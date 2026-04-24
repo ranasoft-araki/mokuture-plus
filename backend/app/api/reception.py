@@ -1,6 +1,6 @@
 from datetime import date
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -14,6 +14,8 @@ from app.services.crypto import decrypt_dict
 
 router = APIRouter(prefix="/reception", tags=["reception"])
 
+_ALLOWED_METHODS = {"form", "qr", "calendar"}
+
 
 class ReceptionCreate(BaseModel):
     visitor_name: str
@@ -21,6 +23,23 @@ class ReceptionCreate(BaseModel):
     purpose: str | None = None
     staff: str | None = None
     method: str = "form"
+
+    @field_validator("visitor_name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("visitor_name must not be empty")
+        if len(v) > 255:
+            raise ValueError("visitor_name too long (max 255 chars)")
+        return v
+
+    @field_validator("method")
+    @classmethod
+    def method_allowed(cls, v: str) -> str:
+        if v not in _ALLOWED_METHODS:
+            raise ValueError(f"method must be one of: {_ALLOWED_METHODS}")
+        return v
 
 
 class ReceptionOut(BaseModel):
