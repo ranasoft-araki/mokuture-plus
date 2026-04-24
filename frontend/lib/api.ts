@@ -1,0 +1,96 @@
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
+
+async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers: { ...headers, ...init?.headers } });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? "Request failed");
+  }
+  if (res.status === 204) return undefined as T;
+  return res.json();
+}
+
+export const api = {
+  // Auth
+  register: (body: { tenant_name: string; tenant_slug: string; email: string; password: string }) =>
+    request<{ access_token: string; refresh_token: string }>("/auth/register", { method: "POST", body: JSON.stringify(body) }),
+  login: (email: string, password: string) =>
+    request<{ access_token: string; refresh_token: string }>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+
+  // Content
+  getMediaUploadUrl: (token: string, filename: string, mime_type: string) =>
+    request<{ media_id: string; upload: { url: string; fields: Record<string, string> }; public_url: string }>("/content/media/upload-url", { method: "POST", body: JSON.stringify({ filename, mime_type }) }, token),
+  registerMedia: (token: string, body: object) =>
+    request("/content/media", { method: "POST", body: JSON.stringify(body) }, token),
+  listMedia: (token: string, type?: string) =>
+    request<MediaItem[]>(`/content/media${type ? `?type=${type}` : ""}`, {}, token),
+  listPlaylists: (token: string) =>
+    request<Playlist[]>("/content/playlists", {}, token),
+  createPlaylist: (token: string, name: string) =>
+    request("/content/playlists", { method: "POST", body: JSON.stringify({ name }) }, token),
+  currentSchedule: (token: string) =>
+    request<{ playlist_id: string | null }>("/content/schedules/current", {}, token),
+
+  // Reception
+  createReception: (token: string, body: ReceptionCreate) =>
+    request<ReceptionLog>("/reception", { method: "POST", body: JSON.stringify(body) }, token),
+  listReception: (token: string) =>
+    request<ReceptionLog[]>("/reception", {}, token),
+  todayStats: (token: string) =>
+    request<{ date: string; count: number }>("/reception/stats/today", {}, token),
+
+  // Lockers
+  listLockers: (token: string) =>
+    request<Locker[]>("/lockers", {}, token),
+  unlockLocker: (token: string, id: string) =>
+    request(`/lockers/${id}/unlock`, { method: "POST" }, token),
+  lockLocker: (token: string, id: string) =>
+    request(`/lockers/${id}/lock`, { method: "POST" }, token),
+};
+
+export interface MediaItem {
+  id: string;
+  filename: string;
+  mime_type: string;
+  url: string;
+  size_bytes: number;
+  duration_sec: number | null;
+  uploaded_at: string;
+}
+
+export interface Playlist {
+  id: string;
+  name: string;
+  items: PlaylistItem[];
+}
+
+export interface PlaylistItem {
+  id: string;
+  media_id: string;
+  display_order: number;
+  duration_sec: number;
+}
+
+export interface ReceptionCreate {
+  visitor_name: string;
+  company?: string;
+  purpose?: string;
+  staff?: string;
+  method?: string;
+}
+
+export interface ReceptionLog extends ReceptionCreate {
+  id: string;
+  state: string;
+  created_at: string;
+}
+
+export interface Locker {
+  id: string;
+  door_number: number;
+  state: string;
+  last_unlocked_at: string | null;
+  auto_relock_sec: number;
+}
