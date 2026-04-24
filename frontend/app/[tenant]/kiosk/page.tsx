@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { api, type KioskPlaylistItem, type KioskMediaItem } from "@/lib/api";
 
+const KIOSK_TOKEN_KEY = "mokuture_kiosk_token";
+
 export default function KioskWaitingPage() {
   const params = useParams<{ tenant: string }>();
   const router = useRouter();
@@ -15,17 +17,28 @@ export default function KioskWaitingPage() {
   const itemTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    const kioskToken = localStorage.getItem(KIOSK_TOKEN_KEY);
+    if (!kioskToken) {
+      router.replace(`/${params.tenant}/kiosk/setup`);
+      return;
+    }
     (async () => {
       try {
-        const data = await api.getKioskSchedule(params.tenant);
+        const data = await api.getKioskSchedule(kioskToken);
         setItems(data.playlist?.items ?? []);
-      } catch {
-        // Network error or tenant not found — show default waiting screen
+      } catch (err: unknown) {
+        // Invalid token → re-setup
+        if (err instanceof Error && err.message === "Invalid kiosk token") {
+          localStorage.removeItem(KIOSK_TOKEN_KEY);
+          router.replace(`/${params.tenant}/kiosk/setup`);
+          return;
+        }
+        // Network error — show default waiting screen
       } finally {
         setLoaded(true);
       }
     })();
-  }, [params.tenant]);
+  }, [params.tenant, router]);
 
   const advanceItem = useCallback(() => {
     setCurrentIndex((i) => (i + 1) % Math.max(items.length, 1));

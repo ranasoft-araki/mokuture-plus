@@ -13,11 +13,19 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
 }
 
 export const api = {
-  // Public kiosk API (no auth — identified by tenant slug)
-  getKioskSchedule: (slug: string) =>
-    request<KioskScheduleResponse>(`/kiosk/${slug}/schedule`),
-  createKioskReception: (slug: string, body: ReceptionCreate) =>
-    request(`/kiosk/${slug}/reception`, { method: "POST", body: JSON.stringify(body) }),
+  // Kiosk API (device token auth via X-Kiosk-Token header)
+  getKioskSchedule: (kioskToken: string) =>
+    request<KioskScheduleResponse>("/kiosk/schedule", { headers: { "X-Kiosk-Token": kioskToken } }),
+  createKioskReception: (kioskToken: string, body: ReceptionCreate) =>
+    request("/kiosk/reception", { method: "POST", body: JSON.stringify(body), headers: { "X-Kiosk-Token": kioskToken } }),
+
+  // Device management (admin)
+  listDevices: (token: string) =>
+    request<Device[]>("/devices", {}, token),
+  createDevice: (token: string, name: string) =>
+    request<Device & { token: string }>("/devices", { method: "POST", body: JSON.stringify({ name }) }, token),
+  deleteDevice: (token: string, id: string) =>
+    request(`/devices/${id}`, { method: "DELETE" }, token),
 
   // Auth
   register: (body: { tenant_name: string; tenant_slug: string; email: string; password: string }) =>
@@ -109,6 +117,13 @@ export interface Locker {
   state: string;
   last_unlocked_at: string | null;
   auto_relock_sec: number;
+}
+
+export interface Device {
+  id: string;
+  name: string;
+  last_seen_at: string | null;
+  created_at: string;
 }
 
 export interface KioskMediaItem {

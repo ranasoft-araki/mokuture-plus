@@ -1,15 +1,17 @@
-"""Public kiosk endpoints — no authentication required.
+"""Public kiosk endpoints — authenticated by device token, not JWT.
 
-Identified by tenant slug in the URL path instead of JWT.
+The device token is stored in the kiosk's localStorage and sent via
+the X-Kiosk-Token header. It identifies both the device and the tenant.
 """
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
+from app.models.device import Device
 from app.models.tenant import Tenant
 from app.models.content import Media, Playlist, PlaylistItem, Schedule
 from app.models.reception import ReceptionLog
@@ -22,18 +24,30 @@ router = APIRouter(prefix="/kiosk", tags=["kiosk"])
 _ALLOWED_METHODS = {"form", "qr"}
 
 
-async def _get_tenant(slug: str, db: AsyncSession) -> Tenant:
-    result = await db.execute(select(Tenant).where(Tenant.slug == slug))
-    tenant = result.scalar_one_or_none()
+async def get_kiosk_device(
+    x_kiosk_token: str = Header(alias="X-Kiosk-Token"),
+    db: AsyncSession = Depends(get_db),
+) -> tuple[Tenant, Device]:
+    result = await db.execute(select(Device).where(Device.token == x_kiosk_token))
+    device = result.scalar_one_or_none()
+    if device is None:
+        raise HTTPException(status_code=401, detail="Invalid kiosk token")
+
+    device.last_seen_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    tenant_result = await db.execute(select(Tenant).where(Tenant.id == device.tenant_id))
+    tenant = tenant_result.scalar_one_or_none()
     if tenant is None:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    return tenant
+        raise HTTPException(status_code=401, detail="Invalid kiosk token")
+
+    return tenant, device
 
 
-@router.get("/{slug}/schedule")
-async def kiosk_schedule(slug: str, db: AsyncSession = Depends(get_db)):
+@router.get("/schedule")
+async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device), db: AsyncSession = Depends(get_db)):
     """Return the current scheduled playlist with embedded media data."""
-    tenant = await _get_tenant(slug, db)
+    tenant, _ = ctx
     now = datetime.now(timezone.utc)
     day = now.weekday()
     time_str = now.strftime("%H:%M")
@@ -50,9 +64,7 @@ async def kiosk_schedule(slug: str, db: AsyncSession = Depends(get_db)):
     if schedule is None:
         return {"playlist": None}
 
-    pl_result = await db.execute(
-        select(Playlist).where(Playlist.id == schedule.playlist_id)
-    )
+    pl_result = await db.execute(select(Playlist).where(Playlist.id == schedule.playlist_id))
     pl = pl_result.scalar_one_or_none()
     if pl is None:
         return {"playlist": None}
@@ -125,10 +137,14 @@ class ReceptionCreate(BaseModel):
         return v
 
 
-@router.post("/{slug}/reception", status_code=201)
-async def kiosk_reception(slug: str, body: ReceptionCreate, db: AsyncSession = Depends(get_db)):
-    """Submit a reception form entry without authentication."""
-    tenant = await _get_tenant(slug, db)
+@router.post("/reception", status_code=201)
+async def kiosk_reception(
+    body: ReceptionCreate,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """Submit a reception form entry using device token authentication."""
+    tenant, _ = ctx
     log = ReceptionLog(tenant_id=tenant.id, **body.model_dump())
     db.add(log)
     await db.commit()
