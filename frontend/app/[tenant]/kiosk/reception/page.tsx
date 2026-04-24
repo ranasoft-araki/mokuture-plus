@@ -5,7 +5,6 @@ import { useRouter, useParams } from "next/navigation";
 import { api, type ReceptionCreate } from "@/lib/api";
 
 const IDLE_TIMEOUT_MS = 60_000;
-const KIOSK_TOKEN_KEY = "mokuture_kiosk_token";
 
 export default function ReceptionPage() {
   const params = useParams<{ tenant: string }>();
@@ -16,7 +15,6 @@ export default function ReceptionPage() {
   const [error, setError] = useState("");
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Reset idle timer on any interaction
   const resetIdle = () => {
     if (idleRef.current) clearTimeout(idleRef.current);
     idleRef.current = setTimeout(() => router.push(`/${params.tenant}/kiosk`), IDLE_TIMEOUT_MS);
@@ -38,8 +36,7 @@ export default function ReceptionPage() {
     if (!form.visitor_name.trim()) { setError("お名前を入力してください"); return; }
     setSubmitting(true);
     try {
-      const token = localStorage.getItem(KIOSK_TOKEN_KEY) ?? "";
-      await api.createReception(token, form);
+      await api.createKioskReception(params.tenant, form);
       router.push(`/${params.tenant}/kiosk/complete?name=${encodeURIComponent(form.visitor_name)}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "受付に失敗しました");
@@ -49,7 +46,6 @@ export default function ReceptionPage() {
 
   return (
     <div className="w-screen h-screen bg-[#faf8f4] flex flex-col" onClick={resetIdle}>
-      {/* Header */}
       <div className="bg-[#4a7c4e] px-8 py-6 flex items-center gap-4">
         <button
           onClick={() => router.push(`/${params.tenant}/kiosk`)}
@@ -60,7 +56,6 @@ export default function ReceptionPage() {
         <h1 className="text-white text-2xl font-medium">受付</h1>
       </div>
 
-      {/* Form */}
       <form onSubmit={handleSubmit} className="flex-1 flex flex-col gap-6 px-10 py-10 max-w-lg mx-auto w-full">
         <p className="text-[#5a5347] text-lg">お名前と用件をご入力ください。</p>
 

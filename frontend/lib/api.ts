@@ -13,6 +13,12 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
 }
 
 export const api = {
+  // Public kiosk API (no auth — identified by tenant slug)
+  getKioskSchedule: (slug: string) =>
+    request<KioskScheduleResponse>(`/kiosk/${slug}/schedule`),
+  createKioskReception: (slug: string, body: ReceptionCreate) =>
+    request(`/kiosk/${slug}/reception`, { method: "POST", body: JSON.stringify(body) }),
+
   // Auth
   register: (body: { tenant_name: string; tenant_slug: string; email: string; password: string }) =>
     request<{ access_token: string; refresh_token: string }>("/auth/register", { method: "POST", body: JSON.stringify(body) }),
@@ -103,4 +109,27 @@ export interface Locker {
   state: string;
   last_unlocked_at: string | null;
   auto_relock_sec: number;
+}
+
+export interface KioskMediaItem {
+  id: string;
+  url: string;
+  mime_type: string;
+  filename: string;
+}
+
+export interface KioskPlaylistItem {
+  id: string;
+  media_id: string;
+  display_order: number;
+  duration_sec: number;
+  media: KioskMediaItem | null;
+}
+
+export interface KioskScheduleResponse {
+  playlist: {
+    id: string;
+    name: string;
+    items: KioskPlaylistItem[];
+  } | null;
 }
