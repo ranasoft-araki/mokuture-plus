@@ -3,8 +3,8 @@ services:
     name: mokuture-plus-api
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
-    rootDir: backend
     healthCheckPath: /health
+    plan: free
     envVars:
       - key: DATABASE_URL
         sync: false
