@@ -26,6 +26,9 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Wrong token type")
 
     user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing subject")
+
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None:
@@ -42,17 +45,17 @@ def require_roles(*roles: str):
     return check
 
 
-def tenant_guard(path_tenant_slug: str):
-    """Ensure the JWT tenant matches the URL slug to prevent cross-tenant access."""
-    async def check(
-        user: User = Depends(get_current_user),
-        db: AsyncSession = Depends(get_db),
-    ) -> User:
-        from sqlalchemy import select
-        from app.models.tenant import Tenant
-        result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
-        tenant = result.scalar_one_or_none()
-        if tenant is None or tenant.slug != path_tenant_slug:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant mismatch")
-        return user
-    return check
+def require_admin():
+    """Shorthand: admin or superadmin."""
+    return require_roles("admin", "superadmin")
+
+
+async def verify_tenant_slug(slug: str, user: User, db: AsyncSession) -> None:
+    """Raise 403 if the JWT tenant_id does not match the URL slug.
+    Apply this at API gateway / Next.js middleware level for URL-routed endpoints.
+    """
+    from app.models.tenant import Tenant
+    result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
+    tenant = result.scalar_one_or_none()
+    if tenant is None or tenant.slug != slug:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant mismatch")

@@ -1,15 +1,23 @@
+import re
+import uuid
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.middleware.tenant import get_current_user
 from app.models.content import Media, Playlist, PlaylistItem, Schedule
 from app.models.user import User
 from app.services import storage
+from app.config import settings
 
 router = APIRouter(prefix="/content", tags=["content"])
+
+_TIME_RE = re.compile(r"^\d{2}:\d{2}$")
 
 
 # ─── Media ──────────────────────────────────────────────────────────────────
@@ -26,6 +34,23 @@ class MediaCreate(BaseModel):
     url: str
     size_bytes: int = 0
     duration_sec: float | None = None
+
+    @field_validator("url")
+    @classmethod
+    def url_must_be_storage_origin(cls, v: str) -> str:
+        # Only allow URLs from the configured storage public URL to prevent arbitrary URL injection
+        allowed = settings.storage_public_url.rstrip("/")
+        if not v.startswith(allowed):
+            raise ValueError(f"URL must originate from configured storage ({allowed})")
+        return v
+
+    @field_validator("mime_type")
+    @classmethod
+    def mime_allowed(cls, v: str) -> str:
+        from app.services.storage import ALLOWED_MIME_TYPES
+        if v not in ALLOWED_MIME_TYPES:
+            raise ValueError(f"MIME type not allowed: {v}")
+        return v
 
 
 class MediaOut(BaseModel):
@@ -49,10 +74,13 @@ async def get_upload_url(body: UploadUrlRequest, user: User = Depends(get_curren
 
 
 @router.post("/media", response_model=MediaOut, status_code=201)
-async def register_media(body: MediaCreate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    import uuid
+async def register_media(
+    body: MediaCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     media = Media(
-        id=body.media_id or str(uuid.uuid4()),
+        id=body.media_id,
         tenant_id=user.tenant_id,
         filename=body.filename,
         mime_type=body.mime_type,
@@ -82,8 +110,14 @@ async def list_media(
 
 
 @router.delete("/media/{media_id}", status_code=204)
-async def delete_media(media_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Media).where(Media.id == media_id, Media.tenant_id == user.tenant_id))
+async def delete_media(
+    media_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Media).where(Media.id == media_id, Media.tenant_id == user.tenant_id)
+    )
     media = result.scalar_one_or_none()
     if media is None:
         raise HTTPException(status_code=404, detail="Media not found")
@@ -124,7 +158,11 @@ class PlaylistOut(BaseModel):
 
 
 @router.post("/playlists", response_model=PlaylistOut, status_code=201)
-async def create_playlist(body: PlaylistCreate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def create_playlist(
+    body: PlaylistCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     pl = Playlist(tenant_id=user.tenant_id, name=body.name)
     db.add(pl)
     await db.commit()
@@ -133,20 +171,33 @@ async def create_playlist(body: PlaylistCreate, user: User = Depends(get_current
 
 
 @router.get("/playlists", response_model=list[PlaylistOut])
-async def list_playlists(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Playlist).where(Playlist.tenant_id == user.tenant_id))
+async def list_playlists(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Use selectinload to avoid N+1 queries (one query for playlists + one for all items)
+    result = await db.execute(
+        select(Playlist)
+        .where(Playlist.tenant_id == user.tenant_id)
+        .options(selectinload(Playlist.items))
+    )
     playlists = result.scalars().all()
-    out = []
-    for pl in playlists:
-        items_result = await db.execute(
-            select(PlaylistItem).where(PlaylistItem.playlist_id == pl.id).order_by(PlaylistItem.display_order)
-        )
-        items = items_result.scalars().all()
-        out.append({"id": pl.id, "name": pl.name, "items": [
-            {"id": i.id, "media_id": i.media_id, "display_order": i.display_order, "duration_sec": i.duration_sec}
-            for i in items
-        ]})
-    return out
+    return [
+        {
+            "id": pl.id,
+            "name": pl.name,
+            "items": [
+                {
+                    "id": i.id,
+                    "media_id": i.media_id,
+                    "display_order": i.display_order,
+                    "duration_sec": i.duration_sec,
+                }
+                for i in sorted(pl.items, key=lambda x: x.display_order)
+            ],
+        }
+        for pl in playlists
+    ]
 
 
 @router.put("/playlists/{playlist_id}/items", status_code=200)
@@ -156,10 +207,26 @@ async def update_playlist_items(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Playlist).where(Playlist.id == playlist_id, Playlist.tenant_id == user.tenant_id))
+    result = await db.execute(
+        select(Playlist).where(Playlist.id == playlist_id, Playlist.tenant_id == user.tenant_id)
+    )
     pl = result.scalar_one_or_none()
     if pl is None:
         raise HTTPException(status_code=404, detail="Playlist not found")
+
+    # Verify all media_ids belong to this tenant (prevent cross-tenant media reference)
+    media_ids = [i.media_id for i in items]
+    if media_ids:
+        owned = await db.execute(
+            select(Media.id).where(
+                Media.id.in_(media_ids),
+                Media.tenant_id == user.tenant_id,
+            )
+        )
+        owned_ids = {row[0] for row in owned.all()}
+        unknown = set(media_ids) - owned_ids
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"Media IDs not found in your library: {unknown}")
 
     await db.execute(delete(PlaylistItem).where(PlaylistItem.playlist_id == playlist_id))
     for item in items:
@@ -176,9 +243,45 @@ class ScheduleCreate(BaseModel):
     start_time: str   # "HH:MM"
     end_time: str     # "HH:MM"
 
+    @field_validator("day_of_week")
+    @classmethod
+    def dow_range(cls, v: int) -> int:
+        if v not in range(-1, 7):
+            raise ValueError("day_of_week must be -1 (everyday) or 0-6 (Mon-Sun)")
+        return v
+
+    @field_validator("start_time", "end_time")
+    @classmethod
+    def time_format(cls, v: str) -> str:
+        if not _TIME_RE.match(v):
+            raise ValueError("Time must be in HH:MM format")
+        h, m = int(v[:2]), int(v[3:])
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise ValueError("Invalid time value")
+        return v
+
+    @field_validator("end_time")
+    @classmethod
+    def end_after_start(cls, v: str, info) -> str:
+        start = info.data.get("start_time", "")
+        if start and v <= start:
+            raise ValueError("end_time must be after start_time")
+        return v
+
 
 @router.post("/schedules", status_code=201)
-async def create_schedule(body: ScheduleCreate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def create_schedule(
+    body: ScheduleCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Verify playlist belongs to this tenant
+    pl_result = await db.execute(
+        select(Playlist).where(Playlist.id == body.playlist_id, Playlist.tenant_id == user.tenant_id)
+    )
+    if pl_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
     s = Schedule(tenant_id=user.tenant_id, **body.model_dump())
     db.add(s)
     await db.commit()
@@ -186,16 +289,30 @@ async def create_schedule(body: ScheduleCreate, user: User = Depends(get_current
 
 
 @router.get("/schedules")
-async def list_schedules(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def list_schedules(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(select(Schedule).where(Schedule.tenant_id == user.tenant_id))
     schedules = result.scalars().all()
-    return [{"id": s.id, "playlist_id": s.playlist_id, "day_of_week": s.day_of_week, "start_time": s.start_time, "end_time": s.end_time} for s in schedules]
+    return [
+        {
+            "id": s.id,
+            "playlist_id": s.playlist_id,
+            "day_of_week": s.day_of_week,
+            "start_time": s.start_time,
+            "end_time": s.end_time,
+        }
+        for s in schedules
+    ]
 
 
 @router.get("/schedules/current")
-async def current_schedule(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def current_schedule(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Return the playlist that should be playing right now based on schedule."""
-    from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
     day = now.weekday()  # 0=Mon
     time_str = now.strftime("%H:%M")
@@ -208,7 +325,8 @@ async def current_schedule(user: User = Depends(get_current_user), db: AsyncSess
             Schedule.end_time > time_str,
         )
     )
-    schedule = result.scalar_one_or_none()
+    # Use first() instead of scalar_one_or_none() — overlapping schedules shouldn't crash the kiosk
+    schedule = result.scalars().first()
     if schedule is None:
         return {"playlist_id": None}
     return {"playlist_id": schedule.playlist_id, "schedule_id": schedule.id}
