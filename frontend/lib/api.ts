@@ -21,9 +21,9 @@ export const api = {
 
   // Content
   getMediaUploadUrl: (token: string, filename: string, mime_type: string) =>
-    request<{ media_id: string; upload: { url: string; fields: Record<string, string> }; public_url: string }>("/content/media/upload-url", { method: "POST", body: JSON.stringify({ filename, mime_type }) }, token),
+    request<MediaUploadUrlResponse>("/content/media/upload-url", { method: "POST", body: JSON.stringify({ filename, mime_type }) }, token),
   registerMedia: (token: string, body: object) =>
-    request("/content/media", { method: "POST", body: JSON.stringify(body) }, token),
+    request<MediaItem>("/content/media", { method: "POST", body: JSON.stringify(body) }, token),
   listMedia: (token: string, type?: string) =>
     request<MediaItem[]>(`/content/media${type ? `?type=${type}` : ""}`, {}, token),
   listPlaylists: (token: string) =>
@@ -49,6 +49,16 @@ export const api = {
   lockLocker: (token: string, id: string) =>
     request(`/lockers/${id}/lock`, { method: "POST" }, token),
 };
+
+export interface MediaUploadUrlResponse {
+  media_id: string;
+  upload: {
+    url: string;
+    fields: Record<string, string>;
+  };
+  public_url: string;
+  storage_key?: string;
+}
 
 export interface MediaItem {
   id: string;
