@@ -2,6 +2,8 @@
 .env
 .env.local
 .env.*.local
+.env.production
+backend/.env.production
 
 # Python
 __pycache__/
@@ -18,6 +20,7 @@ node_modules/
 .next/
 out/
 .vercel/
+frontend/.netlify/
 
 # Database (local dev SQLite)
 *.db

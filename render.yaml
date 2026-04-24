@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: mokuture-plus-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    rootDir: backend
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: DEBUG
+        value: "false"
+      - key: STORAGE_ENDPOINT_URL
+        sync: false
+      - key: STORAGE_ACCESS_KEY_ID
+        sync: false
+      - key: STORAGE_SECRET_ACCESS_KEY
+        sync: false
+      - key: STORAGE_BUCKET_NAME
+        sync: false
+      - key: STORAGE_PUBLIC_URL
+        sync: false
