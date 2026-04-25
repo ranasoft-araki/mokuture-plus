@@ -3,7 +3,7 @@
 The device token is stored in the kiosk's localStorage and sent via
 the X-Kiosk-Token header. It identifies both the device and the tenant.
 """
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, field_validator
@@ -33,7 +33,7 @@ async def get_kiosk_device(
     if device is None:
         raise HTTPException(status_code=401, detail="Invalid kiosk token")
 
-    device.last_seen_at = datetime.now(timezone.utc)
+    device.last_seen_at = datetime.utcnow()
     await db.commit()
 
     tenant_result = await db.execute(select(Tenant).where(Tenant.id == device.tenant_id))
