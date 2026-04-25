@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { api, type MediaItem, type MediaUploadUrlResponse } from "@/lib/api";
+import { api, type MediaItem } from "@/lib/api";
 import { clearTokens, getAccessToken } from "@/lib/auth";
 
 export default function AdminMediaPage() {
@@ -63,18 +63,7 @@ export default function AdminMediaPage() {
     setSuccess("");
 
     try {
-      const uploadInfo = await api.getMediaUploadUrl(token, selectedFile.name, selectedFile.type);
-      await uploadToStorage(uploadInfo, selectedFile);
-
-      const created = await api.registerMedia(token, {
-        media_id: uploadInfo.media_id,
-        filename: selectedFile.name,
-        mime_type: selectedFile.type,
-        url: uploadInfo.public_url,
-        size_bytes: selectedFile.size,
-        duration_sec: null,
-      });
-
+      const created = await api.uploadMedia(token, selectedFile);
       setMedia((current) => [created, ...current]);
       setSelectedFile(null);
       setSuccess("メディアをアップロードしました");
@@ -209,37 +198,6 @@ function MediaPreview({ item }: { item: MediaItem }) {
   );
 }
 
-async function uploadToStorage(uploadInfo: MediaUploadUrlResponse, file: File) {
-  if (Object.keys(uploadInfo.upload.fields).length > 0) {
-    const formData = new FormData();
-    for (const [key, value] of Object.entries(uploadInfo.upload.fields)) {
-      formData.append(key, value);
-    }
-    formData.append("file", file);
-
-    const response = await fetch(uploadInfo.upload.url, {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!response.ok) {
-      throw new Error("ストレージへのアップロードに失敗しました");
-    }
-    return;
-  }
-
-  const response = await fetch(uploadInfo.upload.url, {
-    method: "PUT",
-    headers: {
-      "Content-Type": file.type,
-    },
-    body: file,
-  });
-
-  if (!response.ok) {
-    throw new Error("ストレージへのアップロードに失敗しました");
-  }
-}
 
 function formatBytes(bytes: number) {
   if (bytes === 0) return "0 B";

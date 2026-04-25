@@ -70,6 +70,26 @@ def generate_presigned_upload_url(tenant_id: str, filename: str, mime_type: str)
     return {"media_id": media_id, "upload": response, "public_url": public_url, "storage_key": key}
 
 
+def upload_file(tenant_id: str, filename: str, mime_type: str, data: bytes) -> dict:
+    """Upload bytes directly to R2/MinIO and return media_id + public_url."""
+    safe_name = _safe_filename(filename)
+    validate_upload(safe_name, mime_type)
+
+    media_id = str(uuid.uuid4())
+    key = f"{tenant_id}/{media_id}/{safe_name}"
+
+    s3 = _s3_client()
+    s3.put_object(
+        Bucket=settings.storage_bucket_name,
+        Key=key,
+        Body=data,
+        ContentType=mime_type,
+    )
+
+    public_url = f"{settings.storage_public_url}/{key}"
+    return {"media_id": media_id, "public_url": public_url, "storage_key": key}
+
+
 def delete_object(storage_key: str) -> None:
     s3 = _s3_client()
     s3.delete_object(Bucket=settings.storage_bucket_name, Key=storage_key)

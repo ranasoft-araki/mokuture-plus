@@ -34,6 +34,20 @@ export const api = {
     request<{ access_token: string; refresh_token: string }>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
 
   // Content
+  uploadMedia: async (token: string, file: File): Promise<MediaItem> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch(`${API_BASE}/content/media/upload`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail ?? "アップロードに失敗しました");
+    }
+    return res.json();
+  },
   getMediaUploadUrl: (token: string, filename: string, mime_type: string) =>
     request<MediaUploadUrlResponse>("/content/media/upload-url", { method: "POST", body: JSON.stringify({ filename, mime_type }) }, token),
   registerMedia: (token: string, body: object) =>

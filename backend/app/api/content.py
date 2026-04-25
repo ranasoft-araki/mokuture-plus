@@ -2,7 +2,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
@@ -63,6 +63,39 @@ class MediaOut(BaseModel):
     uploaded_at: str
 
     model_config = {"from_attributes": True}
+
+
+@router.post("/media/upload", response_model=MediaOut, status_code=201)
+async def upload_media(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    data = await file.read()
+    if len(data) > storage.MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="ファイルサイズが大きすぎます（最大500MB）")
+    try:
+        result = storage.upload_file(
+            user.tenant_id,
+            file.filename or "upload",
+            file.content_type or "application/octet-stream",
+            data,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    media = Media(
+        id=result["media_id"],
+        tenant_id=user.tenant_id,
+        filename=file.filename or "upload",
+        mime_type=file.content_type or "application/octet-stream",
+        url=result["public_url"],
+        size_bytes=len(data),
+    )
+    db.add(media)
+    await db.commit()
+    await db.refresh(media)
+    return _media_out(media)
 
 
 @router.post("/media/upload-url")
