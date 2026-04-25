@@ -33,7 +33,7 @@ async def get_kiosk_device(
     if device is None:
         raise HTTPException(status_code=401, detail="Invalid kiosk token")
 
-    device.last_seen_at = datetime.now(timezone.utc)
+    device.last_seen_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
 
     tenant_result = await db.execute(select(Tenant).where(Tenant.id == device.tenant_id))
