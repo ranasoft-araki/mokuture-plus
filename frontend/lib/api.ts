@@ -63,10 +63,22 @@ export const api = {
     request<MediaItem>("/content/media", { method: "POST", body: JSON.stringify(body) }, token),
   listMedia: (token: string, type?: string) =>
     request<MediaItem[]>(`/content/media${type ? `?type=${type}` : ""}`, {}, token),
+  deleteMedia: (token: string, id: string) =>
+    request(`/content/media/${id}`, { method: "DELETE" }, token),
   listPlaylists: (token: string) =>
     request<Playlist[]>("/content/playlists", {}, token),
   createPlaylist: (token: string, name: string) =>
-    request("/content/playlists", { method: "POST", body: JSON.stringify({ name }) }, token),
+    request<Playlist>("/content/playlists", { method: "POST", body: JSON.stringify({ name }) }, token),
+  updatePlaylistItems: (token: string, playlistId: string, items: { media_id: string; display_order: number; duration_sec: number }[]) =>
+    request("/content/playlists/" + playlistId + "/items", { method: "PUT", body: JSON.stringify(items) }, token),
+  deletePlaylist: (token: string, id: string) =>
+    request("/content/playlists/" + id, { method: "DELETE" }, token),
+  listSchedules: (token: string) =>
+    request<Schedule[]>("/content/schedules", {}, token),
+  createSchedule: (token: string, body: { playlist_id: string; day_of_week: number; start_time: string; end_time: string }) =>
+    request<{ id: string }>("/content/schedules", { method: "POST", body: JSON.stringify(body) }, token),
+  deleteSchedule: (token: string, id: string) =>
+    request("/content/schedules/" + id, { method: "DELETE" }, token),
   currentSchedule: (token: string) =>
     request<{ playlist_id: string | null }>("/content/schedules/current", {}, token),
 
@@ -137,6 +149,14 @@ export interface Locker {
   state: string;
   last_unlocked_at: string | null;
   auto_relock_sec: number;
+}
+
+export interface Schedule {
+  id: string;
+  playlist_id: string;
+  day_of_week: number;
+  start_time: string;
+  end_time: string;
 }
 
 export interface Device {

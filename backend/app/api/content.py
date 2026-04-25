@@ -233,6 +233,22 @@ async def list_playlists(
     ]
 
 
+@router.delete("/playlists/{playlist_id}", status_code=204)
+async def delete_playlist(
+    playlist_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Playlist).where(Playlist.id == playlist_id, Playlist.tenant_id == user.tenant_id)
+    )
+    pl = result.scalar_one_or_none()
+    if pl is None:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    await db.delete(pl)
+    await db.commit()
+
+
 @router.put("/playlists/{playlist_id}/items", status_code=200)
 async def update_playlist_items(
     playlist_id: str,
@@ -338,6 +354,22 @@ async def list_schedules(
         }
         for s in schedules
     ]
+
+
+@router.delete("/schedules/{schedule_id}", status_code=204)
+async def delete_schedule(
+    schedule_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Schedule).where(Schedule.id == schedule_id, Schedule.tenant_id == user.tenant_id)
+    )
+    s = result.scalar_one_or_none()
+    if s is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    await db.delete(s)
+    await db.commit()
 
 
 @router.get("/schedules/current")

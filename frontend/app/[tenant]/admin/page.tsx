@@ -1,15 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { api, type ReceptionLog } from "@/lib/api";
 import { getAccessToken, clearTokens } from "@/lib/auth";
+import { AdminShell, MkCard, MkBtn, MkPill } from "@/components/AdminShell";
 
 export default function DashboardPage() {
   const params = useParams<{ tenant: string }>();
   const router = useRouter();
   const [todayCount, setTodayCount] = useState<number | null>(null);
-  const [recent, setRecent] = useState<ReceptionLog[]>([]);
+  const [logs, setLogs] = useState<ReceptionLog[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -17,12 +18,9 @@ export default function DashboardPage() {
     if (!token) { router.push("/login"); return; }
     (async () => {
       try {
-        const [stats, logs] = await Promise.all([
-          api.todayStats(token),
-          api.listReception(token),
-        ]);
+        const [stats, allLogs] = await Promise.all([api.todayStats(token), api.listReception(token)]);
         setTodayCount(stats.count);
-        setRecent(logs.slice(0, 5));
+        setLogs(allLogs);
       } catch {
         clearTokens();
         router.push("/login");
@@ -32,95 +30,190 @@ export default function DashboardPage() {
     })();
   }, [router]);
 
-  if (loading) return <Shell tenant={params.tenant} title="ダッシュボード"><div className="text-[#8a8070]">読み込み中…</div></Shell>;
+  // Bucket today's receptions by hour for the sparkline
+  const hourlyData = useMemo(() => {
+    const now = new Date();
+    const today = now.toLocaleDateString("ja-JP");
+    const buckets = Array(24).fill(0);
+    logs.forEach((r) => {
+      const d = new Date(r.created_at);
+      if (d.toLocaleDateString("ja-JP") === today) {
+        buckets[d.getHours()]++;
+      }
+    });
+    return buckets;
+  }, [logs]);
+
+  const maxHour = Math.max(...hourlyData, 1);
+  const recent = logs.slice(0, 5);
+
+  if (loading) {
+    return (
+      <AdminShell active="dashboard" title="ダッシュボード" breadcrumb="ホーム">
+        <div style={{ color: "#a8a198" }}>読み込み中…</div>
+      </AdminShell>
+    );
+  }
+
+  const today = new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric", weekday: "short" });
 
   return (
-    <Shell tenant={params.tenant} title="ダッシュボード">
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <StatCard label="本日の受付" value={todayCount ?? 0} unit="件" color="#4a7c4e" />
-        <StatCard label="稼働キオスク" value={1} unit="台" color="#2e6b8e" />
-        <StatCard label="ロッカー開錠" value={0} unit="回" color="#b8763a" />
-        <StatCard label="通知配信" value={todayCount ?? 0} unit="件" color="#8a8070" />
+    <AdminShell
+      active="dashboard"
+      title="ダッシュボード"
+      breadcrumb="ホーム"
+      subtitle={`${today} · 本日の稼働状況`}
+      actions={
+        <MkBtn variant="primary" onClick={() => router.push(`/${params.tenant}/admin/media`)}>
+          + 新規コンテンツ
+        </MkBtn>
+      }
+    >
+      {/* KPI row */}
+      <div style={{ display: "flex", gap: 14, marginBottom: 22 }}>
+        <KpiCard label="本日の受付件数" value={String(todayCount ?? 0)} unit="件" />
+        <KpiCard label="稼働中キオスク" value="—" unit="" accent="#3a6240" />
+        <KpiCard label="ロッカー開錠回数" value="0" unit="回" />
+        <KpiCard label="通知配信数" value={String(todayCount ?? 0)} unit="件" />
       </div>
 
-      {/* Recent receptions */}
-      <div className="bg-white rounded-xl border border-[#e2ddd6]">
-        <div className="px-6 py-4 border-b border-[#e2ddd6] flex items-center justify-between">
-          <h2 className="font-medium text-[#1d1a15]">直近の受付</h2>
-          <button onClick={() => router.push(`/${params.tenant}/admin/reception`)} className="text-[#4a7c4e] text-sm">すべて見る →</button>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 20 }}>
+        {/* LEFT */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {/* Hourly chart */}
+          <MkCard>
+            <div style={{ display: "flex", alignItems: "flex-end", marginBottom: 14 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1d1a15" }}>時間帯別 受付件数</div>
+                <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3 }}>00:00 – 23:59 / 本日</div>
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 80, padding: "0 0 4px" }}>
+              {hourlyData.map((d, i) => (
+                <div
+                  key={i}
+                  style={{
+                    flex: 1,
+                    height: `${(d / maxHour) * 100 || 2}%`,
+                    minHeight: 2,
+                    background: d > 0 ? "#4a7c4e" : "#efece5",
+                    borderRadius: "2px 2px 0 0",
+                    opacity: d === 0 ? 0.6 : 1,
+                  }}
+                />
+              ))}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#a8a198", marginTop: 6, fontFamily: "monospace" }}>
+              <span>0</span><span>6</span><span>12</span><span>18</span><span>24</span>
+            </div>
+          </MkCard>
+
+          {/* Recent receptions */}
+          <MkCard padding="0">
+            <div style={{ padding: "18px 20px 14px", borderBottom: "1px solid #efece5", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1d1a15" }}>直近の受付</div>
+                <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3 }}>最新5件</div>
+              </div>
+              <MkBtn variant="ghost" size="sm" onClick={() => router.push(`/${params.tenant}/admin/reception`)}>
+                受付ログへ →
+              </MkBtn>
+            </div>
+            {recent.length === 0 ? (
+              <div style={{ padding: "32px 20px", textAlign: "center", color: "#a8a198" }}>受付記録がありません</div>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}>
+                <thead>
+                  <tr style={{ fontSize: 10.5, color: "#a8a198", textAlign: "left", background: "#f4f1ea", letterSpacing: "0.3px" }}>
+                    {["時刻", "来訪者", "会社", "用件", "担当", "状態"].map((h) => (
+                      <th key={h} style={{ padding: "9px 14px", fontWeight: 600 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {recent.map((r, i) => (
+                    <tr key={r.id} style={{ borderTop: i > 0 ? "1px solid #efece5" : "none" }}>
+                      <td style={{ padding: "12px 14px", color: "#6b6559", fontFamily: "monospace", fontSize: 12 }}>
+                        {new Date(r.created_at).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })}
+                      </td>
+                      <td style={{ padding: "12px 14px", color: "#1d1a15", fontWeight: 500 }}>{r.visitor_name}</td>
+                      <td style={{ padding: "12px 14px", color: "#6b6559" }}>{r.company || "—"}</td>
+                      <td style={{ padding: "12px 14px", color: "#6b6559" }}>{r.purpose || "—"}</td>
+                      <td style={{ padding: "12px 14px", color: "#6b6559" }}>{r.staff || "—"}</td>
+                      <td style={{ padding: "12px 14px" }}>
+                        <MkPill tone={r.state === "received" ? "live" : "neutral"}>
+                          {r.state === "received" ? "確認済" : r.state}
+                        </MkPill>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </MkCard>
         </div>
-        {recent.length === 0 ? (
-          <div className="px-6 py-8 text-center text-[#8a8070]">受付記録がありません</div>
-        ) : (
-          <div className="divide-y divide-[#f0ece6]">
-            {recent.map((r) => (
-              <div key={r.id} className="px-6 py-4 flex items-center gap-4">
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-[#1d1a15] truncate">{r.visitor_name}</p>
-                  <p className="text-sm text-[#8a8070] truncate">{r.company} {r.purpose ? `· ${r.purpose}` : ""}</p>
-                </div>
-                <div className="text-right shrink-0">
-                  <p className="text-sm text-[#5a5347]">{r.staff || "—"}</p>
-                  <p className="text-xs text-[#a09880]">{new Date(r.created_at).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })}</p>
-                </div>
-                <span className={`shrink-0 px-2 py-1 rounded-full text-xs font-medium ${r.state === "received" ? "bg-[#e8f0e9] text-[#4a7c4e]" : "bg-[#f5e8e8] text-[#a84238]"}`}>
-                  {r.state === "received" ? "受付済" : r.state}
-                </span>
+
+        {/* RIGHT */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {/* System health */}
+          <MkCard>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1d1a15", marginBottom: 14 }}>システム状態</div>
+            {[
+              { label: "Slack Webhook", tone: "live" as const, value: "設定済" },
+              { label: "キオスク端末", tone: "neutral" as const, value: "要確認" },
+              { label: "ロッカー制御", tone: "off" as const, value: "Phase 1" },
+              { label: "Google Calendar", tone: "off" as const, value: "Phase 1" },
+            ].map((item, i) => (
+              <div key={item.label} style={{ display: "flex", alignItems: "center", padding: "8px 0", borderTop: i > 0 ? "1px solid #efece5" : "none" }}>
+                <span style={{ flex: 1, fontSize: 12, color: "#2d2a24" }}>{item.label}</span>
+                <MkPill tone={item.tone}>{item.value}</MkPill>
               </div>
             ))}
-          </div>
-        )}
-      </div>
+          </MkCard>
 
-      {/* Quick nav */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-6">
-        {[
-          { label: "メディア管理", href: `/${params.tenant}/admin/media`, desc: "動画・画像のアップロード" },
-          { label: "受付ログ", href: `/${params.tenant}/admin/reception`, desc: "来訪者の記録一覧" },
-          { label: "キオスク管理", href: `/${params.tenant}/admin/kiosk`, desc: "端末トークンの発行・管理" },
-          { label: "キオスク表示", href: `/${params.tenant}/kiosk`, desc: "キオスク画面を開く", external: true },
-        ].map((item) => (
-          <button
-            key={item.href}
-            onClick={() => item.external ? window.open(item.href, "_blank") : router.push(item.href)}
-            className="text-left bg-white rounded-xl border border-[#e2ddd6] px-5 py-4 hover:border-[#4a7c4e] transition-colors"
-          >
-            <p className="font-medium text-[#1d1a15]">{item.label}</p>
-            <p className="text-sm text-[#8a8070] mt-1">{item.desc}</p>
-          </button>
-        ))}
+          {/* Quick nav */}
+          <MkCard>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1d1a15", marginBottom: 14 }}>クイックアクセス</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {[
+                { label: "メディア管理", desc: "動画・画像のアップロード", path: `/${params.tenant}/admin/media` },
+                { label: "プレイリスト管理", desc: "再生リストの作成・編集", path: `/${params.tenant}/admin/playlists` },
+                { label: "スケジュール管理", desc: "曜日・時間帯ごとの設定", path: `/${params.tenant}/admin/schedules` },
+                { label: "キオスク表示", desc: "キオスク画面を開く", path: `/${params.tenant}/kiosk`, external: true },
+              ].map((item) => (
+                <button
+                  key={item.label}
+                  onClick={() => item.external ? window.open(item.path, "_blank") : router.push(item.path)}
+                  style={{
+                    textAlign: "left", padding: "10px 12px", borderRadius: 7,
+                    border: "1px solid #efece5", background: "#fffefb", cursor: "pointer",
+                    transition: "border-color 0.15s",
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4a7c4e"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#efece5"; }}
+                >
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: "#2d2a24" }}>{item.label}</div>
+                  <div style={{ fontSize: 11, color: "#a8a198", marginTop: 2 }}>{item.desc}</div>
+                </button>
+              ))}
+            </div>
+          </MkCard>
+        </div>
       </div>
-    </Shell>
+    </AdminShell>
   );
 }
 
-function StatCard({ label, value, unit, color }: { label: string; value: number; unit: string; color: string }) {
+function KpiCard({ label, value, unit, accent }: { label: string; value: string; unit: string; accent?: string }) {
   return (
-    <div className="bg-white rounded-xl border border-[#e2ddd6] px-5 py-4">
-      <p className="text-sm text-[#8a8070]">{label}</p>
-      <p className="text-3xl font-semibold mt-1" style={{ color }}>{value}<span className="text-base font-normal text-[#8a8070] ml-1">{unit}</span></p>
-    </div>
-  );
-}
-
-function Shell({ tenant, title, children }: { tenant: string; title: string; children: React.ReactNode }) {
-  const router = useRouter();
-  const logout = () => { clearTokens(); router.push("/login"); };
-  return (
-    <div className="min-h-screen bg-[#f5f2ed]">
-      <div className="bg-white border-b border-[#e2ddd6] px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="text-[#4a7c4e] font-semibold">mokuture+</span>
-          <span className="text-[#c8c0b0]">/</span>
-          <span className="text-[#5a5347]">{title}</span>
+    <MkCard padding="18px" style={{ flex: 1 }}>
+      <div style={{ fontSize: 11.5, color: "#a8a198" }}>{label}</div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 8 }}>
+        <div style={{ fontSize: 30, fontWeight: 600, color: accent ?? "#1d1a15", letterSpacing: "-0.8px", lineHeight: 1 }}>
+          {value}
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-[#8a8070] bg-[#f0ece6] px-2 py-1 rounded">{tenant}</span>
-          <button onClick={logout} className="text-sm text-[#8a8070] hover:text-[#1d1a15]">ログアウト</button>
-        </div>
+        {unit && <div style={{ fontSize: 13, color: "#a8a198" }}>{unit}</div>}
       </div>
-      <div className="max-w-5xl mx-auto px-6 py-8">{children}</div>
-    </div>
+    </MkCard>
   );
 }
