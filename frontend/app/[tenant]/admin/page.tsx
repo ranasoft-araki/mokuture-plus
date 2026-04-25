@@ -78,6 +78,7 @@ export default function DashboardPage() {
         {[
           { label: "メディア管理", href: `/${params.tenant}/admin/media`, desc: "動画・画像のアップロード" },
           { label: "受付ログ", href: `/${params.tenant}/admin/reception`, desc: "来訪者の記録一覧" },
+          { label: "キオスク管理", href: `/${params.tenant}/admin/kiosk`, desc: "端末トークンの発行・管理" },
           { label: "キオスク表示", href: `/${params.tenant}/kiosk`, desc: "キオスク画面を開く", external: true },
         ].map((item) => (
           <button
