@@ -21,10 +21,6 @@ git status --short
 echo ""
 
 CHANGED=$(git status --porcelain)
-if [ -z "$CHANGED" ]; then
-  echo -e "${YELLOW}変更がありません。デプロイをスキップします。${NC}"
-  exit 0
-fi
 
 # ─── TypeScript 型チェック ───────────────────────────────────
 echo -e "${YELLOW}[2/4] TypeScript 型チェック${NC}"
@@ -41,22 +37,25 @@ else
   echo -e "${YELLOW}npx が見つからないため型チェックをスキップ${NC}"
 fi
 
-# ─── コミット ────────────────────────────────────────────────
+# ─── コミット（変更がある場合のみ）─────────────────────────
 echo -e "\n${YELLOW}[3/4] コミット & プッシュ${NC}"
 
-# コミットメッセージ（引数があれば使用、なければ自動生成）
-if [ -n "$1" ]; then
-  MSG="$1"
+if [ -n "$CHANGED" ]; then
+  # コミットメッセージ（引数があれば使用、なければ自動生成）
+  if [ -n "$1" ]; then
+    MSG="$1"
+  else
+    TIMESTAMP=$(date '+%Y-%m-%d %H:%M')
+    MSG="deploy: ${TIMESTAMP}"
+  fi
+  git add -A
+  git commit -m "$MSG"
+  echo -e "${GREEN}✓ コミット: ${MSG}${NC}"
 else
-  TIMESTAMP=$(date '+%Y-%m-%d %H:%M')
-  MSG="deploy: ${TIMESTAMP}"
+  echo -e "${YELLOW}ローカルに新しい変更はありません。リビルドのためプッシュします。${NC}"
 fi
 
-git add -A
-git commit -m "$MSG"
-echo -e "${GREEN}✓ コミット: ${MSG}${NC}"
-
-# ─── プッシュ ────────────────────────────────────────────────
+# ─── プッシュ（変更有無に関わらず実行）─────────────────────
 git push origin master
 echo -e "${GREEN}✓ GitHub へプッシュ完了${NC}"
 
