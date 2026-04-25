@@ -35,18 +35,27 @@ export const api = {
 
   // Content
   uploadMedia: async (token: string, file: File): Promise<MediaItem> => {
-    const formData = new FormData();
-    formData.append("file", file);
-    const res = await fetch(`${API_BASE}/content/media/upload`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      body: formData,
+    // Step 1: Get presigned PUT URL from backend
+    const urlData = await api.getMediaUploadUrl(token, file.name, file.type);
+
+    // Step 2: PUT file directly to R2 (no auth header — presigned URL already contains credentials)
+    const putRes = await fetch(urlData.upload_url, {
+      method: "PUT",
+      headers: { "Content-Type": file.type },
+      body: file,
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new Error(err.detail ?? "アップロードに失敗しました");
+    if (!putRes.ok) {
+      throw new Error(`ストレージへのアップロードに失敗しました (${putRes.status})`);
     }
-    return res.json();
+
+    // Step 3: Register metadata in DB
+    return api.registerMedia(token, {
+      media_id: urlData.media_id,
+      filename: file.name,
+      mime_type: file.type,
+      url: urlData.public_url,
+      size_bytes: file.size,
+    });
   },
   getMediaUploadUrl: (token: string, filename: string, mime_type: string) =>
     request<MediaUploadUrlResponse>("/content/media/upload-url", { method: "POST", body: JSON.stringify({ filename, mime_type }) }, token),
@@ -80,10 +89,7 @@ export const api = {
 
 export interface MediaUploadUrlResponse {
   media_id: string;
-  upload: {
-    url: string;
-    fields: Record<string, string>;
-  };
+  upload_url: string;
   public_url: string;
   storage_key?: string;
 }

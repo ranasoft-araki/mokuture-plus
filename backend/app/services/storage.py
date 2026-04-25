@@ -48,7 +48,7 @@ def validate_upload(filename: str, mime_type: str) -> None:
 
 
 def generate_presigned_upload_url(tenant_id: str, filename: str, mime_type: str) -> dict:
-    """Return a presigned POST URL valid for 15 minutes."""
+    """Return a presigned PUT URL valid for 15 minutes. R2 does not support presigned POST."""
     safe_name = _safe_filename(filename)
     validate_upload(safe_name, mime_type)
 
@@ -56,18 +56,17 @@ def generate_presigned_upload_url(tenant_id: str, filename: str, mime_type: str)
     key = f"{tenant_id}/{media_id}/{safe_name}"
 
     s3 = _s3_client()
-    response = s3.generate_presigned_post(
-        Bucket=settings.storage_bucket_name,
-        Key=key,
-        Fields={"Content-Type": mime_type},
-        Conditions=[
-            {"Content-Type": mime_type},
-            ["content-length-range", 1, MAX_UPLOAD_BYTES],
-        ],
+    upload_url = s3.generate_presigned_url(
+        "put_object",
+        Params={
+            "Bucket": settings.storage_bucket_name,
+            "Key": key,
+            "ContentType": mime_type,
+        },
         ExpiresIn=900,  # 15 minutes
     )
     public_url = f"{settings.storage_public_url}/{key}"
-    return {"media_id": media_id, "upload": response, "public_url": public_url, "storage_key": key}
+    return {"media_id": media_id, "upload_url": upload_url, "public_url": public_url, "storage_key": key}
 
 
 def upload_file(tenant_id: str, filename: str, mime_type: str, data: bytes) -> dict:
