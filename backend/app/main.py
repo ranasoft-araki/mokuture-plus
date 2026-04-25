@@ -37,7 +37,7 @@ app.add_middleware(
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Kiosk-Token"],
 )
 
 app.include_router(api_router, prefix=settings.api_prefix)
