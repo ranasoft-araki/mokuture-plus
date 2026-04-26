@@ -64,14 +64,7 @@ export default function KioskWelcomePage() {
         {/* Gradient bar */}
         <div style={{ height: 6, background: "linear-gradient(90deg, #4a7c4e, #b8763a, #2e6b8e)", flexShrink: 0 }} />
 
-        {/* Brand */}
-        <div style={{ padding: "20px 80px 0", display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
-          <div style={{ width: 48, height: 48, borderRadius: 4, border: "1.5px solid #1d1a15", color: "#1d1a15", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 500, letterSpacing: -1, fontFamily: "Inter, system-ui, sans-serif" }}>磯</div>
-          <div>
-            <div style={{ fontSize: 11, letterSpacing: 3.2, textTransform: "uppercase" as const, color: "#a8a198", marginBottom: 4, fontFamily: "Inter, system-ui, sans-serif" }}>EST. 1948</div>
-            <div style={{ fontSize: 20, fontWeight: 500, letterSpacing: -0.2, color: "#1d1a15" }}>磯野木工所</div>
-          </div>
-        </div>
+
 
         {/* Body: left=welcome, right=details */}
         <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1.05fr 1fr", gap: 56, padding: "16px 80px 0", minHeight: 0 }}>

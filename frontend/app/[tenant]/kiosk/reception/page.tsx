@@ -99,14 +99,7 @@ export default function KioskFormPage() {
         style={{ width: 1920, height: 1080, background: "#faf8f4", display: "flex", flexDirection: "column", fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif" }}
         onClick={resetIdle}
       >
-        {/* Brand */}
-        <div style={{ padding: "28px 80px 0", display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
-          <div style={{ width: 48, height: 48, borderRadius: 4, border: "1.5px solid #1d1a15", color: "#1d1a15", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 500, letterSpacing: -1, fontFamily: "Inter, system-ui, sans-serif" }}>磯</div>
-          <div>
-            <div style={{ fontSize: 11, letterSpacing: 3.2, textTransform: "uppercase" as const, color: "#a8a198", marginBottom: 4, fontFamily: "Inter, system-ui, sans-serif" }}>EST. 1948</div>
-            <div style={{ fontSize: 20, fontWeight: 500, letterSpacing: -0.2, color: "#1d1a15" }}>磯野木工所</div>
-          </div>
-        </div>
+
 
         {/* Body: left=fields, right=keyboard */}
         <div style={{ flex: 1, padding: "16px 80px 0", display: "grid", gridTemplateColumns: "1fr 1.2fr", gap: 48, minHeight: 0 }}>
