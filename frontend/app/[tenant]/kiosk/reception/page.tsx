@@ -121,11 +121,11 @@ export default function ReceptionPage() {
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 20, flex: 1 }}>
-          {fields.map(({ key, label, placeholder, required }) => {
+          {fields.map(({ key, label, placeholder, required }, idx) => {
             const isFocused = focusedField === key;
             const hasValue = !!(form[key] as string);
             return (
-              <div key={key} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div key={key} style={{ display: "flex", flexDirection: "column", gap: 8, animation: `kiosk-fade-up 0.35s ${0.05 + idx * 0.07}s both` }}>
                 <label style={{
                   fontSize: 14, fontWeight: 600, color: "#1d1a15",
                   display: "flex", alignItems: "center", gap: 8,

@@ -201,6 +201,7 @@ export function MkBtn({
   onClick,
   disabled,
   type = "button",
+  style,
 }: {
   variant?: "primary" | "default" | "ghost" | "danger";
   size?: "sm" | "md";
@@ -208,6 +209,7 @@ export function MkBtn({
   onClick?: (e?: React.MouseEvent) => void;
   disabled?: boolean;
   type?: "button" | "submit";
+  style?: React.CSSProperties;
 }) {
   const sizes = {
     sm: { padding: "5px 10px", fontSize: 11.5 },
@@ -235,6 +237,7 @@ export function MkBtn({
         fontFamily: FONT_JP, letterSpacing: "0.1px",
         transition: "opacity 0.1s",
         boxShadow: variant === "primary" ? "0 1px 0 rgba(29,26,21,0.08)" : "none",
+        ...style,
       }}
     >
       {children}

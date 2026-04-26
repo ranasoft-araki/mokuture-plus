@@ -143,20 +143,37 @@ export default function KioskWaitingPage() {
       <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center pointer-events-none"
         style={{ paddingBottom: 56 }}>
         {/* Touch pulse indicator */}
-        <div style={{ position: "relative", marginBottom: 22 }}>
+        <div style={{ position: "relative", width: 64, height: 64, marginBottom: 22 }}>
+          {/* Ripple rings */}
           <div style={{
-            width: 64, height: 64, borderRadius: "50%",
+            position: "absolute", inset: 0, borderRadius: "50%",
+            background: "rgba(74,124,78,0.2)",
+            animation: "kiosk-ring-expand 2.4s ease-out 0s infinite",
+          }} />
+          <div style={{
+            position: "absolute", inset: 0, borderRadius: "50%",
+            background: "rgba(74,124,78,0.18)",
+            animation: "kiosk-ring-expand 2.4s ease-out 0.8s infinite",
+          }} />
+          {/* Outer ring */}
+          <div style={{
+            position: "absolute", inset: 0, borderRadius: "50%",
             background: "rgba(74,124,78,0.15)",
             border: "1.5px solid rgba(74,124,78,0.35)",
             display: "flex", alignItems: "center", justifyContent: "center",
           }}>
+            {/* Inner ring */}
             <div style={{
               width: 44, height: 44, borderRadius: "50%",
               background: "rgba(74,124,78,0.25)",
               border: "1.5px solid rgba(74,124,78,0.6)",
               display: "flex", alignItems: "center", justifyContent: "center",
             }}>
-              <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#4a7c4e" }} />
+              {/* Center dot */}
+              <div style={{
+                width: 24, height: 24, borderRadius: "50%", background: "#4a7c4e",
+                animation: "kiosk-touch-pulse 2.4s ease-in-out infinite",
+              }} />
             </div>
           </div>
         </div>

@@ -100,6 +100,7 @@ export default function KioskTopPage() {
         <p style={{
           color: "#6b6559", fontSize: 16, margin: "0 0 32px",
           lineHeight: 1.5, letterSpacing: "0.01em",
+          animation: "kiosk-fade-up 0.35s 0.05s both",
         }}>
           受付方法をお選びください。
         </p>
@@ -120,6 +121,7 @@ export default function KioskTopPage() {
                 : "0 2px 8px rgba(29,26,21,0.06), 0 8px 24px rgba(29,26,21,0.04)",
               transform: pressedCard === "qr" ? "scale(0.97)" : "scale(1)",
               transition: "transform 0.15s cubic-bezier(0.2,0.7,0.3,1), border-color 0.15s, box-shadow 0.15s",
+              animation: "kiosk-fade-up 0.4s 0.12s both",
             }}
           >
             <div style={{
@@ -155,6 +157,7 @@ export default function KioskTopPage() {
                 : "0 2px 8px rgba(29,26,21,0.06), 0 8px 24px rgba(29,26,21,0.04)",
               transform: pressedCard === "form" ? "scale(0.97)" : "scale(1)",
               transition: "transform 0.15s cubic-bezier(0.2,0.7,0.3,1), border-color 0.15s, box-shadow 0.15s",
+              animation: "kiosk-fade-up 0.4s 0.22s both",
             }}
           >
             <div style={{

@@ -97,6 +97,18 @@ export const api = {
     request(`/lockers/${id}/unlock`, { method: "POST" }, token),
   lockLocker: (token: string, id: string) =>
     request(`/lockers/${id}/lock`, { method: "POST" }, token),
+
+  // Push notifications (admin)
+  getPushVapidKey: (token: string) =>
+    request<{ public_key: string | null }>("/notifications/push/vapid-public-key", {}, token),
+  setupPushVapid: (token: string) =>
+    request<{ public_key: string }>("/notifications/push/setup", { method: "POST" }, token),
+  listPushSubscriptions: (token: string) =>
+    request<PushSubscriptionInfo[]>("/notifications/push/subscriptions", {}, token),
+  deletePushSubscription: (token: string, endpoint: string) =>
+    request("/notifications/push/unsubscribe", { method: "DELETE", body: JSON.stringify({ endpoint }) }, token),
+  testPushNotification: (token: string) =>
+    request("/notifications/push/test", { method: "POST" }, token),
 };
 
 export interface MediaUploadUrlResponse {
@@ -164,6 +176,14 @@ export interface Device {
   name: string;
   last_seen_at: string | null;
   created_at: string;
+}
+
+export interface PushSubscriptionInfo {
+  id: string;
+  endpoint: string;
+  user_id: string | null;
+  created_at: string;
+  user_email: string | null;
 }
 
 export interface KioskMediaItem {

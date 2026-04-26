@@ -18,9 +18,11 @@ from app.models.device import Device
 from app.models.tenant import Tenant
 from app.models.content import Media, Playlist, PlaylistItem, Schedule
 from app.models.reception import ReceptionLog
-from app.models.notification import NotificationSetting
+from app.models.notification import NotificationSetting, PushSubscription
 from app.services.slack import send_slack_notification
 from app.services.crypto import decrypt_dict
+from app.services.webpush import send_push
+from app.config import settings
 
 router = APIRouter(prefix="/kiosk", tags=["kiosk"])
 
@@ -154,6 +156,7 @@ async def kiosk_reception(
     await db.refresh(log)
 
     await _notify_slack(tenant.id, log, db)
+    await _notify_push(tenant.id, log, db)
 
     return {
         "id": log.id,
@@ -183,3 +186,50 @@ async def _notify_slack(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> 
             await send_slack_notification(webhook_url, msg)
     except Exception:
         pass
+
+
+async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:
+    """Fire Web Push to all registered subscriptions for this tenant."""
+    # Get VAPID keys (from per-tenant setting or global config)
+    vapid_result = await db.execute(
+        select(NotificationSetting).where(
+            NotificationSetting.tenant_id == tenant_id,
+            NotificationSetting.type == "vapid",
+        )
+    )
+    vapid_setting = vapid_result.scalar_one_or_none()
+    private_key = ""
+    if vapid_setting and vapid_setting.config_json and vapid_setting.config_json != "{}":
+        try:
+            vapid_config = decrypt_dict(vapid_setting.config_json)
+            private_key = vapid_config.get("private_key", "")
+        except Exception:
+            pass
+    if not private_key:
+        private_key = settings.vapid_private_key
+    if not private_key:
+        return
+
+    subs_result = await db.execute(
+        select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
+    )
+    subs = subs_result.scalars().all()
+    if not subs:
+        return
+
+    title = "来客のお知らせ"
+    body = f"{log.visitor_name}様（{log.company or '—'}）が受付を完了しました。"
+    if log.purpose:
+        body += f" 用件：{log.purpose}"
+
+    for sub in subs:
+        await send_push(
+            endpoint=sub.endpoint,
+            p256dh=sub.p256dh,
+            auth=sub.auth_key,
+            title=title,
+            body=body,
+            url=f"/{tenant_id}/admin/reception",
+            private_key=private_key,
+            subject=settings.vapid_subject,
+        )
