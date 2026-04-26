@@ -66,7 +66,7 @@ export default function KioskWaitingPage() {
       style={{
         backgroundImage: "repeating-linear-gradient(45deg, rgba(255,255,255,0.025) 0 10px, transparent 10px 20px)",
       }}
-      onClick={() => router.push(`/${params.tenant}/kiosk/reception`)}
+      onClick={() => router.push(`/${params.tenant}/kiosk/top`)}
     >
       {/* Media layer */}
       {currentMedia ? (

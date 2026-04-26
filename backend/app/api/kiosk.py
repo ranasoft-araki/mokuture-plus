@@ -3,7 +3,10 @@
 The device token is stored in the kiosk's localStorage and sent via
 the X-Kiosk-Token header. It identifies both the device and the tenant.
 """
-from datetime import datetime, timezone
+import zoneinfo
+from datetime import datetime
+
+_JST = zoneinfo.ZoneInfo("Asia/Tokyo")
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, field_validator
@@ -33,7 +36,7 @@ async def get_kiosk_device(
     if device is None:
         raise HTTPException(status_code=401, detail="Invalid kiosk token")
 
-    device.last_seen_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    device.last_seen_at = datetime.now(_JST).replace(tzinfo=None)
     await db.commit()
 
     tenant_result = await db.execute(select(Tenant).where(Tenant.id == device.tenant_id))
@@ -48,7 +51,7 @@ async def get_kiosk_device(
 async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device), db: AsyncSession = Depends(get_db)):
     """Return the current scheduled playlist with embedded media data."""
     tenant, _ = ctx
-    now = datetime.now(timezone.utc)
+    now = datetime.now(_JST)
     day = now.weekday()
     time_str = now.strftime("%H:%M")
 
