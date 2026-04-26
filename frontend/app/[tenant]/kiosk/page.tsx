@@ -146,48 +146,14 @@ export default function KioskIdlePage() {
         }}>
           <div style={{ flex: 1 }} />
 
-          {/* Bottom: company brand + tap CTA */}
+          {/* Bottom: tap CTA */}
           <div style={{
             padding: "0 80px 80px",
-            display: "grid",
-            gridTemplateColumns: "1.4fr auto",
+            display: "flex",
+            justifyContent: "flex-end",
             alignItems: "flex-end",
-            gap: 56,
           }}>
-            {/* Left: company logo + tagline */}
-            <div>
-              <div style={{
-                display: "flex", alignItems: "center", gap: 22,
-                marginBottom: 28, color: "rgba(255,255,255,0.92)",
-              }}>
-                <div style={{
-                  width: 64, height: 64, borderRadius: 4,
-                  border: "1.5px solid rgba(255,255,255,0.5)",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 30, fontWeight: 500, letterSpacing: -1,
-                  fontFamily: "Inter, system-ui, sans-serif",
-                }}>磯</div>
-                <div>
-                  <div style={{
-                    fontSize: 11, letterSpacing: 4, textTransform: "uppercase",
-                    color: "rgba(255,255,255,0.55)", marginBottom: 6,
-                    fontFamily: "Inter, system-ui, sans-serif",
-                  }}>EST. 1948 — ASAHIKAWA</div>
-                  <div style={{ fontSize: 28, fontWeight: 500, letterSpacing: -0.4 }}>
-                    磯野木工所
-                  </div>
-                </div>
-              </div>
-              <div style={{
-                fontSize: 124, fontWeight: 600, color: "#ffffff",
-                letterSpacing: -3.5, lineHeight: 1.0,
-                textShadow: "0 4px 32px rgba(0,0,0,0.5)",
-              }}>
-                木と、暮らしを編む。
-              </div>
-            </div>
-
-            {/* Right: tap CTA card */}
+            {/* tap CTA card */}
             <div style={{
               padding: "28px 36px",
               background: "rgba(255,255,255,0.96)",
