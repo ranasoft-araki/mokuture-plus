@@ -89,6 +89,16 @@ def upload_file(tenant_id: str, filename: str, mime_type: str, data: bytes) -> d
     return {"media_id": media_id, "public_url": public_url, "storage_key": key}
 
 
+def generate_presigned_get_url(key: str, expires_in: int = 3600) -> str:
+    """Return a presigned GET URL valid for expires_in seconds (default 1 hour)."""
+    s3 = _s3_client()
+    return s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": settings.storage_bucket_name, "Key": key},
+        ExpiresIn=expires_in,
+    )
+
+
 def delete_object(storage_key: str) -> None:
     s3 = _s3_client()
     s3.delete_object(Bucket=settings.storage_bucket_name, Key=storage_key)

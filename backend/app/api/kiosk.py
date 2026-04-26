@@ -20,6 +20,7 @@ from app.models.content import Media, Playlist, PlaylistItem, Schedule
 from app.models.reception import ReceptionLog
 from app.models.notification import NotificationSetting, PushSubscription
 from app.services.slack import send_slack_notification
+from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
 from app.services.webpush import send_push
 from app.config import settings
@@ -90,6 +91,13 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     )
     media_map = {m.id: m for m in media_result.scalars()}
 
+    storage_base = settings.storage_public_url.rstrip("/") + "/"
+
+    def _media_url(url: str) -> str:
+        if url.startswith(storage_base):
+            return generate_presigned_get_url(url.removeprefix(storage_base), expires_in=3600)
+        return url
+
     return {
         "playlist": {
             "id": pl.id,
@@ -103,7 +111,7 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
                     "media": (
                         {
                             "id": m.id,
-                            "url": m.url,
+                            "url": _media_url(m.url),
                             "mime_type": m.mime_type,
                             "filename": m.filename,
                         }

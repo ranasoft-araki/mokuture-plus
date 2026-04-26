@@ -24,7 +24,8 @@ export default function KioskIdlePage() {
       router.replace(`/${params.tenant}/kiosk/setup`);
       return;
     }
-    (async () => {
+
+    const fetchSchedule = async () => {
       try {
         const data = await api.getKioskSchedule(kioskToken);
         setItems(data.playlist?.items ?? []);
@@ -32,12 +33,17 @@ export default function KioskIdlePage() {
         if (err instanceof Error && err.message === "Invalid kiosk token") {
           localStorage.removeItem(KIOSK_TOKEN_KEY);
           router.replace(`/${params.tenant}/kiosk/setup`);
-          return;
         }
-      } finally {
-        setLoaded(true);
       }
+    };
+
+    (async () => {
+      await fetchSchedule();
+      setLoaded(true);
     })();
+
+    const intervalId = setInterval(fetchSchedule, 60_000);
+    return () => clearInterval(intervalId);
   }, [params.tenant, router]);
 
   const advanceItem = useCallback(() => {
@@ -47,7 +53,11 @@ export default function KioskIdlePage() {
   useEffect(() => {
     if (items.length === 0) return;
     const item = items[currentIndex];
-    if (!item?.media || item.media.mime_type === "video/mp4") return;
+    if (!item?.media) {
+      itemTimerRef.current = setTimeout(advanceItem, 3000);
+      return () => { if (itemTimerRef.current) clearTimeout(itemTimerRef.current); };
+    }
+    if (item.media.mime_type === "video/mp4") return;
     itemTimerRef.current = setTimeout(advanceItem, item.duration_sec * 1000);
     return () => {
       if (itemTimerRef.current) clearTimeout(itemTimerRef.current);
@@ -85,6 +95,7 @@ export default function KioskIdlePage() {
             loop={items.length === 1}
             onLoadedMetadata={() => videoRef.current?.play().catch(() => {})}
             onEnded={advanceItem}
+            onError={() => advanceItem()}
             style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
           />
         ) : currentMedia ? (
