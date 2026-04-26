@@ -112,11 +112,29 @@ function PWAPushPanel({ authToken }: { authToken: string }) {
     setWorking(true);
     setError("");
     try {
-      await api.testPushNotification(authToken);
-      setTestSent(true);
-      setTimeout(() => setTestSent(false), 3000);
+      const res = await api.testPushNotification(authToken);
+      if (res.sent === 0) {
+        setError(`送信失敗: ${res.total}件中0件成功。Renderのログで詳細を確認してください。`);
+      } else {
+        setTestSent(true);
+        setTimeout(() => setTestSent(false), 3000);
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "送信に失敗しました");
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const handleRegenerateVapid = async () => {
+    if (!confirm("VAPID鍵を再生成します。既存の通知登録は無効になり、再登録が必要になります。続けますか？")) return;
+    setWorking(true);
+    setError("");
+    try {
+      await api.regenerateVapid(authToken);
+      await reload();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "再生成に失敗しました");
     } finally {
       setWorking(false);
     }
@@ -148,7 +166,14 @@ function PWAPushPanel({ authToken }: { authToken: string }) {
         ) : (
           <div style={{ marginBottom: 16, padding: "12px 14px", background: "#eaf0e8", borderRadius: 8, border: "1px solid rgba(74,124,78,0.2)", display: "flex", gap: 10, alignItems: "center" }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4a7c4e" strokeWidth="2" strokeLinecap="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-            <span style={{ fontSize: 12, color: "#3a6240", fontWeight: 500 }}>VAPID 鍵が設定されています</span>
+            <span style={{ fontSize: 12, color: "#3a6240", fontWeight: 500, flex: 1 }}>VAPID 鍵が設定されています</span>
+            <button
+              onClick={handleRegenerateVapid}
+              disabled={working}
+              style={{ fontSize: 10.5, color: "#a8a198", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", padding: 0 }}
+            >
+              再生成
+            </button>
           </div>
         )}
 

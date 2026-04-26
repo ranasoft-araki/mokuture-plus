@@ -267,4 +267,4 @@ async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> N
             url=f"/{tenant_id}/admin/reception",
             private_key=private_key,
             subject=settings.vapid_subject,
-        )
+        )  # fire-and-forget: ignore (bool, str) return

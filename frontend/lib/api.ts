@@ -137,7 +137,9 @@ export const api = {
   deletePushSubscription: (token: string, endpoint: string) =>
     request("/notifications/push/unsubscribe", { method: "DELETE", body: JSON.stringify({ endpoint }) }, token),
   testPushNotification: (token: string) =>
-    request("/notifications/push/test", { method: "POST" }, token),
+    request<{ sent: number; total: number }>("/notifications/push/test", { method: "POST" }, token),
+  regenerateVapid: (token: string) =>
+    request<{ public_key: string; regenerated: boolean }>("/notifications/push/regenerate", { method: "POST" }, token),
 };
 
 export interface MediaUploadUrlResponse {

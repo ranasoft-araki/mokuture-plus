@@ -13,15 +13,15 @@ except ImportError:
     logger.warning("pywebpush not installed — web push disabled. Run: uv add pywebpush")
 
 
-def _send_sync(endpoint: str, p256dh: str, auth: str, payload: dict, private_key: str, subject: str) -> bool:
-    """Synchronous send (called in thread pool to avoid blocking event loop)."""
+def _send_sync(endpoint: str, p256dh: str, auth: str, payload: dict, private_key: str, subject: str) -> None:
+    """Synchronous send (called in thread pool). Raises on failure."""
     webpush(
         subscription_info={"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": auth}},
         data=json.dumps(payload),
         vapid_private_key=private_key,
         vapid_claims={"sub": subject},
+        content_type="application/json",
     )
-    return True
 
 
 async def send_push(
@@ -33,10 +33,12 @@ async def send_push(
     url: str = "/",
     private_key: str = "",
     subject: str = "mailto:admin@mokuture.jp",
-) -> bool:
-    """Send a single web push notification. Returns True on success."""
-    if not _AVAILABLE or not private_key:
-        return False
+) -> tuple[bool, str]:
+    """Send a single web push notification. Returns (success, error_message)."""
+    if not _AVAILABLE:
+        return False, "pywebpush not installed"
+    if not private_key:
+        return False, "VAPID private key not configured"
 
     payload = {
         "title": title,
@@ -47,16 +49,26 @@ async def send_push(
     }
     loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(
+        await loop.run_in_executor(
             None, _send_sync, endpoint, p256dh, auth, payload, private_key, subject
         )
+        return True, ""
     except WebPushException as e:
-        status = getattr(e.response, "status_code", None) if e.response else None
-        logger.warning("push failed (endpoint=%s…, status=%s): %s", endpoint[:40], status, e)
-        return False
+        response_body = ""
+        status_code = None
+        if e.response is not None:
+            status_code = e.response.status_code
+            try:
+                response_body = e.response.text[:400]
+            except Exception:
+                pass
+        error_msg = f"HTTP {status_code}: {response_body}" if status_code else str(e)[:400]
+        logger.error("webpush failed endpoint=%s… : %s", endpoint[:50], error_msg)
+        return False, error_msg
     except Exception as e:
-        logger.warning("push error (endpoint=%s…): %s", endpoint[:40], e)
-        return False
+        error_msg = str(e)[:400]
+        logger.error("webpush error endpoint=%s… : %s", endpoint[:50], error_msg)
+        return False, error_msg
 
 
 def generate_vapid_keys() -> tuple[str, str]:
@@ -70,7 +82,8 @@ def generate_vapid_keys() -> tuple[str, str]:
     private = generate_private_key(SECP256R1())
     public = private.public_key()
 
-    priv_pem = private.private_bytes(Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption()).decode()
+    # PKCS8 format is more universally compatible with pywebpush 2.x
+    priv_pem = private.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()).decode()
     pub_bytes = public.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
     pub_b64 = base64.urlsafe_b64encode(pub_bytes).decode().rstrip("=")
 

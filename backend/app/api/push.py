@@ -70,7 +70,7 @@ async def setup_vapid(
     user: User = Depends(require_roles("admin", "superadmin")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate and store VAPID keys for this tenant (idempotent)."""
+    """Generate and store VAPID keys for this tenant (idempotent — skips if already set)."""
     existing = await _get_vapid(user.tenant_id, db)
     if existing and existing.get("public_key"):
         return {"public_key": existing["public_key"], "generated": False}
@@ -78,6 +78,22 @@ async def setup_vapid(
     private_pem, public_b64 = generate_vapid_keys()
     await _upsert_vapid(user.tenant_id, private_pem, public_b64, db)
     return {"public_key": public_b64, "generated": True}
+
+
+@router.post("/regenerate")
+async def regenerate_vapid(
+    user: User = Depends(require_roles("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Force-regenerate VAPID keys. Existing subscriptions will stop working and must re-subscribe."""
+    private_pem, public_b64 = generate_vapid_keys()
+    await _upsert_vapid(user.tenant_id, private_pem, public_b64, db)
+    # Remove all subscriptions since they were created with the old key
+    await db.execute(
+        delete(PushSubscription).where(PushSubscription.tenant_id == user.tenant_id)
+    )
+    await db.commit()
+    return {"public_key": public_b64, "regenerated": True}
 
 
 # ── Subscription CRUD ────────────────────────────────────────────────
@@ -179,8 +195,9 @@ async def test_push(
         raise HTTPException(status_code=404, detail="No push subscriptions registered.")
 
     sent = 0
+    errors: list[str] = []
     for s in subs:
-        ok = await send_push(
+        ok, err = await send_push(
             endpoint=s.endpoint,
             p256dh=s.p256dh,
             auth=s.auth_key,
@@ -192,4 +209,9 @@ async def test_push(
         )
         if ok:
             sent += 1
+        elif err:
+            errors.append(err)
+
+    if sent == 0 and errors:
+        raise HTTPException(status_code=500, detail=f"プッシュ送信失敗: {errors[0]}")
     return {"sent": sent, "total": len(subs)}
