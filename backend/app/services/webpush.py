@@ -1,24 +1,47 @@
 """Web Push notification service (VAPID / RFC 8030)."""
 import asyncio
+import base64
 import json
 import logging
 
 logger = logging.getLogger(__name__)
 
 try:
-    from pywebpush import webpush, WebPushException
+    from pywebpush import webpush, WebPushException, Vapid
     _AVAILABLE = True
 except ImportError:
     _AVAILABLE = False
     logger.warning("pywebpush not installed — web push disabled. Run: uv add pywebpush")
 
 
-def _send_sync(endpoint: str, p256dh: str, auth: str, payload: dict, private_key: str, subject: str) -> None:
-    """Synchronous send (called in thread pool). Raises on failure."""
+def _build_vapid(raw_b64: str) -> "Vapid":
+    """Build a Vapid object from raw base64url private key — bypasses PEM parsing entirely."""
+    from cryptography.hazmat.primitives.asymmetric.ec import derive_private_key, SECP256R1
+
+    raw = base64.urlsafe_b64decode(raw_b64 + "==")
+    private_int = int.from_bytes(raw, "big")
+    ec_key = derive_private_key(private_int, SECP256R1())
+
+    # Try constructor keyword arg first; fall back to direct attribute assignment
+    try:
+        v = Vapid(private_key=ec_key)
+    except TypeError:
+        v = Vapid()
+        v._private_key = ec_key  # type: ignore[attr-defined]
+        v._public_key = ec_key.public_key()  # type: ignore[attr-defined]
+    return v
+
+
+def _send_sync(
+    endpoint: str, p256dh: str, auth: str,
+    payload: dict, raw_private_key: str, subject: str,
+) -> None:
+    """Synchronous send. raw_private_key is base64url of 32-byte EC scalar. Raises on failure."""
+    vapid = _build_vapid(raw_private_key)
     webpush(
         subscription_info={"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": auth}},
         data=json.dumps(payload),
-        vapid_private_key=private_key,
+        vapid_private_key=vapid,
         vapid_claims={"sub": subject},
     )
 
@@ -71,19 +94,21 @@ async def send_push(
 
 
 def generate_vapid_keys() -> tuple[str, str]:
-    """Generate a new VAPID key pair. Returns (private_key_pem, public_key_base64url)."""
+    """Generate VAPID key pair. Returns (raw_private_key_base64url, public_key_base64url).
+
+    Stores the private key as raw 32-byte EC scalar in base64url to avoid
+    PEM format dependency on pywebpush version.
+    """
     from cryptography.hazmat.primitives.asymmetric.ec import generate_private_key, SECP256R1
-    from cryptography.hazmat.primitives.serialization import (
-        Encoding, PrivateFormat, PublicFormat, NoEncryption
-    )
-    import base64
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
     private = generate_private_key(SECP256R1())
     public = private.public_key()
 
-    # PKCS8 format is more universally compatible with pywebpush 2.x
-    priv_pem = private.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()).decode()
+    priv_raw = private.private_numbers().private_value.to_bytes(32, "big")
+    priv_b64 = base64.urlsafe_b64encode(priv_raw).decode().rstrip("=")
+
     pub_bytes = public.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
     pub_b64 = base64.urlsafe_b64encode(pub_bytes).decode().rstrip("=")
 
-    return priv_pem, pub_b64
+    return priv_b64, pub_b64
