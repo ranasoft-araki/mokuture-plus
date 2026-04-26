@@ -11,7 +11,9 @@ export default function ReceptionPage() {
   const params = useParams<{ tenant: string }>();
   const router = useRouter();
 
-  const [form, setForm] = useState<ReceptionCreate>({ visitor_name: "", company: "", purpose: "", staff: "", method: "form" });
+  const [form, setForm] = useState<ReceptionCreate>({
+    visitor_name: "", company: "", purpose: "", staff: "", method: "form",
+  });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -22,7 +24,6 @@ export default function ReceptionPage() {
   };
 
   useEffect(() => {
-    // Redirect to setup if no token
     if (!localStorage.getItem(KIOSK_TOKEN_KEY)) {
       router.replace(`/${params.tenant}/kiosk/setup`);
       return;
@@ -52,63 +53,116 @@ export default function ReceptionPage() {
     }
   };
 
+  const fields: { key: keyof ReceptionCreate; label: string; placeholder: string; required?: boolean }[] = [
+    { key: "visitor_name", label: "お名前",   placeholder: "山田 太郎",       required: true },
+    { key: "company",      label: "会社名",   placeholder: "株式会社 〇〇" },
+    { key: "purpose",      label: "用件",     placeholder: "打ち合わせ、納品など" },
+    { key: "staff",        label: "担当者名", placeholder: "担当者のお名前" },
+  ];
+
   return (
-    <div className="w-screen h-screen bg-[#faf8f4] flex flex-col" onClick={resetIdle}>
-      <div className="bg-[#4a7c4e] px-8 py-6 flex items-center gap-4">
+    <div
+      className="w-screen h-screen flex flex-col"
+      style={{ background: "#faf8f4" }}
+      onClick={resetIdle}
+    >
+      {/* Header */}
+      <div style={{
+        background: "#4a7c4e", padding: "0 28px",
+        height: 88, display: "flex", alignItems: "center", gap: 16, flexShrink: 0,
+      }}>
         <button
           onClick={() => router.push(`/${params.tenant}/kiosk`)}
-          className="text-white opacity-80 text-2xl min-w-[44px] min-h-[44px] flex items-center"
+          style={{
+            width: 44, height: 44, borderRadius: 12,
+            background: "rgba(255,255,255,0.15)", border: "none",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "pointer",
+          }}
         >
-          ←
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 12H5M12 5l-7 7 7 7" />
+          </svg>
         </button>
-        <h1 className="text-white text-2xl font-medium">受付</h1>
+        <h1 style={{ color: "white", fontSize: 22, fontWeight: 600, letterSpacing: "-0.02em", margin: 0 }}>
+          受付
+        </h1>
       </div>
 
-      <form onSubmit={handleSubmit} className="flex-1 flex flex-col gap-6 px-10 py-10 max-w-lg mx-auto w-full">
-        <p className="text-[#5a5347] text-lg">お名前と用件をご入力ください。</p>
+      {/* Form body */}
+      <form
+        onSubmit={handleSubmit}
+        style={{
+          flex: 1, display: "flex", flexDirection: "column",
+          padding: "32px 32px 0", gap: 20, overflowY: "auto",
+        }}
+      >
+        <p style={{ color: "#6b6559", fontSize: 17, margin: 0, lineHeight: 1.5 }}>
+          お名前と用件をご入力ください。
+        </p>
 
-        {error && <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-red-700">{error}</div>}
+        {error && (
+          <div style={{
+            background: "#f6e0dc", border: "1px solid #a84238",
+            borderRadius: 12, padding: "12px 16px", color: "#a84238", fontSize: 15,
+          }}>
+            {error}
+          </div>
+        )}
 
-        <Field label="お名前 *">
-          <input type="text" value={form.visitor_name} onChange={(e) => handleChange("visitor_name", e.target.value)}
-            className="kiosk-input" placeholder="山田 太郎" autoComplete="off" required />
-        </Field>
-        <Field label="会社名">
-          <input type="text" value={form.company ?? ""} onChange={(e) => handleChange("company", e.target.value)}
-            className="kiosk-input" placeholder="株式会社 〇〇" autoComplete="off" />
-        </Field>
-        <Field label="用件">
-          <input type="text" value={form.purpose ?? ""} onChange={(e) => handleChange("purpose", e.target.value)}
-            className="kiosk-input" placeholder="打ち合わせ、納品など" autoComplete="off" />
-        </Field>
-        <Field label="担当者名">
-          <input type="text" value={form.staff ?? ""} onChange={(e) => handleChange("staff", e.target.value)}
-            className="kiosk-input" placeholder="担当者のお名前" autoComplete="off" />
-        </Field>
-
-        <button type="submit" disabled={submitting}
-          className="mt-4 bg-[#4a7c4e] text-white text-xl py-5 rounded-xl font-medium disabled:opacity-50 min-h-[64px]">
-          {submitting ? "送信中…" : "受付する"}
-        </button>
+        {fields.map(({ key, label, placeholder, required }) => (
+          <div key={key} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <label style={{
+              fontSize: 14, fontWeight: 600, color: "#1d1a15",
+              display: "flex", alignItems: "center", gap: 8,
+            }}>
+              {label}
+              {required && (
+                <span style={{
+                  fontSize: 11, color: "white", background: "#a84238",
+                  padding: "1px 8px", borderRadius: 999, fontWeight: 600,
+                }}>必須</span>
+              )}
+            </label>
+            <input
+              type="text"
+              value={(form[key] as string) ?? ""}
+              onChange={(e) => handleChange(key, e.target.value)}
+              placeholder={placeholder}
+              autoComplete="off"
+              required={required}
+              style={{
+                height: 64, background: "white",
+                border: `2px solid ${form[key] ? "#4a7c4e" : "#d8d3c7"}`,
+                borderRadius: 12, padding: "0 20px",
+                fontSize: 20, color: "#1d1a15", outline: "none",
+                boxShadow: form[key] ? "0 0 0 3px #eaf0e8" : "none",
+                transition: "border-color 0.15s, box-shadow 0.15s",
+              }}
+            />
+          </div>
+        ))}
       </form>
 
-      <style jsx global>{`
-        .kiosk-input {
-          width: 100%; padding: 16px 20px; font-size: 20px;
-          border: 2px solid #e2ddd6; border-radius: 12px;
-          background: white; outline: none; min-height: 64px;
-        }
-        .kiosk-input:focus { border-color: #4a7c4e; }
-      `}</style>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-2">
-      <label className="text-[#1d1a15] text-base font-medium">{label}</label>
-      {children}
+      {/* Submit */}
+      <div style={{ padding: "24px 32px 48px", flexShrink: 0 }}>
+        <button
+          type="submit"
+          form="reception-form"
+          onClick={handleSubmit}
+          disabled={submitting}
+          style={{
+            width: "100%", height: 68, background: submitting ? "#7a9e7d" : "#4a7c4e",
+            color: "white", border: "none", borderRadius: 16,
+            fontSize: 20, fontWeight: 600, cursor: submitting ? "not-allowed" : "pointer",
+            letterSpacing: "0.02em",
+            boxShadow: "0 4px 16px rgba(74,124,78,0.35)",
+            transition: "background 0.15s",
+          }}
+        >
+          {submitting ? "送信中…" : "受付する"}
+        </button>
+      </div>
     </div>
   );
 }
