@@ -20,7 +20,6 @@ def _send_sync(endpoint: str, p256dh: str, auth: str, payload: dict, private_key
         data=json.dumps(payload),
         vapid_private_key=private_key,
         vapid_claims={"sub": subject},
-        content_type="application/json",
     )
 
 
