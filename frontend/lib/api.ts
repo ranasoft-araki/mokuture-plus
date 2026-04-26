@@ -6,29 +6,38 @@ async function _fetch(path: string, init?: RequestInit, token?: string): Promise
   return fetch(`${API_BASE}${path}`, { ...init, headers: { ...headers, ...init?.headers } });
 }
 
+// Singleton: prevents race condition when multiple requests expire simultaneously
+let _pendingRefresh: Promise<string | null> | null = null;
+
+async function _doRefresh(): Promise<string | null> {
+  const { getRefreshToken, saveTokens, clearTokens } = await import("@/lib/auth");
+  const rt = getRefreshToken();
+  if (!rt) return null;
+  const res = await _fetch("/auth/refresh", {
+    method: "POST",
+    body: JSON.stringify({ refresh_token: rt }),
+  });
+  if (res.ok) {
+    const { access_token, refresh_token } = await res.json();
+    saveTokens(access_token, refresh_token);
+    return access_token;
+  }
+  clearTokens();
+  if (typeof window !== "undefined") window.location.href = "/login";
+  return null;
+}
+
 async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
   let res = await _fetch(path, init, token);
 
-  // Auto-refresh: if the caller passed an access token and we get 401, try refreshing once
   if (res.status === 401 && token) {
-    const { getRefreshToken, saveTokens, clearTokens } = await import("@/lib/auth");
-    const refreshToken = getRefreshToken();
-    if (refreshToken) {
-      const refreshRes = await _fetch("/auth/refresh", {
-        method: "POST",
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
-      if (refreshRes.ok) {
-        const { access_token, refresh_token } = await refreshRes.json();
-        saveTokens(access_token, refresh_token);
-        // Retry original request with new access token
-        res = await _fetch(path, init, access_token);
-      } else {
-        clearTokens();
-        if (typeof window !== "undefined") window.location.href = "/login";
-        throw new Error("セッションが切れました。再ログインしてください。");
-      }
+    // All concurrent 401s share one refresh attempt — prevents refresh token rotation conflict
+    if (!_pendingRefresh) {
+      _pendingRefresh = _doRefresh().finally(() => { _pendingRefresh = null; });
     }
+    const newToken = await _pendingRefresh;
+    if (!newToken) throw new Error("セッションが切れました。再ログインしてください。");
+    res = await _fetch(path, init, newToken);
   }
 
   if (!res.ok) {
@@ -132,6 +141,8 @@ export const api = {
     request<{ public_key: string | null }>("/notifications/push/vapid-public-key", {}, token),
   setupPushVapid: (token: string) =>
     request<{ public_key: string }>("/notifications/push/setup", { method: "POST" }, token),
+  subscribePush: (token: string, body: { endpoint: string; p256dh: string; auth: string }) =>
+    request("/notifications/push/subscribe", { method: "POST", body: JSON.stringify(body) }, token),
   listPushSubscriptions: (token: string) =>
     request<PushSubscriptionInfo[]>("/notifications/push/subscriptions", {}, token),
   deletePushSubscription: (token: string, endpoint: string) =>

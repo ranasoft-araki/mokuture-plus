@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
 import { api } from "@/lib/api";
-import { requestAndSubscribe, sendSubscriptionToServer, unsubscribeFromPush, getCurrentPushSubscription } from "@/lib/push";
+import { requestAndSubscribe, getCurrentPushSubscription } from "@/lib/push";
 import { getAccessToken } from "@/lib/auth";
 
 function Field({ label, hint, children, required }: { label: string; hint?: string; children: React.ReactNode; required?: boolean }) {
@@ -83,12 +83,16 @@ function PWAPushPanel({ authToken }: { authToken: string }) {
     try {
       const sub = await requestAndSubscribe(vapidKey);
       if (!sub) { setError("通知の許可が拒否されました。ブラウザの設定を確認してください。"); return; }
-      const ok = await sendSubscriptionToServer(authToken, sub);
-      if (!ok) { setError("サーバーへの登録に失敗しました"); return; }
+      const json = sub.toJSON();
+      await api.subscribePush(authToken, {
+        endpoint: sub.endpoint,
+        p256dh: json.keys?.p256dh ?? "",
+        auth: json.keys?.auth ?? "",
+      });
       setIsSubscribed(true);
       await reload();
-    } catch {
-      setError("登録に失敗しました");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "登録に失敗しました");
     } finally {
       setWorking(false);
     }
@@ -98,11 +102,18 @@ function PWAPushPanel({ authToken }: { authToken: string }) {
     setWorking(true);
     setError("");
     try {
-      await unsubscribeFromPush(authToken);
+      if ("serviceWorker" in navigator) {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          await api.deletePushSubscription(authToken, sub.endpoint);
+          await sub.unsubscribe();
+        }
+      }
       setIsSubscribed(false);
       await reload();
-    } catch {
-      setError("登録解除に失敗しました");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "登録解除に失敗しました");
     } finally {
       setWorking(false);
     }
