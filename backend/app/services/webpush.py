@@ -45,7 +45,7 @@ async def send_push(
         "tag": "reception",
         "icon": "/icons/icon.svg",
     }
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(
             None, _send_sync, endpoint, p256dh, auth, payload, private_key, subject

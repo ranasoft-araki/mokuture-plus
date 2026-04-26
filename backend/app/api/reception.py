@@ -7,10 +7,12 @@ from sqlalchemy import select, func
 from app.database import get_db
 from app.middleware.tenant import get_current_user
 from app.models.reception import ReceptionLog
-from app.models.notification import NotificationSetting
+from app.models.notification import NotificationSetting, PushSubscription
 from app.models.user import User
 from app.services.slack import send_slack_notification
+from app.services.webpush import send_push
 from app.services.crypto import decrypt_dict
+from app.config import settings
 
 router = APIRouter(prefix="/reception", tags=["reception"])
 
@@ -66,8 +68,8 @@ async def create_reception(
     await db.commit()
     await db.refresh(log)
 
-    # Fire-and-forget Slack notification
     await _notify_slack(user.tenant_id, log, db)
+    await _notify_push(user.tenant_id, log, db)
 
     return _log_out(log)
 
@@ -102,6 +104,51 @@ async def today_stats(user: User = Depends(get_current_user), db: AsyncSession =
     )
     count = result.scalar_one()
     return {"date": today.isoformat(), "count": count}
+
+
+async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:
+    vapid_result = await db.execute(
+        select(NotificationSetting).where(
+            NotificationSetting.tenant_id == tenant_id,
+            NotificationSetting.type == "vapid",
+        )
+    )
+    vapid_setting = vapid_result.scalar_one_or_none()
+    private_key = ""
+    if vapid_setting and vapid_setting.config_json and vapid_setting.config_json != "{}":
+        try:
+            vapid_config = decrypt_dict(vapid_setting.config_json)
+            private_key = vapid_config.get("private_key", "")
+        except Exception:
+            pass
+    if not private_key:
+        private_key = settings.vapid_private_key
+    if not private_key:
+        return
+
+    subs_result = await db.execute(
+        select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
+    )
+    subs = subs_result.scalars().all()
+    if not subs:
+        return
+
+    title = "来客のお知らせ"
+    body = f"{log.visitor_name}様（{log.company or '—'}）が受付を完了しました。"
+    if log.purpose:
+        body += f" 用件：{log.purpose}"
+
+    for sub in subs:
+        await send_push(
+            endpoint=sub.endpoint,
+            p256dh=sub.p256dh,
+            auth=sub.auth_key,
+            title=title,
+            body=body,
+            url=f"/{tenant_id}/admin/reception",
+            private_key=private_key,
+            subject=settings.vapid_subject,
+        )
 
 
 async def _notify_slack(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:
