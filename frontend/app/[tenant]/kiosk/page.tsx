@@ -90,6 +90,7 @@ export default function KioskIdlePage() {
             key={currentMedia.id}
             src={currentMedia.url}
             autoPlay
+            muted
             playsInline
             loop={items.length === 1}
             onLoadedMetadata={() => videoRef.current?.play().catch(() => {})}

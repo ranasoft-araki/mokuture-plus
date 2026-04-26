@@ -24,6 +24,98 @@ const KB_ROWS = [
   ["shift","z","x","c","v","b","n","m","⌫"],
 ];
 
+// ローマ字→ひらがな 変換テーブル
+const ROMAJI_MAP: Record<string, string> = {
+  "a":"あ","i":"い","u":"う","e":"え","o":"お",
+  "ka":"か","ki":"き","ku":"く","ke":"け","ko":"こ",
+  "kya":"きゃ","kyu":"きゅ","kyo":"きょ",
+  "sa":"さ","si":"し","su":"す","se":"せ","so":"そ",
+  "shi":"し","sha":"しゃ","shu":"しゅ","sho":"しょ",
+  "sya":"しゃ","syu":"しゅ","syo":"しょ",
+  "ta":"た","ti":"ち","tu":"つ","te":"て","to":"と",
+  "chi":"ち","tsu":"つ",
+  "cha":"ちゃ","chu":"ちゅ","cho":"ちょ",
+  "tya":"ちゃ","tyu":"ちゅ","tyo":"ちょ",
+  "na":"な","ni":"に","nu":"ぬ","ne":"ね","no":"の",
+  "nya":"にゃ","nyu":"にゅ","nyo":"にょ",
+  "nn":"ん",
+  "ha":"は","hi":"ひ","hu":"ふ","fu":"ふ","he":"へ","ho":"ほ",
+  "hya":"ひゃ","hyu":"ひゅ","hyo":"ひょ",
+  "ma":"ま","mi":"み","mu":"む","me":"め","mo":"も",
+  "mya":"みゃ","myu":"みゅ","myo":"みょ",
+  "ya":"や","yu":"ゆ","yo":"よ",
+  "ra":"ら","ri":"り","ru":"る","re":"れ","ro":"ろ",
+  "rya":"りゃ","ryu":"りゅ","ryo":"りょ",
+  "wa":"わ","wo":"を","wi":"ゐ","we":"ゑ",
+  "ga":"が","gi":"ぎ","gu":"ぐ","ge":"げ","go":"ご",
+  "gya":"ぎゃ","gyu":"ぎゅ","gyo":"ぎょ",
+  "za":"ざ","zi":"じ","zu":"ず","ze":"ぜ","zo":"ぞ",
+  "ji":"じ","ja":"じゃ","ju":"じゅ","jo":"じょ",
+  "zya":"じゃ","zyu":"じゅ","zyo":"じょ",
+  "da":"だ","di":"ぢ","du":"づ","de":"で","do":"ど",
+  "ba":"ば","bi":"び","bu":"ぶ","be":"べ","bo":"ぼ",
+  "bya":"びゃ","byu":"びゅ","byo":"びょ",
+  "pa":"ぱ","pi":"ぴ","pu":"ぷ","pe":"ぺ","po":"ぽ",
+  "pya":"ぴゃ","pyu":"ぴゅ","pyo":"ぴょ",
+  "xa":"ぁ","xi":"ぃ","xu":"ぅ","xe":"ぇ","xo":"ぉ",
+  "xya":"ゃ","xyu":"ゅ","xyo":"ょ",
+  "xtsu":"っ","xtu":"っ",
+  "-":"ー",
+};
+
+// 有効なローマ字プレフィックスのセット（パフォーマンス最適化）
+const ROMAJI_PREFIXES = new Set(
+  Object.keys(ROMAJI_MAP).flatMap(k =>
+    Array.from({ length: k.length }, (_, i) => k.slice(0, i + 1))
+  )
+);
+
+const VOWELS = new Set(["a","i","u","e","o"]);
+
+function convertRomaji(buffer: string, newChar: string): { output: string; pending: string } {
+  const candidate = buffer + newChar;
+
+  // "n" の後ろが母音でも"y"でも"n"でもない → ん を確定してnewCharから再スタート
+  if (buffer === "n" && !VOWELS.has(newChar) && newChar !== "y" && newChar !== "n") {
+    const rest = convertRomaji("", newChar);
+    return { output: "ん" + rest.output, pending: rest.pending };
+  }
+
+  // 同じ子音の連続（nn を除く）→ っ を確定してnewCharから再スタート
+  if (
+    buffer.length > 0 &&
+    newChar === buffer[buffer.length - 1] &&
+    !VOWELS.has(newChar) &&
+    newChar !== "n"
+  ) {
+    const rest = convertRomaji("", newChar);
+    return { output: "っ" + rest.output, pending: rest.pending };
+  }
+
+  // 完全一致 → 変換確定
+  if (ROMAJI_MAP[candidate] !== undefined) {
+    return { output: ROMAJI_MAP[candidate], pending: "" };
+  }
+
+  // 有効プレフィックス → 継続バッファ
+  if (ROMAJI_PREFIXES.has(candidate)) {
+    return { output: "", pending: candidate };
+  }
+
+  // 一致不可 — newChar 単体でプレフィックスが有効ならバッファをフラッシュして再スタート
+  if (ROMAJI_PREFIXES.has(newChar)) {
+    return { output: buffer, pending: newChar };
+  }
+
+  // newChar 単体が完全一致
+  if (ROMAJI_MAP[newChar] !== undefined) {
+    return { output: buffer + ROMAJI_MAP[newChar], pending: "" };
+  }
+
+  // どれにも該当しない（数字・記号など）→ そのまま出力
+  return { output: candidate, pending: "" };
+}
+
 export default function KioskFormPage() {
   const params = useParams<{ tenant: string }>();
   const searchParams = useSearchParams();
@@ -36,6 +128,8 @@ export default function KioskFormPage() {
   });
   const [focusedField, setFocusedField] = useState<FieldKey>("visitor_name");
   const [shifted, setShifted] = useState(false);
+  const [isKana, setIsKana] = useState(false);
+  const [romajiBuffer, setRomajiBuffer] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [now, setNow] = useState("");
@@ -61,15 +155,37 @@ export default function KioskFormPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // バッファ内の未確定ローマ字を確定してフォームに書き込む
+  const commitBuffer = (field: FieldKey, buf: string) => {
+    if (buf.length === 0) return;
+    const committed = buf === "n" ? "ん" : buf;
+    setForm(f => ({ ...f, [field]: f[field] + committed }));
+    setRomajiBuffer("");
+  };
+
   const handleKey = (key: string) => {
     resetIdle();
     if (key === "⌫") {
-      setForm(f => ({ ...f, [focusedField]: f[focusedField].slice(0, -1) }));
+      if (isKana && romajiBuffer.length > 0) {
+        setRomajiBuffer(b => b.slice(0, -1));
+      } else {
+        setForm(f => ({ ...f, [focusedField]: f[focusedField].slice(0, -1) }));
+      }
     } else if (key === "shift") {
       setShifted(s => !s);
     } else if (key === "space") {
+      if (isKana) commitBuffer(focusedField, romajiBuffer);
       setForm(f => ({ ...f, [focusedField]: f[focusedField] + " " }));
+    } else if (key === "kana") {
+      commitBuffer(focusedField, romajiBuffer);
+      setIsKana(k => !k);
+      setShifted(false);
+    } else if (isKana && /^[a-z-]$/i.test(key)) {
+      const { output, pending } = convertRomaji(romajiBuffer, key.toLowerCase());
+      if (output) setForm(f => ({ ...f, [focusedField]: f[focusedField] + output }));
+      setRomajiBuffer(pending);
     } else {
+      if (isKana && romajiBuffer.length > 0) commitBuffer(focusedField, romajiBuffer);
       const char = shifted ? key.toUpperCase() : key;
       setForm(f => ({ ...f, [focusedField]: f[focusedField] + char }));
       if (shifted) setShifted(false);
@@ -77,6 +193,7 @@ export default function KioskFormPage() {
   };
 
   const handleSubmit = async () => {
+    if (isKana && romajiBuffer.length > 0) commitBuffer(focusedField, romajiBuffer);
     if (!form.visitor_name.trim()) { setError("お名前を入力してください"); return; }
     const kioskToken = localStorage.getItem(KIOSK_TOKEN_KEY);
     if (!kioskToken) { router.replace(`/${params.tenant}/kiosk/setup`); return; }
@@ -131,6 +248,8 @@ export default function KioskFormPage() {
             <div style={{ display: "flex", flexDirection: "column", gap: 14, flex: 1 }}>
               {FIELDS.slice(0, 2).map(f => {
                 const isFocused = focusedField === f.key;
+                const pending = isFocused && isKana ? romajiBuffer : "";
+                const displayValue = form[f.key] + pending;
                 return (
                   <div key={f.key}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 7 }}>
@@ -138,17 +257,21 @@ export default function KioskFormPage() {
                       {f.required && <span style={{ fontSize: 10, color: "#a84238", background: "#f6e0dc", padding: "2px 8px", borderRadius: 4, fontWeight: 600, letterSpacing: 0.5 }}>必須</span>}
                     </div>
                     <div
-                      onClick={() => { setFocusedField(f.key); resetIdle(); }}
+                      onClick={() => {
+                        if (isKana && romajiBuffer.length > 0) commitBuffer(focusedField, romajiBuffer);
+                        setFocusedField(f.key);
+                        resetIdle();
+                      }}
                       style={{
                         background: "#fffefb", border: `2px solid ${isFocused ? "#4a7c4e" : form[f.key] ? "#4a7c4e" : "#d8d3c7"}`,
                         borderRadius: 11, padding: "14px 20px", fontSize: 22,
-                        color: form[f.key] ? "#2d2a24" : "#a8a198",
+                        color: displayValue ? "#2d2a24" : "#a8a198",
                         boxShadow: isFocused ? "0 0 0 4px #eaf0e8" : "none",
                         cursor: "default", minHeight: 60, display: "flex", alignItems: "center",
                         transition: "border-color 0.15s, box-shadow 0.15s",
                       }}
                     >
-                      {form[f.key] || f.placeholder}
+                      {displayValue || f.placeholder}
                       {isFocused && <span style={{ display: "inline-block", width: 2, height: 26, background: "#4a7c4e", marginLeft: 4, animation: "kiosk-cursor-blink 1s step-end infinite" }} />}
                     </div>
                   </div>
@@ -158,6 +281,8 @@ export default function KioskFormPage() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
                 {FIELDS.slice(2).map(f => {
                   const isFocused = focusedField === f.key;
+                  const pending = isFocused && isKana ? romajiBuffer : "";
+                  const displayValue = form[f.key] + pending;
                   return (
                     <div key={f.key}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 7 }}>
@@ -165,17 +290,21 @@ export default function KioskFormPage() {
                         {f.required && <span style={{ fontSize: 10, color: "#a84238", background: "#f6e0dc", padding: "2px 8px", borderRadius: 4, fontWeight: 600 }}>必須</span>}
                       </div>
                       <div
-                        onClick={() => { setFocusedField(f.key); resetIdle(); }}
+                        onClick={() => {
+                          if (isKana && romajiBuffer.length > 0) commitBuffer(focusedField, romajiBuffer);
+                          setFocusedField(f.key);
+                          resetIdle();
+                        }}
                         style={{
                           background: "#fffefb", border: `2px solid ${isFocused ? "#4a7c4e" : form[f.key] ? "#4a7c4e" : "#d8d3c7"}`,
                           borderRadius: 11, padding: "14px 20px", fontSize: 20,
-                          color: form[f.key] ? "#2d2a24" : "#a8a198",
+                          color: displayValue ? "#2d2a24" : "#a8a198",
                           boxShadow: isFocused ? "0 0 0 4px #eaf0e8" : "none",
                           cursor: "default", minHeight: 56, display: "flex", alignItems: "center",
                           transition: "border-color 0.15s, box-shadow 0.15s",
                         }}
                       >
-                        {form[f.key] || f.placeholder}
+                        {displayValue || f.placeholder}
                         {isFocused && <span style={{ display: "inline-block", width: 2, height: 22, background: "#4a7c4e", marginLeft: 4, animation: "kiosk-cursor-blink 1s step-end infinite" }} />}
                       </div>
                     </div>
@@ -220,12 +349,12 @@ export default function KioskFormPage() {
                   })}
                 </div>
               ))}
-              {/* Bottom row: space + submit */}
+              {/* Bottom row: kana toggle + space + submit */}
               <div style={{ display: "flex", gap: 5, marginTop: 5, justifyContent: "center" }}>
                 <button
-                  onMouseDown={(e) => { e.preventDefault(); handleKey("space"); }}
-                  onTouchStart={(e) => { e.preventDefault(); handleKey("space"); }}
-                  style={{ flex: 2, height: 62, background: "#fffefb", border: "1px solid #d8d3c7", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: "#6b6559", cursor: "pointer", fontFamily: "inherit", userSelect: "none" }}
+                  onMouseDown={(e) => { e.preventDefault(); handleKey("kana"); }}
+                  onTouchStart={(e) => { e.preventDefault(); handleKey("kana"); }}
+                  style={{ flex: 2, height: 62, background: isKana ? "#1d1a15" : "#fffefb", border: "1px solid #d8d3c7", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: isKana ? "#ffffff" : "#6b6559", cursor: "pointer", fontFamily: "inherit", userSelect: "none", transition: "background 0.1s, color 0.1s" }}
                 >
                   かな / ABC
                 </button>
