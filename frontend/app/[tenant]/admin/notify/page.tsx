@@ -131,6 +131,12 @@ function PWAPushPanel({ authToken }: { authToken: string }) {
     setWorking(true);
     setError("");
     try {
+      // ブラウザ側の購読も解除してから再生成
+      if ("serviceWorker" in navigator) {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) await sub.unsubscribe();
+      }
       await api.regenerateVapid(authToken);
       await reload();
     } catch (e: unknown) {
