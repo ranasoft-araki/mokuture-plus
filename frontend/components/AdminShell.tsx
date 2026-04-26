@@ -4,7 +4,7 @@ import { useRouter, useParams } from "next/navigation";
 import { clearTokens } from "@/lib/auth";
 import type { ReactNode } from "react";
 
-export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception";
+export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "notify" | "locker" | "settings";
 
 interface Props {
   active: NavId;
@@ -15,13 +15,19 @@ interface Props {
   children: ReactNode;
 }
 
-const NAV_ITEMS: { id: NavId; label: string }[] = [
+const NAV_OPS: { id: NavId; label: string }[] = [
   { id: "dashboard", label: "ダッシュボード" },
   { id: "media",     label: "メディア" },
   { id: "playlist",  label: "プレイリスト" },
   { id: "schedule",  label: "スケジュール" },
   { id: "device",    label: "キオスク端末" },
   { id: "reception", label: "受付ログ" },
+];
+
+const NAV_SETTINGS: { id: NavId; label: string }[] = [
+  { id: "notify",   label: "通知設定" },
+  { id: "locker",   label: "ロッカー" },
+  { id: "settings", label: "基本設定" },
 ];
 
 const NAV_PATHS: Record<NavId, (t: string) => string> = {
@@ -31,7 +37,14 @@ const NAV_PATHS: Record<NavId, (t: string) => string> = {
   schedule:  (t) => `/${t}/admin/schedules`,
   device:    (t) => `/${t}/admin/kiosk`,
   reception: (t) => `/${t}/admin/reception`,
+  notify:    (t) => `/${t}/admin/notify`,
+  locker:    (t) => `/${t}/admin/locker`,
+  settings:  (t) => `/${t}/admin/settings`,
 };
+
+const FONT_UI = '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Noto Sans JP", sans-serif';
+const FONT_JP = '"Noto Sans JP", "Inter", system-ui, sans-serif';
+const FONT_MONO = '"JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace';
 
 export function AdminShell({ active, title, subtitle, breadcrumb, actions, children }: Props) {
   const params = useParams<{ tenant: string }>();
@@ -39,102 +52,86 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
   const tenant = params.tenant ?? "";
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: "#faf8f4" }}>
+    <div className="flex h-screen overflow-hidden" style={{ background: "#faf8f4", fontFamily: FONT_UI }}>
       {/* ─ Sidebar ──────────────────────────────────────────── */}
       <aside
         className="w-[248px] flex-shrink-0 flex flex-col"
         style={{ background: "#fffefb", borderRight: "1px solid #efece5" }}
       >
         {/* Brand */}
-        <div className="px-5 py-[22px] flex items-center gap-2.5" style={{ borderBottom: "1px solid #efece5" }}>
-          <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-            style={{ background: "#1d1a15" }}
-          >
+        <div style={{ padding: "22px 20px 18px", display: "flex", alignItems: "center", gap: 10, borderBottom: "1px solid #efece5" }}>
+          <div style={{ width: 32, height: 32, borderRadius: 8, background: "#1d1a15", color: "#fffefb", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fffefb" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+              <circle cx="12" cy="9" r="5"/>
+              <path d="M4 19c2-3 5-4.5 8-4.5s6 1.5 8 4.5"/>
+              <path d="M12 4v10"/>
             </svg>
           </div>
           <div>
-            <div className="text-[15px] font-semibold tracking-[-0.2px]" style={{ color: "#1d1a15" }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15", letterSpacing: "-0.2px" }}>
               mokuture<span style={{ color: "#4a7c4e" }}>+</span>
             </div>
-            <div className="text-[10.5px] uppercase tracking-[0.4px]" style={{ color: "#a8a198", fontFamily: "monospace" }}>
+            <div style={{ fontSize: 10.5, color: "#a8a198", letterSpacing: "0.4px", textTransform: "uppercase", fontFamily: FONT_MONO }}>
               CMS console
             </div>
           </div>
         </div>
 
-        {/* Tenant chip */}
-        <div className="px-4 pt-3.5 pb-2">
-          <div
-            className="flex items-center gap-2.5 px-2.5 py-2 rounded-[7px]"
-            style={{ background: "#f4f1ea", border: "1px solid #efece5" }}
-          >
-            <div
-              className="w-[22px] h-[22px] rounded-[5px] flex items-center justify-center text-[11px] font-bold flex-shrink-0"
-              style={{ background: "#4a7c4e", color: "#fffefb" }}
-            >
+        {/* Tenant switcher */}
+        <div style={{ padding: "14px 16px 8px" }}>
+          <button style={{
+            width: "100%", display: "flex", alignItems: "center", gap: 10,
+            padding: "8px 10px", background: "#f4f1ea", border: "1px solid #efece5",
+            borderRadius: 7, cursor: "pointer", fontFamily: FONT_UI, textAlign: "left",
+          }}>
+            <div style={{ width: 22, height: 22, borderRadius: 5, background: "#4a7c4e", color: "#fffefb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
               {tenant[0]?.toUpperCase() ?? "T"}
             </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-[12px] font-semibold leading-[1.2] truncate" style={{ color: "#2d2a24" }}>
-                {tenant}
-              </div>
-              <div className="text-[10px] tracking-[0.4px]" style={{ color: "#a8a198", fontFamily: "monospace" }}>
-                TENANT
-              </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#2d2a24", lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tenant}</div>
+              <div style={{ fontSize: 10, color: "#a8a198", fontFamily: FONT_MONO }}>TENANT · {tenant}</div>
             </div>
-          </div>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a8a198" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <path d="M6 9l6 6 6-6"/>
+            </svg>
+          </button>
         </div>
 
         {/* Nav */}
-        <nav className="px-2.5 pt-2 flex-1 overflow-auto">
-          <div
-            className="text-[10.5px] uppercase tracking-[0.6px] px-2.5 pt-2 pb-1.5"
-            style={{ color: "#a8a198" }}
-          >
+        <nav style={{ padding: "10px 10px", flex: 1, overflow: "auto" }}>
+          <div style={{ fontSize: 10.5, color: "#a8a198", textTransform: "uppercase", letterSpacing: "0.6px", padding: "8px 10px 6px" }}>
             運用
           </div>
-          {NAV_ITEMS.map((item) => {
-            const isActive = active === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => router.push(NAV_PATHS[item.id](tenant))}
-                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-[7px] mb-[1px] text-[13px] text-left transition-colors hover:bg-[#f4f1ea]"
-                style={{
-                  background: isActive ? "#eaf0e8" : "transparent",
-                  color: isActive ? "#3a6240" : "#6b6559",
-                  fontWeight: isActive ? 600 : 500,
-                  borderLeft: `2px solid ${isActive ? "#4a7c4e" : "transparent"}`,
-                }}
-              >
-                <NavIcon id={item.id} active={isActive} />
-                <span style={{ fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}>{item.label}</span>
-              </button>
-            );
-          })}
+          {NAV_OPS.map((item) => (
+            <NavItem key={item.id} id={item.id} label={item.label} active={active === item.id} onClick={() => router.push(NAV_PATHS[item.id](tenant))} />
+          ))}
+          <div style={{ fontSize: 10.5, color: "#a8a198", textTransform: "uppercase", letterSpacing: "0.6px", padding: "14px 10px 6px" }}>
+            設定
+          </div>
+          {NAV_SETTINGS.map((item) => (
+            <NavItem key={item.id} id={item.id} label={item.label} active={active === item.id} onClick={() => router.push(NAV_PATHS[item.id](tenant))} />
+          ))}
         </nav>
 
         {/* User footer */}
-        <div className="p-3 flex items-center gap-2.5" style={{ borderTop: "1px solid #efece5" }}>
-          <div
-            className="w-[30px] h-[30px] rounded-full flex items-center justify-center text-[12px] font-bold flex-shrink-0"
-            style={{ background: "#f7ecd9", color: "#b8763a" }}
-          >
+        <div style={{ padding: 12, borderTop: "1px solid #efece5", display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#f7ecd9", color: "#b8763a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
             {tenant[0]?.toUpperCase() ?? "A"}
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-[12px] font-semibold" style={{ color: "#2d2a24" }}>管理者</div>
-            <div className="text-[10.5px]" style={{ color: "#a8a198" }}>admin</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#2d2a24" }}>管理者</div>
+            <div style={{ fontSize: 10.5, color: "#a8a198" }}>管理者 · admin</div>
           </div>
           <button
             onClick={() => { clearTokens(); router.push("/login"); }}
-            className="text-[11.5px] hover:underline flex-shrink-0"
-            style={{ color: "#a8a198", background: "none", border: "none", cursor: "pointer" }}
+            style={{ background: "none", border: "none", color: "#a8a198", cursor: "pointer", padding: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
+            title="ログアウト"
           >
-            ログアウト
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="5" cy="12" r="1.2" fill="currentColor"/>
+              <circle cx="12" cy="12" r="1.2" fill="currentColor"/>
+              <circle cx="19" cy="12" r="1.2" fill="currentColor"/>
+            </svg>
           </button>
         </div>
       </aside>
@@ -142,35 +139,23 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
       {/* ─ Main ────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* TopBar */}
-        <div
-          className="px-8 py-[22px] pb-[18px] flex items-end gap-6"
-          style={{ background: "#fffefb", borderBottom: "1px solid #efece5" }}
-        >
-          <div className="flex-1">
+        <div style={{ padding: "22px 32px 18px", borderBottom: "1px solid #efece5", background: "#fffefb", display: "flex", alignItems: "flex-end", gap: 24 }}>
+          <div style={{ flex: 1 }}>
             {breadcrumb && (
-              <div
-                className="text-[11.5px] mb-1.5 tracking-[0.2px]"
-                style={{ color: "#a8a198", fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}
-              >
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginBottom: 6, fontFamily: FONT_JP, letterSpacing: "0.2px" }}>
                 {breadcrumb}
               </div>
             )}
-            <h1
-              className="m-0 text-[22px] font-semibold tracking-[-0.3px]"
-              style={{ color: "#1d1a15", fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}
-            >
+            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: "#1d1a15", letterSpacing: "-0.3px", fontFamily: FONT_JP }}>
               {title}
             </h1>
             {subtitle && (
-              <div
-                className="text-[13px] mt-1"
-                style={{ color: "#6b6559", fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}
-              >
+              <div style={{ fontSize: 13, color: "#6b6559", marginTop: 4, fontFamily: FONT_JP }}>
                 {subtitle}
               </div>
             )}
           </div>
-          {actions && <div className="flex items-center gap-2.5">{actions}</div>}
+          {actions && <div style={{ display: "flex", alignItems: "center", gap: 10 }}>{actions}</div>}
         </div>
 
         {/* Content */}
@@ -179,6 +164,31 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
         </div>
       </div>
     </div>
+  );
+}
+
+function NavItem({ id, label, active, onClick }: { id: NavId; label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        width: "100%", display: "flex", alignItems: "center", gap: 10,
+        padding: active ? "8px 10px 8px 12px" : "8px 10px",
+        borderRadius: 7, marginBottom: 1,
+        background: active ? "#eaf0e8" : "transparent",
+        color: active ? "#3a6240" : "#6b6559",
+        fontSize: 13, fontWeight: active ? 600 : 500,
+        cursor: "pointer", textAlign: "left",
+        borderLeft: `2px solid ${active ? "#4a7c4e" : "transparent"}`,
+        border: "none", fontFamily: FONT_JP,
+        transition: "background 0.1s",
+      }}
+      onMouseEnter={(e) => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "#f4f1ea"; }}
+      onMouseLeave={(e) => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+    >
+      <NavIcon id={id} active={active} />
+      <span>{label}</span>
+    </button>
   );
 }
 
@@ -200,25 +210,32 @@ export function MkBtn({
   type?: "button" | "submit";
 }) {
   const sizes = {
-    sm: "px-2.5 py-[5px] text-[11.5px]",
-    md: "px-3.5 py-2 text-[12.5px]",
+    sm: { padding: "5px 10px", fontSize: 11.5 },
+    md: { padding: "8px 14px", fontSize: 12.5 },
   }[size];
   const variants = {
-    primary: "text-[#fffefb] hover:opacity-90",
-    default: "text-[#2d2a24] hover:bg-[#f4f1ea]",
-    ghost:   "text-[#6b6559] hover:bg-[#f4f1ea]",
-    danger:  "text-[#a84238] hover:bg-[#f6e0dc]",
+    primary: { bg: "#4a7c4e", color: "#fffefb", border: "#4a7c4e" },
+    default: { bg: "#fffefb", color: "#2d2a24", border: "#d8d3c7" },
+    ghost:   { bg: "transparent", color: "#6b6559", border: "transparent" },
+    danger:  { bg: "#fffefb", color: "#a84238", border: "#d8d3c7" },
   }[variant];
-  const bg = variant === "primary" ? "#4a7c4e" : "#fffefb";
-  const border = variant === "primary" ? "#4a7c4e" : variant === "ghost" ? "transparent" : "#d8d3c7";
 
   return (
     <button
       type={type}
       onClick={onClick}
       disabled={disabled}
-      className={`inline-flex items-center gap-1.5 font-medium rounded-[7px] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${sizes} ${variants}`}
-      style={{ background: bg, border: `1px solid ${border}` }}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 7,
+        padding: sizes.padding, fontSize: sizes.fontSize, fontWeight: 500,
+        background: variants.bg, color: variants.color,
+        border: `1px solid ${variants.border}`, borderRadius: 7,
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.5 : 1,
+        fontFamily: FONT_JP, letterSpacing: "0.1px",
+        transition: "opacity 0.1s",
+        boxShadow: variant === "primary" ? "0 1px 0 rgba(29,26,21,0.08)" : "none",
+      }}
     >
       {children}
     </button>
@@ -232,7 +249,7 @@ export function MkCard({
   id,
 }: {
   children: ReactNode;
-  padding?: string;
+  padding?: string | number;
   style?: React.CSSProperties;
   id?: string;
 }) {
@@ -245,7 +262,7 @@ export function MkCard({
         borderRadius: 10,
         padding,
         boxShadow: "0 1px 0 rgba(29,26,21,0.03), 0 1px 2px rgba(29,26,21,0.04)",
-        fontFamily: '"Noto Sans JP", system-ui, sans-serif',
+        fontFamily: FONT_JP,
         ...style,
       }}
     >
@@ -254,7 +271,7 @@ export function MkCard({
   );
 }
 
-export function MkPill({ tone, children }: { tone: "live" | "warn" | "off" | "error" | "info" | "neutral"; children: ReactNode }) {
+export function MkPill({ tone, children, dot = true }: { tone: "live" | "warn" | "off" | "error" | "info" | "neutral"; children: ReactNode; dot?: boolean }) {
   const tones = {
     live:    { bg: "#eaf0e8", fg: "#3a6240", dot: "#4a7c4e" },
     warn:    { bg: "#f7ecd9", fg: "#b8763a", dot: "#b8763a" },
@@ -265,43 +282,72 @@ export function MkPill({ tone, children }: { tone: "live" | "warn" | "off" | "er
   }[tone];
   return (
     <span
-      className="inline-flex items-center gap-1.5 px-2 py-[3px] rounded-full text-[10.5px] font-semibold tracking-[0.2px] whitespace-nowrap"
-      style={{ background: tones.bg, color: tones.fg, fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        padding: "3px 8px", borderRadius: 999, background: tones.bg, color: tones.fg,
+        fontSize: 10.5, fontWeight: 600, fontFamily: FONT_JP, letterSpacing: "0.2px",
+        whiteSpace: "nowrap",
+      }}
     >
-      <span className="w-[5px] h-[5px] rounded-full flex-shrink-0" style={{ background: tones.dot }} />
+      {dot && <span style={{ width: 5, height: 5, borderRadius: "50%", background: tones.dot, flexShrink: 0 }} />}
       {children}
     </span>
   );
 }
 
-/* Nav icons (inline SVG) */
+export function MkSectionTitle({ title, subtitle, action, style }: { title: string; subtitle?: string; action?: ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", marginBottom: 14, gap: 16, ...style }}>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1d1a15", fontFamily: FONT_JP, letterSpacing: "-0.1px" }}>{title}</div>
+        {subtitle && <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3, fontFamily: FONT_JP }}>{subtitle}</div>}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+/* Nav icons */
 function NavIcon({ id, active }: { id: NavId; active: boolean }) {
   const color = active ? "#3a6240" : "#a8a198";
+  const stroke = active ? 1.8 : 1.6;
   const w = 17;
   switch (id) {
     case "dashboard":
-      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>
       </svg>;
     case "media":
-      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="2" y="3" width="20" height="18" rx="2"/><path d="M9 8l6 4-6 4V8z" fill={color} stroke="none"/>
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="M3 16l5-4 4 3 4-4 5 4"/>
       </svg>;
     case "playlist":
-      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-        <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="15" y2="18"/><circle cx="20" cy="15" r="3"/><line x1="20" y1="9" x2="20" y2="12"/>
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 6h10M4 12h10M4 18h6"/><path d="M17 14l5 3-5 3z" fill={color} stroke="none"/>
       </svg>;
     case "schedule":
-      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>
       </svg>;
     case "device":
-      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>
       </svg>;
     case "reception":
-      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="12" y2="17"/>
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 21v-2a4 4 0 014-4h8a4 4 0 014 4v2"/><circle cx="12" cy="8" r="4"/>
+      </svg>;
+    case "notify":
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M6 8a6 6 0 0112 0v5l2 3H4l2-3z"/><path d="M10 19a2 2 0 004 0"/>
+      </svg>;
+    case "locker":
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M3 12h18M12 3v18"/><circle cx="8" cy="8" r="0.8" fill={color}/><circle cx="8" cy="16" r="0.8" fill={color}/><circle cx="16" cy="8" r="0.8" fill={color}/><circle cx="16" cy="16" r="0.8" fill={color}/>
+      </svg>;
+    case "settings":
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 01-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 010-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 014 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 010 4h-.1a1.7 1.7 0 00-1.5 1z"/>
       </svg>;
   }
 }

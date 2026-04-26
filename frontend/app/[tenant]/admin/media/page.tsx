@@ -20,6 +20,7 @@ export default function AdminMediaPage() {
   const [success, setSuccess] = useState("");
   const [filter, setFilter] = useState<FilterType>("all");
   const [search, setSearch] = useState("");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const loadMedia = useCallback(async (token: string) => {
@@ -112,9 +113,12 @@ export default function AdminMediaPage() {
       active="media"
       title="メディアライブラリ"
       breadcrumb="ホーム / コンテンツ管理"
-      subtitle={`動画・静止画を管理 · 合計 ${media.length} 件 / 使用容量 ${formatBytes(stats.totalBytes)}`}
+      subtitle={`動画・静止画・ロゴを管理 · 合計 ${media.length} 件 / 使用容量 ${formatBytes(stats.totalBytes)}`}
       actions={
         <>
+          <MkBtn variant="default" size="sm">
+            フォルダ
+          </MkBtn>
           <MkBtn variant="primary" onClick={() => inputRef.current?.click()} disabled={uploading}>
             {uploading ? "アップロード中…" : "↑ アップロード"}
           </MkBtn>
@@ -124,6 +128,65 @@ export default function AdminMediaPage() {
     >
       {error && <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#f6e0dc", border: "1px solid #a84238", color: "#a84238", fontSize: 13 }}>{error}</div>}
       {success && <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#eaf0e8", border: "1px solid #4a7c4e", color: "#3a6240", fontSize: 13 }}>{success}</div>}
+
+      {/* Toolbar */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#fffefb", border: "1px solid #d8d3c7", borderRadius: 7, padding: "0 12px", height: 34, width: 320 }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#a8a198" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
+          </svg>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="ファイル名・タグで検索"
+            style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 12.5, color: "#2d2a24", height: "100%" }}
+          />
+        </div>
+        {/* Filter chips */}
+        <div style={{ display: "flex", gap: 6 }}>
+          {(["all", "video", "image"] as FilterType[]).map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              style={{
+                padding: "6px 12px", fontSize: 11.5,
+                background: filter === f ? "#1d1a15" : "#fffefb",
+                color: filter === f ? "#fffefb" : "#6b6559",
+                border: `1px solid ${filter === f ? "#1d1a15" : "#d8d3c7"}`,
+                borderRadius: 999, cursor: "pointer",
+                display: "flex", alignItems: "center", gap: 6,
+              }}
+            >
+              {filterLabels[f]}
+              <span style={{ fontSize: 10, opacity: 0.6, fontFamily: "monospace" }}>{filterCounts[f]}</span>
+            </button>
+          ))}
+        </div>
+        <div style={{ flex: 1 }} />
+        {/* Grid/List toggle */}
+        <div style={{ display: "flex", alignItems: "center", gap: 2, background: "#fffefb", border: "1px solid #d8d3c7", borderRadius: 7, padding: 2 }}>
+          <button
+            onClick={() => setViewMode("grid")}
+            style={{ padding: 6, background: viewMode === "grid" ? "#f4f1ea" : "transparent", border: "none", borderRadius: 4, cursor: "pointer" }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={viewMode === "grid" ? "#2d2a24" : "#a8a198"} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+            </svg>
+          </button>
+          <button
+            onClick={() => setViewMode("list")}
+            style={{ padding: 6, background: viewMode === "list" ? "#f4f1ea" : "transparent", border: "none", borderRadius: 4, cursor: "pointer" }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={viewMode === "list" ? "#2d2a24" : "#a8a198"} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>
+            </svg>
+          </button>
+        </div>
+        <button style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "6px 10px", fontSize: 11.5, background: "transparent", color: "#6b6559", border: "none", cursor: "pointer" }}>
+          アップロード順
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
 
       {/* Drop zone */}
       <div
@@ -144,18 +207,12 @@ export default function AdminMediaPage() {
           transition: "all 0.15s",
         }}
       >
-        <div
-          style={{
-            width: 44, height: 44, borderRadius: 7, flexShrink: 0,
-            background: "#eaf0e8", color: "#3a6240",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}
-        >
+        <div style={{ width: 44, height: 44, borderRadius: 7, flexShrink: 0, background: "#eaf0e8", color: "#3a6240", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            <path d="M12 3v12M7 8l5-5 5 5"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/>
           </svg>
         </div>
-        <div style={{ flex: 1, fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}>
+        <div style={{ flex: 1 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#2d2a24" }}>
             ドラッグ&amp;ドロップ、またはクリックしてアップロード
           </div>
@@ -168,54 +225,25 @@ export default function AdminMediaPage() {
         </MkBtn>
       </div>
 
-      {/* Toolbar */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#fffefb", border: "1px solid #d8d3c7", borderRadius: 7, padding: "0 12px", height: 34, width: 280 }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a8a198" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-          </svg>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="ファイル名で検索"
-            style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 12.5, color: "#2d2a24", fontFamily: '"Noto Sans JP", system-ui, sans-serif', height: "100%" }}
-          />
-        </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          {(["all", "video", "image"] as FilterType[]).map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              style={{
-                padding: "6px 12px", fontSize: 11.5,
-                background: filter === f ? "#1d1a15" : "#fffefb",
-                color: filter === f ? "#fffefb" : "#6b6559",
-                border: `1px solid ${filter === f ? "#1d1a15" : "#d8d3c7"}`,
-                borderRadius: 999, cursor: "pointer",
-                display: "flex", alignItems: "center", gap: 6,
-                fontFamily: '"Noto Sans JP", system-ui, sans-serif',
-              }}
-            >
-              {filterLabels[f]}
-              <span style={{ fontSize: 10, opacity: 0.6, fontFamily: "monospace" }}>{filterCounts[f]}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Grid */}
+      {/* Grid / List */}
       {loading ? (
         <div style={{ textAlign: "center", color: "#a8a198", padding: "48px 0" }}>読み込み中…</div>
       ) : filtered.length === 0 ? (
         <div style={{ textAlign: "center", color: "#a8a198", padding: "48px 0" }}>
           {media.length === 0 ? "まだメディアが登録されていません" : "検索結果がありません"}
         </div>
-      ) : (
+      ) : viewMode === "grid" ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16 }}>
           {filtered.map((item) => (
             <MediaTile key={item.id} item={item} onDelete={() => handleDelete(item.id, item.filename)} />
           ))}
         </div>
+      ) : (
+        <MkCard padding="0">
+          {filtered.map((item, i) => (
+            <MediaRow key={item.id} item={item} onDelete={() => handleDelete(item.id, item.filename)} isFirst={i === 0} />
+          ))}
+        </MkCard>
       )}
     </AdminShell>
   );
@@ -227,17 +255,19 @@ function MediaTile({ item, onDelete }: { item: MediaItem; onDelete: () => void }
 
   return (
     <div
+      className="group"
       style={{
         background: "#fffefb", border: "1px solid #efece5", borderRadius: 10,
         overflow: "hidden", cursor: "pointer",
         boxShadow: "0 1px 0 rgba(29,26,21,0.03), 0 1px 2px rgba(29,26,21,0.04)",
       }}
     >
-      {/* Thumbnail */}
       <div
         style={{
           aspectRatio: "16/10",
-          background: isVideo ? "#1d1a15" : "#f4f1ea",
+          background: isVideo
+            ? `#1d1a15 repeating-linear-gradient(45deg, rgba(255,255,255,0.04) 0 10px, transparent 10px 20px)`
+            : "#f4f1ea",
           position: "relative",
           display: "flex", alignItems: "center", justifyContent: "center",
           color: isVideo ? "#fffefb" : "#a8a198",
@@ -249,8 +279,8 @@ function MediaTile({ item, onDelete }: { item: MediaItem; onDelete: () => void }
           <>
             <video src={item.url} muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.15)", border: "1.5px solid rgba(255,255,255,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="#fffefb" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <div style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(255,255,255,0.12)", border: "1.5px solid rgba(255,255,255,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="#fffefb" stroke="none"><polygon points="6 4 20 12 6 20 6 4"/></svg>
               </div>
             </div>
           </>
@@ -258,7 +288,7 @@ function MediaTile({ item, onDelete }: { item: MediaItem; onDelete: () => void }
           <img src={item.url} alt={item.filename} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
         )}
         <div style={{ position: "absolute", top: 8, left: 8 }}>
-          <MkPill tone={isVideo ? "info" : "neutral"}>{isVideo ? "MP4" : ext}</MkPill>
+          <MkPill tone={isVideo ? "info" : "neutral"} dot={false}>{isVideo ? "MP4" : ext}</MkPill>
         </div>
         <button
           onClick={(e) => { e.stopPropagation(); onDelete(); }}
@@ -267,13 +297,10 @@ function MediaTile({ item, onDelete }: { item: MediaItem; onDelete: () => void }
             borderRadius: "50%", background: "rgba(168,66,56,0.85)", border: "none",
             color: "#fffefb", cursor: "pointer", fontSize: 14, lineHeight: "22px",
             display: "flex", alignItems: "center", justifyContent: "center",
-            opacity: 0,
           }}
-          className="delete-btn"
+          className="opacity-0 group-hover:opacity-100 transition-opacity"
         >×</button>
       </div>
-
-      {/* Info */}
       <div style={{ padding: "10px 12px" }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: "#2d2a24", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {item.filename}
@@ -284,6 +311,30 @@ function MediaTile({ item, onDelete }: { item: MediaItem; onDelete: () => void }
           <span>{formatDate(item.uploaded_at)}</span>
         </div>
       </div>
+    </div>
+  );
+}
+
+function MediaRow({ item, onDelete, isFirst }: { item: MediaItem; onDelete: () => void; isFirst: boolean }) {
+  const isVideo = item.mime_type.startsWith("video/");
+  const ext = item.mime_type.split("/")[1]?.toUpperCase() ?? "FILE";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", borderTop: isFirst ? "none" : "1px solid #efece5" }}>
+      <div style={{ width: 56, height: 36, borderRadius: 5, overflow: "hidden", background: isVideo ? "#1d1a15" : "#f4f1ea", flexShrink: 0 }}>
+        {isVideo ? (
+          <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="#fffefb" stroke="none"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+          </div>
+        ) : (
+          <img src={item.url} alt={item.filename} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        )}
+      </div>
+      <MkPill tone={isVideo ? "info" : "neutral"} dot={false}>{isVideo ? "MP4" : ext}</MkPill>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: "#2d2a24", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.filename}</div>
+        <div style={{ fontSize: 10.5, color: "#a8a198", marginTop: 2, fontFamily: "monospace" }}>{formatBytes(item.size_bytes)} · {formatDate(item.uploaded_at)}</div>
+      </div>
+      <button onClick={onDelete} style={{ background: "none", border: "none", color: "#a84238", cursor: "pointer", fontSize: 12, padding: "4px 8px" }}>削除</button>
     </div>
   );
 }

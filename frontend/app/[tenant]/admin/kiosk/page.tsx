@@ -76,11 +76,11 @@ export default function AdminKioskPage() {
     ? `${window.location.origin}/${params.tenant}/kiosk`
     : `/${params.tenant}/kiosk`;
 
-  // Summary counts
-  const online = devices.filter((d) => {
-    if (!d.last_seen_at) return false;
-    return (Date.now() - new Date(d.last_seen_at).getTime()) < 2 * 60 * 1000;
-  }).length;
+  const isOnline = (d: Device) => !!d.last_seen_at && (Date.now() - new Date(d.last_seen_at).getTime()) < 2 * 60 * 1000;
+
+  const onlineCount = devices.filter(isOnline).length;
+  const offlineCount = devices.filter((d) => !!d.last_seen_at && !isOnline(d)).length;
+  const pendingCount = devices.filter((d) => !d.last_seen_at).length;
 
   return (
     <AdminShell
@@ -89,19 +89,25 @@ export default function AdminKioskPage() {
       breadcrumb="ホーム / キオスク端末"
       subtitle={`接続済み端末を管理 · ${devices.length} 台`}
       actions={
-        <MkBtn variant="primary" onClick={() => document.getElementById("add-device-form")?.scrollIntoView({ behavior: "smooth" })}>
-          + 端末を追加
-        </MkBtn>
+        <>
+          <MkBtn variant="default" size="sm" onClick={() => document.getElementById("add-device-form")?.scrollIntoView({ behavior: "smooth" })}>
+            ペアリング
+          </MkBtn>
+          <MkBtn variant="primary" onClick={() => document.getElementById("add-device-form")?.scrollIntoView({ behavior: "smooth" })}>
+            + 端末を追加
+          </MkBtn>
+        </>
       }
     >
-      {/* Summary strip */}
+      {/* Summary strip — 4 cards */}
       <div style={{ display: "flex", gap: 14, marginBottom: 22 }}>
         {[
-          { label: "稼働中", value: online, color: "#3a6240" },
-          { label: "オフライン", value: devices.length - online, color: "#a8a198" },
-          { label: "合計", value: devices.length, color: "#2d2a24" },
+          { label: "稼働中",      value: onlineCount,                  color: "#3a6240" },
+          { label: "警告",        value: 0,                            color: "#b8763a" },
+          { label: "オフライン",  value: offlineCount,                 color: "#a8a198" },
+          { label: "保留・未設定", value: pendingCount,                 color: "#6b6559" },
         ].map(({ label, value, color }) => (
-          <MkCard key={label} padding="14px" style={{ flex: 1 }}>
+          <MkCard key={label} padding={14} style={{ flex: 1 }}>
             <div style={{ fontSize: 11, color: "#a8a198" }}>{label}</div>
             <div style={{ fontSize: 24, fontWeight: 600, color, letterSpacing: "-0.6px", marginTop: 4 }}>{value}</div>
           </MkCard>
@@ -137,14 +143,14 @@ export default function AdminKioskPage() {
           <MkCard><div style={{ textAlign: "center", color: "#a8a198" }}>読み込み中…</div></MkCard>
         ) : devices.length === 0 ? null : (
           devices.map((d) => {
-            const isOnline = d.last_seen_at && (Date.now() - new Date(d.last_seen_at).getTime()) < 2 * 60 * 1000;
+            const online = isOnline(d);
             return (
               <MkCard key={d.id} padding="0">
                 <div style={{ display: "flex", alignItems: "stretch" }}>
                   {/* Preview area */}
                   <div
                     style={{
-                      width: 140, minHeight: 160, background: "#1d1a15", flexShrink: 0,
+                      width: 150, minHeight: 180, background: "#1d1a15", flexShrink: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
                       borderRight: "1px solid #efece5",
                       borderRadius: "10px 0 0 10px",
@@ -152,38 +158,59 @@ export default function AdminKioskPage() {
                       position: "relative",
                     }}
                   >
-                    <div style={{ color: "#fffefb", fontFamily: "monospace", fontSize: 9, opacity: 0.5, textAlign: "center" }}>
-                      [ kiosk<br/>preview ]
+                    <div style={{ color: "#fffefb", fontFamily: "monospace", fontSize: 10, opacity: 0.6, textAlign: "center" }}>
+                      [ kiosk live<br/>preview ]
                     </div>
                     <div style={{ position: "absolute", top: 10, left: 10 }}>
-                      <MkPill tone={isOnline ? "live" : "off"}>{isOnline ? "稼働中" : "オフライン"}</MkPill>
+                      <MkPill tone={online ? "live" : "off"}>{online ? "稼働中" : "オフライン"}</MkPill>
                     </div>
                   </div>
 
                   {/* Details */}
                   <div style={{ flex: 1, padding: "18px 22px" }}>
-                    <div style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15" }}>{d.name}</div>
-                    <div style={{ fontSize: 11, color: "#a8a198", fontFamily: "monospace", marginTop: 3 }}>{d.id}</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginTop: 16, paddingTop: 14, borderTop: "1px solid #efece5" }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                      <div style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15" }}>{d.name}</div>
+                      <div style={{ fontSize: 11, color: "#a8a198", fontFamily: "monospace" }}>{d.id}</div>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: "#6b6559", marginTop: 3 }}>キオスク端末</div>
+                    <div style={{
+                      display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16,
+                      marginTop: 18, paddingTop: 14, borderTop: "1px solid #efece5",
+                    }}>
                       {[
-                        { label: "発行日", value: formatDate(d.created_at) },
-                        { label: "最終接続", value: d.last_seen_at ? formatDate(d.last_seen_at) : "未接続" },
-                        { label: "状態", value: isOnline ? "稼働中" : "オフライン" },
-                      ].map(({ label, value }) => (
+                        { label: "IPアドレス",        value: "—",                    mono: true },
+                        { label: "MAC",               value: "—",                    mono: true },
+                        { label: "バージョン",         value: "—",                    mono: true },
+                        { label: "最終同期",           value: d.last_seen_at ? formatRelative(d.last_seen_at) : "未接続", mono: false },
+                        { label: "連続稼働",           value: "—",                    mono: false },
+                        { label: "現在のプレイリスト", value: "—",                    mono: false },
+                        { label: "配信スロット",       value: "—",                    mono: true },
+                        { label: "発行日",             value: formatDate(d.created_at), mono: false },
+                      ].map(({ label, value, mono }) => (
                         <div key={label}>
                           <div style={{ fontSize: 10, color: "#a8a198", letterSpacing: "0.4px", textTransform: "uppercase", fontFamily: "monospace" }}>{label}</div>
-                          <div style={{ fontSize: 12, color: "#2d2a24", marginTop: 3, fontWeight: 500 }}>{value}</div>
+                          <div style={{ fontSize: 12, color: "#2d2a24", marginTop: 3, fontWeight: 500, fontFamily: mono ? "monospace" : undefined }}>{value}</div>
                         </div>
                       ))}
                     </div>
                   </div>
 
                   {/* Actions */}
-                  <div style={{ width: 160, padding: 16, borderLeft: "1px solid #efece5", display: "flex", flexDirection: "column", gap: 8, background: "#f4f1ea", borderRadius: "0 10px 10px 0" }}>
-                    <MkBtn size="sm" variant="default" onClick={() => window.open(`${kioskUrl}`, "_blank")}>
-                      画面を開く
+                  <div style={{
+                    width: 180, padding: 18, borderLeft: "1px solid #efece5",
+                    display: "flex", flexDirection: "column", gap: 8,
+                    background: "#f4f1ea", borderRadius: "0 10px 10px 0",
+                  }}>
+                    <MkBtn size="sm" variant="default" onClick={() => window.open(kioskUrl, "_blank")}>
+                      画面プレビュー
                     </MkBtn>
-                    <MkBtn size="sm" variant="danger" onClick={() => handleDelete(d.id, d.name)}>
+                    <MkBtn size="sm" variant="default">
+                      再起動
+                    </MkBtn>
+                    <MkBtn size="sm" variant="default">
+                      端末設定
+                    </MkBtn>
+                    <MkBtn size="sm" variant="ghost" onClick={() => handleDelete(d.id, d.name)}>
                       削除
                     </MkBtn>
                   </div>
@@ -193,17 +220,20 @@ export default function AdminKioskPage() {
           })
         )}
 
-        {/* Pending slot (always shown if less than 3 devices) */}
-        {!loading && devices.length < 3 && (
+        {/* Pending slot */}
+        {!loading && (
           <MkCard padding="22px" style={{ borderStyle: "dashed", background: "#f4f1ea" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
               <div style={{ width: 48, height: 48, borderRadius: 7, background: "#fffefb", border: "1px dashed #d8d3c7", display: "flex", alignItems: "center", justifyContent: "center", color: "#a8a198", flexShrink: 0 }}>
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               </div>
-              <div style={{ flex: 1, fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#2d2a24" }}>端末を追加する</div>
-                <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3 }}>下のフォームから端末名を入力してトークンを発行できます</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#2d2a24" }}>ペアリング待機中の端末 · {pendingCount} 台</div>
+                <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3 }}>新しい端末で QR コードをスキャンすると、この場所に表示されます</div>
               </div>
+              <MkBtn size="sm" variant="default" onClick={() => document.getElementById("add-device-form")?.scrollIntoView({ behavior: "smooth" })}>
+                QRを表示
+              </MkBtn>
             </div>
           </MkCard>
         )}
@@ -219,7 +249,7 @@ export default function AdminKioskPage() {
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             placeholder="例: 受付1F、ショールーム"
-            style={{ flex: 1, border: "1px solid #d8d3c7", borderRadius: 7, padding: "0 12px", height: 34, fontSize: 12.5, color: "#2d2a24", fontFamily: '"Noto Sans JP", system-ui, sans-serif', outline: "none" }}
+            style={{ flex: 1, border: "1px solid #d8d3c7", borderRadius: 7, padding: "0 12px", height: 34, fontSize: 12.5, color: "#2d2a24", outline: "none", background: "#fffefb" }}
             required
           />
           <MkBtn type="submit" variant="primary" disabled={creating || !newName.trim()}>
@@ -230,7 +260,7 @@ export default function AdminKioskPage() {
       </MkCard>
 
       {/* Setup instructions */}
-      <div style={{ marginTop: 16, padding: "12px 16px", background: "#f4f1ea", borderRadius: 7, borderLeft: "2px solid #4a7c4e", fontSize: 11.5, color: "#6b6559", fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}>
+      <div style={{ marginTop: 16, padding: "12px 16px", background: "#f4f1ea", borderRadius: 7, borderLeft: "2px solid #4a7c4e", fontSize: 11.5, color: "#6b6559" }}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>セットアップ手順</div>
         <ol style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
           <li>「トークン発行」で端末名を入力して発行</li>
@@ -246,4 +276,15 @@ export default function AdminKioskPage() {
 function formatDate(value: string) {
   if (!value) return "—";
   return new Date(value).toLocaleString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatRelative(value: string) {
+  const diff = Date.now() - new Date(value).getTime();
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return `${sec}秒前`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}分前`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}時間前`;
+  return `${Math.floor(hr / 24)}日前`;
 }
