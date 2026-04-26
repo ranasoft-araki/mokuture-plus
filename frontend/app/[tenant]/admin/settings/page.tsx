@@ -20,12 +20,12 @@ export default function AdminSettingsPage() {
         </>
       }
     >
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 20 }}>
+      <div className="adm-grid-main" style={{ gap: 20 }}>
         {/* Form */}
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <MkCard>
             <MkSectionTitle title="ブランディング" subtitle="キオスク画面・管理画面共通" />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <div className="adm-grid-2" style={{ gap: 16 }}>
               <Field label="テナント名" required>
                 <TextInput value={tenant} />
               </Field>
@@ -82,7 +82,7 @@ export default function AdminSettingsPage() {
 
           <MkCard>
             <MkSectionTitle title="タイムアウト" />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <div className="adm-grid-2" style={{ gap: 16 }}>
               <Field label="受付画面の無操作タイムアウト" hint="30 〜 120 秒">
                 <TextInput value="60" mono suffix={<span style={{ color: "#a8a198", fontSize: 12 }}>秒</span>} />
               </Field>

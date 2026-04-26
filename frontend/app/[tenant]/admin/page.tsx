@@ -84,14 +84,14 @@ export default function DashboardPage() {
       }
     >
       {/* KPI row */}
-      <div style={{ display: "flex", gap: 14, marginBottom: 22 }}>
+      <div className="adm-kpi-row" style={{ gap: 14, marginBottom: 22 }}>
         <StatCard label="本日の受付件数" value={String(todayCount ?? 0)} unit="件" delta="前日比" />
         <StatCard label="稼働中キオスク" value={`${onlineCount}`} unit={`/ ${devices.length}`} accent="#3a6240" delta="すべて正常稼働" />
         <StatCard label="ロッカー開錠回数" value="0" unit="回" delta="—" />
         <StatCard label="通知配信数" value={String(todayCount ?? 0)} unit="件" delta="失敗 0件" />
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 20 }}>
+      <div className="adm-grid-main" style={{ gap: 20 }}>
         {/* LEFT */}
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           {/* Hourly chart */}

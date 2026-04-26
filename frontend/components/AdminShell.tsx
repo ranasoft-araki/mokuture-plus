@@ -2,6 +2,7 @@
 
 import { useRouter, useParams } from "next/navigation";
 import { clearTokens } from "@/lib/auth";
+import { useState } from "react";
 import type { ReactNode } from "react";
 
 export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "notify" | "locker" | "settings";
@@ -50,13 +51,18 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
   const params = useParams<{ tenant: string }>();
   const router = useRouter();
   const tenant = params.tenant ?? "";
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: "#faf8f4", fontFamily: FONT_UI }}>
+      {/* ─ Overlay (mobile) ─────────────────────────────────── */}
+      {sidebarOpen && (
+        <div className="adm-sidebar-overlay" onClick={() => setSidebarOpen(false)} />
+      )}
+
       {/* ─ Sidebar ──────────────────────────────────────────── */}
       <aside
-        className="w-[248px] flex-shrink-0 flex flex-col"
-        style={{ background: "#fffefb", borderRight: "1px solid #efece5" }}
+        className={`adm-sidebar${sidebarOpen ? " open" : ""}`}
       >
         {/* Brand */}
         <div style={{ padding: "22px 20px 18px", display: "flex", alignItems: "center", gap: 10, borderBottom: "1px solid #efece5" }}>
@@ -67,7 +73,7 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
               <path d="M12 4v10"/>
             </svg>
           </div>
-          <div>
+          <div style={{ flex: 1 }}>
             <div style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15", letterSpacing: "-0.2px" }}>
               mokuture<span style={{ color: "#4a7c4e" }}>+</span>
             </div>
@@ -75,6 +81,16 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
               CMS console
             </div>
           </div>
+          {/* Close button (mobile only) */}
+          <button
+            className="adm-hamburger"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="メニューを閉じる"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
         </div>
 
         {/* Tenant switcher */}
@@ -139,14 +155,20 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
       {/* ─ Main ────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* TopBar */}
-        <div style={{ padding: "22px 32px 18px", borderBottom: "1px solid #efece5", background: "#fffefb", display: "flex", alignItems: "flex-end", gap: 24 }}>
-          <div style={{ flex: 1 }}>
+        <div className="adm-topbar" style={{ borderBottom: "1px solid #efece5", background: "#fffefb", display: "flex", alignItems: "center", gap: 8 }}>
+          {/* Hamburger (mobile only) */}
+          <button className="adm-hamburger" onClick={() => setSidebarOpen(true)} aria-label="メニューを開く">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          </button>
+          <div style={{ flex: 1, minWidth: 0 }}>
             {breadcrumb && (
-              <div style={{ fontSize: 11.5, color: "#a8a198", marginBottom: 6, fontFamily: FONT_JP, letterSpacing: "0.2px" }}>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginBottom: 4, fontFamily: FONT_JP, letterSpacing: "0.2px" }}>
                 {breadcrumb}
               </div>
             )}
-            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: "#1d1a15", letterSpacing: "-0.3px", fontFamily: FONT_JP }}>
+            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: "#1d1a15", letterSpacing: "-0.3px", fontFamily: FONT_JP, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {title}
             </h1>
             {subtitle && (
@@ -155,11 +177,11 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
               </div>
             )}
           </div>
-          {actions && <div style={{ display: "flex", alignItems: "center", gap: 10 }}>{actions}</div>}
+          {actions && <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>{actions}</div>}
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-auto" style={{ padding: "24px 32px 40px" }}>
+        <div className="flex-1 overflow-auto adm-content">
           {children}
         </div>
       </div>

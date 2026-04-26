@@ -234,7 +234,7 @@ export default function AdminPlaylistsPage() {
         </div>
       ) : (
         /* ─ EDIT VIEW ─ */
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 20 }}>
+        <div className="adm-grid-3" style={{ gap: 20 }}>
           {/* Left: item list */}
           <MkCard padding="0">
             <div style={{ padding: "16px 20px", borderBottom: "1px solid #efece5", display: "flex", alignItems: "center" }}>
@@ -329,7 +329,7 @@ export default function AdminPlaylistsPage() {
                   からアップロードしてください
                 </p>
               ) : (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                <div className="adm-grid-4" style={{ gap: 8 }}>
                   {media.map((m) => {
                     const inPl = draftItems.some((d) => d.media_id === m.id);
                     return (

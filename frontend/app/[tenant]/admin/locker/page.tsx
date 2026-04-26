@@ -59,14 +59,14 @@ export default function AdminLockerPage() {
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 20 }}>
+      <div className="adm-grid-locker" style={{ gap: 20 }}>
         <MkCard>
           <MkSectionTitle
             title="ロッカー一覧"
             subtitle="クリックで詳細 · ダブルクリックで開錠"
             action={<MkBtn size="sm" variant="ghost">レイアウト表示</MkBtn>}
           />
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
+          <div className="adm-grid-5" style={{ gap: 10 }}>
             {lockers.map((l) => {
               const s = STATE_MAP[l.state];
               const isSelected = selected === l.n;

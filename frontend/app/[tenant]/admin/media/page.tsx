@@ -233,7 +233,7 @@ export default function AdminMediaPage() {
           {media.length === 0 ? "まだメディアが登録されていません" : "検索結果がありません"}
         </div>
       ) : viewMode === "grid" ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16 }}>
+        <div className="adm-grid-4" style={{ gap: 16 }}>
           {filtered.map((item) => (
             <MediaTile key={item.id} item={item} onDelete={() => handleDelete(item.id, item.filename)} />
           ))}

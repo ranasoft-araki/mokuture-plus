@@ -132,7 +132,7 @@ function PWAPushPanel({ authToken }: { authToken: string }) {
   }
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+    <div className="adm-grid-2" style={{ gap: 20 }}>
       {/* Left: setup + device list */}
       <div>
         {/* VAPID Setup */}
@@ -263,7 +263,7 @@ export default function AdminNotifyPage() {
       breadcrumb="ホーム / 設定 / 通知"
       subtitle="Slack · Chatwork · PWA プッシュ通知の連携と受信者管理"
     >
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+      <div className="adm-grid-2" style={{ gap: 20 }}>
         {/* Slack */}
         <MkCard>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 18 }}>
