@@ -2,16 +2,36 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
+import { KioskScaler } from "@/components/KioskScaler";
 
-const AUTO_RETURN_SEC = 10;
+const AUTO_RETURN_SEC = 60;
 
-export default function CompletePage() {
+const CheckIcon = ({ size = 50, stroke = 2.4 }: { size?: number; stroke?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M5 12l5 5L20 6" strokeDasharray="60" strokeDashoffset="60" style={{ animation: "kiosk-check-draw 0.6s 0.3s cubic-bezier(0.2,0.9,0.3,1) forwards" }} />
+  </svg>
+);
+
+const ArrowIcon = () => (
+  <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M5 12h14M12 5l7 7-7 7" />
+  </svg>
+);
+
+const ClockIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" />
+  </svg>
+);
+
+export default function KioskWelcomePage() {
   const params = useParams<{ tenant: string }>();
   const searchParams = useSearchParams();
   const router = useRouter();
   const name = searchParams.get("name") ?? "お客様";
   const [count, setCount] = useState(AUTO_RETURN_SEC);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [now, setNow] = useState("");
 
   useEffect(() => {
     timerRef.current = setInterval(() => {
@@ -24,158 +44,127 @@ export default function CompletePage() {
         return c - 1;
       });
     }, 1000);
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    const tick = () => {
+      const d = new Date();
+      setNow(`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`);
+    };
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      clearInterval(id);
+    };
   }, [params.tenant, router]);
 
+  const progress = ((AUTO_RETURN_SEC - count) / AUTO_RETURN_SEC) * 100;
+
   return (
-    <div
-      className="w-screen h-screen flex flex-col items-center justify-center select-none overflow-hidden"
-      style={{
-        background: "#4a7c4e",
-        position: "relative",
-        animation: "kiosk-screen-in 0.4s cubic-bezier(0.2,0.7,0.3,1)",
-      }}
-      onClick={() => router.push(`/${params.tenant}/kiosk`)}
-    >
-      {/* Radial glow */}
-      <div style={{
-        position: "absolute", inset: 0,
-        backgroundImage: "radial-gradient(circle at 50% 42%, rgba(255,255,255,0.08) 0%, transparent 65%)",
-        pointerEvents: "none",
-      }} />
+    <KioskScaler bg="#faf8f4">
+      <div style={{ width: 1920, height: 1080, background: "#faf8f4", display: "flex", flexDirection: "column", fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif" }}>
+        {/* Gradient bar */}
+        <div style={{ height: 6, background: "linear-gradient(90deg, #4a7c4e, #b8763a, #2e6b8e)", flexShrink: 0 }} />
 
-      {/* Logo */}
-      <div style={{
-        position: "absolute", top: 40, left: 0, right: 0,
-        display: "flex", justifyContent: "center", zIndex: 1,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: 8,
-            background: "rgba(255,255,255,0.2)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="9" r="5"/><path d="M4 19c2-3 5-4.5 8-4.5s6 1.5 8 4.5"/><path d="M12 4v10"/>
-            </svg>
+        {/* Brand */}
+        <div style={{ padding: "20px 80px 0", display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
+          <div style={{ width: 48, height: 48, borderRadius: 4, border: "1.5px solid #1d1a15", color: "#1d1a15", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 500, letterSpacing: -1, fontFamily: "Inter, system-ui, sans-serif" }}>磯</div>
+          <div>
+            <div style={{ fontSize: 11, letterSpacing: 3.2, textTransform: "uppercase" as const, color: "#a8a198", marginBottom: 4, fontFamily: "Inter, system-ui, sans-serif" }}>EST. 1948</div>
+            <div style={{ fontSize: 20, fontWeight: 500, letterSpacing: -0.2, color: "#1d1a15" }}>磯野木工所</div>
           </div>
-          <span style={{ color: "rgba(255,255,255,0.9)", fontSize: 15, fontWeight: 600 }}>
-            mokuture<span style={{ color: "rgba(255,255,255,0.45)" }}>+</span>
-          </span>
         </div>
-      </div>
 
-      {/* Center content */}
-      <div
-        className="flex flex-col items-center"
-        style={{ zIndex: 1, padding: "0 52px", textAlign: "center", width: "100%", maxWidth: 520 }}
-      >
-        {/* Checkmark rings */}
-        <div style={{
-          marginBottom: 36,
-          animation: "kiosk-scale-in 0.5s cubic-bezier(0.2,0.9,0.3,1.1)",
-        }}>
-          <div style={{
-            width: 120, height: 120, borderRadius: "50%",
-            background: "rgba(255,255,255,0.18)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
+        {/* Body: left=welcome, right=details */}
+        <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1.05fr 1fr", gap: 56, padding: "16px 80px 0", minHeight: 0 }}>
+          {/* Left: welcome */}
+          <div style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
             <div style={{
-              width: 88, height: 88, borderRadius: "50%",
-              background: "rgba(255,255,255,0.14)",
-              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 84, height: 84, borderRadius: 22, background: "#eaf0e8",
+              color: "#4a7c4e", display: "flex", alignItems: "center", justifyContent: "center",
+              marginBottom: 24,
+              animation: "kiosk-scale-in 0.5s cubic-bezier(0.2,0.9,0.3,1.1)",
             }}>
-              <svg width="42" height="42" viewBox="0 0 24 24" fill="none"
-                stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path
-                  d="M5 12l5 5L20 6"
-                  strokeDasharray="60"
-                  strokeDashoffset="60"
-                  style={{ animation: "kiosk-check-draw 0.6s 0.35s cubic-bezier(0.2,0.9,0.3,1) forwards" }}
-                />
-              </svg>
+              <CheckIcon size={50} stroke={2.4} />
+            </div>
+
+            <div style={{ fontSize: 16, color: "#a8a198", letterSpacing: 4, textTransform: "uppercase" as const, marginBottom: 12, fontFamily: "Inter, system-ui, sans-serif" }}>WELCOME</div>
+
+            <div style={{ fontSize: 92, fontWeight: 600, color: "#1d1a15", letterSpacing: -3, lineHeight: 1.04, marginBottom: 16 }}>
+              {name}<br />
+              <span style={{ color: "#6b6559", fontSize: 56, fontWeight: 400 }}>様</span>
+            </div>
+
+            <div style={{ fontSize: 26, color: "#6b6559", lineHeight: 1.5 }}>
+              お待ちしておりました
+            </div>
+
+            <div style={{ marginTop: 36, display: "flex", alignItems: "center", gap: 14 }}>
+              <ClockIcon />
+              <span style={{ fontSize: 14, color: "#6b6559", flex: 1 }}>
+                この画面は <b>{count}秒後</b> に待機画面へ戻ります
+              </span>
+              <div style={{ width: 220, height: 4, background: "#efece5", borderRadius: 2 }}>
+                <div style={{ width: `${progress}%`, height: "100%", background: "#4a7c4e", borderRadius: 2, transition: "width 1s linear" }} />
+              </div>
             </div>
           </div>
-        </div>
 
-        <p style={{
-          color: "white", fontSize: "2.25rem", fontWeight: 600,
-          letterSpacing: "-0.03em", lineHeight: 1.25, margin: "0 0 10px",
-        }}>
-          {name}様、
-        </p>
-        <p style={{
-          color: "white", fontSize: "1.6rem", fontWeight: 500,
-          letterSpacing: "-0.02em", margin: "0 0 32px",
-        }}>
-          ようこそいらっしゃいました
-        </p>
-
-        {/* Info card */}
-        <div style={{
-          width: "100%",
-          background: "rgba(255,255,255,0.14)",
-          borderRadius: 16, padding: "20px 24px",
-          border: "1px solid rgba(255,255,255,0.2)",
-          textAlign: "left",
-        }}>
-          <div style={{
-            color: "rgba(255,255,255,0.6)", fontSize: 11,
-            letterSpacing: 1.5, textTransform: "uppercase",
-            fontFamily: "monospace", marginBottom: 10,
-          }}>
-            担当者へ通知しました
-          </div>
-          <p style={{
-            color: "white", fontSize: "1.1rem", fontWeight: 500,
-            lineHeight: 1.6, margin: "0 0 14px",
-          }}>
-            担当者をお呼びしています。<br />少々お待ちください。
-          </p>
-          {/* NEXT block */}
-          <div style={{
-            padding: "12px 14px",
-            background: "rgba(255,255,255,0.12)",
-            borderRadius: 10,
-            borderLeft: "3px solid rgba(255,255,255,0.5)",
-          }}>
+          {/* Right: visit details + room */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 18, paddingBottom: 32, justifyContent: "center" }}>
+            {/* Visit details card */}
             <div style={{
-              color: "rgba(255,255,255,0.5)", fontSize: 10,
-              letterSpacing: 1, textTransform: "uppercase",
-              fontFamily: "monospace", marginBottom: 5,
+              background: "#fffefb", border: "1px solid #efece5",
+              borderRadius: 18, padding: 26,
+              boxShadow: "0 1px 0 rgba(29,26,21,0.03), 0 1px 2px rgba(29,26,21,0.04)",
             }}>
-              NEXT
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22 }}>
+                {[
+                  { label: "ご担当", value: "担当者" },
+                  { label: "ご予約時間", value: now, mono: true },
+                  { label: "通知方法", value: "Slack / プッシュ" },
+                  { label: "ステータス", value: "通知済み" },
+                ].map(({ label, value, mono }, i) => (
+                  <div key={i}>
+                    <div style={{ fontSize: 11, color: "#a8a198", letterSpacing: 1, fontWeight: 600, textTransform: "uppercase" as const, marginBottom: 6, fontFamily: "Inter, system-ui, sans-serif" }}>{label}</div>
+                    <div style={{ fontSize: 22, fontWeight: 600, color: "#2d2a24", fontFamily: mono ? "JetBrains Mono, monospace" : "inherit" }}>{value}</div>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div style={{ color: "white", fontSize: 15, fontWeight: 500 }}>
-              2階 商談ルーム A にご案内します
+
+            {/* Room guidance card */}
+            <div style={{
+              background: "#1d1a15", color: "#ffffff",
+              borderRadius: 18, padding: 26,
+              display: "flex", alignItems: "center", gap: 22,
+            }}>
+              <div style={{
+                width: 68, height: 68, borderRadius: 16, background: "rgba(255,255,255,0.1)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                flexShrink: 0,
+              }}>
+                <ArrowIcon />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 6, fontFamily: "Inter, system-ui, sans-serif" }}>NEXT — 受付へ</div>
+                <div style={{ fontSize: 32, fontWeight: 600, letterSpacing: -0.8, lineHeight: 1.15 }}>
+                  担当者がお迎えします
+                </div>
+                <div style={{ fontSize: 15, color: "rgba(255,255,255,0.6)", marginTop: 4 }}>
+                  恐れ入りますが、こちらでお待ちください
+                </div>
+              </div>
+              <div style={{
+                width: 68, height: 68, borderRadius: 16, background: "#fffefb", color: "#1d1a15",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 28, fontWeight: 700, fontFamily: "Inter, system-ui, sans-serif",
+                flexShrink: 0,
+              }}>
+                ✓
+              </div>
             </div>
           </div>
         </div>
-
-        {/* Animated dots */}
-        <div style={{ display: "flex", gap: 8, marginTop: 28 }}>
-          {[0, 1, 2].map((i) => (
-            <div key={i} style={{
-              width: 8, height: 8, borderRadius: "50%",
-              background: "white",
-              animation: `kiosk-dot-pulse 1.6s ${i * 0.3}s ease-in-out infinite`,
-            }} />
-          ))}
-        </div>
       </div>
-
-      {/* Countdown */}
-      <div style={{
-        position: "absolute", bottom: 40, left: 0, right: 0,
-        display: "flex", justifyContent: "center", zIndex: 1,
-      }}>
-        <p style={{
-          color: "rgba(255,255,255,0.4)", fontSize: 13,
-          fontFamily: "monospace", margin: 0,
-        }}>
-          {count}秒後に自動で戻ります
-        </p>
-      </div>
-    </div>
+    </KioskScaler>
   );
 }

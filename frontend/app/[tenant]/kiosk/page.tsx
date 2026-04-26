@@ -3,12 +3,14 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { api, type KioskPlaylistItem, type KioskMediaItem } from "@/lib/api";
+import { KioskScaler } from "@/components/KioskScaler";
 
 const KIOSK_TOKEN_KEY = "mokuture_kiosk_token";
 
-export default function KioskWaitingPage() {
+export default function KioskIdlePage() {
   const params = useParams<{ tenant: string }>();
   const router = useRouter();
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   const [items, setItems] = useState<KioskPlaylistItem[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -47,141 +49,177 @@ export default function KioskWaitingPage() {
     const item = items[currentIndex];
     if (!item?.media || item.media.mime_type === "video/mp4") return;
     itemTimerRef.current = setTimeout(advanceItem, item.duration_sec * 1000);
-    return () => { if (itemTimerRef.current) clearTimeout(itemTimerRef.current); };
+    return () => {
+      if (itemTimerRef.current) clearTimeout(itemTimerRef.current);
+    };
   }, [currentIndex, items, advanceItem]);
+
+  const currentMedia: KioskMediaItem | null = items[currentIndex]?.media ?? null;
 
   if (!loaded) {
     return (
-      <div className="w-screen h-screen bg-[#1d1a15] flex items-center justify-center">
-        <div className="text-[#faf8f4] text-2xl opacity-50">読み込み中…</div>
+      <div style={{ width: "100vw", height: "100vh", background: "#0a0806", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 18 }}>読み込み中…</div>
       </div>
     );
   }
 
-  const currentMedia: KioskMediaItem | null = items[currentIndex]?.media ?? null;
-
   return (
-    <div
-      className="w-screen h-screen bg-[#1d1a15] relative overflow-hidden cursor-pointer select-none"
-      style={{
-        backgroundImage: "repeating-linear-gradient(45deg, rgba(255,255,255,0.025) 0 10px, transparent 10px 20px)",
-      }}
-      onClick={() => router.push(`/${params.tenant}/kiosk/top`)}
-    >
-      {/* Media layer */}
-      {currentMedia ? (
-        currentMedia.mime_type === "video/mp4" ? (
+    <KioskScaler bg="#0a0806">
+      <div
+        style={{
+          width: 1920, height: 1080, position: "relative", overflow: "hidden",
+          cursor: "pointer", userSelect: "none",
+        }}
+        onClick={() => router.push(`/${params.tenant}/kiosk/top`)}
+      >
+        {/* ── Background: real video from playlist or cinematic placeholder ── */}
+        {currentMedia?.mime_type === "video/mp4" ? (
           <video
+            ref={videoRef}
             key={currentMedia.id}
             src={currentMedia.url}
             autoPlay
             muted
             playsInline
-            className="absolute inset-0 w-full h-full object-cover"
+            loop={items.length === 1}
+            onLoadedMetadata={() => videoRef.current?.play().catch(() => {})}
             onEnded={advanceItem}
+            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
           />
-        ) : (
+        ) : currentMedia ? (
           <img
             key={currentMedia.id}
             src={currentMedia.url}
             alt=""
-            className="absolute inset-0 w-full h-full object-cover"
+            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
           />
-        )
-      ) : (
-        /* Default brand screen */
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-0">
-          {/* Concentric rings */}
-          <div style={{
-            width: 120, height: 120, borderRadius: "50%",
-            border: "1.5px solid rgba(255,255,255,0.12)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            marginBottom: 36,
-          }}>
+        ) : (
+          /* Cinematic placeholder matching design */
+          <>
             <div style={{
-              width: 80, height: 80, borderRadius: "50%",
-              border: "1.5px solid rgba(255,255,255,0.2)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-            }}>
+              position: "absolute", inset: 0,
+              background: "radial-gradient(ellipse at 35% 40%, #4a3e2c 0%, #1d1610 50%, #0a0806 100%)",
+            }} />
+            <svg width="1920" height="1080" style={{ position: "absolute", inset: 0, opacity: 0.18 }}>
+              <defs>
+                <pattern id="idleGrain" x="0" y="0" width="100%" height="36" patternUnits="userSpaceOnUse">
+                  <path d="M0 18 Q 480 4 960 20 T 1920 16" stroke="#e8d8b8" strokeWidth="0.7" fill="none" />
+                </pattern>
+                <linearGradient id="idleVignette" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#000" stopOpacity="0.55" />
+                  <stop offset="45%" stopColor="#000" stopOpacity="0" />
+                  <stop offset="100%" stopColor="#000" stopOpacity="0.85" />
+                </linearGradient>
+              </defs>
+              <rect width="1920" height="1080" fill="url(#idleGrain)" />
+              <rect width="1920" height="1080" fill="url(#idleVignette)" />
+            </svg>
+            <div style={{
+              position: "absolute", left: "8%", bottom: "14%", width: 500, height: 360,
+              background: "linear-gradient(180deg, transparent, rgba(0,0,0,0.6))",
+              borderRadius: "50% 50% 8% 8% / 30% 30% 8% 8%",
+              filter: "blur(40px)", opacity: 0.7,
+            }} />
+            <div style={{
+              position: "absolute", right: "12%", top: "18%", width: 600, height: 400,
+              background: "radial-gradient(ellipse, #f0d9a8 0%, transparent 60%)",
+              opacity: 0.25, filter: "blur(2px)",
+            }} />
+          </>
+        )}
+
+        {/* ── Main content overlay ── */}
+        <div style={{
+          position: "absolute", inset: 0, display: "flex", flexDirection: "column",
+          zIndex: 1,
+        }}>
+          <div style={{ flex: 1 }} />
+
+          {/* Bottom: company brand + tap CTA */}
+          <div style={{
+            padding: "0 80px 80px",
+            display: "grid",
+            gridTemplateColumns: "1.4fr auto",
+            alignItems: "flex-end",
+            gap: 56,
+          }}>
+            {/* Left: company logo + tagline */}
+            <div>
               <div style={{
-                width: 44, height: 44, borderRadius: "50%", background: "#4a7c4e",
-                display: "flex", alignItems: "center", justifyContent: "center",
+                display: "flex", alignItems: "center", gap: 22,
+                marginBottom: 28, color: "rgba(255,255,255,0.92)",
               }}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="9" r="5" /><path d="M4 19c2-3 5-4.5 8-4.5s6 1.5 8 4.5" /><path d="M12 4v10" />
-                </svg>
+                <div style={{
+                  width: 64, height: 64, borderRadius: 4,
+                  border: "1.5px solid rgba(255,255,255,0.5)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 30, fontWeight: 500, letterSpacing: -1,
+                  fontFamily: "Inter, system-ui, sans-serif",
+                }}>磯</div>
+                <div>
+                  <div style={{
+                    fontSize: 11, letterSpacing: 4, textTransform: "uppercase",
+                    color: "rgba(255,255,255,0.55)", marginBottom: 6,
+                    fontFamily: "Inter, system-ui, sans-serif",
+                  }}>EST. 1948 — ASAHIKAWA</div>
+                  <div style={{ fontSize: 28, fontWeight: 500, letterSpacing: -0.4 }}>
+                    磯野木工所
+                  </div>
+                </div>
+              </div>
+              <div style={{
+                fontSize: 124, fontWeight: 600, color: "#ffffff",
+                letterSpacing: -3.5, lineHeight: 1.0,
+                textShadow: "0 4px 32px rgba(0,0,0,0.5)",
+              }}>
+                木と、暮らしを編む。
+              </div>
+            </div>
+
+            {/* Right: tap CTA card */}
+            <div style={{
+              padding: "28px 36px",
+              background: "rgba(255,255,255,0.96)",
+              color: "#1d1a15",
+              borderRadius: 20,
+              display: "flex", alignItems: "center", gap: 22,
+              boxShadow: "0 12px 48px rgba(0,0,0,0.4)",
+            }}>
+              {/* Pulse dot */}
+              <div style={{ position: "relative", width: 56, height: 56, flexShrink: 0 }}>
+                <div style={{
+                  position: "absolute", inset: 0, borderRadius: "50%",
+                  border: "2px solid #4a7c4e", opacity: 0.4,
+                  animation: "kiosk-ring-expand 2.4s ease-out 0s infinite",
+                }} />
+                <div style={{
+                  position: "absolute", inset: 0, borderRadius: "50%",
+                  border: "2px solid #4a7c4e", opacity: 0.3,
+                  animation: "kiosk-ring-expand 2.4s ease-out 0.8s infinite",
+                }} />
+                <div style={{
+                  position: "absolute", inset: 8, borderRadius: "50%",
+                  background: "#4a7c4e",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <div style={{ width: 14, height: 14, borderRadius: "50%", background: "#ffffff" }} />
+                </div>
+              </div>
+              <div>
+                <div style={{
+                  fontSize: 11, letterSpacing: 2, color: "#a8a198",
+                  textTransform: "uppercase", marginBottom: 4,
+                  fontFamily: "Inter, system-ui, sans-serif",
+                }}>TAP TO BEGIN</div>
+                <div style={{ fontSize: 26, fontWeight: 600, letterSpacing: -0.5 }}>
+                  画面にタッチして受付
+                </div>
               </div>
             </div>
           </div>
-          <p className="text-[#faf8f4] text-4xl font-medium tracking-tight" style={{ marginBottom: 12 }}>ようこそ</p>
-          <p className="text-[#a8a198] text-lg" style={{ letterSpacing: "0.03em" }}>磯野木工所 本社</p>
-        </div>
-      )}
-
-      {/* Top brand bar */}
-      <div className="absolute top-0 left-0 right-0 flex items-center gap-3 pointer-events-none"
-        style={{ padding: "32px 32px 0" }}>
-        <div style={{
-          width: 36, height: 36, borderRadius: 9, background: "#4a7c4e",
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="9" r="5" /><path d="M4 19c2-3 5-4.5 8-4.5s6 1.5 8 4.5" /><path d="M12 4v10" />
-          </svg>
-        </div>
-        <div>
-          <div className="text-[#faf8f4] font-semibold" style={{ fontSize: 16, letterSpacing: "-0.02em" }}>
-            mokuture<span style={{ color: "#4a7c4e" }}>+</span>
-          </div>
-          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, letterSpacing: "0.12em", fontFamily: "monospace" }}>
-            KIOSK
-          </div>
         </div>
       </div>
-
-      {/* Bottom CTA */}
-      <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center pointer-events-none"
-        style={{ paddingBottom: 56 }}>
-        {/* Touch pulse indicator */}
-        <div style={{ position: "relative", width: 64, height: 64, marginBottom: 22 }}>
-          {/* Ripple rings */}
-          <div style={{
-            position: "absolute", inset: 0, borderRadius: "50%",
-            background: "rgba(74,124,78,0.2)",
-            animation: "kiosk-ring-expand 2.4s ease-out 0s infinite",
-          }} />
-          <div style={{
-            position: "absolute", inset: 0, borderRadius: "50%",
-            background: "rgba(74,124,78,0.18)",
-            animation: "kiosk-ring-expand 2.4s ease-out 0.8s infinite",
-          }} />
-          {/* Outer ring */}
-          <div style={{
-            position: "absolute", inset: 0, borderRadius: "50%",
-            background: "rgba(74,124,78,0.15)",
-            border: "1.5px solid rgba(74,124,78,0.35)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
-            {/* Inner ring */}
-            <div style={{
-              width: 44, height: 44, borderRadius: "50%",
-              background: "rgba(74,124,78,0.25)",
-              border: "1.5px solid rgba(74,124,78,0.6)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-            }}>
-              {/* Center dot */}
-              <div style={{
-                width: 24, height: 24, borderRadius: "50%", background: "#4a7c4e",
-                animation: "kiosk-touch-pulse 2.4s ease-in-out infinite",
-              }} />
-            </div>
-          </div>
-        </div>
-        <p className="text-[#faf8f4]" style={{ fontSize: 17, opacity: 0.85, letterSpacing: "0.02em" }}>
-          画面をタッチして受付へ
-        </p>
-        <div style={{ marginTop: 18, width: 48, height: 3, background: "#4a7c4e", borderRadius: 2, opacity: 0.7 }} />
-      </div>
-    </div>
+    </KioskScaler>
   );
 }

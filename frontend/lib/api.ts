@@ -181,9 +181,9 @@ export interface Device {
 export interface PushSubscriptionInfo {
   id: string;
   endpoint: string;
+  display_endpoint: string;
   user_id: string | null;
   created_at: string;
-  user_email: string | null;
 }
 
 export interface KioskMediaItem {

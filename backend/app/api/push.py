@@ -149,10 +149,10 @@ async def list_subscriptions(
     return [
         {
             "id": s.id,
-            "endpoint": s.endpoint[:60] + "…",
+            "endpoint": s.endpoint,
+            "display_endpoint": s.endpoint[:60] + "…",
             "user_id": s.user_id,
             "created_at": s.created_at.isoformat() if s.created_at else "",
-            "user_email": None,  # enriched if needed
         }
         for s in subs
     ]

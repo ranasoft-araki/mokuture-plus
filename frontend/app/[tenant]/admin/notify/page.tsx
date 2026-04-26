@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
 import { api } from "@/lib/api";
-import { fetchVapidPublicKey, requestAndSubscribe, sendSubscriptionToServer, unsubscribeFromPush, getCurrentPushSubscription } from "@/lib/push";
+import { requestAndSubscribe, sendSubscriptionToServer, unsubscribeFromPush, getCurrentPushSubscription } from "@/lib/push";
 
 const AUTH_KEY = "mokuture_auth_token";
 
@@ -38,7 +38,7 @@ function TextInput({ placeholder, mono, value, onChange }: { placeholder?: strin
 function PWAPushPanel({ authToken }: { authToken: string }) {
   const [vapidKey, setVapidKey] = useState<string | null>(null);
   const [isSubscribed, setIsSubscribed] = useState(false);
-  const [subscriptions, setSubscriptions] = useState<{ id: string; endpoint: string; created_at: string }[]>([]);
+  const [subscriptions, setSubscriptions] = useState<{ id: string; endpoint: string; display_endpoint: string; created_at: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [testSent, setTestSent] = useState(false);
@@ -190,7 +190,7 @@ function PWAPushPanel({ authToken }: { authToken: string }) {
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6b6559" strokeWidth="1.8" strokeLinecap="round"><rect x="5" y="2" width="14" height="20" rx="2"/><circle cx="12" cy="17" r="1"/></svg>
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 11.5, color: "#2d2a24", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.endpoint}</div>
+                  <div style={{ fontSize: 11.5, color: "#2d2a24", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.display_endpoint}</div>
                   <div style={{ fontSize: 10.5, color: "#a8a198", marginTop: 2 }}>{new Date(s.created_at).toLocaleString("ja-JP")}</div>
                 </div>
                 <button
