@@ -6,7 +6,8 @@ from sqlalchemy import select
 from app.database import get_db
 from app.models.tenant import Tenant
 from app.models.user import User
-from app.services.auth import hash_password, verify_password, create_access_token, create_refresh_token
+from jose import JWTError
+from app.services.auth import hash_password, verify_password, create_access_token, create_refresh_token, decode_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -36,6 +37,10 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
 
 
 class TokenResponse(BaseModel):
@@ -83,6 +88,28 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     password_ok = verify_password(body.password, candidate_hash)
     if user is None or not password_ok:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    return TokenResponse(
+        access_token=create_access_token(user.tenant_id, user.id, user.role),
+        refresh_token=create_refresh_token(user.tenant_id, user.id),
+    )
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
+    try:
+        payload = decode_token(body.refresh_token)
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
+
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Wrong token type")
+
+    user_id = payload.get("sub")
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
     return TokenResponse(
         access_token=create_access_token(user.tenant_id, user.id, user.role),

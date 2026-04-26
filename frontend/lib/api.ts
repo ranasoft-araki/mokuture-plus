@@ -1,9 +1,36 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 
-async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+async function _fetch(path: string, init?: RequestInit, token?: string): Promise<Response> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers: { ...headers, ...init?.headers } });
+  return fetch(`${API_BASE}${path}`, { ...init, headers: { ...headers, ...init?.headers } });
+}
+
+async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+  let res = await _fetch(path, init, token);
+
+  // Auto-refresh: if the caller passed an access token and we get 401, try refreshing once
+  if (res.status === 401 && token) {
+    const { getRefreshToken, saveTokens, clearTokens } = await import("@/lib/auth");
+    const refreshToken = getRefreshToken();
+    if (refreshToken) {
+      const refreshRes = await _fetch("/auth/refresh", {
+        method: "POST",
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (refreshRes.ok) {
+        const { access_token, refresh_token } = await refreshRes.json();
+        saveTokens(access_token, refresh_token);
+        // Retry original request with new access token
+        res = await _fetch(path, init, access_token);
+      } else {
+        clearTokens();
+        if (typeof window !== "undefined") window.location.href = "/login";
+        throw new Error("セッションが切れました。再ログインしてください。");
+      }
+    }
+  }
+
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail ?? "Request failed");

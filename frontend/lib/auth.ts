@@ -11,6 +11,11 @@ export function getAccessToken(): string | null {
   return localStorage.getItem("mokuture_access");
 }
 
+export function getRefreshToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("mokuture_refresh");
+}
+
 export function clearTokens() {
   localStorage.removeItem("mokuture_access");
   localStorage.removeItem("mokuture_refresh");
