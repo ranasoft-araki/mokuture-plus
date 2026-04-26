@@ -5,8 +5,7 @@ import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
 import { api } from "@/lib/api";
 import { requestAndSubscribe, sendSubscriptionToServer, unsubscribeFromPush, getCurrentPushSubscription } from "@/lib/push";
-
-const AUTH_KEY = "mokuture_auth_token";
+import { getAccessToken } from "@/lib/auth";
 
 function Field({ label, hint, children, required }: { label: string; hint?: string; children: React.ReactNode; required?: boolean }) {
   return (
@@ -254,8 +253,7 @@ export default function AdminNotifyPage() {
   const [authToken, setAuthToken] = useState("");
 
   useEffect(() => {
-    const t = typeof window !== "undefined" ? localStorage.getItem(AUTH_KEY) ?? "" : "";
-    setAuthToken(t);
+    setAuthToken(getAccessToken() ?? "");
   }, []);
 
   return (
