@@ -18,12 +18,14 @@ export const api = {
     request<KioskScheduleResponse>("/kiosk/schedule", { headers: { "X-Kiosk-Token": kioskToken } }),
   createKioskReception: (kioskToken: string, body: ReceptionCreate) =>
     request("/kiosk/reception", { method: "POST", body: JSON.stringify(body), headers: { "X-Kiosk-Token": kioskToken } }),
+  verifyKioskPin: (pinCode: string) =>
+    request<{ device_token: string }>("/kiosk/verify-pin", { method: "POST", body: JSON.stringify({ pin_code: pinCode }) }),
 
   // Device management (admin)
   listDevices: (token: string) =>
     request<Device[]>("/devices", {}, token),
   createDevice: (token: string, name: string) =>
-    request<Device & { token: string }>("/devices", { method: "POST", body: JSON.stringify({ name }) }, token),
+    request<Device & { token: string; pin_code: string; pin_expires_minutes: number }>("/devices", { method: "POST", body: JSON.stringify({ name }) }, token),
   deleteDevice: (token: string, id: string) =>
     request(`/devices/${id}`, { method: "DELETE" }, token),
 

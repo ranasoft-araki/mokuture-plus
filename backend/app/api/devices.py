@@ -1,5 +1,7 @@
 """Admin API for kiosk device token management."""
+import random
 import secrets
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -12,6 +14,8 @@ from app.models.device import Device
 from app.models.user import User
 
 router = APIRouter(prefix="/devices", tags=["devices"])
+
+_PIN_EXPIRY_MINUTES = 15
 
 
 class DeviceCreate(BaseModel):
@@ -40,12 +44,20 @@ async def create_device(
     db: AsyncSession = Depends(get_db),
 ):
     token = secrets.token_hex(32)  # 64-char hex, cryptographically secure
-    device = Device(tenant_id=user.tenant_id, name=body.name, token=token)
+    pin = f"{random.SystemRandom().randint(0, 999999):06d}"
+    expires = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=_PIN_EXPIRY_MINUTES)
+    device = Device(
+        tenant_id=user.tenant_id,
+        name=body.name,
+        token=token,
+        pin_code=pin,
+        pin_expires_at=expires,
+        pin_used=False,
+    )
     db.add(device)
     await db.commit()
     await db.refresh(device)
-    # Return token only once at creation time
-    return {**_out(device), "token": token}
+    return {**_out(device), "token": token, "pin_code": pin, "pin_expires_minutes": _PIN_EXPIRY_MINUTES}
 
 
 @router.delete("/{device_id}", status_code=204)

@@ -4,11 +4,13 @@ The device token is stored in the kiosk's localStorage and sent via
 the X-Kiosk-Token header. It identifies both the device and the tenant.
 """
 import zoneinfo
-from datetime import datetime
+from datetime import datetime, timezone
 
 _JST = zoneinfo.ZoneInfo("Asia/Tokyo")
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -26,8 +28,33 @@ from app.services.webpush import send_push
 from app.config import settings
 
 router = APIRouter(prefix="/kiosk", tags=["kiosk"])
+_limiter = Limiter(key_func=get_remote_address)
 
 _ALLOWED_METHODS = {"form", "qr"}
+_PIN_FAIL_MSG = "PINが無効または期限切れです"
+
+
+class PinVerifyRequest(BaseModel):
+    pin_code: str
+
+
+@router.post("/verify-pin")
+@_limiter.limit("10/minute")
+async def verify_pin(request: Request, body: PinVerifyRequest, db: AsyncSession = Depends(get_db)):
+    """Exchange a one-time PIN for the device token. PIN expires in 15 min and is single-use."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    result = await db.execute(select(Device).where(Device.pin_code == body.pin_code))
+    device = result.scalar_one_or_none()
+
+    if device is None or device.pin_used or device.pin_expires_at is None or device.pin_expires_at < now:
+        raise HTTPException(status_code=401, detail=_PIN_FAIL_MSG)
+
+    # Invalidate PIN immediately
+    device.pin_used = True
+    device.pin_code = None
+    await db.commit()
+
+    return {"device_token": device.token}
 
 
 async def get_kiosk_device(

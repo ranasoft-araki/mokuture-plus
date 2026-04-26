@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, DateTime, Integer, ForeignKey, func, UniqueConstraint
+from sqlalchemy import String, DateTime, Integer, ForeignKey, func, Boolean, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -17,6 +17,9 @@ class Device(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     current_playlist_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    pin_code: Mapped[str | None] = mapped_column(String(6), nullable=True, index=True)
+    pin_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    pin_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     tenant = relationship("Tenant", back_populates="devices")
 

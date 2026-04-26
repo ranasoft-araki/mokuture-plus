@@ -14,9 +14,9 @@ export default function AdminKioskPage() {
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
-  const [newToken, setNewToken] = useState<{ name: string; token: string } | null>(null);
+  const [newToken, setNewToken] = useState<{ name: string; token: string; pin_code: string; pin_expires_minutes: number } | null>(null);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"token" | "url" | null>(null);
 
   const loadDevices = useCallback(async (token: string) => {
     try {
@@ -45,7 +45,7 @@ export default function AdminKioskPage() {
     try {
       const created = await api.createDevice(token, newName.trim());
       setDevices((d) => [created, ...d]);
-      setNewToken({ name: created.name, token: created.token });
+      setNewToken({ name: created.name, token: created.token, pin_code: created.pin_code, pin_expires_minutes: created.pin_expires_minutes });
       setNewName("");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "作成に失敗しました");
@@ -66,10 +66,10 @@ export default function AdminKioskPage() {
     }
   }
 
-  async function handleCopy(token: string) {
-    await navigator.clipboard.writeText(token);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  async function handleCopy(text: string, type: "token" | "url") {
+    await navigator.clipboard.writeText(text);
+    setCopied(type);
+    setTimeout(() => setCopied(null), 2000);
   }
 
   const kioskUrl = typeof window !== "undefined"
@@ -117,23 +117,57 @@ export default function AdminKioskPage() {
       {/* Token revealed */}
       {newToken && (
         <div style={{ marginBottom: 20, padding: 20, borderRadius: 10, background: "#f7ecd9", border: "1px solid #b8763a" }}>
-          <p style={{ fontWeight: 600, color: "#7a4e10", fontSize: 13, marginBottom: 4 }}>「{newToken.name}」のトークンが発行されました</p>
-          <p style={{ fontSize: 12, color: "#7a4e10", marginBottom: 12 }}>このトークンは今後表示されません。キオスク端末のセットアップ画面に入力してください。</p>
-          <div style={{ display: "flex", gap: 8 }}>
-            <code style={{ flex: 1, background: "#fffefb", borderRadius: 7, padding: "12px 14px", fontSize: 12, fontFamily: "monospace", color: "#1d1a15", border: "1px solid #efece5", wordBreak: "break-all" }}>
-              {newToken.token}
-            </code>
-            <button
-              onClick={() => handleCopy(newToken.token)}
-              style={{ flexShrink: 0, padding: "0 16px", borderRadius: 7, background: "#4a7c4e", color: "#fffefb", border: "none", fontSize: 12, fontWeight: 500, cursor: "pointer" }}
-            >
-              {copied ? "コピー済" : "コピー"}
-            </button>
+          <p style={{ fontWeight: 600, color: "#7a4e10", fontSize: 13, marginBottom: 4 }}>「{newToken.name}」のデバイスが登録されました</p>
+
+          {/* PIN */}
+          <div style={{ margin: "16px 0", textAlign: "center" }}>
+            <p style={{ fontSize: 11, color: "#7a4e10", marginBottom: 6 }}>ワンタイムPIN（{newToken.pin_expires_minutes}分以内・1回限り）</p>
+            <div style={{ display: "inline-flex", gap: 6 }}>
+              {newToken.pin_code.split("").map((d, i) => (
+                <div key={i} style={{ width: 44, height: 52, borderRadius: 8, background: "#fffefb", border: "1px solid #efece5", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, fontWeight: 700, color: "#1d1a15", fontFamily: "monospace" }}>
+                  {d}
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize: 11, color: "#7a4e10", marginTop: 8 }}>
+              キオスク端末の画面でこのPINをタップ入力してください
+            </p>
           </div>
-          <p style={{ fontSize: 11, color: "#7a4e10", marginTop: 10 }}>
-            セットアップ URL: <span style={{ fontFamily: "monospace" }}>{kioskUrl}/setup</span>
-          </p>
-          <button onClick={() => setNewToken(null)} style={{ fontSize: 11, color: "#a8a198", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", marginTop: 8 }}>閉じる</button>
+
+          {/* Setup URL (SSH provisioning) */}
+          <div style={{ borderTop: "1px solid #e8d5b8", paddingTop: 12, marginTop: 4 }}>
+            <p style={{ fontSize: 11, color: "#7a4e10", marginBottom: 6 }}>SSHでPiを操作する場合 — セットアップURL</p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <code style={{ flex: 1, background: "#fffefb", borderRadius: 7, padding: "8px 12px", fontSize: 10, fontFamily: "monospace", color: "#1d1a15", border: "1px solid #efece5", wordBreak: "break-all" }}>
+                {kioskUrl}/setup?pin={newToken.pin_code}
+              </code>
+              <button
+                onClick={() => handleCopy(`${kioskUrl}/setup?pin=${newToken.pin_code}`, "url")}
+                style={{ flexShrink: 0, padding: "0 12px", borderRadius: 7, background: "#7a4e10", color: "#fffefb", border: "none", fontSize: 11, fontWeight: 500, cursor: "pointer" }}
+              >
+                {copied === "url" ? "コピー済" : "URLコピー"}
+              </button>
+            </div>
+          </div>
+
+          {/* Long token (hidden, for manual entry) */}
+          <details style={{ marginTop: 12 }}>
+            <summary style={{ fontSize: 11, color: "#a8a198", cursor: "pointer" }}>デバイストークンを表示（保存推奨）</summary>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <code style={{ flex: 1, background: "#fffefb", borderRadius: 7, padding: "10px 12px", fontSize: 10, fontFamily: "monospace", color: "#1d1a15", border: "1px solid #efece5", wordBreak: "break-all" }}>
+                {newToken.token}
+              </code>
+              <button
+                onClick={() => handleCopy(newToken.token, "token")}
+                style={{ flexShrink: 0, padding: "0 12px", borderRadius: 7, background: "#4a7c4e", color: "#fffefb", border: "none", fontSize: 11, fontWeight: 500, cursor: "pointer" }}
+              >
+                {copied === "token" ? "コピー済" : "コピー"}
+              </button>
+            </div>
+            <p style={{ fontSize: 10, color: "#a8a198", marginTop: 4 }}>このトークンは今後表示されません</p>
+          </details>
+
+          <button onClick={() => setNewToken(null)} style={{ fontSize: 11, color: "#a8a198", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", marginTop: 12 }}>閉じる</button>
         </div>
       )}
 
@@ -242,7 +276,7 @@ export default function AdminKioskPage() {
       {/* Add form */}
       <MkCard id="add-device-form">
         <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1d1a15", marginBottom: 6 }}>キオスク端末を追加</div>
-        <div style={{ fontSize: 12, color: "#a8a198", marginBottom: 16 }}>端末ごとに固有のトークンを発行します。トークンはセットアップ時に一度だけ表示されます。</div>
+        <div style={{ fontSize: 12, color: "#a8a198", marginBottom: 16 }}>端末ごとに6桁のワンタイムPINを発行します。キオスク画面のテンキーで入力してください。</div>
         <form onSubmit={handleCreate} style={{ display: "flex", gap: 10 }}>
           <input
             type="text"
@@ -263,10 +297,11 @@ export default function AdminKioskPage() {
       <div style={{ marginTop: 16, padding: "12px 16px", background: "#f4f1ea", borderRadius: 7, borderLeft: "2px solid #4a7c4e", fontSize: 11.5, color: "#6b6559" }}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>セットアップ手順</div>
         <ol style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
-          <li>「トークン発行」で端末名を入力して発行</li>
+          <li>「トークン発行」で端末名を入力 → 6桁PINが表示される</li>
           <li>キオスク端末のブラウザで <span style={{ fontFamily: "monospace", fontSize: 11 }}>{kioskUrl}/setup</span> を開く</li>
-          <li>表示されたトークンを入力して「設定を保存」</li>
+          <li>タッチテンキーでPINを入力（キーボード不要）</li>
           <li>以降は自動的にキオスク待機画面が表示される</li>
+          <li style={{ color: "#7a4e10" }}>SSH/リモート操作の場合は「URLコピー」でセットアップURLを使用</li>
         </ol>
       </div>
     </AdminShell>
