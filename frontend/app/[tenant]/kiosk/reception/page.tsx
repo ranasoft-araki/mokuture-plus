@@ -14,6 +14,7 @@ export default function ReceptionPage() {
   const [form, setForm] = useState<ReceptionCreate>({
     visitor_name: "", company: "", purpose: "", staff: "", method: "form",
   });
+  const [focusedField, setFocusedField] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -46,7 +47,7 @@ export default function ReceptionPage() {
     setSubmitting(true);
     try {
       await api.createKioskReception(kioskToken, form);
-      router.push(`/${params.tenant}/kiosk/complete?name=${encodeURIComponent(form.visitor_name)}`);
+      router.push(`/${params.tenant}/kiosk/calling?name=${encodeURIComponent(form.visitor_name)}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "受付に失敗しました");
       setSubmitting(false);
@@ -62,8 +63,11 @@ export default function ReceptionPage() {
 
   return (
     <div
-      className="w-screen h-screen flex flex-col select-none"
-      style={{ background: "#faf8f4" }}
+      className="w-screen h-screen flex flex-col select-none overflow-hidden"
+      style={{
+        background: "#faf8f4",
+        animation: "kiosk-screen-in 0.35s cubic-bezier(0.2,0.7,0.3,1)",
+      }}
       onClick={resetIdle}
     >
       {/* Header */}
@@ -87,24 +91,29 @@ export default function ReceptionPage() {
         <h1 style={{ color: "white", fontSize: 22, fontWeight: 600, letterSpacing: "-0.02em", margin: 0 }}>
           受付
         </h1>
+        <div style={{ flex: 1 }} />
+        <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 12, fontFamily: "monospace" }}>
+          kiosk-hq-1f-01
+        </div>
       </div>
 
-      {/* Form — button lives inside the form so type="submit" works */}
+      {/* Form */}
       <form
         onSubmit={handleSubmit}
         style={{
           flex: 1, display: "flex", flexDirection: "column",
           padding: "32px 32px 48px",
+          overflowY: "auto",
         }}
       >
-        <p style={{ color: "#6b6559", fontSize: 17, margin: "0 0 28px", lineHeight: 1.5 }}>
+        <p style={{ color: "#6b6559", fontSize: 17, margin: "0 0 28px", lineHeight: 1.55 }}>
           お名前と用件をご入力ください。
         </p>
 
         {error && (
           <div style={{
             marginBottom: 20, background: "#f6e0dc",
-            border: "1px solid #a84238", borderRadius: 12,
+            border: "1px solid rgba(168,66,56,0.4)", borderRadius: 12,
             padding: "12px 16px", color: "#a84238", fontSize: 15,
           }}>
             {error}
@@ -112,41 +121,46 @@ export default function ReceptionPage() {
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 20, flex: 1 }}>
-          {fields.map(({ key, label, placeholder, required }) => (
-            <div key={key} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <label style={{
-                fontSize: 14, fontWeight: 600, color: "#1d1a15",
-                display: "flex", alignItems: "center", gap: 8,
-              }}>
-                {label}
-                {required && (
-                  <span style={{
-                    fontSize: 11, color: "white", background: "#a84238",
-                    padding: "1px 8px", borderRadius: 999, fontWeight: 600,
-                  }}>必須</span>
-                )}
-              </label>
-              <input
-                type="text"
-                value={(form[key] as string) ?? ""}
-                onChange={(e) => handleChange(key, e.target.value)}
-                placeholder={placeholder}
-                autoComplete="off"
-                required={required}
-                style={{
-                  height: 64, background: "white",
-                  border: `2px solid ${(form[key] as string) ? "#4a7c4e" : "#d8d3c7"}`,
-                  borderRadius: 12, padding: "0 20px",
-                  fontSize: 20, color: "#1d1a15", outline: "none",
-                  boxShadow: (form[key] as string) ? "0 0 0 3px #eaf0e8" : "none",
-                  transition: "border-color 0.15s, box-shadow 0.15s",
-                }}
-              />
-            </div>
-          ))}
+          {fields.map(({ key, label, placeholder, required }) => {
+            const isFocused = focusedField === key;
+            const hasValue = !!(form[key] as string);
+            return (
+              <div key={key} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <label style={{
+                  fontSize: 14, fontWeight: 600, color: "#1d1a15",
+                  display: "flex", alignItems: "center", gap: 8,
+                }}>
+                  {label}
+                  {required && (
+                    <span style={{
+                      fontSize: 11, color: "white", background: "#a84238",
+                      padding: "1px 8px", borderRadius: 999, fontWeight: 600,
+                    }}>必須</span>
+                  )}
+                </label>
+                <input
+                  type="text"
+                  value={(form[key] as string) ?? ""}
+                  onChange={(e) => handleChange(key, e.target.value)}
+                  onFocus={() => { setFocusedField(key); resetIdle(); }}
+                  onBlur={() => setFocusedField(null)}
+                  placeholder={placeholder}
+                  autoComplete="off"
+                  required={required}
+                  style={{
+                    height: 64, background: "white",
+                    border: `2px solid ${isFocused ? "#4a7c4e" : hasValue ? "#4a7c4e" : "#d8d3c7"}`,
+                    borderRadius: 12, padding: "0 20px",
+                    fontSize: 20, color: "#1d1a15", outline: "none",
+                    boxShadow: isFocused ? "0 0 0 3px #eaf0e8" : hasValue ? "0 0 0 3px #eaf0e8" : "none",
+                    transition: "border-color 0.15s, box-shadow 0.15s",
+                  }}
+                />
+              </div>
+            );
+          })}
         </div>
 
-        {/* Submit — inside the form, so type="submit" works correctly */}
         <button
           type="submit"
           disabled={submitting}
@@ -154,16 +168,31 @@ export default function ReceptionPage() {
             marginTop: 28, width: "100%", height: 68,
             background: submitting ? "#7a9e7d" : "#4a7c4e",
             color: "white", border: "none", borderRadius: 16,
-            fontSize: 20, fontWeight: 600, cursor: submitting ? "not-allowed" : "pointer",
+            fontSize: 20, fontWeight: 600,
+            cursor: submitting ? "not-allowed" : "pointer",
             letterSpacing: "0.02em",
-            boxShadow: "0 4px 16px rgba(74,124,78,0.35)",
-            transition: "background 0.15s",
+            boxShadow: submitting ? "none" : "0 4px 16px rgba(74,124,78,0.35)",
+            transition: "background 0.15s, box-shadow 0.15s",
             flexShrink: 0,
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
           }}
         >
-          {submitting ? "送信中…" : "受付する"}
+          {submitting ? (
+            <>
+              <div style={{
+                width: 22, height: 22, borderRadius: "50%",
+                border: "2.5px solid rgba(255,255,255,0.3)", borderTopColor: "white",
+                animation: "spin 0.7s linear infinite",
+              }} />
+              送信中…
+            </>
+          ) : "受付する"}
         </button>
       </form>
+
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+      `}</style>
     </div>
   );
 }

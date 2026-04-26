@@ -7,7 +7,6 @@ import { api } from "@/lib/api";
 const IDLE_TIMEOUT_MS = 60_000;
 const KIOSK_TOKEN_KEY = "mokuture_kiosk_token";
 
-// BarcodeDetector is a browser API — declare types manually
 declare class BarcodeDetector {
   constructor(options: { formats: string[] });
   detect(image: ImageBitmapSource): Promise<{ rawValue: string }[]>;
@@ -39,7 +38,6 @@ export default function KioskQRPage() {
     }
     resetIdle();
 
-    // Check BarcodeDetector support
     if (typeof BarcodeDetector === "undefined") {
       setSupported(false);
       return;
@@ -100,7 +98,6 @@ export default function KioskQRPage() {
     const kioskToken = localStorage.getItem(KIOSK_TOKEN_KEY);
     if (!kioskToken) { router.replace(`/${params.tenant}/kiosk/setup`); return; }
 
-    // Try to parse URLSearchParams from the QR value
     let name = "";
     let company = "";
     let purpose = "";
@@ -110,7 +107,6 @@ export default function KioskQRPage() {
       company = url.searchParams.get("company") ?? "";
       purpose = url.searchParams.get("purpose") ?? "";
     } catch {
-      // Plain text fallback: treat entire value as visitor name
       name = raw.trim();
     }
 
@@ -126,7 +122,7 @@ export default function KioskQRPage() {
     try {
       await api.createKioskReception(kioskToken, { visitor_name: name, company, purpose, method: "qr" });
       stopCamera();
-      router.push(`/${params.tenant}/kiosk/complete?name=${encodeURIComponent(name)}`);
+      router.push(`/${params.tenant}/kiosk/calling?name=${encodeURIComponent(name)}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "受付処理に失敗しました");
       setSubmitting(false);
@@ -140,8 +136,11 @@ export default function KioskQRPage() {
 
   return (
     <div
-      className="w-screen h-screen flex flex-col select-none"
-      style={{ background: "#1d1a15" }}
+      className="w-screen h-screen flex flex-col select-none overflow-hidden"
+      style={{
+        background: "#faf8f4",
+        animation: "kiosk-screen-in 0.35s cubic-bezier(0.2,0.7,0.3,1)",
+      }}
       onClick={resetIdle}
     >
       {/* Header */}
@@ -167,12 +166,26 @@ export default function KioskQRPage() {
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, position: "relative", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-
+      <div style={{
+        flex: 1, display: "flex", flexDirection: "column",
+        alignItems: "center", justifyContent: "center",
+        padding: "40px 32px",
+        gap: 28,
+      }}>
         {supported === false ? (
           /* BarcodeDetector not supported */
-          <div style={{ padding: "0 40px", textAlign: "center" }}>
-            <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 16, lineHeight: 1.6, marginBottom: 28 }}>
+          <div style={{ textAlign: "center", maxWidth: 400 }}>
+            <div style={{
+              width: 80, height: 80, borderRadius: "50%",
+              background: "#eaf0e8", color: "#4a7c4e",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              margin: "0 auto 24px",
+            }}>
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>
+              </svg>
+            </div>
+            <div style={{ color: "#6b6559", fontSize: 16, lineHeight: 1.6, marginBottom: 28 }}>
               このブラウザはQR受付に対応していません。<br />
               Chromium系ブラウザをご利用ください。
             </div>
@@ -182,73 +195,91 @@ export default function KioskQRPage() {
                 background: "#4a7c4e", color: "white", border: "none",
                 borderRadius: 14, height: 60, padding: "0 32px", fontSize: 17,
                 fontWeight: 600, cursor: "pointer",
+                boxShadow: "0 4px 16px rgba(74,124,78,0.3)",
               }}
             >
               入力して受付へ
             </button>
           </div>
         ) : submitting ? (
-          <div style={{ color: "white", fontSize: 20, opacity: 0.8 }}>受付処理中…</div>
+          <div style={{ textAlign: "center" }}>
+            <div style={{
+              width: 60, height: 60, borderRadius: "50%",
+              border: "3px solid #eaf0e8", borderTopColor: "#4a7c4e",
+              animation: "spin 0.8s linear infinite",
+              margin: "0 auto 20px",
+            }} />
+            <div style={{ color: "#6b6559", fontSize: 17 }}>受付処理中…</div>
+          </div>
         ) : (
           <>
+            <p style={{ color: "#6b6559", fontSize: 16, margin: 0, textAlign: "center" }}>
+              QRコードをカメラにかざしてください
+            </p>
+
             {/* Camera viewfinder */}
             <div style={{
-              position: "relative", width: "min(80vw, 400px)", aspectRatio: "1",
-              borderRadius: 24, overflow: "hidden",
-              border: "2px solid rgba(74,124,78,0.7)",
-              boxShadow: "0 0 0 4px rgba(74,124,78,0.2)",
+              position: "relative",
+              width: "min(72vw, 380px)", aspectRatio: "1",
+              borderRadius: 20, overflow: "hidden",
             }}>
+              {/* Camera feed */}
               <video
                 ref={videoRef}
                 muted
                 playsInline
-                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                style={{ width: "100%", height: "100%", objectFit: "cover", background: "#e8e4dd" }}
               />
+
               {/* Corner marks */}
               {[
-                { top: 0, left: 0 },
-                { top: 0, right: 0 },
-                { bottom: 0, left: 0 },
-                { bottom: 0, right: 0 },
-              ].map((pos, i) => (
-                <div key={i} style={{
-                  position: "absolute", width: 28, height: 28, ...pos,
-                  borderTop: i < 2 ? `3px solid #4a7c4e` : "none",
-                  borderBottom: i >= 2 ? `3px solid #4a7c4e` : "none",
-                  borderLeft: i % 2 === 0 ? `3px solid #4a7c4e` : "none",
-                  borderRight: i % 2 === 1 ? `3px solid #4a7c4e` : "none",
-                  borderRadius: i === 0 ? "8px 0 0 0" : i === 1 ? "0 8px 0 0" : i === 2 ? "0 0 0 8px" : "0 0 8px 0",
-                }} />
+                { top: 0, left: 0, borderTop: "3px solid #4a7c4e", borderLeft: "3px solid #4a7c4e", borderTopLeftRadius: 8 },
+                { top: 0, right: 0, borderTop: "3px solid #4a7c4e", borderRight: "3px solid #4a7c4e", borderTopRightRadius: 8 },
+                { bottom: 0, left: 0, borderBottom: "3px solid #4a7c4e", borderLeft: "3px solid #4a7c4e", borderBottomLeftRadius: 8 },
+                { bottom: 0, right: 0, borderBottom: "3px solid #4a7c4e", borderRight: "3px solid #4a7c4e", borderBottomRightRadius: 8 },
+              ].map((s, i) => (
+                <div key={i} style={{ position: "absolute", width: 32, height: 32, ...s }} />
               ))}
+
+              {/* Scan line */}
               {scanning && (
                 <div style={{
-                  position: "absolute", top: "50%", left: 0, right: 0, height: 2,
-                  background: "rgba(74,124,78,0.8)",
-                  animation: "scan 2s linear infinite",
+                  position: "absolute", left: 8, right: 8, height: 2,
+                  background: "linear-gradient(90deg, transparent, #4a7c4e, transparent)",
+                  boxShadow: "0 0 8px rgba(74,124,78,0.6)",
+                  animation: "kiosk-scan 2s linear infinite",
                 }} />
               )}
             </div>
 
-            <p style={{ color: "rgba(255,255,255,0.7)", fontSize: 15, marginTop: 28, textAlign: "center" }}>
-              QRコードをカメラにかざしてください
-            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+              {[0, 1, 2].map((i) => (
+                <div key={i} style={{
+                  width: 8, height: 8, borderRadius: "50%", background: "#4a7c4e",
+                  animation: `kiosk-dot-bounce 1.4s ${i * 0.18}s ease-in-out infinite`,
+                }} />
+              ))}
+            </div>
 
             {error && (
               <div style={{
-                marginTop: 20, padding: "12px 20px", background: "#f6e0dc",
-                borderRadius: 12, color: "#a84238", fontSize: 14,
-                maxWidth: 380, textAlign: "center",
+                padding: "14px 20px", background: "#f6e0dc",
+                border: "1px solid rgba(168,66,56,0.3)", borderRadius: 12,
+                color: "#a84238", fontSize: 14, maxWidth: 400, textAlign: "center",
+                lineHeight: 1.5,
               }}>
                 {error}
               </div>
             )}
 
             <button
-              onClick={() => router.push(`/${params.tenant}/kiosk/reception`)}
+              onClick={() => { stopCamera(); router.push(`/${params.tenant}/kiosk/reception`); }}
               style={{
-                marginTop: 32, background: "rgba(255,255,255,0.08)",
-                border: "1px solid rgba(255,255,255,0.2)", color: "rgba(255,255,255,0.7)",
-                borderRadius: 12, height: 50, padding: "0 24px", fontSize: 15, cursor: "pointer",
+                background: "transparent",
+                border: "1.5px solid #d8d3c7", color: "#6b6559",
+                borderRadius: 12, height: 52, padding: "0 28px",
+                fontSize: 15, cursor: "pointer",
+                transition: "border-color 0.15s, color 0.15s",
               }}
             >
               入力して受付に切り替え
@@ -258,11 +289,7 @@ export default function KioskQRPage() {
       </div>
 
       <style>{`
-        @keyframes scan {
-          0% { top: 10%; }
-          50% { top: 90%; }
-          100% { top: 10%; }
-        }
+        @keyframes spin { to { transform: rotate(360deg); } }
       `}</style>
     </div>
   );
