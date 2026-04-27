@@ -251,12 +251,6 @@ export default function AdminKioskPage() {
                     <MkBtn size="sm" variant="default" onClick={() => window.open(kioskUrl, "_blank")}>
                       画面プレビュー
                     </MkBtn>
-                    <MkBtn size="sm" variant="default">
-                      再起動
-                    </MkBtn>
-                    <MkBtn size="sm" variant="default">
-                      端末設定
-                    </MkBtn>
                     <MkBtn size="sm" variant="ghost" onClick={() => handleDelete(d.id, d.name)}>
                       削除
                     </MkBtn>

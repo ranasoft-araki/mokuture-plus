@@ -256,43 +256,76 @@ export default function AdminSettingsPage() {
         {/* Live preview */}
         <div style={{ position: "sticky", top: 0 }}>
           <MkCard>
-            <MkSectionTitle title="プレビュー" subtitle="キオスク受付完了画面" />
+            <MkSectionTitle title="プレビュー" subtitle="キオスク受付トップ画面" />
             <div style={{
-              aspectRatio: "9/16", background: "#fffefb", borderRadius: 7,
+              aspectRatio: "9/16", background: "#faf8f4", borderRadius: 7,
               border: "1px solid #efece5", overflow: "hidden",
-              display: "flex", flexDirection: "column", padding: 22, position: "relative",
+              display: "flex", flexDirection: "column", padding: 18, gap: 10,
             }}>
-              <div style={{ width: 36, height: 36, borderRadius: 8, background: "#1d1a15", color: "#fffefb", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {(logoPreview ?? logoUrl) ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={logoPreview ?? logoUrl!} alt="logo" style={{ width: 28, height: 28, objectFit: "contain" }} />
-                ) : (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fffefb" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="9" r="5"/><path d="M4 19c2-3 5-4.5 8-4.5s6 1.5 8 4.5"/><path d="M12 4v10"/>
-                  </svg>
-                )}
+              {/* Header */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 28, height: 28, borderRadius: 6, background: "#1d1a15", color: "#fffefb", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  {(logoPreview ?? logoUrl) ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={logoPreview ?? logoUrl!} alt="logo" style={{ width: 22, height: 22, objectFit: "contain" }} />
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fffefb" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="9" r="5"/><path d="M4 19c2-3 5-4.5 8-4.5s6 1.5 8 4.5"/>
+                    </svg>
+                  )}
+                </div>
+                <div style={{ fontSize: 8, color: "#a8a198", letterSpacing: 2, textTransform: "uppercase", fontFamily: "Inter, system-ui, sans-serif" }}>RECEPTION</div>
               </div>
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", textAlign: "center" }}>
-                <div style={{ width: 60, height: 60, borderRadius: "50%", background: `${brandColor}22`, color: brandColor, margin: "0 auto 20px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l5 5L20 6"/></svg>
+
+              {/* Welcome heading */}
+              <div style={{ paddingTop: 4 }}>
+                <div style={{ fontSize: 26, fontWeight: 700, color: "#1d1a15", letterSpacing: -0.8, lineHeight: 1.1 }}>
+                  {kioskWelcome || "ようこそ"}
                 </div>
-                <div style={{ fontSize: 22, fontWeight: 600, color: "#1d1a15", letterSpacing: "-0.4px", lineHeight: 1.3 }}>
-                  佐々木 様、<br/>お待ちしておりました
-                </div>
-                <div style={{ fontSize: 13, color: "#6b6559", marginTop: 14 }}>
-                  {kioskCalling || "担当者をお呼びしています"}
-                </div>
-                <div style={{ display: "flex", justifyContent: "center", gap: 5, marginTop: 14 }}>
-                  {[0, 1, 2].map((i) => (
-                    <div key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: brandColor, opacity: i === 1 ? 1 : 0.3 }} />
-                  ))}
+                <div style={{ fontSize: 11, color: "#6b6559", marginTop: 4 }}>
+                  {kioskSub || "ご用件をお選びください"}
                 </div>
               </div>
-              <div style={{ padding: 14, background: "#f4f1ea", borderRadius: 7, borderLeft: `2px solid ${brandColor}` }}>
-                <div style={{ fontSize: 10, color: "#a8a198", letterSpacing: "0.4px", textTransform: "uppercase" }}>NEXT</div>
-                <div style={{ fontSize: 13, color: "#2d2a24", fontWeight: 500, marginTop: 4, lineHeight: 1.4 }}>
-                  {kioskComplete || "担当者がご案内します"}
+
+              {/* Tile grid */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, flex: 1, minHeight: 0 }}>
+                {[
+                  { label: "ご訪問", primary: true },
+                  { label: "QR 受付", primary: false },
+                  { label: "配送・宅配", primary: false },
+                  { label: "その他", primary: false },
+                ].map((t, i) => (
+                  <div key={i} style={{
+                    background: t.primary ? "#1d1a15" : "#fffefb",
+                    border: `1px solid ${t.primary ? "#1d1a15" : "#efece5"}`,
+                    borderRadius: 9, padding: "8px 10px",
+                    display: "flex", alignItems: "flex-end",
+                    minHeight: 0,
+                  }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: t.primary ? "#ffffff" : "#2d2a24" }}>{t.label}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Calling / Complete message references */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                <div style={{ background: "#fffefb", border: "1px solid #efece5", borderRadius: 6, padding: "6px 10px" }}>
+                  <div style={{ fontSize: 8, color: "#a8a198", letterSpacing: 1, textTransform: "uppercase", marginBottom: 2 }}>CALLING</div>
+                  <div style={{ fontSize: 10, color: "#2d2a24", fontWeight: 500, lineHeight: 1.3 }}>
+                    {kioskCalling || "担当者をお呼びしています"}
+                  </div>
                 </div>
+                <div style={{ background: "#1d1a15", borderRadius: 6, padding: "6px 10px" }}>
+                  <div style={{ fontSize: 8, color: "rgba(255,255,255,0.4)", letterSpacing: 1, textTransform: "uppercase", marginBottom: 2 }}>COMPLETE</div>
+                  <div style={{ fontSize: 10, color: "#ffffff", fontWeight: 500, lineHeight: 1.3 }}>
+                    {kioskComplete || "担当者がご案内します"}
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div style={{ fontSize: 8, color: "#a8a198", textAlign: "right", fontFamily: "monospace" }}>
+                {kioskIdleTimeout || "60"}秒で待機画面へ
               </div>
             </div>
           </MkCard>

@@ -6,6 +6,7 @@ import { KioskScaler } from "@/components/KioskScaler";
 import { api, type PublicTenantSettings } from "@/lib/api";
 
 const KIOSK_TOKEN_KEY = "mokuture_kiosk_token";
+const KIOSK_NAME_KEY = "mokuture_kiosk_name";
 
 const DEFAULT_SETTINGS: PublicTenantSettings = {
   brand_color: "#4a7c4e",
@@ -82,6 +83,7 @@ export default function KioskTopPage() {
   const [pressed, setPressed] = useState<number | null>(null);
   const [now, setNow] = useState("");
   const [kioskSettings, setKioskSettings] = useState<PublicTenantSettings>(DEFAULT_SETTINGS);
+  const [deviceName, setDeviceName] = useState("");
   const idleTimeoutRef = useRef(60_000);
 
   const resetIdle = () => {
@@ -94,6 +96,8 @@ export default function KioskTopPage() {
       router.replace(`/${params.tenant}/kiosk/setup`);
       return;
     }
+
+    setDeviceName(localStorage.getItem(KIOSK_NAME_KEY) ?? "");
 
     // Load tenant settings
     api.getPublicTenantSettings(params.tenant).then((s) => {
@@ -226,7 +230,7 @@ export default function KioskTopPage() {
           <span style={{ flex: 1 }} />
           <span style={{ color: "#a8a198" }}>{kioskSettings.kiosk_idle_timeout_sec}秒で待機画面に戻ります</span>
           <span style={{ flex: 1 }} />
-          <span style={{ fontFamily: "JetBrains Mono, monospace" }}>kiosk-hq-1f-01</span>
+          <span style={{ fontFamily: "JetBrains Mono, monospace" }}>{deviceName || "kiosk"}</span>
         </div>
       </div>
     </KioskScaler>
