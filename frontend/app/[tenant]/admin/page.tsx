@@ -84,15 +84,10 @@ export default function DashboardPage() {
       breadcrumb="ホーム"
       subtitle={`${today} · 本日の稼働状況`}
       actions={
-        <>
-          <MkBtn variant="ghost" size="sm" onClick={() => { const t = getAccessToken(); if (t) void loadData(t, true); }} disabled={refreshing}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-            {refreshing ? "更新中..." : "更新"}
-          </MkBtn>
-          <MkBtn variant="primary" onClick={() => router.push(`/${params.tenant}/admin/media`)}>
-            + 新規コンテンツ
-          </MkBtn>
-        </>
+        <MkBtn variant="ghost" size="sm" onClick={() => { const t = getAccessToken(); if (t) void loadData(t, true); }} disabled={refreshing}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          {refreshing ? "更新中..." : "更新"}
+        </MkBtn>
       }
     >
       {/* KPI row */}

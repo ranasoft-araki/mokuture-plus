@@ -9,6 +9,7 @@ from app.models.notification import NotificationSetting
 from app.models.user import User
 from app.services.crypto import encrypt_dict, decrypt_dict
 from app.services.slack import send_slack_notification
+import httpx
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -71,6 +72,32 @@ async def test_slack(user: User = Depends(require_roles("admin", "superadmin")),
         raise HTTPException(status_code=404, detail="Slack not configured")
     config = decrypt_dict(setting.config_json)
     ok = await send_slack_notification(config.get("webhook_url", ""), "mokuture+ テスト通知")
+    return {"ok": ok}
+
+
+@router.post("/test/chatwork")
+async def test_chatwork(user: User = Depends(require_roles("admin", "superadmin")), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(NotificationSetting).where(NotificationSetting.tenant_id == user.tenant_id, NotificationSetting.type == "chatwork")
+    )
+    setting = result.scalar_one_or_none()
+    if not setting:
+        raise HTTPException(status_code=404, detail="Chatwork not configured")
+    config = decrypt_dict(setting.config_json)
+    api_token = config.get("api_token", "")
+    room_id = config.get("room_id", "")
+    if not api_token or not room_id:
+        raise HTTPException(status_code=400, detail="Chatwork API token or room ID missing")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(
+                f"https://api.chatwork.com/v2/rooms/{room_id}/messages",
+                headers={"X-ChatWorkToken": api_token},
+                data={"body": "mokuture+ テスト通知"},
+            )
+        ok = res.status_code == 200
+    except Exception:
+        ok = False
     return {"ok": ok}
 
 

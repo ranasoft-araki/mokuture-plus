@@ -1,9 +1,8 @@
-"""Locker control API – Phase 0 mock: manages state in DB only.
-Phase 1: replace the unlock/lock handlers with Raspberry Pi GPIO bridge calls.
-"""
+"""Locker control API – manages state in DB; Phase 2: wire up GPIO bridge."""
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -15,6 +14,11 @@ from app.models.user import User
 router = APIRouter(prefix="/lockers", tags=["lockers"])
 
 
+class CreateLockerRequest(BaseModel):
+    door_number: int
+    auto_relock_sec: int = 60
+
+
 @router.get("")
 async def list_lockers(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Locker).where(Locker.tenant_id == user.tenant_id).order_by(Locker.door_number))
@@ -23,11 +27,12 @@ async def list_lockers(user: User = Depends(get_current_user), db: AsyncSession 
 
 @router.post("", status_code=201)
 async def create_locker(
-    door_number: int,
-    auto_relock_sec: int = 60,
+    body: CreateLockerRequest,
     user: User = Depends(require_roles("admin", "superadmin")),
     db: AsyncSession = Depends(get_db),
 ):
+    door_number = body.door_number
+    auto_relock_sec = body.auto_relock_sec
     locker = Locker(tenant_id=user.tenant_id, door_number=door_number, auto_relock_sec=auto_relock_sec)
     db.add(locker)
     await db.commit()
@@ -59,6 +64,17 @@ async def lock_locker(
     locker.state = "locked"
     await db.commit()
     return {"ok": True, "state": "locked"}
+
+
+@router.delete("/{locker_id}", status_code=204)
+async def delete_locker(
+    locker_id: str,
+    user: User = Depends(require_roles("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    locker = await _get_locker(locker_id, user.tenant_id, db)
+    await db.delete(locker)
+    await db.commit()
 
 
 async def _get_locker(locker_id: str, tenant_id: str, db: AsyncSession) -> Locker:

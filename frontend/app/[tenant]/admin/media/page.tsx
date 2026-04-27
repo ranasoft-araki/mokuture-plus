@@ -85,6 +85,20 @@ function MediaPreviewModal({ item, onClose }: { item: MediaItem; onClose: () => 
   );
 }
 
+function ConfirmDialog({ message, onConfirm, onCancel }: { message: string; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "#fffefb", borderRadius: 12, padding: 28, maxWidth: 400, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <p style={{ fontSize: 14, color: "#2d2a24", marginBottom: 20 }}>{message}</p>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button onClick={onCancel} style={{ padding: "8px 16px", borderRadius: 7, background: "#f4f1ea", border: "1px solid #d8d3c7", color: "#6b6559", cursor: "pointer", fontSize: 13 }}>キャンセル</button>
+          <button onClick={onConfirm} style={{ padding: "8px 16px", borderRadius: 7, background: "#a84238", border: "none", color: "#fffefb", cursor: "pointer", fontSize: 13, fontWeight: 500 }}>削除</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type FilterType = "all" | "video" | "image";
 
 export default function AdminMediaPage() {
@@ -101,6 +115,7 @@ export default function AdminMediaPage() {
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
+  const [confirmTarget, setConfirmTarget] = useState<{ id: string; name: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const loadMedia = useCallback(async (token: string) => {
@@ -171,8 +186,14 @@ export default function AdminMediaPage() {
     if (f) void uploadFile(f);
   }
 
-  async function handleDelete(id: string, name: string) {
-    if (!confirm(`「${name}」を削除しますか？`)) return;
+  function handleDelete(id: string, name: string) {
+    setConfirmTarget({ id, name });
+  }
+
+  async function doDelete() {
+    if (!confirmTarget) return;
+    const { id } = confirmTarget;
+    setConfirmTarget(null);
     const token = getAccessToken();
     if (!token) return;
     try {
@@ -196,18 +217,8 @@ export default function AdminMediaPage() {
       title="メディアライブラリ"
       breadcrumb="ホーム / コンテンツ管理"
       subtitle={`動画・静止画・ロゴを管理 · 合計 ${media.length} 件 / 使用容量 ${formatBytes(stats.totalBytes)}`}
-      actions={
-        <>
-          <MkBtn variant="default" size="sm">
-            フォルダ
-          </MkBtn>
-          <MkBtn variant="primary" onClick={() => inputRef.current?.click()} disabled={uploading}>
-            {uploading ? "アップロード中…" : "↑ アップロード"}
-          </MkBtn>
-          <input ref={inputRef} type="file" accept="image/*,video/*" className="hidden" onChange={handleFilePick} />
-        </>
-      }
     >
+      <input ref={inputRef} type="file" accept="image/*,video/*" className="hidden" onChange={handleFilePick} />
       {error && <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#f6e0dc", border: "1px solid #a84238", color: "#a84238", fontSize: 13 }}>{error}</div>}
       {success && <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#eaf0e8", border: "1px solid #4a7c4e", color: "#3a6240", fontSize: 13 }}>{success}</div>}
 
@@ -328,6 +339,13 @@ export default function AdminMediaPage() {
         </MkCard>
       )}
       {previewItem && <MediaPreviewModal item={previewItem} onClose={() => setPreviewItem(null)} />}
+      {confirmTarget && (
+        <ConfirmDialog
+          message={`「${confirmTarget.name}」を削除しますか？`}
+          onConfirm={doDelete}
+          onCancel={() => setConfirmTarget(null)}
+        />
+      )}
     </AdminShell>
   );
 }

@@ -130,24 +130,32 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
         </nav>
 
         {/* User footer */}
-        <div style={{ padding: 12, borderTop: "1px solid #efece5", display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#f7ecd9", color: "#b8763a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
-            {tenant[0]?.toUpperCase() ?? "A"}
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: "#2d2a24" }}>管理者</div>
-            <div style={{ fontSize: 10.5, color: "#a8a198" }}>管理者 · admin</div>
+        <div style={{ borderTop: "1px solid #efece5" }}>
+          <div style={{ padding: "12px 12px 8px", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#f7ecd9", color: "#b8763a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
+              {tenant[0]?.toUpperCase() ?? "A"}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#2d2a24" }}>管理者</div>
+              <div style={{ fontSize: 10.5, color: "#a8a198" }}>管理者 · admin</div>
+            </div>
           </div>
           <button
             onClick={() => { clearTokens(); router.push("/login"); }}
-            style={{ background: "none", border: "none", color: "#a8a198", cursor: "pointer", padding: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
-            title="ログアウト"
+            style={{
+              width: "100%", display: "flex", alignItems: "center", gap: 8,
+              padding: "9px 14px", background: "none", border: "none",
+              borderTop: "1px solid #efece5", cursor: "pointer",
+              color: "#6b6559", fontSize: 12.5, fontFamily: FONT_JP,
+              textAlign: "left",
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f4f1ea"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="5" cy="12" r="1.2" fill="currentColor"/>
-              <circle cx="12" cy="12" r="1.2" fill="currentColor"/>
-              <circle cx="19" cy="12" r="1.2" fill="currentColor"/>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
             </svg>
+            ログアウト
           </button>
         </div>
       </aside>

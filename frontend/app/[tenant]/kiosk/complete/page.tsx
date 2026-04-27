@@ -3,8 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { KioskScaler } from "@/components/KioskScaler";
+import { api } from "@/lib/api";
 
-const AUTO_RETURN_SEC = 60;
+const DEFAULT_RETURN_SEC = 60;
+const DEFAULT_COMPLETE_MSG = "担当者がお迎えします";
 
 const CheckIcon = ({ size = 50, stroke = 2.4 }: { size?: number; stroke?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
@@ -30,21 +32,34 @@ export default function KioskWelcomePage() {
   const router = useRouter();
   const name = searchParams.get("name") ?? "お客様";
   const staff = searchParams.get("staff") ?? "";
-  const [count, setCount] = useState(AUTO_RETURN_SEC);
+  const [autoReturnSec, setAutoReturnSec] = useState(DEFAULT_RETURN_SEC);
+  const [count, setCount] = useState(DEFAULT_RETURN_SEC);
+  const [completeMessage, setCompleteMessage] = useState(DEFAULT_COMPLETE_MSG);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [now, setNow] = useState("");
 
   useEffect(() => {
-    timerRef.current = setInterval(() => {
-      setCount((c) => {
-        if (c <= 1) {
-          clearInterval(timerRef.current!);
-          router.push(`/${params.tenant}/kiosk`);
-          return 0;
-        }
-        return c - 1;
+    let returnSec = DEFAULT_RETURN_SEC;
+    api.getPublicTenantSettings(params.tenant)
+      .then((s) => {
+        returnSec = s.kiosk_complete_timeout_sec;
+        setAutoReturnSec(returnSec);
+        setCount(returnSec);
+        setCompleteMessage(s.kiosk_complete_message);
+      })
+      .catch(() => {})
+      .finally(() => {
+        timerRef.current = setInterval(() => {
+          setCount((c) => {
+            if (c <= 1) {
+              clearInterval(timerRef.current!);
+              router.push(`/${params.tenant}/kiosk`);
+              return 0;
+            }
+            return c - 1;
+          });
+        }, 1000);
       });
-    }, 1000);
     const tick = () => {
       const d = new Date();
       setNow(`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`);
@@ -55,9 +70,10 @@ export default function KioskWelcomePage() {
       if (timerRef.current) clearInterval(timerRef.current);
       clearInterval(id);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.tenant, router]);
 
-  const progress = ((AUTO_RETURN_SEC - count) / AUTO_RETURN_SEC) * 100;
+  const progress = ((autoReturnSec - count) / autoReturnSec) * 100;
 
   return (
     <KioskScaler bg="#faf8f4">
@@ -141,7 +157,7 @@ export default function KioskWelcomePage() {
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 6, fontFamily: "Inter, system-ui, sans-serif" }}>NEXT — 受付へ</div>
                 <div style={{ fontSize: 32, fontWeight: 600, letterSpacing: -0.8, lineHeight: 1.15 }}>
-                  担当者がお迎えします
+                  {completeMessage}
                 </div>
                 <div style={{ fontSize: 15, color: "rgba(255,255,255,0.6)", marginTop: 4 }}>
                   恐れ入りますが、こちらでお待ちください

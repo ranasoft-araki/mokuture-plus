@@ -6,14 +6,13 @@ import { api, type ReceptionLog } from "@/lib/api";
 import { getAccessToken, clearTokens } from "@/lib/auth";
 import { AdminShell, MkBtn, MkCard, MkPill } from "@/components/AdminShell";
 
-type DateFilter = "today" | "week" | "month" | "all" | "custom";
+type DateFilter = "today" | "week" | "month" | "all";
 
 const DATE_LABELS: Record<DateFilter, string> = {
   today:  "今日",
   week:   "今週",
   month:  "今月",
   all:    "過去30日",
-  custom: "カスタム",
 };
 
 const PAGE_SIZE = 10;
@@ -49,7 +48,6 @@ export default function ReceptionLogsPage() {
       week:   startOf(7),
       month:  startOf(30),
       all:    startOf(30),
-      custom: startOf(30),
     };
     let list = logs.filter((r) => new Date(r.created_at) >= cutoff[dateFilter]);
     if (search.trim()) {
@@ -71,15 +69,6 @@ export default function ReceptionLogsPage() {
       title="受付ログ"
       breadcrumb="ホーム / 受付ログ"
       subtitle={`過去30日 · 合計 ${logs.length} 件`}
-      actions={
-        <>
-          <MkBtn variant="ghost" size="sm">CSV エクスポート</MkBtn>
-          <MkBtn variant="default" size="sm">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-            詳細検索
-          </MkBtn>
-        </>
-      }
     >
       {/* Filter row */}
       <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
@@ -95,7 +84,7 @@ export default function ReceptionLogsPage() {
           />
         </div>
         <div style={{ display: "flex", gap: 6 }}>
-          {(["today", "week", "month", "all", "custom"] as DateFilter[]).map((f) => (
+          {(["today", "week", "month", "all"] as DateFilter[]).map((f) => (
             <button
               key={f}
               onClick={() => { setDateFilter(f); setPage(1); }}
@@ -111,19 +100,6 @@ export default function ReceptionLogsPage() {
             </button>
           ))}
         </div>
-        <div style={{ flex: 1 }} />
-        {/* Dropdown filters */}
-        {[["受付経路", "全て"], ["担当者", "全員"], ["状態", "全て"]].map(([label, val]) => (
-          <button key={label} style={{
-            padding: "7px 12px", fontSize: 11.5,
-            background: "#fffefb", color: "#2d2a24", border: "1px solid #d8d3c7",
-            borderRadius: 7, cursor: "pointer", display: "flex", gap: 6, alignItems: "center",
-          }}>
-            <span style={{ color: "#a8a198" }}>{label}</span>
-            <span style={{ fontWeight: 500 }}>{val}</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#a8a198" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"/></svg>
-          </button>
-        ))}
       </div>
 
       <MkCard padding="0">

@@ -73,8 +73,15 @@ export const api = {
   // Settings
   getTenantSettings: (token: string) =>
     request<TenantSettings>("/settings", {}, token),
-  updateTenantSettings: (token: string, body: { brand_color?: string; font?: string }) =>
+  updateTenantSettings: (token: string, body: {
+    brand_color?: string; font?: string;
+    kiosk_welcome_message?: string; kiosk_sub_message?: string;
+    kiosk_calling_message?: string; kiosk_complete_message?: string;
+    kiosk_idle_timeout_sec?: number; kiosk_complete_timeout_sec?: number;
+  }) =>
     request<TenantSettings>("/settings", { method: "PATCH", body: JSON.stringify(body) }, token),
+  getPublicTenantSettings: (tenantSlug: string) =>
+    request<PublicTenantSettings>(`/settings/public/${tenantSlug}`),
   getLogoUploadUrl: (token: string, filename: string, mime_type: string) =>
     request<{ upload_url: string; public_url: string }>("/settings/logo-upload-url", { method: "POST", body: JSON.stringify({ filename, mime_type }) }, token),
   confirmLogoUpload: (token: string, logo_url: string) =>
@@ -170,6 +177,14 @@ export const api = {
     request("/notifications/settings/chatwork", { method: "PUT", body: JSON.stringify({ api_token, room_id }) }, token),
   testSlackNotification: (token: string) =>
     request<{ ok: boolean }>("/notifications/test/slack", { method: "POST" }, token),
+  testChatworkNotification: (token: string) =>
+    request<{ ok: boolean }>("/notifications/test/chatwork", { method: "POST" }, token),
+
+  // Lockers (extended)
+  createLocker: (token: string, door_number: number, auto_relock_sec: number) =>
+    request<Locker>("/lockers", { method: "POST", body: JSON.stringify({ door_number, auto_relock_sec }) }, token),
+  deleteLocker: (token: string, id: string) =>
+    request(`/lockers/${id}`, { method: "DELETE" }, token),
 };
 
 export interface MediaUploadUrlResponse {
@@ -268,6 +283,24 @@ export interface TenantSettings {
   brand_color: string;
   logo_url: string | null;
   font: string;
+  kiosk_welcome_message: string;
+  kiosk_sub_message: string;
+  kiosk_calling_message: string;
+  kiosk_complete_message: string;
+  kiosk_idle_timeout_sec: number;
+  kiosk_complete_timeout_sec: number;
+}
+
+export interface PublicTenantSettings {
+  brand_color: string;
+  logo_url: string | null;
+  font: string;
+  kiosk_welcome_message: string;
+  kiosk_sub_message: string;
+  kiosk_calling_message: string;
+  kiosk_complete_message: string;
+  kiosk_idle_timeout_sec: number;
+  kiosk_complete_timeout_sec: number;
 }
 
 export interface KioskScheduleResponse {

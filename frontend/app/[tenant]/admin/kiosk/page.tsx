@@ -6,6 +6,20 @@ import { api, type Device } from "@/lib/api";
 import { clearTokens, getAccessToken } from "@/lib/auth";
 import { AdminShell, MkBtn, MkCard, MkPill } from "@/components/AdminShell";
 
+function ConfirmDialog({ message, onConfirm, onCancel }: { message: string; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "#fffefb", borderRadius: 12, padding: 28, maxWidth: 400, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <p style={{ fontSize: 14, color: "#2d2a24", marginBottom: 20 }}>{message}</p>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button onClick={onCancel} style={{ padding: "8px 16px", borderRadius: 7, background: "#f4f1ea", border: "1px solid #d8d3c7", color: "#6b6559", cursor: "pointer", fontSize: 13 }}>キャンセル</button>
+          <button onClick={onConfirm} style={{ padding: "8px 16px", borderRadius: 7, background: "#a84238", border: "none", color: "#fffefb", cursor: "pointer", fontSize: 13, fontWeight: 500 }}>削除</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminKioskPage() {
   const params = useParams<{ tenant: string }>();
   const router = useRouter();
@@ -17,6 +31,7 @@ export default function AdminKioskPage() {
   const [newToken, setNewToken] = useState<{ name: string; token: string; pin_code: string; pin_expires_minutes: number } | null>(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState<"token" | "url" | null>(null);
+  const [confirmTarget, setConfirmTarget] = useState<{ id: string; name: string } | null>(null);
 
   const loadDevices = useCallback(async (token: string) => {
     try {
@@ -56,8 +71,14 @@ export default function AdminKioskPage() {
     }
   }
 
-  async function handleDelete(id: string, name: string) {
-    if (!confirm(`「${name}」を削除すると、そのキオスク端末は使用できなくなります。続けますか？`)) return;
+  function handleDelete(id: string, name: string) {
+    setConfirmTarget({ id, name });
+  }
+
+  async function doDelete() {
+    if (!confirmTarget) return;
+    const { id } = confirmTarget;
+    setConfirmTarget(null);
     const token = getAccessToken();
     if (!token) return;
     try {
@@ -90,16 +111,6 @@ export default function AdminKioskPage() {
       title="キオスク端末"
       breadcrumb="ホーム / キオスク端末"
       subtitle={`接続済み端末を管理 · ${devices.length} 台`}
-      actions={
-        <>
-          <MkBtn variant="default" size="sm" onClick={() => document.getElementById("add-device-form")?.scrollIntoView({ behavior: "smooth" })}>
-            ペアリング
-          </MkBtn>
-          <MkBtn variant="primary" onClick={() => document.getElementById("add-device-form")?.scrollIntoView({ behavior: "smooth" })}>
-            + 端末を追加
-          </MkBtn>
-        </>
-      }
     >
       {/* Summary strip — 4 cards */}
       <div style={{ display: "flex", gap: 14, marginBottom: 22 }}>
@@ -256,23 +267,6 @@ export default function AdminKioskPage() {
           })
         )}
 
-        {/* Pending slot */}
-        {!loading && (
-          <MkCard padding="22px" style={{ borderStyle: "dashed", background: "#f4f1ea" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-              <div style={{ width: 48, height: 48, borderRadius: 7, background: "#fffefb", border: "1px dashed #d8d3c7", display: "flex", alignItems: "center", justifyContent: "center", color: "#a8a198", flexShrink: 0 }}>
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#2d2a24" }}>ペアリング待機中の端末 · {pendingCount} 台</div>
-                <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3 }}>新しい端末で QR コードをスキャンすると、この場所に表示されます</div>
-              </div>
-              <MkBtn size="sm" variant="default" onClick={() => document.getElementById("add-device-form")?.scrollIntoView({ behavior: "smooth" })}>
-                QRを表示
-              </MkBtn>
-            </div>
-          </MkCard>
-        )}
       </div>
 
       {/* Add form */}
@@ -306,6 +300,13 @@ export default function AdminKioskPage() {
           <li style={{ color: "#7a4e10" }}>SSH/リモート操作の場合は「URLコピー」でセットアップURLを使用</li>
         </ol>
       </div>
+      {confirmTarget && (
+        <ConfirmDialog
+          message={`「${confirmTarget.name}」を削除すると、そのキオスク端末は使用できなくなります。続けますか？`}
+          onConfirm={doDelete}
+          onCancel={() => setConfirmTarget(null)}
+        />
+      )}
     </AdminShell>
   );
 }

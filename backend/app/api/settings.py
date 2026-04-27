@@ -29,11 +29,35 @@ class TenantSettingsOut(BaseModel):
     brand_color: str
     logo_url: str | None
     font: str
+    kiosk_welcome_message: str
+    kiosk_sub_message: str
+    kiosk_calling_message: str
+    kiosk_complete_message: str
+    kiosk_idle_timeout_sec: int
+    kiosk_complete_timeout_sec: int
+
+
+class PublicTenantSettingsOut(BaseModel):
+    brand_color: str
+    logo_url: str | None
+    font: str
+    kiosk_welcome_message: str
+    kiosk_sub_message: str
+    kiosk_calling_message: str
+    kiosk_complete_message: str
+    kiosk_idle_timeout_sec: int
+    kiosk_complete_timeout_sec: int
 
 
 class TenantSettingsPatch(BaseModel):
     brand_color: str | None = None
     font: str | None = None
+    kiosk_welcome_message: str | None = None
+    kiosk_sub_message: str | None = None
+    kiosk_calling_message: str | None = None
+    kiosk_complete_message: str | None = None
+    kiosk_idle_timeout_sec: int | None = None
+    kiosk_complete_timeout_sec: int | None = None
 
 
 class LogoUploadUrlRequest(BaseModel):
@@ -60,6 +84,26 @@ def _out(tenant: Tenant) -> TenantSettingsOut:
         brand_color=tenant.brand_color,
         logo_url=tenant.logo_url,
         font=getattr(tenant, "font", "Noto Sans JP / Inter"),
+        kiosk_welcome_message=getattr(tenant, "kiosk_welcome_message", "ようこそ"),
+        kiosk_sub_message=getattr(tenant, "kiosk_sub_message", "ご用件をお選びください"),
+        kiosk_calling_message=getattr(tenant, "kiosk_calling_message", "担当者をお呼びしています。少々お待ちください。"),
+        kiosk_complete_message=getattr(tenant, "kiosk_complete_message", "担当者がご案内します"),
+        kiosk_idle_timeout_sec=getattr(tenant, "kiosk_idle_timeout_sec", 60),
+        kiosk_complete_timeout_sec=getattr(tenant, "kiosk_complete_timeout_sec", 10),
+    )
+
+
+def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
+    return PublicTenantSettingsOut(
+        brand_color=tenant.brand_color,
+        logo_url=tenant.logo_url,
+        font=getattr(tenant, "font", "Noto Sans JP / Inter"),
+        kiosk_welcome_message=getattr(tenant, "kiosk_welcome_message", "ようこそ"),
+        kiosk_sub_message=getattr(tenant, "kiosk_sub_message", "ご用件をお選びください"),
+        kiosk_calling_message=getattr(tenant, "kiosk_calling_message", "担当者をお呼びしています。少々お待ちください。"),
+        kiosk_complete_message=getattr(tenant, "kiosk_complete_message", "担当者がご案内します"),
+        kiosk_idle_timeout_sec=getattr(tenant, "kiosk_idle_timeout_sec", 60),
+        kiosk_complete_timeout_sec=getattr(tenant, "kiosk_complete_timeout_sec", 10),
     )
 
 
@@ -86,8 +130,29 @@ async def patch_settings(
         if body.font not in ALLOWED_FONTS:
             raise HTTPException(status_code=422, detail=f"Font not allowed: {body.font}")
         tenant.font = body.font
+    if body.kiosk_welcome_message is not None:
+        tenant.kiosk_welcome_message = body.kiosk_welcome_message[:255]
+    if body.kiosk_sub_message is not None:
+        tenant.kiosk_sub_message = body.kiosk_sub_message[:255]
+    if body.kiosk_calling_message is not None:
+        tenant.kiosk_calling_message = body.kiosk_calling_message[:255]
+    if body.kiosk_complete_message is not None:
+        tenant.kiosk_complete_message = body.kiosk_complete_message[:255]
+    if body.kiosk_idle_timeout_sec is not None:
+        tenant.kiosk_idle_timeout_sec = max(10, min(300, body.kiosk_idle_timeout_sec))
+    if body.kiosk_complete_timeout_sec is not None:
+        tenant.kiosk_complete_timeout_sec = max(5, min(60, body.kiosk_complete_timeout_sec))
     await db.commit()
     return _out(tenant)
+
+
+@router.get("/public/{tenant_slug}", response_model=PublicTenantSettingsOut)
+async def get_public_settings(tenant_slug: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Tenant).where(Tenant.slug == tenant_slug))
+    tenant = result.scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return _public_out(tenant)
 
 
 @router.post("/logo-upload-url")

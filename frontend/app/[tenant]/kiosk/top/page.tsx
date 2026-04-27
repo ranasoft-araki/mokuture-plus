@@ -3,9 +3,21 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { KioskScaler } from "@/components/KioskScaler";
+import { api, type PublicTenantSettings } from "@/lib/api";
 
-const IDLE_TIMEOUT_MS = 60_000;
 const KIOSK_TOKEN_KEY = "mokuture_kiosk_token";
+
+const DEFAULT_SETTINGS: PublicTenantSettings = {
+  brand_color: "#4a7c4e",
+  logo_url: null,
+  font: "Noto Sans JP / Inter",
+  kiosk_welcome_message: "ようこそ",
+  kiosk_sub_message: "ご用件をお選びください",
+  kiosk_calling_message: "担当者をお呼びしています。少々お待ちください。",
+  kiosk_complete_message: "担当者がご案内します",
+  kiosk_idle_timeout_sec: 60,
+  kiosk_complete_timeout_sec: 10,
+};
 
 const ReceptionIcon = () => (
   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -69,10 +81,12 @@ export default function KioskTopPage() {
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pressed, setPressed] = useState<number | null>(null);
   const [now, setNow] = useState("");
+  const [kioskSettings, setKioskSettings] = useState<PublicTenantSettings>(DEFAULT_SETTINGS);
+  const idleTimeoutRef = useRef(60_000);
 
   const resetIdle = () => {
     if (idleRef.current) clearTimeout(idleRef.current);
-    idleRef.current = setTimeout(() => router.push(`/${params.tenant}/kiosk`), IDLE_TIMEOUT_MS);
+    idleRef.current = setTimeout(() => router.push(`/${params.tenant}/kiosk`), idleTimeoutRef.current);
   };
 
   useEffect(() => {
@@ -80,7 +94,16 @@ export default function KioskTopPage() {
       router.replace(`/${params.tenant}/kiosk/setup`);
       return;
     }
-    resetIdle();
+
+    // Load tenant settings
+    api.getPublicTenantSettings(params.tenant).then((s) => {
+      setKioskSettings(s);
+      idleTimeoutRef.current = s.kiosk_idle_timeout_sec * 1000;
+      resetIdle();
+    }).catch(() => {
+      resetIdle();
+    });
+
     const tick = () => {
       const d = new Date();
       setNow(`${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,"0")}.${String(d.getDate()).padStart(2,"0")} · ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`);
@@ -119,9 +142,9 @@ export default function KioskTopPage() {
           <div style={{ display: "flex", alignItems: "flex-end", gap: 40, marginBottom: 40 }}>
             <div>
               <div style={{ fontSize: 14, color: "#a8a198", letterSpacing: 4, textTransform: "uppercase", marginBottom: 12, fontFamily: "Inter, system-ui, sans-serif" }}>RECEPTION</div>
-              <div style={{ fontSize: 78, fontWeight: 600, color: "#1d1a15", letterSpacing: -2.5, lineHeight: 1.1 }}>ようこそ</div>
+              <div style={{ fontSize: 78, fontWeight: 600, color: "#1d1a15", letterSpacing: -2.5, lineHeight: 1.1 }}>{kioskSettings.kiosk_welcome_message}</div>
             </div>
-            <div style={{ paddingBottom: 16, fontSize: 22, color: "#6b6559" }}>ご用件をお選びください</div>
+            <div style={{ paddingBottom: 16, fontSize: 22, color: "#6b6559" }}>{kioskSettings.kiosk_sub_message}</div>
           </div>
 
           {/* 4-tile grid */}
@@ -201,7 +224,7 @@ export default function KioskTopPage() {
         }}>
           <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 14 }}>{now}</span>
           <span style={{ flex: 1 }} />
-          <span style={{ color: "#a8a198" }}>60秒で待機画面に戻ります</span>
+          <span style={{ color: "#a8a198" }}>{kioskSettings.kiosk_idle_timeout_sec}秒で待機画面に戻ります</span>
           <span style={{ flex: 1 }} />
           <span style={{ fontFamily: "JetBrains Mono, monospace" }}>kiosk-hq-1f-01</span>
         </div>

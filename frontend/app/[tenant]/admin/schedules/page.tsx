@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api, type Playlist, type Schedule } from "@/lib/api";
 import { clearTokens, getAccessToken } from "@/lib/auth";
@@ -9,7 +9,6 @@ import { AdminShell, MkBtn, MkCard } from "@/components/AdminShell";
 const DAYS = ["月", "火", "水", "木", "金", "土", "日"] as const;
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
-// Color palette per playlist (cycled by index)
 const PALETTE = [
   { bg: "#eaf0e8", fg: "#3a6240", border: "#4a7c4e" },
   { bg: "#f7ecd9", fg: "#b8763a", border: "#b8763a" },
@@ -22,6 +21,56 @@ function timeToMinutes(t: string) {
   const [h, m] = t.split(":").map(Number);
   return h * 60 + (m ?? 0);
 }
+
+function minutesToTime(m: number): string {
+  const clamped = Math.max(0, Math.min(1439, Math.round(m / 15) * 15));
+  return `${String(Math.floor(clamped / 60)).padStart(2, "0")}:${String(clamped % 60).padStart(2, "0")}`;
+}
+
+interface ConfirmDialogProps {
+  open: boolean;
+  title: string;
+  description?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  danger?: boolean;
+}
+
+function ConfirmDialog({ open, title, description, onConfirm, onCancel, danger }: ConfirmDialogProps) {
+  if (!open) return null;
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}
+      onClick={onCancel}
+    >
+      <div
+        style={{ background: "#fffefb", borderRadius: 12, padding: 28, width: 360, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15", marginBottom: 8 }}>{title}</div>
+        {description && <div style={{ fontSize: 12.5, color: "#6b6559", lineHeight: 1.6, marginBottom: 20 }}>{description}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button onClick={onCancel} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #d8d3c7", background: "#fffefb", fontSize: 12.5, cursor: "pointer", color: "#6b6559" }}>キャンセル</button>
+          <button onClick={onConfirm} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: danger ? "#a84238" : "#4a7c4e", color: "#fffefb", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>削除</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type DraggingState = {
+  type: "move" | "resize";
+  id: string;
+  startX: number;
+  startY: number;
+  origStartMin: number;
+  origEndMin: number;
+  origDay: number;
+  offsetMin: number;
+  tempStartMin: number;
+  tempEndMin: number;
+  tempDay: number;
+};
 
 export default function AdminSchedulesPage() {
   const params = useParams<{ tenant: string }>();
@@ -39,6 +88,10 @@ export default function AdminSchedulesPage() {
   const [formEnd, setFormEnd] = useState("18:00");
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
+
+  const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
+  const [dragging, setDragging] = useState<DraggingState | null>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async (token: string) => {
     setLoading(true);
@@ -63,6 +116,81 @@ export default function AdminSchedulesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Drag event handlers
+  useEffect(() => {
+    if (!dragging) return;
+
+    const ROW_HEIGHT_ESTIMATE = 58;
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!gridRef.current) return;
+      const rect = gridRef.current.getBoundingClientRect();
+      const DAY_LABEL_WIDTH = 60;
+      const gridWidth = rect.width - DAY_LABEL_WIDTH;
+      const relX = e.clientX - rect.left - DAY_LABEL_WIDTH;
+      const fraction = Math.max(0, Math.min(1, relX / gridWidth));
+      const minuteAtCursor = fraction * 1440;
+
+      if (dragging.type === "move") {
+        const duration = dragging.origEndMin - dragging.origStartMin;
+        let newStart = Math.round((minuteAtCursor - dragging.offsetMin) / 15) * 15;
+        newStart = Math.max(0, Math.min(1440 - duration, newStart));
+        const newEnd = newStart + duration;
+
+        // Calculate day from Y position
+        const headerHeight = 41; // approx header row height
+        const relY = e.clientY - rect.top - headerHeight;
+        const rowHeight = (rect.height - headerHeight) / 7;
+        const newDay = Math.max(0, Math.min(6, Math.floor(relY / rowHeight)));
+
+        setDragging((d) => d ? { ...d, tempStartMin: newStart, tempEndMin: newEnd, tempDay: newDay } : null);
+      } else {
+        // resize
+        let newEnd = Math.round(minuteAtCursor / 15) * 15;
+        newEnd = Math.max(dragging.origStartMin + 15, Math.min(1440, newEnd));
+        setDragging((d) => d ? { ...d, tempEndMin: newEnd } : null);
+      }
+    };
+
+    const onMouseUp = async () => {
+      if (!dragging) return;
+      const token = getAccessToken();
+      if (!token) return;
+
+      const { id, tempStartMin, tempEndMin, tempDay, origStartMin, origEndMin, origDay } = dragging;
+      setDragging(null);
+
+      // No change
+      if (tempStartMin === origStartMin && tempEndMin === origEndMin && tempDay === origDay) return;
+
+      const sched = schedules.find((s) => s.id === id);
+      if (!sched) return;
+
+      try {
+        await api.deleteSchedule(token, id);
+        await api.createSchedule(token, {
+          playlist_id: sched.playlist_id,
+          day_of_week: tempDay,
+          start_time: minutesToTime(tempStartMin),
+          end_time: minutesToTime(tempEndMin),
+        });
+        const ss = await api.listSchedules(token);
+        setSchedules(ss);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "移動に失敗しました");
+        await load(token);
+      }
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragging, schedules]);
+
   async function handleCreate() {
     const token = getAccessToken();
     if (!token || !formPlaylistId) return;
@@ -83,7 +211,6 @@ export default function AdminSchedulesPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("このスケジュールを削除しますか？")) return;
     const token = getAccessToken();
     if (!token) return;
     try {
@@ -96,7 +223,6 @@ export default function AdminSchedulesPage() {
 
   const playlistById = Object.fromEntries(playlists.map((p) => [p.id, p]));
 
-  // Build a stable color map: playlist_id → palette index
   const plColorMap: Record<string, number> = {};
   let colorIdx = 0;
   schedules.forEach((s) => {
@@ -105,7 +231,6 @@ export default function AdminSchedulesPage() {
     }
   });
 
-  // For each day (0=Mon…6=Sun), gather blocks
   function getBlocksForDay(dayIndex: number) {
     return schedules.filter((s) => s.day_of_week === dayIndex || s.day_of_week === -1);
   }
@@ -116,14 +241,16 @@ export default function AdminSchedulesPage() {
       title="配信スケジュール"
       breadcrumb="ホーム / コンテンツ管理 / スケジュール"
       subtitle="曜日 × 時間帯でプレイリストを自動切替"
-      actions={
-        <MkBtn variant="default" size="sm" onClick={() => setShowForm((v) => !v)}>
-          {showForm ? "閉じる" : "+ 新規ブロック"}
-        </MkBtn>
-      }
     >
       {error && <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#f6e0dc", border: "1px solid #a84238", color: "#a84238", fontSize: 13 }}>{error}</div>}
       {success && <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#eaf0e8", border: "1px solid #4a7c4e", color: "#3a6240", fontSize: 13 }}>{success}</div>}
+
+      {/* Action bar */}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
+        <MkBtn variant="default" size="sm" onClick={() => setShowForm((v) => !v)}>
+          {showForm ? "閉じる" : "+ 新規ブロック"}
+        </MkBtn>
+      </div>
 
       {/* Add form */}
       {showForm && (
@@ -198,91 +325,169 @@ export default function AdminSchedulesPage() {
 
       {/* Weekly grid */}
       <MkCard padding="0">
-        {/* Hour header */}
-        <div style={{ display: "grid", gridTemplateColumns: "60px 1fr", borderBottom: "1px solid #efece5", background: "#f4f1ea" }}>
-          <div style={{ padding: "10px 12px", fontSize: 10.5, color: "#a8a198", fontFamily: "monospace", letterSpacing: "0.4px" }}>HOUR</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(24, 1fr)" }}>
-            {HOURS.map((h) => (
-              <div key={h} style={{ padding: "10px 0", fontSize: 10, color: "#a8a198", fontFamily: "monospace", textAlign: "center", borderLeft: h % 6 === 0 ? "1px solid #efece5" : "none" }}>
-                {h % 3 === 0 ? String(h).padStart(2, "0") : ""}
-              </div>
-            ))}
+        <div ref={gridRef}>
+          {/* Hour header */}
+          <div style={{ display: "grid", gridTemplateColumns: "60px 1fr", borderBottom: "1px solid #efece5", background: "#f4f1ea" }}>
+            <div style={{ padding: "10px 12px", fontSize: 10.5, color: "#a8a198", fontFamily: "monospace", letterSpacing: "0.4px" }}>HOUR</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(24, 1fr)" }}>
+              {HOURS.map((h) => (
+                <div key={h} style={{ padding: "10px 0", fontSize: 10, color: "#a8a198", fontFamily: "monospace", textAlign: "center", borderLeft: h % 6 === 0 ? "1px solid #efece5" : "none" }}>
+                  {h % 3 === 0 ? String(h).padStart(2, "0") : ""}
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
 
-        {/* Day rows */}
-        {DAYS.map((day, di) => {
-          const dayBlocks = getBlocksForDay(di);
-          const isWeekend = di >= 5;
-          return (
-            <div
-              key={day}
-              style={{
-                display: "grid", gridTemplateColumns: "60px 1fr", alignItems: "stretch",
-                borderTop: "1px solid #efece5", minHeight: 58,
-              }}
-            >
-              <div style={{
-                padding: "16px 12px", fontSize: 13, fontWeight: 600, color: "#2d2a24",
-                fontFamily: '"Noto Sans JP", system-ui, sans-serif',
-                display: "flex", alignItems: "center",
-                borderRight: "1px solid #efece5",
-                background: isWeekend ? "#f4f1ea" : "#fffefb",
-              }}>
-                {day}
-                {isWeekend && <span style={{ fontSize: 9, color: "#a8a198", marginLeft: 6, fontFamily: "monospace" }}>WKND</span>}
-              </div>
-              <div style={{ position: "relative", display: "grid", gridTemplateColumns: "repeat(24, 1fr)", padding: "6px 0" }}>
-                {/* Grid lines */}
-                {HOURS.map((h) => (
-                  <div key={h} style={{ borderLeft: h > 0 && h % 3 === 0 ? "1px solid #efece5" : "none" }} />
-                ))}
-                {/* Schedule blocks */}
-                <div style={{ position: "absolute", inset: "6px 0", display: "flex" }}>
-                  {dayBlocks.length === 0 ? null : dayBlocks.map((s) => {
-                    const startMin = timeToMinutes(s.start_time);
-                    const endMin = timeToMinutes(s.end_time);
-                    const totalMin = 24 * 60;
-                    const left = `${(startMin / totalMin) * 100}%`;
-                    const width = `${((endMin - startMin) / totalMin) * 100}%`;
-                    const c = PALETTE[plColorMap[s.playlist_id] ?? 0];
-                    const plName = playlistById[s.playlist_id]?.name ?? "不明";
-                    return (
-                      <div
-                        key={s.id}
-                        style={{
-                          position: "absolute", left, width,
-                          top: 0, bottom: 0,
-                          background: c.bg, color: c.fg,
-                          borderLeft: `3px solid ${c.border}`,
-                          borderRadius: "0 5px 5px 0",
-                          padding: "4px 8px",
-                          fontSize: 10.5, fontFamily: '"Noto Sans JP", system-ui, sans-serif', fontWeight: 500,
-                          display: "flex", flexDirection: "column", justifyContent: "center",
-                          overflow: "hidden", cursor: "pointer",
-                        }}
-                        onClick={() => void handleDelete(s.id)}
-                        title="クリックで削除"
-                      >
-                        <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 600 }}>{plName}</div>
-                        <div style={{ fontSize: 9, opacity: 0.7, fontFamily: "monospace", marginTop: 1 }}>
-                          {s.start_time} – {s.end_time}
+          {/* Day rows */}
+          {DAYS.map((day, di) => {
+            const dayBlocks = getBlocksForDay(di);
+            const isWeekend = di >= 5;
+            return (
+              <div
+                key={day}
+                style={{
+                  display: "grid", gridTemplateColumns: "60px 1fr", alignItems: "stretch",
+                  borderTop: "1px solid #efece5", minHeight: 58,
+                }}
+              >
+                <div style={{
+                  padding: "16px 12px", fontSize: 13, fontWeight: 600, color: "#2d2a24",
+                  fontFamily: '"Noto Sans JP", system-ui, sans-serif',
+                  display: "flex", alignItems: "center",
+                  borderRight: "1px solid #efece5",
+                  background: isWeekend ? "#f4f1ea" : "#fffefb",
+                }}>
+                  {day}
+                  {isWeekend && <span style={{ fontSize: 9, color: "#a8a198", marginLeft: 6, fontFamily: "monospace" }}>WKND</span>}
+                </div>
+                <div style={{ position: "relative", display: "grid", gridTemplateColumns: "repeat(24, 1fr)", padding: "6px 0" }}>
+                  {/* Grid lines */}
+                  {HOURS.map((h) => (
+                    <div key={h} style={{ borderLeft: h > 0 && h % 3 === 0 ? "1px solid #efece5" : "none" }} />
+                  ))}
+                  {/* Schedule blocks */}
+                  <div style={{ position: "absolute", inset: "6px 0", display: "flex" }}>
+                    {dayBlocks.length === 0 ? null : dayBlocks.map((s) => {
+                      const isDraggingThis = dragging?.id === s.id;
+                      const isGhostRow = isDraggingThis && dragging?.origDay !== di;
+
+                      // When dragging this block, show in temp day row only
+                      if (isDraggingThis && dragging?.tempDay !== di) return null;
+
+                      const startMin = isDraggingThis ? dragging!.tempStartMin : timeToMinutes(s.start_time);
+                      const endMin = isDraggingThis ? dragging!.tempEndMin : timeToMinutes(s.end_time);
+                      const totalMin = 24 * 60;
+                      const left = `${(startMin / totalMin) * 100}%`;
+                      const width = `${((endMin - startMin) / totalMin) * 100}%`;
+                      const c = PALETTE[plColorMap[s.playlist_id] ?? 0];
+                      const plName = playlistById[s.playlist_id]?.name ?? "不明";
+
+                      return (
+                        <div
+                          key={s.id}
+                          style={{
+                            position: "absolute", left, width,
+                            top: 0, bottom: 0,
+                            background: c.bg, color: c.fg,
+                            borderLeft: `3px solid ${c.border}`,
+                            borderRadius: "0 5px 5px 0",
+                            padding: "4px 8px",
+                            fontSize: 10.5, fontFamily: '"Noto Sans JP", system-ui, sans-serif', fontWeight: 500,
+                            display: "flex", flexDirection: "column", justifyContent: "center",
+                            overflow: "hidden",
+                            cursor: isDraggingThis ? "grabbing" : "grab",
+                            opacity: isDraggingThis ? 0.85 : 1,
+                            userSelect: "none",
+                            boxShadow: isDraggingThis ? "0 4px 12px rgba(0,0,0,0.15)" : "none",
+                          }}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            if (!gridRef.current) return;
+                            const rect = gridRef.current.getBoundingClientRect();
+                            const DAY_LABEL_WIDTH = 60;
+                            const gridWidth = rect.width - DAY_LABEL_WIDTH;
+                            const startMin0 = timeToMinutes(s.start_time);
+                            const endMin0 = timeToMinutes(s.end_time);
+                            const blockLeftPx = (startMin0 / 1440) * gridWidth;
+                            const clickRelX = e.clientX - rect.left - DAY_LABEL_WIDTH;
+                            const offsetMin = Math.round(((clickRelX - blockLeftPx) / gridWidth) * 1440);
+                            setDragging({
+                              type: "move",
+                              id: s.id,
+                              startX: e.clientX,
+                              startY: e.clientY,
+                              origStartMin: startMin0,
+                              origEndMin: endMin0,
+                              origDay: di,
+                              offsetMin: Math.max(0, offsetMin),
+                              tempStartMin: startMin0,
+                              tempEndMin: endMin0,
+                              tempDay: di,
+                            });
+                          }}
+                          onClick={(e) => {
+                            if (dragging) return;
+                            e.stopPropagation();
+                            setConfirmTarget(s.id);
+                          }}
+                        >
+                          <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 600 }}>{plName}</div>
+                          <div style={{ fontSize: 9, opacity: 0.7, fontFamily: "monospace", marginTop: 1 }}>
+                            {isDraggingThis ? `${minutesToTime(dragging!.tempStartMin)} – ${minutesToTime(dragging!.tempEndMin)}` : `${s.start_time} – ${s.end_time}`}
+                          </div>
+                          {/* Resize handle */}
+                          <div
+                            style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 8, cursor: "ew-resize", background: "rgba(0,0,0,0.12)", borderRadius: "0 5px 5px 0" }}
+                            onMouseDown={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              const startMin0 = timeToMinutes(s.start_time);
+                              const endMin0 = timeToMinutes(s.end_time);
+                              setDragging({
+                                type: "resize",
+                                id: s.id,
+                                startX: e.clientX,
+                                startY: e.clientY,
+                                origStartMin: startMin0,
+                                origEndMin: endMin0,
+                                origDay: di,
+                                offsetMin: 0,
+                                tempStartMin: startMin0,
+                                tempEndMin: endMin0,
+                                tempDay: di,
+                              });
+                            }}
+                          />
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </MkCard>
 
       {schedules.length === 0 && !loading && (
         <div style={{ marginTop: 16, padding: "12px 16px", background: "#f4f1ea", borderRadius: 7, borderLeft: "2px solid #4a7c4e", fontSize: 11.5, color: "#6b6559", fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}>
-          「+ 新規ブロック」からスケジュールを追加すると、キオスクが自動的に指定時間帯のプレイリストを再生します。グリッドのブロックをクリックすると削除できます。
+          「+ 新規ブロック」からスケジュールを追加すると、キオスクが自動的に指定時間帯のプレイリストを再生します。ブロックはドラッグで移動・右端でリサイズできます。
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmTarget !== null}
+        title="スケジュールを削除しますか？"
+        description="この操作は取り消せません。"
+        onConfirm={async () => {
+          if (confirmTarget) {
+            await handleDelete(confirmTarget);
+            setConfirmTarget(null);
+          }
+        }}
+        onCancel={() => setConfirmTarget(null)}
+        danger
+      />
     </AdminShell>
   );
 }

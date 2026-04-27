@@ -70,6 +70,22 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
         role="admin",
     )
     db.add(user)
+
+    # Auto-generate VAPID keys for push notifications
+    try:
+        from app.services.webpush import generate_vapid_keys
+        from app.services.crypto import encrypt_dict
+        from app.models.notification import NotificationSetting
+        priv_b64, pub_b64 = generate_vapid_keys()
+        vapid_setting = NotificationSetting(
+            tenant_id=tenant.id,
+            type="webpush",
+            config_json=encrypt_dict({"private_key": priv_b64, "public_key": pub_b64}),
+        )
+        db.add(vapid_setting)
+    except Exception:
+        pass  # Don't fail registration if VAPID generation fails
+
     await db.commit()
 
     return TokenResponse(

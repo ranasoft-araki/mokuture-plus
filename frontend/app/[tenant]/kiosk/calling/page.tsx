@@ -3,8 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { KioskScaler } from "@/components/KioskScaler";
+import { api } from "@/lib/api";
 
 const AUTO_ADVANCE_MS = 4_000;
+const DEFAULT_CALLING_MSG = "担当者をお呼びしています";
 
 const CheckIcon = () => (
   <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -27,8 +29,13 @@ export default function KioskCallingPage() {
   const staff = searchParams.get("staff") ?? "";
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [now, setNow] = useState("");
+  const [callingMessage, setCallingMessage] = useState(DEFAULT_CALLING_MSG);
 
   useEffect(() => {
+    api.getPublicTenantSettings(params.tenant)
+      .then((s) => setCallingMessage(s.kiosk_calling_message))
+      .catch(() => {});
+
     timerRef.current = setTimeout(() => {
       const qs = new URLSearchParams({ name });
       if (staff) qs.set("staff", staff);
@@ -85,7 +92,7 @@ export default function KioskCallingPage() {
           <div>
             <div style={{ fontSize: 18, color: "#a8a198", letterSpacing: 4, textTransform: "uppercase" as const, marginBottom: 18, fontFamily: "Inter, system-ui, sans-serif" }}>CALLING</div>
             <div style={{ fontSize: 96, fontWeight: 600, color: "#1d1a15", letterSpacing: -3, lineHeight: 1.05, marginBottom: 24 }}>
-              担当者を<br />お呼びしています
+              {callingMessage}
             </div>
             <div style={{ fontSize: 22, color: "#6b6559", lineHeight: 1.7, maxWidth: 720, marginBottom: 28 }}>
               まもなく担当者がお迎えにあがります<br />

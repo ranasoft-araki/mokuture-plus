@@ -24,6 +24,14 @@ export default function AdminSettingsPage() {
   const [saved, setSaved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Kiosk message state
+  const [kioskWelcome, setKioskWelcome] = useState("ようこそ");
+  const [kioskSub, setKioskSub] = useState("ご用件をお選びください");
+  const [kioskCalling, setKioskCalling] = useState("担当者をお呼びしています。少々お待ちください。");
+  const [kioskComplete, setKioskComplete] = useState("担当者がご案内します");
+  const [kioskIdleTimeout, setKioskIdleTimeout] = useState("60");
+  const [kioskCompleteTimeout, setKioskCompleteTimeout] = useState("10");
+
   useEffect(() => {
     const token = getAccessToken();
     if (!token) return;
@@ -32,6 +40,12 @@ export default function AdminSettingsPage() {
       setBrandColor(s.brand_color);
       setFont(s.font);
       setLogoUrl(s.logo_url);
+      setKioskWelcome(s.kiosk_welcome_message ?? "ようこそ");
+      setKioskSub(s.kiosk_sub_message ?? "ご用件をお選びください");
+      setKioskCalling(s.kiosk_calling_message ?? "担当者をお呼びしています。少々お待ちください。");
+      setKioskComplete(s.kiosk_complete_message ?? "担当者がご案内します");
+      setKioskIdleTimeout(String(s.kiosk_idle_timeout_sec ?? 60));
+      setKioskCompleteTimeout(String(s.kiosk_complete_timeout_sec ?? 10));
     }).catch(() => {});
   }, []);
 
@@ -69,7 +83,16 @@ export default function AdminSettingsPage() {
     setSaving(true);
     setError(null);
     try {
-      await api.updateTenantSettings(token, { brand_color: brandColor, font });
+      await api.updateTenantSettings(token, {
+        brand_color: brandColor,
+        font,
+        kiosk_welcome_message: kioskWelcome,
+        kiosk_sub_message: kioskSub,
+        kiosk_calling_message: kioskCalling,
+        kiosk_complete_message: kioskComplete,
+        kiosk_idle_timeout_sec: Number(kioskIdleTimeout) || 60,
+        kiosk_complete_timeout_sec: Number(kioskCompleteTimeout) || 10,
+      });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err: unknown) {
@@ -85,6 +108,12 @@ export default function AdminSettingsPage() {
     setFont(settings.font);
     setLogoUrl(settings.logo_url);
     setLogoPreview(null);
+    setKioskWelcome(settings.kiosk_welcome_message ?? "ようこそ");
+    setKioskSub(settings.kiosk_sub_message ?? "ご用件をお選びください");
+    setKioskCalling(settings.kiosk_calling_message ?? "担当者をお呼びしています。少々お待ちください。");
+    setKioskComplete(settings.kiosk_complete_message ?? "担当者がご案内します");
+    setKioskIdleTimeout(String(settings.kiosk_idle_timeout_sec ?? 60));
+    setKioskCompleteTimeout(String(settings.kiosk_complete_timeout_sec ?? 10));
     setError(null);
   };
 
@@ -183,32 +212,42 @@ export default function AdminSettingsPage() {
             </div>
           </MkCard>
 
-          <MkCard style={{ opacity: 0.55, pointerEvents: "none" }}>
-            <MkSectionTitle title="キオスク画面の文言" subtitle="Phase 1 実装予定" />
+          <MkCard>
+            <MkSectionTitle title="キオスク画面の文言" subtitle="変更後「保存」ボタンで反映されます" />
             <div style={{ display: "grid", gap: 16 }}>
               <Field label="受付トップ メインメッセージ">
-                <TextInput value={`ようこそ、${tenant}へ`} />
+                <TextInput value={kioskWelcome} onChange={setKioskWelcome} placeholder="ようこそ" />
               </Field>
-              <Field label="歓迎メッセージ" hint="{name} は Google カレンダー連携で自動挿入されます">
-                <TextInput value="{name} 様、お待ちしておりました" />
+              <Field label="受付トップ サブメッセージ">
+                <TextInput value={kioskSub} onChange={setKioskSub} placeholder="ご用件をお選びください" />
               </Field>
               <Field label="呼び出し中メッセージ">
-                <TextInput value="担当者をお呼びしています。少々お待ちください。" />
+                <TextInput value={kioskCalling} onChange={setKioskCalling} placeholder="担当者をお呼びしています。少々お待ちください。" />
               </Field>
-              <Field label="会議室・目的地案内" hint="完了画面の下部に表示">
-                <TextInput value="担当者がご案内します" />
+              <Field label="完了画面メッセージ" hint="完了画面の下部に表示">
+                <TextInput value={kioskComplete} onChange={setKioskComplete} placeholder="担当者がご案内します" />
               </Field>
             </div>
           </MkCard>
 
-          <MkCard style={{ opacity: 0.55, pointerEvents: "none" }}>
-            <MkSectionTitle title="タイムアウト" subtitle="Phase 1 実装予定" />
+          <MkCard>
+            <MkSectionTitle title="タイムアウト" subtitle="秒数を変更して保存してください" />
             <div className="adm-grid-2" style={{ gap: 16 }}>
-              <Field label="受付画面の無操作タイムアウト" hint="30 〜 120 秒">
-                <TextInput value="60" mono suffix={<span style={{ color: "#a8a198", fontSize: 12 }}>秒</span>} />
+              <Field label="受付画面の無操作タイムアウト" hint="10 〜 300 秒">
+                <TextInputWithSuffix
+                  value={kioskIdleTimeout}
+                  onChange={setKioskIdleTimeout}
+                  mono
+                  suffix={<span style={{ color: "#a8a198", fontSize: 12 }}>秒</span>}
+                />
               </Field>
-              <Field label="完了画面の表示時間">
-                <TextInput value="60" mono suffix={<span style={{ color: "#a8a198", fontSize: 12 }}>秒</span>} />
+              <Field label="完了画面の表示時間" hint="5 〜 60 秒">
+                <TextInputWithSuffix
+                  value={kioskCompleteTimeout}
+                  onChange={setKioskCompleteTimeout}
+                  mono
+                  suffix={<span style={{ color: "#a8a198", fontSize: 12 }}>秒</span>}
+                />
               </Field>
             </div>
           </MkCard>
@@ -241,7 +280,7 @@ export default function AdminSettingsPage() {
                   佐々木 様、<br/>お待ちしておりました
                 </div>
                 <div style={{ fontSize: 13, color: "#6b6559", marginTop: 14 }}>
-                  担当者をお呼びしています
+                  {kioskCalling || "担当者をお呼びしています"}
                 </div>
                 <div style={{ display: "flex", justifyContent: "center", gap: 5, marginTop: 14 }}>
                   {[0, 1, 2].map((i) => (
@@ -252,7 +291,7 @@ export default function AdminSettingsPage() {
               <div style={{ padding: 14, background: "#f4f1ea", borderRadius: 7, borderLeft: `2px solid ${brandColor}` }}>
                 <div style={{ fontSize: 10, color: "#a8a198", letterSpacing: "0.4px", textTransform: "uppercase" }}>NEXT</div>
                 <div style={{ fontSize: 13, color: "#2d2a24", fontWeight: 500, marginTop: 4, lineHeight: 1.4 }}>
-                  担当者がご案内します
+                  {kioskComplete || "担当者がご案内します"}
                 </div>
               </div>
             </div>
@@ -276,14 +315,29 @@ function Field({ label, hint, children, required }: { label: string; hint?: stri
   );
 }
 
-function TextInput({ value, placeholder, mono, suffix, readOnly }: { value?: string; placeholder?: string; mono?: boolean; suffix?: React.ReactNode; readOnly?: boolean }) {
+function TextInput({ value, placeholder, mono, readOnly, onChange }: { value?: string; placeholder?: string; mono?: boolean; readOnly?: boolean; onChange?: (v: string) => void }) {
   return (
     <div style={{ display: "flex", alignItems: "center", border: "1px solid #d8d3c7", borderRadius: 7, background: readOnly ? "#f8f6f2" : "#fffefb", padding: "0 10px", height: 34 }}>
       <input
-        defaultValue={value}
+        value={value ?? ""}
         placeholder={placeholder}
         readOnly={readOnly}
+        onChange={(e) => onChange?.(e.target.value)}
         style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 12.5, color: readOnly ? "#a8a198" : "#2d2a24", fontFamily: mono ? "monospace" : undefined, height: "100%", cursor: readOnly ? "default" : undefined }}
+      />
+    </div>
+  );
+}
+
+function TextInputWithSuffix({ value, placeholder, mono, suffix, onChange }: { value?: string; placeholder?: string; mono?: boolean; suffix?: React.ReactNode; onChange?: (v: string) => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", border: "1px solid #d8d3c7", borderRadius: 7, background: "#fffefb", padding: "0 10px", height: 34 }}>
+      <input
+        value={value ?? ""}
+        placeholder={placeholder}
+        onChange={(e) => onChange?.(e.target.value)}
+        type="number"
+        style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 12.5, color: "#2d2a24", fontFamily: mono ? "monospace" : undefined, height: "100%" }}
       />
       {suffix}
     </div>

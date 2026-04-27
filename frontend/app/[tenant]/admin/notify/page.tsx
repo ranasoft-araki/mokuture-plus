@@ -33,8 +33,8 @@ function TextInput({ placeholder, mono, value, onChange }: { placeholder?: strin
   );
 }
 
-// ── PWA Push Panel ────────────────────────────────────────────────────
-function PWAPushPanel({ authToken }: { authToken: string }) {
+// ── Push Push Panel ────────────────────────────────────────────────────
+function PushPanel({ authToken }: { authToken: string }) {
   const [vapidKey, setVapidKey] = useState<string | null>(null);
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [subscriptions, setSubscriptions] = useState<{ id: string; endpoint: string; display_endpoint: string; created_at: string }[]>([]);
@@ -42,6 +42,7 @@ function PWAPushPanel({ authToken }: { authToken: string }) {
   const [working, setWorking] = useState(false);
   const [testSent, setTestSent] = useState(false);
   const [error, setError] = useState("");
+  const [activeTab, setActiveTab] = useState<"settings" | "devices">("settings");
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -138,11 +139,9 @@ function PWAPushPanel({ authToken }: { authToken: string }) {
   };
 
   const handleRegenerateVapid = async () => {
-    if (!confirm("VAPID鍵を再生成します。既存の通知登録は無効になり、再登録が必要になります。続けますか？")) return;
     setWorking(true);
     setError("");
     try {
-      // ブラウザ側の購読も解除してから再生成
       if ("serviceWorker" in navigator) {
         const reg = await navigator.serviceWorker.ready;
         const sub = await reg.pushManager.getSubscription();
@@ -167,124 +166,151 @@ function PWAPushPanel({ authToken }: { authToken: string }) {
   }
 
   return (
-    <div className="adm-grid-2" style={{ gap: 20 }}>
-      {/* Left: setup + device list */}
-      <div>
-        {/* VAPID Setup */}
-        {!vapidKey ? (
-          <div style={{ padding: "20px", background: "#f4f1ea", borderRadius: 10, marginBottom: 16, border: "1px solid #efece5" }}>
-            <div style={{ fontSize: 13, color: "#6b6559", marginBottom: 12, lineHeight: 1.55 }}>
-              プッシュ通知を有効にするには、まず VAPID 鍵を生成してください。
-            </div>
-            <MkBtn variant="primary" size="sm" onClick={handleSetupVapid}>
-              {working ? "生成中…" : "VAPID 鍵を生成"}
-            </MkBtn>
-          </div>
-        ) : (
-          <div style={{ marginBottom: 16, padding: "12px 14px", background: "#eaf0e8", borderRadius: 8, border: "1px solid rgba(74,124,78,0.2)", display: "flex", gap: 10, alignItems: "center" }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4a7c4e" strokeWidth="2" strokeLinecap="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-            <span style={{ fontSize: 12, color: "#3a6240", fontWeight: 500, flex: 1 }}>VAPID 鍵が設定されています</span>
-            <button
-              onClick={handleRegenerateVapid}
-              disabled={working}
-              style={{ fontSize: 10.5, color: "#a8a198", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", padding: 0 }}
-            >
-              再生成
-            </button>
-          </div>
-        )}
+    <div>
+      {/* Tabs */}
+      <div style={{ display: "flex", borderBottom: "1px solid #efece5", marginBottom: 20 }}>
+        {[
+          { id: "settings" as const, label: "設定" },
+          { id: "devices" as const, label: `登録端末 (${subscriptions.length})` },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            style={{
+              padding: "10px 16px", fontSize: 12.5, fontWeight: activeTab === tab.id ? 600 : 400,
+              color: activeTab === tab.id ? "#1d1a15" : "#6b6559",
+              background: "none", border: "none",
+              borderBottom: activeTab === tab.id ? "2px solid #1d1a15" : "2px solid transparent",
+              cursor: "pointer", marginBottom: -1, fontFamily: '"Noto Sans JP", system-ui, sans-serif',
+            }}
+          >{tab.label}</button>
+        ))}
+      </div>
 
-        {/* Subscribe button */}
-        {vapidKey && (
-          <div style={{ marginBottom: 16 }}>
-            {isSubscribed ? (
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <div style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500, flex: 1 }}>
-                  このデバイスで受信中
+      {activeTab === "settings" && (
+        <div className="adm-grid-2" style={{ gap: 20 }}>
+          {/* Left: VAPID setup + subscribe */}
+          <div>
+            {!vapidKey ? (
+              <div style={{ padding: "20px", background: "#f4f1ea", borderRadius: 10, marginBottom: 16, border: "1px solid #efece5" }}>
+                <div style={{ fontSize: 13, color: "#6b6559", marginBottom: 12, lineHeight: 1.55 }}>
+                  プッシュ通知を有効にするには、まず VAPID 鍵を生成してください。
                 </div>
-                <MkBtn variant="ghost" size="sm" onClick={handleUnsubscribe}>
-                  このデバイスを解除
+                <MkBtn variant="primary" size="sm" onClick={handleSetupVapid}>
+                  {working ? "生成中…" : "VAPID 鍵を生成"}
                 </MkBtn>
               </div>
             ) : (
-              <MkBtn variant="primary" size="sm" onClick={handleSubscribe}>
-                {working ? "設定中…" : "このデバイスで通知を受け取る"}
+              <div style={{ marginBottom: 16, padding: "12px 14px", background: "#eaf0e8", borderRadius: 8, border: "1px solid rgba(74,124,78,0.2)", display: "flex", gap: 10, alignItems: "center" }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4a7c4e" strokeWidth="2" strokeLinecap="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                <span style={{ fontSize: 12, color: "#3a6240", fontWeight: 500, flex: 1 }}>VAPID 鍵が設定されています</span>
+                <button
+                  onClick={handleRegenerateVapid}
+                  disabled={working}
+                  style={{ fontSize: 10.5, color: "#a8a198", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", padding: 0 }}
+                >
+                  再生成
+                </button>
+              </div>
+            )}
+
+            {vapidKey && (
+              <div style={{ marginBottom: 16 }}>
+                {isSubscribed ? (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500, flex: 1 }}>
+                      このデバイスで受信中
+                    </div>
+                    <MkBtn variant="ghost" size="sm" onClick={handleUnsubscribe}>
+                      このデバイスを解除
+                    </MkBtn>
+                  </div>
+                ) : (
+                  <MkBtn variant="primary" size="sm" onClick={handleSubscribe}>
+                    {working ? "設定中…" : "このデバイスで通知を受け取る"}
+                  </MkBtn>
+                )}
+              </div>
+            )}
+
+            {error && (
+              <div style={{ marginTop: 12, padding: "10px 14px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 8, color: "#a84238", fontSize: 12 }}>
+                {error}
+              </div>
+            )}
+          </div>
+
+          {/* Right: notification preview + test */}
+          <div>
+            <div style={{ fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 8 }}>通知プレビュー</div>
+            <div style={{ background: "#f4f1ea", borderRadius: 10, padding: 16, border: "1px solid #efece5", marginBottom: 16 }}>
+              <div style={{ background: "rgba(255,255,255,0.85)", border: "1px solid #efece5", borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(29,26,21,0.06)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                  <div style={{ width: 24, height: 24, borderRadius: 6, background: "#1d1a15", color: "#fffefb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, flexShrink: 0 }}>M+</div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#2d2a24", letterSpacing: 0.2 }}>MOKUTURE+</div>
+                  <div style={{ flex: 1 }} />
+                  <div style={{ fontSize: 10.5, color: "#a8a198", fontFamily: "monospace" }}>今</div>
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15" }}>来客のお知らせ</div>
+                <div style={{ fontSize: 12, color: "#2d2a24", marginTop: 3, lineHeight: 1.5 }}>
+                  佐々木 美咲 様（アルチザン株式会社）が受付を完了しました。用件：打ち合わせ
+                </div>
+              </div>
+              <div style={{ fontSize: 10.5, color: "#a8a198", marginTop: 12, textAlign: "center" }}>
+                ロック画面・バックグラウンドでも受信可能
+              </div>
+            </div>
+
+            {vapidKey && subscriptions.length > 0 && (
+              <MkBtn
+                variant="default"
+                size="sm"
+                onClick={handleTestPush}
+                style={{ width: "100%", justifyContent: "center" }}
+              >
+                {working ? "送信中…" : testSent ? "✓ 送信しました" : "テスト通知を送信"}
               </MkBtn>
             )}
           </div>
-        )}
-
-        {/* Subscription list */}
-        <div style={{ fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 8 }}>
-          登録済み端末（{subscriptions.length}）
         </div>
-        {subscriptions.length === 0 ? (
-          <div style={{ padding: "20px 0", textAlign: "center", color: "#a8a198", fontSize: 12 }}>
-            端末が登録されていません。<br />
-            上のボタンで登録してください。
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-            {subscriptions.map((s, i) => (
-              <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: i > 0 ? "1px solid #efece5" : "none" }}>
-                <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#f4f1ea", border: "1px solid #efece5", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6b6559" strokeWidth="1.8" strokeLinecap="round"><rect x="5" y="2" width="14" height="20" rx="2"/><circle cx="12" cy="17" r="1"/></svg>
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 11.5, color: "#2d2a24", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.display_endpoint}</div>
-                  <div style={{ fontSize: 10.5, color: "#a8a198", marginTop: 2 }}>{new Date(s.created_at).toLocaleString("ja-JP")}</div>
-                </div>
-                <button
-                  onClick={() => handleDeleteSub(s.endpoint)}
-                  style={{ background: "none", border: "none", color: "#a8a198", cursor: "pointer", padding: 4, borderRadius: 4 }}
-                  title="削除"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+      )}
 
-        {error && (
-          <div style={{ marginTop: 12, padding: "10px 14px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 8, color: "#a84238", fontSize: 12 }}>
-            {error}
-          </div>
-        )}
-      </div>
-
-      {/* Right: notification preview */}
-      <div>
-        <div style={{ fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 8 }}>通知プレビュー</div>
-        <div style={{ background: "#f4f1ea", borderRadius: 10, padding: 16, border: "1px solid #efece5", marginBottom: 16 }}>
-          <div style={{ background: "rgba(255,255,255,0.85)", border: "1px solid #efece5", borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(29,26,21,0.06)" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-              <div style={{ width: 24, height: 24, borderRadius: 6, background: "#1d1a15", color: "#fffefb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, flexShrink: 0 }}>M+</div>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#2d2a24", letterSpacing: 0.2 }}>MOKUTURE+</div>
-              <div style={{ flex: 1 }} />
-              <div style={{ fontSize: 10.5, color: "#a8a198", fontFamily: "monospace" }}>今</div>
+      {activeTab === "devices" && (
+        <div>
+          {subscriptions.length === 0 ? (
+            <div style={{ padding: "40px 0", textAlign: "center", color: "#a8a198", fontSize: 12 }}>
+              端末が登録されていません。<br />
+              「設定」タブで登録してください。
             </div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15" }}>来客のお知らせ</div>
-            <div style={{ fontSize: 12, color: "#2d2a24", marginTop: 3, lineHeight: 1.5 }}>
-              佐々木 美咲 様（アルチザン株式会社）が受付を完了しました。用件：打ち合わせ
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+              {subscriptions.map((s, i) => (
+                <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 0", borderTop: i > 0 ? "1px solid #efece5" : "none" }}>
+                  <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#f4f1ea", border: "1px solid #efece5", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6b6559" strokeWidth="1.8" strokeLinecap="round"><rect x="5" y="2" width="14" height="20" rx="2"/><circle cx="12" cy="17" r="1"/></svg>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 11.5, color: "#2d2a24", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.display_endpoint}</div>
+                    <div style={{ fontSize: 10.5, color: "#a8a198", marginTop: 2 }}>登録日: {new Date(s.created_at).toLocaleString("ja-JP")}</div>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteSub(s.endpoint)}
+                    style={{ background: "none", border: "none", color: "#a8a198", cursor: "pointer", padding: 4, borderRadius: 4 }}
+                    title="削除"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+                  </button>
+                </div>
+              ))}
             </div>
-          </div>
-          <div style={{ fontSize: 10.5, color: "#a8a198", marginTop: 12, textAlign: "center" }}>
-            ロック画面・バックグラウンドでも受信可能
-          </div>
+          )}
+          {error && (
+            <div style={{ marginTop: 12, padding: "10px 14px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 8, color: "#a84238", fontSize: 12 }}>
+              {error}
+            </div>
+          )}
         </div>
-
-        {vapidKey && subscriptions.length > 0 && (
-          <MkBtn
-            variant="default"
-            size="sm"
-            onClick={handleTestPush}
-            style={{ width: "100%", justifyContent: "center" }}
-          >
-            {working ? "送信中…" : testSent ? "✓ 送信しました" : "テスト通知を送信"}
-          </MkBtn>
-        )}
-      </div>
+      )}
     </div>
   );
 }
@@ -307,6 +333,7 @@ export default function AdminNotifyPage() {
   const [cwConfigured, setCwConfigured] = useState(false);
   const [cwSaving, setCwSaving] = useState(false);
   const [cwError, setCwError] = useState("");
+  const [cwTested, setCwTested] = useState(false);
 
   useEffect(() => {
     setAuthToken(getAccessToken() ?? "");
@@ -362,12 +389,23 @@ export default function AdminNotifyPage() {
     }
   };
 
+  const handleTestChatwork = async () => {
+    setCwError("");
+    try {
+      await api.testChatworkNotification(authToken);
+      setCwTested(true);
+      setTimeout(() => setCwTested(false), 3000);
+    } catch (e: unknown) {
+      setCwError(e instanceof Error ? e.message : "送信に失敗しました");
+    }
+  };
+
   return (
     <AdminShell
       active="notify"
       title="通知設定"
       breadcrumb="ホーム / 設定 / 通知"
-      subtitle="Slack · Chatwork · PWA プッシュ通知の連携と受信者管理"
+      subtitle="Slack · Chatwork · プッシュ通知の連携と受信者管理"
     >
       <div className="adm-grid-2" style={{ gap: 20 }}>
         {/* Slack */}
@@ -461,21 +499,26 @@ export default function AdminNotifyPage() {
               {cwError}
             </div>
           )}
-          <div style={{ marginTop: 16 }}>
+          <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
             <MkBtn variant="primary" size="sm" onClick={handleSaveChatwork}>
               {cwSaving ? "保存中…" : "保存"}
             </MkBtn>
+            {cwConfigured && (
+              <MkBtn variant="ghost" size="sm" onClick={handleTestChatwork}>
+                {cwTested ? "✓ 送信しました" : "テスト送信"}
+              </MkBtn>
+            )}
           </div>
         </MkCard>
 
-        {/* PWA Push */}
+        {/* Push Notifications */}
         <MkCard style={{ gridColumn: "span 2" }}>
           <MkSectionTitle
-            title="PWA プッシュ通知"
+            title="プッシュ通知"
             subtitle="担当者スマホに Web Push API (VAPID) で通知を配信"
           />
           {authToken ? (
-            <PWAPushPanel authToken={authToken} />
+            <PushPanel authToken={authToken} />
           ) : (
             <div style={{ padding: "20px 0", color: "#a8a198", fontSize: 13 }}>認証が必要です。ページを再読み込みしてください。</div>
           )}
