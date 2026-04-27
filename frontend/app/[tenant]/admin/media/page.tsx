@@ -6,6 +6,85 @@ import { api, type MediaItem } from "@/lib/api";
 import { clearTokens, getAccessToken } from "@/lib/auth";
 import { AdminShell, MkBtn, MkCard, MkPill } from "@/components/AdminShell";
 
+function MediaPreviewModal({ item, onClose }: { item: MediaItem; onClose: () => void }) {
+  const isVideo = item.mime_type.startsWith("video/");
+
+  useEffect(() => {
+    const fn = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", fn);
+    return () => document.removeEventListener("keydown", fn);
+  }, [onClose]);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 50,
+        background: "rgba(0,0,0,0.75)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fffefb", borderRadius: 12,
+          boxShadow: "0 24px 60px rgba(0,0,0,0.4)",
+          width: "100%", maxWidth: 960,
+          display: "flex", flexDirection: "column",
+          maxHeight: "calc(100vh - 48px)",
+          overflow: "hidden",
+        }}
+      >
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", borderBottom: "1px solid #efece5" }}>
+          <div style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: "#2d2a24", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {item.filename}
+          </div>
+          <button
+            onClick={onClose}
+            style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid #d8d3c7", background: "#f4f1ea", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6b6559" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        {/* Media */}
+        <div style={{ flex: 1, minHeight: 0, background: "#1d1a15", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+          {isVideo ? (
+            <video
+              controls
+              autoPlay
+              src={item.url}
+              style={{ maxWidth: "100%", maxHeight: "calc(100vh - 180px)", display: "block" }}
+            />
+          ) : (
+            <img
+              src={item.url}
+              alt={item.filename}
+              style={{ maxWidth: "100%", maxHeight: "calc(100vh - 180px)", objectFit: "contain", display: "block" }}
+            />
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "12px 18px", borderTop: "1px solid #efece5" }}>
+          <MkPill tone={isVideo ? "info" : "neutral"} dot={false}>{item.mime_type.split("/")[1]?.toUpperCase()}</MkPill>
+          <span style={{ fontSize: 11.5, color: "#a8a198", fontFamily: "monospace" }}>{formatBytes(item.size_bytes)}</span>
+          {isVideo && item.duration_sec != null && (
+            <span style={{ fontSize: 11.5, color: "#a8a198", fontFamily: "monospace" }}>{formatDuration(item.duration_sec)}</span>
+          )}
+          <span style={{ fontSize: 11.5, color: "#a8a198", fontFamily: "monospace" }}>{formatDate(item.uploaded_at)}</span>
+          <div style={{ flex: 1 }} />
+          <a href={item.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#6b6559", textDecoration: "none" }}>
+            別タブで開く ↗
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type FilterType = "all" | "video" | "image";
 
 export default function AdminMediaPage() {
@@ -21,6 +100,7 @@ export default function AdminMediaPage() {
   const [filter, setFilter] = useState<FilterType>("all");
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const loadMedia = useCallback(async (token: string) => {
@@ -235,27 +315,29 @@ export default function AdminMediaPage() {
       ) : viewMode === "grid" ? (
         <div className="adm-grid-4" style={{ gap: 16 }}>
           {filtered.map((item) => (
-            <MediaTile key={item.id} item={item} onDelete={() => handleDelete(item.id, item.filename)} />
+            <MediaTile key={item.id} item={item} onDelete={() => handleDelete(item.id, item.filename)} onPreview={() => setPreviewItem(item)} />
           ))}
         </div>
       ) : (
         <MkCard padding="0">
           {filtered.map((item, i) => (
-            <MediaRow key={item.id} item={item} onDelete={() => handleDelete(item.id, item.filename)} isFirst={i === 0} />
+            <MediaRow key={item.id} item={item} onDelete={() => handleDelete(item.id, item.filename)} onPreview={() => setPreviewItem(item)} isFirst={i === 0} />
           ))}
         </MkCard>
       )}
+      {previewItem && <MediaPreviewModal item={previewItem} onClose={() => setPreviewItem(null)} />}
     </AdminShell>
   );
 }
 
-function MediaTile({ item, onDelete }: { item: MediaItem; onDelete: () => void }) {
+function MediaTile({ item, onDelete, onPreview }: { item: MediaItem; onDelete: () => void; onPreview: () => void }) {
   const isVideo = item.mime_type.startsWith("video/");
   const ext = item.mime_type.split("/")[1]?.toUpperCase() ?? "FILE";
 
   return (
     <div
       className="group"
+      onClick={onPreview}
       style={{
         background: "#fffefb", border: "1px solid #efece5", borderRadius: 10,
         overflow: "hidden", cursor: "pointer",
@@ -315,11 +397,11 @@ function MediaTile({ item, onDelete }: { item: MediaItem; onDelete: () => void }
   );
 }
 
-function MediaRow({ item, onDelete, isFirst }: { item: MediaItem; onDelete: () => void; isFirst: boolean }) {
+function MediaRow({ item, onDelete, onPreview, isFirst }: { item: MediaItem; onDelete: () => void; onPreview: () => void; isFirst: boolean }) {
   const isVideo = item.mime_type.startsWith("video/");
   const ext = item.mime_type.split("/")[1]?.toUpperCase() ?? "FILE";
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", borderTop: isFirst ? "none" : "1px solid #efece5" }}>
+    <div onClick={onPreview} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", borderTop: isFirst ? "none" : "1px solid #efece5", cursor: "pointer" }}>
       <div style={{ width: 56, height: 36, borderRadius: 5, overflow: "hidden", background: isVideo ? "#1d1a15" : "#f4f1ea", flexShrink: 0 }}>
         {isVideo ? (
           <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -334,7 +416,7 @@ function MediaRow({ item, onDelete, isFirst }: { item: MediaItem; onDelete: () =
         <div style={{ fontSize: 12.5, fontWeight: 600, color: "#2d2a24", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.filename}</div>
         <div style={{ fontSize: 10.5, color: "#a8a198", marginTop: 2, fontFamily: "monospace" }}>{formatBytes(item.size_bytes)} · {formatDate(item.uploaded_at)}</div>
       </div>
-      <button onClick={onDelete} style={{ background: "none", border: "none", color: "#a84238", cursor: "pointer", fontSize: 12, padding: "4px 8px" }}>削除</button>
+      <button onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ background: "none", border: "none", color: "#a84238", cursor: "pointer", fontSize: 12, padding: "4px 8px" }}>削除</button>
     </div>
   );
 }
@@ -351,4 +433,10 @@ function formatDate(value: string) {
   if (!value) return "—";
   const d = new Date(value);
   return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function formatDuration(sec: number) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}分${String(s).padStart(2, "0")}秒`;
 }
