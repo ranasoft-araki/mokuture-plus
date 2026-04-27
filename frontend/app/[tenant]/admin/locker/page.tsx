@@ -46,7 +46,8 @@ export default function AdminLockerPage() {
         router.push("/login");
       })
       .finally(() => setLoading(false));
-  }, [router]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const sel = selectedId ? lockers.find((l) => l.id === selectedId) ?? null : null;
 

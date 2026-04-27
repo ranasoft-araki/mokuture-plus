@@ -40,13 +40,15 @@ export default function AdminPlaylistsPage() {
     } finally {
       setLoading(false);
     }
-  }, [router]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const token = getAccessToken();
     if (!token) { router.push("/login"); return; }
     void load(token);
-  }, [load, router]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function selectPlaylist(pl: Playlist) {
     setSelectedId(pl.id);

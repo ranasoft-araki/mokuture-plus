@@ -54,13 +54,14 @@ export default function AdminSchedulesPage() {
       setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router]);
+  }, []);
 
   useEffect(() => {
     const token = getAccessToken();
     if (!token) { router.push("/login"); return; }
     void load(token);
-  }, [load]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleCreate() {
     const token = getAccessToken();

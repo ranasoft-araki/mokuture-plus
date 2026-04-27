@@ -33,7 +33,8 @@ export default function ReceptionLogsPage() {
       .then(setLogs)
       .catch(() => { clearTokens(); router.push("/login"); })
       .finally(() => setLoading(false));
-  }, [router]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filtered = useMemo(() => {
     const now = new Date();

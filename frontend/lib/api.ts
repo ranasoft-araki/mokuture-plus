@@ -23,7 +23,6 @@ async function _doRefresh(): Promise<string | null> {
     return access_token;
   }
   clearTokens();
-  if (typeof window !== "undefined") window.location.href = "/login";
   return null;
 }
 

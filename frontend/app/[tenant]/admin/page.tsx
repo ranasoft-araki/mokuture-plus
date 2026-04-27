@@ -36,13 +36,17 @@ export default function DashboardPage() {
       setLoading(false);
       if (showSpinner) setRefreshing(false);
     }
-  }, [router]);
+  // router is stable from useRouter(); omitting it avoids re-running on mid-redirect re-renders
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const token = getAccessToken();
     if (!token) { router.push("/login"); return; }
     void loadData(token);
-  }, [loadData, router]);
+  // mount-only: loadData and router are both stable references
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const hourlyData = useMemo(() => {
     const now = new Date();

@@ -113,13 +113,15 @@ export default function AdminMediaPage() {
     } finally {
       setLoading(false);
     }
-  }, [router]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const token = getAccessToken();
     if (!token) { router.push("/login"); return; }
     void loadMedia(token);
-  }, [loadMedia, router]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const stats = useMemo(() => {
     const images = media.filter((m) => m.mime_type.startsWith("image/")).length;

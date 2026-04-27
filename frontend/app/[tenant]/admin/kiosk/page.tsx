@@ -27,13 +27,15 @@ export default function AdminKioskPage() {
     } finally {
       setLoading(false);
     }
-  }, [router]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const token = getAccessToken();
     if (!token) { router.push("/login"); return; }
     void loadDevices(token);
-  }, [loadDevices, router]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
