@@ -15,6 +15,7 @@ class Tenant(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     brand_color: Mapped[str] = mapped_column(String(7), default="#4a7c4e")
     logo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    font: Mapped[str] = mapped_column(String(64), default="Noto Sans JP / Inter")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")

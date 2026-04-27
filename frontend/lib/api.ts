@@ -71,6 +71,16 @@ export const api = {
   login: (email: string, password: string) =>
     request<{ access_token: string; refresh_token: string }>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
 
+  // Settings
+  getTenantSettings: (token: string) =>
+    request<TenantSettings>("/settings", {}, token),
+  updateTenantSettings: (token: string, body: { brand_color?: string; font?: string }) =>
+    request<TenantSettings>("/settings", { method: "PATCH", body: JSON.stringify(body) }, token),
+  getLogoUploadUrl: (token: string, filename: string, mime_type: string) =>
+    request<{ upload_url: string; public_url: string }>("/settings/logo-upload-url", { method: "POST", body: JSON.stringify({ filename, mime_type }) }, token),
+  confirmLogoUpload: (token: string, logo_url: string) =>
+    request<TenantSettings>("/settings/logo", { method: "PATCH", body: JSON.stringify({ logo_url }) }, token),
+
   // Content
   uploadMedia: async (token: string, file: File): Promise<MediaItem> => {
     // Step 1: Get presigned PUT URL from backend
@@ -241,6 +251,14 @@ export interface KioskPlaylistItem {
   display_order: number;
   duration_sec: number;
   media: KioskMediaItem | null;
+}
+
+export interface TenantSettings {
+  tenant_name: string;
+  tenant_slug: string;
+  brand_color: string;
+  logo_url: string | null;
+  font: string;
 }
 
 export interface KioskScheduleResponse {
