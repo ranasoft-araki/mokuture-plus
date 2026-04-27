@@ -183,8 +183,8 @@ export default function AdminSettingsPage() {
             </div>
           </MkCard>
 
-          <MkCard>
-            <MkSectionTitle title="キオスク画面の文言" subtitle="受付トップ・完了・案内テキスト" />
+          <MkCard style={{ opacity: 0.55, pointerEvents: "none" }}>
+            <MkSectionTitle title="キオスク画面の文言" subtitle="Phase 1 実装予定" />
             <div style={{ display: "grid", gap: 16 }}>
               <Field label="受付トップ メインメッセージ">
                 <TextInput value={`ようこそ、${tenant}へ`} />
@@ -201,8 +201,8 @@ export default function AdminSettingsPage() {
             </div>
           </MkCard>
 
-          <MkCard>
-            <MkSectionTitle title="タイムアウト" />
+          <MkCard style={{ opacity: 0.55, pointerEvents: "none" }}>
+            <MkSectionTitle title="タイムアウト" subtitle="Phase 1 実装予定" />
             <div className="adm-grid-2" style={{ gap: 16 }}>
               <Field label="受付画面の無操作タイムアウト" hint="30 〜 120 秒">
                 <TextInput value="60" mono suffix={<span style={{ color: "#a8a198", fontSize: 12 }}>秒</span>} />

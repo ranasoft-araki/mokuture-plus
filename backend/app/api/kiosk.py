@@ -54,7 +54,7 @@ async def verify_pin(request: Request, body: PinVerifyRequest, db: AsyncSession 
     device.pin_code = None
     await db.commit()
 
-    return {"device_token": device.token}
+    return {"device_token": device.token, "device_name": device.name}
 
 
 async def get_kiosk_device(

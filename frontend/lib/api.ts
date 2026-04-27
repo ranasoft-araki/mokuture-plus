@@ -55,7 +55,7 @@ export const api = {
   createKioskReception: (kioskToken: string, body: ReceptionCreate) =>
     request("/kiosk/reception", { method: "POST", body: JSON.stringify(body), headers: { "X-Kiosk-Token": kioskToken } }),
   verifyKioskPin: (pinCode: string) =>
-    request<{ device_token: string }>("/kiosk/verify-pin", { method: "POST", body: JSON.stringify({ pin_code: pinCode }) }),
+    request<{ device_token: string; device_name: string }>("/kiosk/verify-pin", { method: "POST", body: JSON.stringify({ pin_code: pinCode }) }),
 
   // Device management (admin)
   listDevices: (token: string) =>
@@ -161,6 +161,16 @@ export const api = {
     request<{ sent: number; total: number }>("/notifications/push/test", { method: "POST" }, token),
   regenerateVapid: (token: string) =>
     request<{ public_key: string; regenerated: boolean }>("/notifications/push/regenerate", { method: "POST" }, token),
+
+  // Notification settings
+  getNotificationSettings: (token: string) =>
+    request<Record<string, Record<string, string>>>("/notifications/settings", {}, token),
+  updateSlackSettings: (token: string, webhook_url: string) =>
+    request("/notifications/settings/slack", { method: "PUT", body: JSON.stringify({ webhook_url }) }, token),
+  updateChatworkSettings: (token: string, api_token: string, room_id: string) =>
+    request("/notifications/settings/chatwork", { method: "PUT", body: JSON.stringify({ api_token, room_id }) }, token),
+  testSlackNotification: (token: string) =>
+    request<{ ok: boolean }>("/notifications/test/slack", { method: "POST" }, token),
 };
 
 export interface MediaUploadUrlResponse {

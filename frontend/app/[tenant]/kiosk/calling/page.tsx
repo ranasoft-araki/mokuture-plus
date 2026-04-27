@@ -24,12 +24,15 @@ export default function KioskCallingPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const name = searchParams.get("name") ?? "";
+  const staff = searchParams.get("staff") ?? "";
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [now, setNow] = useState("");
 
   useEffect(() => {
     timerRef.current = setTimeout(() => {
-      router.push(`/${params.tenant}/kiosk/complete?name=${encodeURIComponent(name)}`);
+      const qs = new URLSearchParams({ name });
+      if (staff) qs.set("staff", staff);
+      router.push(`/${params.tenant}/kiosk/complete?${qs.toString()}`);
     }, AUTO_ADVANCE_MS);
     const tick = () => {
       const d = new Date();
@@ -41,7 +44,7 @@ export default function KioskCallingPage() {
       if (timerRef.current) clearTimeout(timerRef.current);
       clearInterval(id);
     };
-  }, [params.tenant, router, name]);
+  }, [params.tenant, router, name, staff]);
 
   return (
     <KioskScaler bg="#faf8f4">

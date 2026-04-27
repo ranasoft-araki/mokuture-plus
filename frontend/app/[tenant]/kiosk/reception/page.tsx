@@ -7,6 +7,7 @@ import { KioskScaler } from "@/components/KioskScaler";
 
 const IDLE_TIMEOUT_MS = 60_000;
 const KIOSK_TOKEN_KEY = "mokuture_kiosk_token";
+const KIOSK_NAME_KEY = "mokuture_kiosk_name";
 
 type FieldKey = "visitor_name" | "company" | "staff" | "purpose";
 
@@ -133,6 +134,7 @@ export default function KioskFormPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [now, setNow] = useState("");
+  const [deviceName, setDeviceName] = useState("");
 
   const resetIdle = useCallback(() => {
     if (idleRef.current) clearTimeout(idleRef.current);
@@ -144,6 +146,7 @@ export default function KioskFormPage() {
       router.replace(`/${params.tenant}/kiosk/setup`);
       return;
     }
+    setDeviceName(localStorage.getItem(KIOSK_NAME_KEY) ?? "");
     resetIdle();
     const tick = () => {
       const d = new Date();
@@ -203,7 +206,9 @@ export default function KioskFormPage() {
         visitor_name: form.visitor_name, company: form.company,
         purpose: form.purpose, staff: form.staff, method: "form",
       });
-      router.push(`/${params.tenant}/kiosk/calling?name=${encodeURIComponent(form.visitor_name)}`);
+      const qs = new URLSearchParams({ name: form.visitor_name });
+      if (form.staff) qs.set("staff", form.staff);
+      router.push(`/${params.tenant}/kiosk/calling?${qs.toString()}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "受付に失敗しました");
       setSubmitting(false);
@@ -388,7 +393,7 @@ export default function KioskFormPage() {
         <div style={{ padding: "12px 80px 20px", display: "flex", alignItems: "center", color: "#a8a198", fontSize: 13, flexShrink: 0 }}>
           <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 14 }}>{now}</span>
           <span style={{ flex: 1 }} />
-          <span style={{ fontFamily: "JetBrains Mono, monospace" }}>kiosk-hq-1f-01</span>
+          <span style={{ fontFamily: "JetBrains Mono, monospace" }}>{deviceName || "kiosk"}</span>
         </div>
       </div>
 

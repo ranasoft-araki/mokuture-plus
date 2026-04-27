@@ -294,9 +294,73 @@ export default function AdminNotifyPage() {
   const params = useParams<{ tenant: string }>();
   const [authToken, setAuthToken] = useState("");
 
+  // Slack state
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [slackConfigured, setSlackConfigured] = useState(false);
+  const [slackSaving, setSlackSaving] = useState(false);
+  const [slackError, setSlackError] = useState("");
+  const [slackTested, setSlackTested] = useState(false);
+
+  // Chatwork state
+  const [cwApiToken, setCwApiToken] = useState("");
+  const [cwRoomId, setCwRoomId] = useState("");
+  const [cwConfigured, setCwConfigured] = useState(false);
+  const [cwSaving, setCwSaving] = useState(false);
+  const [cwError, setCwError] = useState("");
+
   useEffect(() => {
     setAuthToken(getAccessToken() ?? "");
   }, []);
+
+  useEffect(() => {
+    if (!authToken) return;
+    api.getNotificationSettings(authToken).then((settings) => {
+      const slack = settings["slack"] ?? {};
+      const cw = settings["chatwork"] ?? {};
+      if (slack["webhook_url"]) setSlackConfigured(true);
+      if (cw["api_token"]) setCwConfigured(true);
+    }).catch(() => {});
+  }, [authToken]);
+
+  const handleSaveSlack = async () => {
+    setSlackSaving(true);
+    setSlackError("");
+    try {
+      await api.updateSlackSettings(authToken, webhookUrl);
+      setSlackConfigured(true);
+      setWebhookUrl("");
+    } catch (e: unknown) {
+      setSlackError(e instanceof Error ? e.message : "保存に失敗しました");
+    } finally {
+      setSlackSaving(false);
+    }
+  };
+
+  const handleSaveChatwork = async () => {
+    setCwSaving(true);
+    setCwError("");
+    try {
+      await api.updateChatworkSettings(authToken, cwApiToken, cwRoomId);
+      setCwConfigured(true);
+      setCwApiToken("");
+      setCwRoomId("");
+    } catch (e: unknown) {
+      setCwError(e instanceof Error ? e.message : "保存に失敗しました");
+    } finally {
+      setCwSaving(false);
+    }
+  };
+
+  const handleTestSlack = async () => {
+    setSlackError("");
+    try {
+      await api.testSlackNotification(authToken);
+      setSlackTested(true);
+      setTimeout(() => setSlackTested(false), 3000);
+    } catch (e: unknown) {
+      setSlackError(e instanceof Error ? e.message : "送信に失敗しました");
+    }
+  };
 
   return (
     <AdminShell
@@ -318,14 +382,16 @@ export default function AdminNotifyPage() {
               <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>Slack</div>
               <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>Incoming Webhook で指定チャンネルへ通知</div>
             </div>
-            <MkPill tone="off">未設定</MkPill>
+            <MkPill tone={slackConfigured ? "live" : "off"}>{slackConfigured ? "設定済" : "未設定"}</MkPill>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Field label="Webhook URL" required>
-              <TextInput placeholder="https://hooks.slack.com/services/..." mono />
-            </Field>
-            <Field label="通知先チャンネル">
-              <TextInput placeholder="#reception-alerts" mono />
+              <TextInput
+                placeholder="https://hooks.slack.com/services/..."
+                mono
+                value={webhookUrl}
+                onChange={setWebhookUrl}
+              />
             </Field>
             <Field label="通知テンプレート" hint="{name} {company} {purpose} {time} が利用可能">
               <div style={{ border: "1px solid #d8d3c7", borderRadius: 7, background: "#fffefb", padding: 10, fontSize: 12, color: "#2d2a24", lineHeight: 1.55 }}>
@@ -333,7 +399,21 @@ export default function AdminNotifyPage() {
               </div>
             </Field>
           </div>
-          <div style={{ marginTop: 16 }}><MkBtn variant="primary" size="sm">保存</MkBtn></div>
+          {slackError && (
+            <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
+              {slackError}
+            </div>
+          )}
+          <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
+            <MkBtn variant="primary" size="sm" onClick={handleSaveSlack}>
+              {slackSaving ? "保存中…" : "保存"}
+            </MkBtn>
+            {slackConfigured && (
+              <MkBtn variant="ghost" size="sm" onClick={handleTestSlack}>
+                {slackTested ? "✓ 送信しました" : "テスト送信"}
+              </MkBtn>
+            )}
+          </div>
         </MkCard>
 
         {/* Chatwork */}
@@ -346,14 +426,24 @@ export default function AdminNotifyPage() {
               <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>Chatwork</div>
               <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>API トークン + ルーム ID で通知</div>
             </div>
-            <MkPill tone="off">未設定</MkPill>
+            <MkPill tone={cwConfigured ? "live" : "off"}>{cwConfigured ? "設定済" : "未設定"}</MkPill>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Field label="API トークン" required>
-              <TextInput placeholder="Chatwork API トークン" mono />
+              <TextInput
+                placeholder="Chatwork API トークン"
+                mono
+                value={cwApiToken}
+                onChange={setCwApiToken}
+              />
             </Field>
             <Field label="通知先ルーム ID" required>
-              <TextInput placeholder="例: 312648719" mono />
+              <TextInput
+                placeholder="例: 312648719"
+                mono
+                value={cwRoomId}
+                onChange={setCwRoomId}
+              />
             </Field>
             <Field label="通知対象">
               <div style={{ display: "flex", gap: 8 }}>
@@ -366,7 +456,16 @@ export default function AdminNotifyPage() {
               </div>
             </Field>
           </div>
-          <div style={{ marginTop: 16 }}><MkBtn variant="primary" size="sm">保存</MkBtn></div>
+          {cwError && (
+            <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
+              {cwError}
+            </div>
+          )}
+          <div style={{ marginTop: 16 }}>
+            <MkBtn variant="primary" size="sm" onClick={handleSaveChatwork}>
+              {cwSaving ? "保存中…" : "保存"}
+            </MkBtn>
+          </div>
         </MkCard>
 
         {/* PWA Push */}

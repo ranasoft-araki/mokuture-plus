@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 
 const KIOSK_TOKEN_KEY = "mokuture_kiosk_token";
+const KIOSK_NAME_KEY = "mokuture_kiosk_name";
 
 const PAD_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "←", "0", "→"] as const;
 
@@ -30,8 +31,9 @@ export default function KioskSetupPage() {
     setVerifying(true);
     setError("");
     try {
-      const { device_token } = await api.verifyKioskPin(code);
+      const { device_token, device_name } = await api.verifyKioskPin(code);
       localStorage.setItem(KIOSK_TOKEN_KEY, device_token);
+      localStorage.setItem(KIOSK_NAME_KEY, device_name);
       router.replace(`/${params.tenant}/kiosk`);
     } catch {
       setError("PINが無効です。管理画面で新しいPINを発行してください。");

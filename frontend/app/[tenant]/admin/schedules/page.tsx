@@ -116,16 +116,9 @@ export default function AdminSchedulesPage() {
       breadcrumb="ホーム / コンテンツ管理 / スケジュール"
       subtitle="曜日 × 時間帯でプレイリストを自動切替"
       actions={
-        <>
-          <MkBtn variant="default" size="sm" onClick={() => setShowForm((v) => !v)}>
-            {showForm ? "閉じる" : "+ 新規ブロック"}
-          </MkBtn>
-          {schedules.length > 0 && (
-            <MkBtn variant="primary" size="sm" onClick={() => setSuccess("スケジュールを保存しました")}>
-              ✓ スケジュールを保存
-            </MkBtn>
-          )}
-        </>
+        <MkBtn variant="default" size="sm" onClick={() => setShowForm((v) => !v)}>
+          {showForm ? "閉じる" : "+ 新規ブロック"}
+        </MkBtn>
       }
     >
       {error && <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#f6e0dc", border: "1px solid #a84238", color: "#a84238", fontSize: 13 }}>{error}</div>}

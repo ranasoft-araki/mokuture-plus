@@ -29,6 +29,7 @@ export default function KioskWelcomePage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const name = searchParams.get("name") ?? "お客様";
+  const staff = searchParams.get("staff") ?? "";
   const [count, setCount] = useState(AUTO_RETURN_SEC);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [now, setNow] = useState("");
@@ -111,7 +112,7 @@ export default function KioskWelcomePage() {
             }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22 }}>
                 {[
-                  { label: "ご担当", value: "担当者" },
+                  { label: "ご担当", value: staff || "—" },
                   { label: "ご予約時間", value: now, mono: true },
                   { label: "通知方法", value: "Slack / プッシュ" },
                   { label: "ステータス", value: "通知済み" },

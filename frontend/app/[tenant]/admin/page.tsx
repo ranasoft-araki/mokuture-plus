@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { api, type ReceptionLog, type Device } from "@/lib/api";
 import { getAccessToken, clearTokens } from "@/lib/auth";
@@ -13,28 +13,36 @@ export default function DashboardPage() {
   const [logs, setLogs] = useState<ReceptionLog[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [notifySettings, setNotifySettings] = useState<Record<string, Record<string, string>>>({});
+
+  const loadData = useCallback(async (token: string, showSpinner = false) => {
+    if (showSpinner) setRefreshing(true);
+    try {
+      const [stats, allLogs, devs, notify] = await Promise.all([
+        api.todayStats(token),
+        api.listReception(token),
+        api.listDevices(token),
+        api.getNotificationSettings(token).catch(() => ({})),
+      ]);
+      setTodayCount(stats.count);
+      setLogs(allLogs);
+      setDevices(devs);
+      setNotifySettings(notify);
+    } catch {
+      clearTokens();
+      router.push("/login");
+    } finally {
+      setLoading(false);
+      if (showSpinner) setRefreshing(false);
+    }
+  }, [router]);
 
   useEffect(() => {
     const token = getAccessToken();
     if (!token) { router.push("/login"); return; }
-    (async () => {
-      try {
-        const [stats, allLogs, devs] = await Promise.all([
-          api.todayStats(token),
-          api.listReception(token),
-          api.listDevices(token),
-        ]);
-        setTodayCount(stats.count);
-        setLogs(allLogs);
-        setDevices(devs);
-      } catch {
-        clearTokens();
-        router.push("/login");
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [router]);
+    void loadData(token);
+  }, [loadData, router]);
 
   const hourlyData = useMemo(() => {
     const now = new Date();
@@ -73,9 +81,9 @@ export default function DashboardPage() {
       subtitle={`${today} · 本日の稼働状況`}
       actions={
         <>
-          <MkBtn variant="ghost" size="sm">
+          <MkBtn variant="ghost" size="sm" onClick={() => { const t = getAccessToken(); if (t) void loadData(t, true); }} disabled={refreshing}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-            更新
+            {refreshing ? "更新中..." : "更新"}
           </MkBtn>
           <MkBtn variant="primary" onClick={() => router.push(`/${params.tenant}/admin/media`)}>
             + 新規コンテンツ
@@ -230,11 +238,11 @@ export default function DashboardPage() {
           <MkCard>
             <MkSectionTitle title="システム状態" />
             {[
-              { label: "Slack Webhook",     tone: "live" as const,    value: "設定済" },
-              { label: "Chatwork API",      tone: "off" as const,     value: "未設定" },
-              { label: "PWA Push (VAPID)",  tone: "off" as const,     value: "未設定" },
-              { label: "ロッカー制御",       tone: "off" as const,     value: "Phase 2" },
-              { label: "Google Calendar",   tone: "off" as const,     value: "Phase 2" },
+              { label: "Slack Webhook",    tone: (notifySettings["slack"]?.["webhook_url"] ? "live" : "off") as "live" | "off", value: notifySettings["slack"]?.["webhook_url"] ? "設定済" : "未設定" },
+              { label: "Chatwork API",     tone: (notifySettings["chatwork"]?.["api_token"] ? "live" : "off") as "live" | "off", value: notifySettings["chatwork"]?.["api_token"] ? "設定済" : "未設定" },
+              { label: "PWA Push (VAPID)", tone: (notifySettings["vapid"]?.["public_key"] ? "live" : "off") as "live" | "off",  value: notifySettings["vapid"]?.["public_key"] ? "設定済" : "未設定" },
+              { label: "ロッカー制御",      tone: "off" as const,     value: "Phase 2" },
+              { label: "Google Calendar",  tone: "off" as const,     value: "Phase 2" },
             ].map((item, i) => (
               <div key={item.label} style={{ display: "flex", alignItems: "center", padding: "8px 0", borderTop: i > 0 ? "1px solid #efece5" : "none" }}>
                 <span style={{ flex: 1, fontSize: 12, color: "#2d2a24" }}>{item.label}</span>
