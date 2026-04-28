@@ -16,5 +16,3 @@ rpi = [
     "gpiozero>=2.0",
 ]
 
-[tool.uv]
-dev-dependencies = []

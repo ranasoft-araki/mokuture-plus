@@ -26,4 +26,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-settings.media_dir.mkdir(parents=True, exist_ok=True)

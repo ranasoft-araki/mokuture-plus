@@ -9,13 +9,16 @@ Responsibilities:
 import asyncio
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from config import settings
 from gpio import LockerController, PirSensor
+from state import get_device_name, get_device_token, is_registered, save_device_state
 from sync import find_media, sync_loop
 
 locker_ctrl = LockerController(settings.locker_pins)
@@ -24,6 +27,7 @@ pir = PirSensor(settings.pir_pin)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings.media_dir.mkdir(parents=True, exist_ok=True)
     task = asyncio.create_task(sync_loop())
     yield
     task.cancel()
@@ -41,11 +45,39 @@ app.add_middleware(
 )
 
 
+class PinRequest(BaseModel):
+    pin_code: str
+
+
+@app.post("/setup")
+async def setup_device(body: PinRequest):
+    """管理画面で発行した PIN を使ってデバイスを登録する（一度だけ実行）。"""
+    if is_registered():
+        return {"status": "already_registered", "device_name": get_device_name()}
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                f"{settings.remote_api_url}/kiosk/verify-pin",
+                json={"pin_code": body.pin_code},
+                timeout=15,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail="PIN が無効または期限切れです")
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"リモートAPIに接続できません: {e}")
+
+    data = resp.json()
+    save_device_state(data["device_token"], data["device_name"])
+    return {"status": "registered", "device_name": data["device_name"]}
+
+
 @app.get("/health")
 async def health():
     return {
         "status": "ok",
-        "token_set": bool(settings.device_token),
+        "registered": is_registered(),
+        "device_name": get_device_name(),
         "media_dir": str(settings.media_dir),
         "mock_gpio": settings.mock_gpio,
     }
