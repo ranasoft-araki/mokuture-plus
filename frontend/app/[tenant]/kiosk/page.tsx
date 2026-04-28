@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { api, type KioskPlaylistItem, type KioskMediaItem } from "@/lib/api";
+import { api, getCachedKioskSettings, setCachedKioskSettings, type KioskPlaylistItem, type KioskMediaItem } from "@/lib/api";
 import { KioskScaler } from "@/components/KioskScaler";
 
 const KIOSK_TOKEN_KEY = "mokuture_kiosk_token";
@@ -15,6 +15,9 @@ export default function KioskIdlePage() {
   const [items, setItems] = useState<KioskPlaylistItem[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loaded, setLoaded] = useState(false);
+  const [brandColor, setBrandColor] = useState(
+    () => getCachedKioskSettings(params.tenant)?.brand_color ?? "#4a7c4e"
+  );
 
   const itemTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -24,6 +27,13 @@ export default function KioskIdlePage() {
       router.replace(`/${params.tenant}/kiosk/setup`);
       return;
     }
+
+    api.getPublicTenantSettings(params.tenant)
+      .then((s) => {
+        setBrandColor(s.brand_color);
+        setCachedKioskSettings(params.tenant, s);
+      })
+      .catch(() => {});
 
     const fetchSchedule = async () => {
       try {
@@ -167,17 +177,17 @@ export default function KioskIdlePage() {
               <div style={{ position: "relative", width: 56, height: 56, flexShrink: 0 }}>
                 <div style={{
                   position: "absolute", inset: 0, borderRadius: "50%",
-                  border: "2px solid #4a7c4e", opacity: 0.4,
+                  border: `2px solid ${brandColor}`, opacity: 0.4,
                   animation: "kiosk-ring-expand 2.4s ease-out 0s infinite",
                 }} />
                 <div style={{
                   position: "absolute", inset: 0, borderRadius: "50%",
-                  border: "2px solid #4a7c4e", opacity: 0.3,
+                  border: `2px solid ${brandColor}`, opacity: 0.3,
                   animation: "kiosk-ring-expand 2.4s ease-out 0.8s infinite",
                 }} />
                 <div style={{
                   position: "absolute", inset: 8, borderRadius: "50%",
-                  background: "#4a7c4e",
+                  background: brandColor,
                   display: "flex", alignItems: "center", justifyContent: "center",
                 }}>
                   <div style={{ width: 14, height: 14, borderRadius: "50%", background: "#ffffff" }} />

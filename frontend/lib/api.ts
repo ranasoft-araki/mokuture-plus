@@ -310,3 +310,21 @@ export interface KioskScheduleResponse {
     items: KioskPlaylistItem[];
   } | null;
 }
+
+const _SETTINGS_KEY = "mokuture_kiosk_settings";
+
+export function getCachedKioskSettings(tenantSlug: string): PublicTenantSettings | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(`${_SETTINGS_KEY}_${tenantSlug}`);
+    if (raw) return JSON.parse(raw) as PublicTenantSettings;
+  } catch {}
+  return null;
+}
+
+export function setCachedKioskSettings(tenantSlug: string, s: PublicTenantSettings): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(`${_SETTINGS_KEY}_${tenantSlug}`, JSON.stringify(s));
+  } catch {}
+}

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { KioskScaler } from "@/components/KioskScaler";
-import { api } from "@/lib/api";
+import { api, getCachedKioskSettings, setCachedKioskSettings } from "@/lib/api";
 
 const AUTO_ADVANCE_MS = 4_000;
 const DEFAULT_CALLING_MSG = "担当者をお呼びしています";
@@ -29,11 +29,17 @@ export default function KioskCallingPage() {
   const staff = searchParams.get("staff") ?? "";
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [now, setNow] = useState("");
-  const [callingMessage, setCallingMessage] = useState(DEFAULT_CALLING_MSG);
+  const cached = getCachedKioskSettings(params.tenant);
+  const [callingMessage, setCallingMessage] = useState(cached?.kiosk_calling_message ?? DEFAULT_CALLING_MSG);
+  const [brandColor, setBrandColor] = useState(cached?.brand_color ?? "#4a7c4e");
 
   useEffect(() => {
     api.getPublicTenantSettings(params.tenant)
-      .then((s) => setCallingMessage(s.kiosk_calling_message))
+      .then((s) => {
+        setCallingMessage(s.kiosk_calling_message);
+        setBrandColor(s.brand_color);
+        setCachedKioskSettings(params.tenant, s);
+      })
       .catch(() => {});
 
     timerRef.current = setTimeout(() => {
@@ -71,7 +77,7 @@ export default function KioskCallingPage() {
               <div key={i} style={{
                 position: "absolute",
                 inset: `${(1 - s) * 40}%`,
-                border: "2px solid #4a7c4e",
+                border: `2px solid ${brandColor}`,
                 borderRadius: "50%",
                 opacity: 0.15 + i * 0.18,
                 animation: `kiosk-pulse-ring${i === 0 ? "-3" : i === 1 ? "-2" : ""} 2.6s ease-in-out ${i * 0.25}s infinite`,
@@ -79,10 +85,10 @@ export default function KioskCallingPage() {
             ))}
             <div style={{
               position: "absolute", inset: "32%",
-              background: "#4a7c4e", borderRadius: "50%",
+              background: brandColor, borderRadius: "50%",
               display: "flex", alignItems: "center", justifyContent: "center",
               color: "#ffffff",
-              boxShadow: "0 8px 32px rgba(74,124,78,0.45)",
+              boxShadow: `0 8px 32px ${brandColor}72`,
             }}>
               <BellIcon />
             </div>
@@ -102,7 +108,7 @@ export default function KioskCallingPage() {
               {[0, 1, 2].map((i) => (
                 <div key={i} style={{
                   width: 14, height: 14, borderRadius: "50%",
-                  background: "#4a7c4e", opacity: i === 1 ? 1 : 0.25,
+                  background: brandColor, opacity: i === 1 ? 1 : 0.25,
                   animation: `kiosk-dot-bounce 1.5s ${i * 0.18}s ease-in-out infinite`,
                 }} />
               ))}
@@ -119,7 +125,7 @@ export default function KioskCallingPage() {
             boxShadow: "0 1px 0 rgba(29,26,21,0.03), 0 1px 2px rgba(29,26,21,0.04)",
           }}>
             <div style={{
-              width: 48, height: 48, borderRadius: 12, background: "#eaf0e8", color: "#3a6240",
+              width: 48, height: 48, borderRadius: 12, background: `${brandColor}22`, color: brandColor,
               display: "flex", alignItems: "center", justifyContent: "center",
             }}>
               <CheckIcon />

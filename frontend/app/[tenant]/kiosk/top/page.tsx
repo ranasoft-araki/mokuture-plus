@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { KioskScaler } from "@/components/KioskScaler";
-import { api, type PublicTenantSettings } from "@/lib/api";
+import { api, getCachedKioskSettings, setCachedKioskSettings, type PublicTenantSettings } from "@/lib/api";
 
 const KIOSK_TOKEN_KEY = "mokuture_kiosk_token";
 const KIOSK_NAME_KEY = "mokuture_kiosk_name";
@@ -82,7 +82,9 @@ export default function KioskTopPage() {
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pressed, setPressed] = useState<number | null>(null);
   const [now, setNow] = useState("");
-  const [kioskSettings, setKioskSettings] = useState<PublicTenantSettings>(DEFAULT_SETTINGS);
+  const [kioskSettings, setKioskSettings] = useState<PublicTenantSettings>(
+    () => getCachedKioskSettings(params.tenant) ?? DEFAULT_SETTINGS
+  );
   const [deviceName, setDeviceName] = useState("");
   const idleTimeoutRef = useRef(60_000);
 
@@ -99,9 +101,10 @@ export default function KioskTopPage() {
 
     setDeviceName(localStorage.getItem(KIOSK_NAME_KEY) ?? "");
 
-    // Load tenant settings
+    // Load tenant settings (stale-while-revalidate via localStorage cache)
     api.getPublicTenantSettings(params.tenant).then((s) => {
       setKioskSettings(s);
+      setCachedKioskSettings(params.tenant, s);
       idleTimeoutRef.current = s.kiosk_idle_timeout_sec * 1000;
       resetIdle();
     }).catch(() => {
@@ -176,8 +179,8 @@ export default function KioskTopPage() {
                 >
                   <div style={{
                     width: 76, height: 76, borderRadius: 18,
-                    background: isPrimary ? "rgba(255,255,255,0.1)" : "#eaf0e8",
-                    color: isPrimary ? "#ffffff" : "#3a6240",
+                    background: isPrimary ? "rgba(255,255,255,0.1)" : `${kioskSettings.brand_color}22`,
+                    color: isPrimary ? "#ffffff" : kioskSettings.brand_color,
                     display: "flex", alignItems: "center", justifyContent: "center",
                   }}>
                     <tile.Icon />

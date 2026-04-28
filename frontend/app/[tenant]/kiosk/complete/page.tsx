@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { KioskScaler } from "@/components/KioskScaler";
-import { api } from "@/lib/api";
+import { api, getCachedKioskSettings, setCachedKioskSettings } from "@/lib/api";
 
 const DEFAULT_RETURN_SEC = 60;
 const DEFAULT_COMPLETE_MSG = "担当者がお迎えします";
@@ -32,20 +32,24 @@ export default function KioskWelcomePage() {
   const router = useRouter();
   const name = searchParams.get("name") ?? "お客様";
   const staff = searchParams.get("staff") ?? "";
-  const [autoReturnSec, setAutoReturnSec] = useState(DEFAULT_RETURN_SEC);
-  const [count, setCount] = useState(DEFAULT_RETURN_SEC);
-  const [completeMessage, setCompleteMessage] = useState(DEFAULT_COMPLETE_MSG);
+  const _cached = getCachedKioskSettings(params.tenant);
+  const [autoReturnSec, setAutoReturnSec] = useState(_cached?.kiosk_complete_timeout_sec ?? DEFAULT_RETURN_SEC);
+  const [count, setCount] = useState(_cached?.kiosk_complete_timeout_sec ?? DEFAULT_RETURN_SEC);
+  const [completeMessage, setCompleteMessage] = useState(_cached?.kiosk_complete_message ?? DEFAULT_COMPLETE_MSG);
+  const [brandColor, setBrandColor] = useState(_cached?.brand_color ?? "#4a7c4e");
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [now, setNow] = useState("");
 
   useEffect(() => {
-    let returnSec = DEFAULT_RETURN_SEC;
+    let returnSec = _cached?.kiosk_complete_timeout_sec ?? DEFAULT_RETURN_SEC;
     api.getPublicTenantSettings(params.tenant)
       .then((s) => {
         returnSec = s.kiosk_complete_timeout_sec;
         setAutoReturnSec(returnSec);
         setCount(returnSec);
         setCompleteMessage(s.kiosk_complete_message);
+        setBrandColor(s.brand_color);
+        setCachedKioskSettings(params.tenant, s);
       })
       .catch(() => {})
       .finally(() => {
@@ -79,7 +83,7 @@ export default function KioskWelcomePage() {
     <KioskScaler bg="#faf8f4">
       <div style={{ width: 1920, height: 1080, background: "#faf8f4", display: "flex", flexDirection: "column", fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif" }}>
         {/* Gradient bar */}
-        <div style={{ height: 6, background: "linear-gradient(90deg, #4a7c4e, #b8763a, #2e6b8e)", flexShrink: 0 }} />
+        <div style={{ height: 6, background: `linear-gradient(90deg, ${brandColor}, #b8763a, #2e6b8e)`, flexShrink: 0 }} />
 
 
 
@@ -88,8 +92,8 @@ export default function KioskWelcomePage() {
           {/* Left: welcome */}
           <div style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
             <div style={{
-              width: 84, height: 84, borderRadius: 22, background: "#eaf0e8",
-              color: "#4a7c4e", display: "flex", alignItems: "center", justifyContent: "center",
+              width: 84, height: 84, borderRadius: 22, background: `${brandColor}22`,
+              color: brandColor, display: "flex", alignItems: "center", justifyContent: "center",
               marginBottom: 24,
               animation: "kiosk-scale-in 0.5s cubic-bezier(0.2,0.9,0.3,1.1)",
             }}>
@@ -113,7 +117,7 @@ export default function KioskWelcomePage() {
                 この画面は <b>{count}秒後</b> に待機画面へ戻ります
               </span>
               <div style={{ width: 220, height: 4, background: "#efece5", borderRadius: 2 }}>
-                <div style={{ width: `${progress}%`, height: "100%", background: "#4a7c4e", borderRadius: 2, transition: "width 1s linear" }} />
+                <div style={{ width: `${progress}%`, height: "100%", background: brandColor, borderRadius: 2, transition: "width 1s linear" }} />
               </div>
             </div>
           </div>
