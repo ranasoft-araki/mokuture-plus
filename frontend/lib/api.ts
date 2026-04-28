@@ -311,6 +311,22 @@ export interface KioskScheduleResponse {
   } | null;
 }
 
+// ─── Local Device Agent ───────────────────────────────────────────────────────
+// Set NEXT_PUBLIC_LOCAL_AGENT_URL=http://localhost:8080 in kiosk builds to
+// route media through the on-device agent instead of the remote CDN.
+const _LOCAL_AGENT = process.env.NEXT_PUBLIC_LOCAL_AGENT_URL ?? "";
+
+export const localAgent = {
+  isAvailable: () => Boolean(_LOCAL_AGENT),
+  getMediaUrl: (mediaId: string) => `${_LOCAL_AGENT}/media/${mediaId}`,
+  openLocker: (lockerId: string): Promise<{ locker_id: string; state: string }> =>
+    fetch(`${_LOCAL_AGENT}/device/locker/${lockerId}/open`, { method: "POST" }).then(r => r.json()),
+  getPirStatus: (): Promise<{ motion_detected: boolean }> =>
+    fetch(`${_LOCAL_AGENT}/device/pir`).then(r => r.json()),
+  getHealth: (): Promise<{ status: string; token_set: boolean; mock_gpio: boolean }> =>
+    fetch(`${_LOCAL_AGENT}/health`).then(r => r.json()),
+};
+
 const _SETTINGS_KEY = "mokuture_kiosk_settings";
 
 export function getCachedKioskSettings(tenantSlug: string): PublicTenantSettings | null {

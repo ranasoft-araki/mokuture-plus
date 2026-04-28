@@ -152,6 +152,56 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     }
 
 
+@router.get("/content-manifest")
+async def kiosk_content_manifest(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device), db: AsyncSession = Depends(get_db)):
+    """Return all scheduled-playlist media for local device caching."""
+    tenant, _ = ctx
+
+    sched_result = await db.execute(
+        select(Schedule.playlist_id).where(
+            Schedule.tenant_id == tenant.id,
+            Schedule.playlist_id.isnot(None),
+        ).distinct()
+    )
+    playlist_ids = [row[0] for row in sched_result.all()]
+    if not playlist_ids:
+        return {"items": []}
+
+    items_result = await db.execute(
+        select(PlaylistItem.media_id).where(
+            PlaylistItem.playlist_id.in_(playlist_ids)
+        ).distinct()
+    )
+    media_ids = [row[0] for row in items_result.all()]
+    if not media_ids:
+        return {"items": []}
+
+    media_result = await db.execute(
+        select(Media).where(Media.id.in_(media_ids), Media.tenant_id == tenant.id)
+    )
+    media_list = media_result.scalars().all()
+
+    storage_base = settings.storage_public_url.rstrip("/") + "/"
+
+    def _download_url(url: str) -> str:
+        if url.startswith(storage_base):
+            return generate_presigned_get_url(url.removeprefix(storage_base), expires_in=3600)
+        return url
+
+    return {
+        "items": [
+            {
+                "id": m.id,
+                "filename": m.filename,
+                "mime_type": m.mime_type,
+                "size_bytes": m.size_bytes,
+                "url": _download_url(m.url),
+            }
+            for m in media_list
+        ]
+    }
+
+
 class ReceptionCreate(BaseModel):
     visitor_name: str
     company: str | None = None

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import {
   api,
+  localAgent,
   getCachedKioskSettings,
   setCachedKioskSettings,
   type PublicTenantSettings,
@@ -219,6 +220,8 @@ function IdleScreen({
   }, [currentIndex, items, advanceItem]);
 
   const currentMedia: KioskMediaItem | null = items[currentIndex]?.media ?? null;
+  const resolveUrl = (m: KioskMediaItem) =>
+    localAgent.isAvailable() ? localAgent.getMediaUrl(m.id) : m.url;
 
   return (
     <KioskScaler bg="#0a0806">
@@ -230,7 +233,7 @@ function IdleScreen({
           <video
             ref={videoRef}
             key={currentMedia.id}
-            src={currentMedia.url}
+            src={resolveUrl(currentMedia)}
             autoPlay muted playsInline
             loop={items.length === 1}
             onLoadedMetadata={() => videoRef.current?.play().catch(() => {})}
@@ -241,7 +244,7 @@ function IdleScreen({
         ) : currentMedia ? (
           <img
             key={currentMedia.id}
-            src={currentMedia.url}
+            src={resolveUrl(currentMedia)}
             alt=""
             style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
           />
