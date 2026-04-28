@@ -118,7 +118,7 @@ export default function KioskQRPage() {
     try {
       await api.createKioskReception(kioskToken, { visitor_name: name, company, purpose, method: "qr" });
       stopCamera();
-      router.push(`/${params.tenant}/kiosk/calling?name=${encodeURIComponent(name)}`);
+      router.push(`/${params.tenant}/kiosk?screen=calling&name=${encodeURIComponent(name)}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "受付処理に失敗しました");
       setSubmitting(false);
@@ -126,8 +126,8 @@ export default function KioskQRPage() {
     }
   };
 
-  const back = () => { stopCamera(); router.push(`/${params.tenant}/kiosk/top`); };
-  const toForm = () => { stopCamera(); router.push(`/${params.tenant}/kiosk/reception`); };
+  const back = () => { stopCamera(); router.push(`/${params.tenant}/kiosk`); };
+  const toForm = () => { stopCamera(); router.push(`/${params.tenant}/kiosk?screen=reception`); };
 
   return (
     <KioskScaler bg="#faf8f4">
