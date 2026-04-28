@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Integer, DateTime, func
+from sqlalchemy import String, Integer, Float, DateTime, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -25,6 +25,11 @@ class Tenant(Base):
     kiosk_complete_message: Mapped[str] = mapped_column(String(255), default="担当者がご案内します")
     kiosk_idle_timeout_sec: Mapped[int] = mapped_column(Integer, default=60)
     kiosk_complete_timeout_sec: Mapped[int] = mapped_column(Integer, default=10)
+
+    # Logo placement on kiosk screen (relative to 1920x1080)
+    logo_pos_x: Mapped[float] = mapped_column(Float, default=0.04)
+    logo_pos_y: Mapped[float] = mapped_column(Float, default=0.04)
+    logo_width_pct: Mapped[float] = mapped_column(Float, default=8.0)
 
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     media = relationship("Media", back_populates="tenant", cascade="all, delete-orphan")

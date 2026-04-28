@@ -35,6 +35,9 @@ class TenantSettingsOut(BaseModel):
     kiosk_complete_message: str
     kiosk_idle_timeout_sec: int
     kiosk_complete_timeout_sec: int
+    logo_pos_x: float
+    logo_pos_y: float
+    logo_width_pct: float
 
 
 class PublicTenantSettingsOut(BaseModel):
@@ -47,6 +50,9 @@ class PublicTenantSettingsOut(BaseModel):
     kiosk_complete_message: str
     kiosk_idle_timeout_sec: int
     kiosk_complete_timeout_sec: int
+    logo_pos_x: float
+    logo_pos_y: float
+    logo_width_pct: float
 
 
 class TenantSettingsPatch(BaseModel):
@@ -58,6 +64,9 @@ class TenantSettingsPatch(BaseModel):
     kiosk_complete_message: str | None = None
     kiosk_idle_timeout_sec: int | None = None
     kiosk_complete_timeout_sec: int | None = None
+    logo_pos_x: float | None = None
+    logo_pos_y: float | None = None
+    logo_width_pct: float | None = None
 
 
 class LogoUploadUrlRequest(BaseModel):
@@ -90,6 +99,9 @@ def _out(tenant: Tenant) -> TenantSettingsOut:
         kiosk_complete_message=getattr(tenant, "kiosk_complete_message", "担当者がご案内します"),
         kiosk_idle_timeout_sec=getattr(tenant, "kiosk_idle_timeout_sec", 60),
         kiosk_complete_timeout_sec=getattr(tenant, "kiosk_complete_timeout_sec", 10),
+        logo_pos_x=getattr(tenant, "logo_pos_x", 0.04),
+        logo_pos_y=getattr(tenant, "logo_pos_y", 0.04),
+        logo_width_pct=getattr(tenant, "logo_width_pct", 8.0),
     )
 
 
@@ -104,6 +116,9 @@ def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
         kiosk_complete_message=getattr(tenant, "kiosk_complete_message", "担当者がご案内します"),
         kiosk_idle_timeout_sec=getattr(tenant, "kiosk_idle_timeout_sec", 60),
         kiosk_complete_timeout_sec=getattr(tenant, "kiosk_complete_timeout_sec", 10),
+        logo_pos_x=getattr(tenant, "logo_pos_x", 0.04),
+        logo_pos_y=getattr(tenant, "logo_pos_y", 0.04),
+        logo_width_pct=getattr(tenant, "logo_width_pct", 8.0),
     )
 
 
@@ -142,6 +157,12 @@ async def patch_settings(
         tenant.kiosk_idle_timeout_sec = max(10, min(300, body.kiosk_idle_timeout_sec))
     if body.kiosk_complete_timeout_sec is not None:
         tenant.kiosk_complete_timeout_sec = max(5, min(60, body.kiosk_complete_timeout_sec))
+    if body.logo_pos_x is not None:
+        tenant.logo_pos_x = max(0.0, min(0.9, body.logo_pos_x))
+    if body.logo_pos_y is not None:
+        tenant.logo_pos_y = max(0.0, min(0.9, body.logo_pos_y))
+    if body.logo_width_pct is not None:
+        tenant.logo_width_pct = max(2.0, min(30.0, body.logo_width_pct))
     await db.commit()
     return _out(tenant)
 

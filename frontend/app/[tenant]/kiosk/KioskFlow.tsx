@@ -37,6 +37,9 @@ const DEFAULT_SETTINGS: PublicTenantSettings = {
   kiosk_complete_message: "担当者がご案内します",
   kiosk_idle_timeout_sec: 60,
   kiosk_complete_timeout_sec: 10,
+  logo_pos_x: 0.04,
+  logo_pos_y: 0.04,
+  logo_width_pct: 8,
 };
 
 // ─── Romaji conversion ────────────────────────────────────────────────────────
@@ -342,9 +345,26 @@ function TopScreen({
   return (
     <KioskScaler bg="#faf8f4">
       <div
-        style={{ width: 1920, height: 1080, background: "#faf8f4", display: "flex", flexDirection: "column", fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif" }}
+        style={{ width: 1920, height: 1080, background: "#faf8f4", display: "flex", flexDirection: "column", fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif", position: "relative" }}
         onClick={resetIdle}
       >
+        {settings.logo_url && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={settings.logo_url}
+            alt="logo"
+            style={{
+              position: "absolute",
+              left: `${settings.logo_pos_x * 100}%`,
+              top: `${settings.logo_pos_y * 100}%`,
+              width: `${settings.logo_width_pct}%`,
+              height: "auto",
+              objectFit: "contain",
+              pointerEvents: "none",
+              zIndex: 10,
+            }}
+          />
+        )}
         <div style={{ flex: 1, padding: "28px 80px 0", display: "flex", flexDirection: "column", minHeight: 0 }}>
           <div style={{ display: "flex", alignItems: "flex-end", gap: 40, marginBottom: 40 }}>
             <div>

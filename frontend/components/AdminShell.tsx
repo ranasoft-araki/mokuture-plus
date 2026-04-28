@@ -5,7 +5,7 @@ import { clearTokens } from "@/lib/auth";
 import { useState } from "react";
 import type { ReactNode } from "react";
 
-export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "notify" | "locker" | "settings";
+export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "notify" | "locker" | "kiosk_settings" | "settings";
 
 interface Props {
   active: NavId;
@@ -26,21 +26,23 @@ const NAV_OPS: { id: NavId; label: string }[] = [
 ];
 
 const NAV_SETTINGS: { id: NavId; label: string }[] = [
-  { id: "notify",   label: "通知設定" },
-  { id: "locker",   label: "ロッカー" },
-  { id: "settings", label: "基本設定" },
+  { id: "notify",         label: "通知設定" },
+  { id: "locker",         label: "ロッカー" },
+  { id: "kiosk_settings", label: "受付設定" },
+  { id: "settings",       label: "基本設定" },
 ];
 
 const NAV_PATHS: Record<NavId, (t: string) => string> = {
-  dashboard: (t) => `/${t}/admin`,
-  media:     (t) => `/${t}/admin/media`,
-  playlist:  (t) => `/${t}/admin/playlists`,
-  schedule:  (t) => `/${t}/admin/schedules`,
-  device:    (t) => `/${t}/admin/kiosk`,
-  reception: (t) => `/${t}/admin/reception`,
-  notify:    (t) => `/${t}/admin/notify`,
-  locker:    (t) => `/${t}/admin/locker`,
-  settings:  (t) => `/${t}/admin/settings`,
+  dashboard:     (t) => `/${t}/admin`,
+  media:         (t) => `/${t}/admin/media`,
+  playlist:      (t) => `/${t}/admin/playlists`,
+  schedule:      (t) => `/${t}/admin/schedules`,
+  device:        (t) => `/${t}/admin/kiosk`,
+  reception:     (t) => `/${t}/admin/reception`,
+  notify:        (t) => `/${t}/admin/notify`,
+  locker:        (t) => `/${t}/admin/locker`,
+  kiosk_settings:(t) => `/${t}/admin/kiosk-settings`,
+  settings:      (t) => `/${t}/admin/settings`,
 };
 
 const FONT_UI = '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Noto Sans JP", sans-serif';
@@ -377,6 +379,11 @@ function NavIcon({ id, active }: { id: NavId; active: boolean }) {
     case "locker":
       return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M3 12h18M12 3v18"/><circle cx="8" cy="8" r="0.8" fill={color}/><circle cx="8" cy="16" r="0.8" fill={color}/><circle cx="16" cy="8" r="0.8" fill={color}/><circle cx="16" cy="16" r="0.8" fill={color}/>
+      </svg>;
+    case "kiosk_settings":
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>
+        <path d="M7 10h2M11 10h6M7 13h4"/>
       </svg>;
     case "settings":
       return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">

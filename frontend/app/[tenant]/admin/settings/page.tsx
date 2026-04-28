@@ -24,14 +24,6 @@ export default function AdminSettingsPage() {
   const [saved, setSaved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Kiosk message state
-  const [kioskWelcome, setKioskWelcome] = useState("ようこそ");
-  const [kioskSub, setKioskSub] = useState("ご用件をお選びください");
-  const [kioskCalling, setKioskCalling] = useState("担当者をお呼びしています。少々お待ちください。");
-  const [kioskComplete, setKioskComplete] = useState("担当者がご案内します");
-  const [kioskIdleTimeout, setKioskIdleTimeout] = useState("60");
-  const [kioskCompleteTimeout, setKioskCompleteTimeout] = useState("10");
-
   useEffect(() => {
     const token = getAccessToken();
     if (!token) return;
@@ -40,12 +32,6 @@ export default function AdminSettingsPage() {
       setBrandColor(s.brand_color);
       setFont(s.font);
       setLogoUrl(s.logo_url);
-      setKioskWelcome(s.kiosk_welcome_message ?? "ようこそ");
-      setKioskSub(s.kiosk_sub_message ?? "ご用件をお選びください");
-      setKioskCalling(s.kiosk_calling_message ?? "担当者をお呼びしています。少々お待ちください。");
-      setKioskComplete(s.kiosk_complete_message ?? "担当者がご案内します");
-      setKioskIdleTimeout(String(s.kiosk_idle_timeout_sec ?? 60));
-      setKioskCompleteTimeout(String(s.kiosk_complete_timeout_sec ?? 10));
     }).catch(() => {});
   }, []);
 
@@ -83,16 +69,7 @@ export default function AdminSettingsPage() {
     setSaving(true);
     setError(null);
     try {
-      await api.updateTenantSettings(token, {
-        brand_color: brandColor,
-        font,
-        kiosk_welcome_message: kioskWelcome,
-        kiosk_sub_message: kioskSub,
-        kiosk_calling_message: kioskCalling,
-        kiosk_complete_message: kioskComplete,
-        kiosk_idle_timeout_sec: Number(kioskIdleTimeout) || 60,
-        kiosk_complete_timeout_sec: Number(kioskCompleteTimeout) || 10,
-      });
+      await api.updateTenantSettings(token, { brand_color: brandColor, font });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err: unknown) {
@@ -108,12 +85,6 @@ export default function AdminSettingsPage() {
     setFont(settings.font);
     setLogoUrl(settings.logo_url);
     setLogoPreview(null);
-    setKioskWelcome(settings.kiosk_welcome_message ?? "ようこそ");
-    setKioskSub(settings.kiosk_sub_message ?? "ご用件をお選びください");
-    setKioskCalling(settings.kiosk_calling_message ?? "担当者をお呼びしています。少々お待ちください。");
-    setKioskComplete(settings.kiosk_complete_message ?? "担当者がご案内します");
-    setKioskIdleTimeout(String(settings.kiosk_idle_timeout_sec ?? 60));
-    setKioskCompleteTimeout(String(settings.kiosk_complete_timeout_sec ?? 10));
     setError(null);
   };
 
@@ -122,7 +93,7 @@ export default function AdminSettingsPage() {
       active="settings"
       title="基本設定"
       breadcrumb="ホーム / 設定 / 基本情報"
-      subtitle="キオスク画面のブランディング・歓迎メッセージ・タイムアウト"
+      subtitle="ロゴ・テーマカラー・フォントなどブランディング設定"
       actions={
         <>
           <MkBtn variant="ghost" size="sm" onClick={handleCancel}>変更をキャンセル</MkBtn>
@@ -137,9 +108,7 @@ export default function AdminSettingsPage() {
           {error}
         </div>
       )}
-      <div className="adm-grid-main" style={{ gap: 20 }}>
-        {/* Form */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <MkCard>
             <MkSectionTitle title="ブランディング" subtitle="キオスク画面・管理画面共通" />
             <div className="adm-grid-2" style={{ gap: 16 }}>
@@ -211,125 +180,6 @@ export default function AdminSettingsPage() {
               </Field>
             </div>
           </MkCard>
-
-          <MkCard>
-            <MkSectionTitle title="キオスク画面の文言" subtitle="変更後「保存」ボタンで反映されます" />
-            <div style={{ display: "grid", gap: 16 }}>
-              <Field label="受付トップ メインメッセージ">
-                <TextInput value={kioskWelcome} onChange={setKioskWelcome} placeholder="ようこそ" />
-              </Field>
-              <Field label="受付トップ サブメッセージ">
-                <TextInput value={kioskSub} onChange={setKioskSub} placeholder="ご用件をお選びください" />
-              </Field>
-              <Field label="呼び出し中メッセージ">
-                <TextInput value={kioskCalling} onChange={setKioskCalling} placeholder="担当者をお呼びしています。少々お待ちください。" />
-              </Field>
-              <Field label="完了画面メッセージ" hint="完了画面の下部に表示">
-                <TextInput value={kioskComplete} onChange={setKioskComplete} placeholder="担当者がご案内します" />
-              </Field>
-            </div>
-          </MkCard>
-
-          <MkCard>
-            <MkSectionTitle title="タイムアウト" subtitle="秒数を変更して保存してください" />
-            <div className="adm-grid-2" style={{ gap: 16 }}>
-              <Field label="受付画面の無操作タイムアウト" hint="10 〜 300 秒">
-                <TextInputWithSuffix
-                  value={kioskIdleTimeout}
-                  onChange={setKioskIdleTimeout}
-                  mono
-                  suffix={<span style={{ color: "#a8a198", fontSize: 12 }}>秒</span>}
-                />
-              </Field>
-              <Field label="完了画面の表示時間" hint="5 〜 60 秒">
-                <TextInputWithSuffix
-                  value={kioskCompleteTimeout}
-                  onChange={setKioskCompleteTimeout}
-                  mono
-                  suffix={<span style={{ color: "#a8a198", fontSize: 12 }}>秒</span>}
-                />
-              </Field>
-            </div>
-          </MkCard>
-        </div>
-
-        {/* Live preview */}
-        <div style={{ position: "sticky", top: 0 }}>
-          <MkCard>
-            <MkSectionTitle title="プレビュー" subtitle="キオスク受付トップ画面" />
-            <div style={{
-              aspectRatio: "9/16", background: "#faf8f4", borderRadius: 7,
-              border: "1px solid #efece5", overflow: "hidden",
-              display: "flex", flexDirection: "column", padding: 18, gap: 10,
-            }}>
-              {/* Header */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{ width: 28, height: 28, borderRadius: 6, background: "#1d1a15", color: "#fffefb", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  {(logoPreview ?? logoUrl) ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={logoPreview ?? logoUrl!} alt="logo" style={{ width: 22, height: 22, objectFit: "contain" }} />
-                  ) : (
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fffefb" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="9" r="5"/><path d="M4 19c2-3 5-4.5 8-4.5s6 1.5 8 4.5"/>
-                    </svg>
-                  )}
-                </div>
-                <div style={{ fontSize: 8, color: "#a8a198", letterSpacing: 2, textTransform: "uppercase", fontFamily: "Inter, system-ui, sans-serif" }}>RECEPTION</div>
-              </div>
-
-              {/* Welcome heading */}
-              <div style={{ paddingTop: 4 }}>
-                <div style={{ fontSize: 26, fontWeight: 700, color: "#1d1a15", letterSpacing: -0.8, lineHeight: 1.1 }}>
-                  {kioskWelcome || "ようこそ"}
-                </div>
-                <div style={{ fontSize: 11, color: "#6b6559", marginTop: 4 }}>
-                  {kioskSub || "ご用件をお選びください"}
-                </div>
-              </div>
-
-              {/* Tile grid */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, flex: 1, minHeight: 0 }}>
-                {[
-                  { label: "ご訪問", primary: true },
-                  { label: "QR 受付", primary: false },
-                  { label: "配送・宅配", primary: false },
-                  { label: "その他", primary: false },
-                ].map((t, i) => (
-                  <div key={i} style={{
-                    background: t.primary ? "#1d1a15" : "#fffefb",
-                    border: `1px solid ${t.primary ? "#1d1a15" : "#efece5"}`,
-                    borderRadius: 9, padding: "8px 10px",
-                    display: "flex", alignItems: "flex-end",
-                    minHeight: 0,
-                  }}>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: t.primary ? "#ffffff" : "#2d2a24" }}>{t.label}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Calling / Complete message references */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                <div style={{ background: "#fffefb", border: "1px solid #efece5", borderRadius: 6, padding: "6px 10px" }}>
-                  <div style={{ fontSize: 8, color: "#a8a198", letterSpacing: 1, textTransform: "uppercase", marginBottom: 2 }}>CALLING</div>
-                  <div style={{ fontSize: 10, color: "#2d2a24", fontWeight: 500, lineHeight: 1.3 }}>
-                    {kioskCalling || "担当者をお呼びしています"}
-                  </div>
-                </div>
-                <div style={{ background: "#1d1a15", borderRadius: 6, padding: "6px 10px" }}>
-                  <div style={{ fontSize: 8, color: "rgba(255,255,255,0.4)", letterSpacing: 1, textTransform: "uppercase", marginBottom: 2 }}>COMPLETE</div>
-                  <div style={{ fontSize: 10, color: "#ffffff", fontWeight: 500, lineHeight: 1.3 }}>
-                    {kioskComplete || "担当者がご案内します"}
-                  </div>
-                </div>
-              </div>
-
-              {/* Footer */}
-              <div style={{ fontSize: 8, color: "#a8a198", textAlign: "right", fontFamily: "monospace" }}>
-                {kioskIdleTimeout || "60"}秒で待機画面へ
-              </div>
-            </div>
-          </MkCard>
-        </div>
       </div>
     </AdminShell>
   );
@@ -362,17 +212,3 @@ function TextInput({ value, placeholder, mono, readOnly, onChange }: { value?: s
   );
 }
 
-function TextInputWithSuffix({ value, placeholder, mono, suffix, onChange }: { value?: string; placeholder?: string; mono?: boolean; suffix?: React.ReactNode; onChange?: (v: string) => void }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", border: "1px solid #d8d3c7", borderRadius: 7, background: "#fffefb", padding: "0 10px", height: 34 }}>
-      <input
-        value={value ?? ""}
-        placeholder={placeholder}
-        onChange={(e) => onChange?.(e.target.value)}
-        type="number"
-        style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 12.5, color: "#2d2a24", fontFamily: mono ? "monospace" : undefined, height: "100%" }}
-      />
-      {suffix}
-    </div>
-  );
-}
