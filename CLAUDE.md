@@ -40,6 +40,26 @@ cd backend && uv run uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 
 # Frontend (port 3000)
 cd frontend && npm run dev
+
+# Kiosk Agent (port 8080) — Raspberry Pi / ローカル動作確認
+cd kiosk_agent && uv run uvicorn main:app --host 0.0.0.0 --port 8080 --reload
+# ブラウザで http://localhost:8080 を開く (Chromium キオスクモード: chromium-browser --kiosk http://localhost:8080)
+```
+
+### Kiosk Agent — Raspberry Pi 本番セットアップ
+
+```bash
+# 1. インストール & systemd 登録
+cd kiosk_agent && bash install.sh
+
+# 2. デバイス登録 (管理画面で PIN を発行してから)
+curl -X POST http://localhost:8080/setup \
+     -H 'Content-Type: application/json' \
+     -d '{"pin_code":"取得したPIN"}'
+
+# 3. サービス管理
+sudo systemctl status mokuture-kiosk
+journalctl -u mokuture-kiosk -f
 ```
 
 ---

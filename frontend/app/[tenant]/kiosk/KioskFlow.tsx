@@ -1116,9 +1116,10 @@ export function KioskFlow() {
     }
     setDeviceName(localStorage.getItem(KIOSK_NAME_KEY) ?? "");
 
-    api.getPublicTenantSettings(params.tenant)
-      .then(s => { setSettings(s); setCachedKioskSettings(params.tenant, s); })
-      .catch(() => {});
+    const fetchSettings = () =>
+      api.getPublicTenantSettings(params.tenant)
+        .then(s => { setSettings(s); setCachedKioskSettings(params.tenant, s); })
+        .catch(() => {});
 
     const fetchSchedule = async () => {
       try {
@@ -1132,8 +1133,9 @@ export function KioskFlow() {
       }
     };
 
+    fetchSettings();
     fetchSchedule().then(() => setReady(true));
-    const id = setInterval(fetchSchedule, 60_000);
+    const id = setInterval(() => { fetchSettings(); fetchSchedule(); }, 60_000);
     return () => clearInterval(id);
   }, [params.tenant, router]);
 
