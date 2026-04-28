@@ -47,6 +47,7 @@ class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    tenant_slug: str = ""
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
@@ -91,6 +92,7 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     return TokenResponse(
         access_token=create_access_token(tenant.id, user.id, user.role),
         refresh_token=create_refresh_token(tenant.id, user.id),
+        tenant_slug=body.tenant_slug,
     )
 
 
@@ -105,9 +107,13 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     if user is None or not password_ok:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
+    tenant_result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
+    tenant = tenant_result.scalar_one_or_none()
+
     return TokenResponse(
         access_token=create_access_token(user.tenant_id, user.id, user.role),
         refresh_token=create_refresh_token(user.tenant_id, user.id),
+        tenant_slug=tenant.slug if tenant else "",
     )
 
 

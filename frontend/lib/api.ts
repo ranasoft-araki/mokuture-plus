@@ -66,9 +66,9 @@ export const api = {
 
   // Auth
   register: (body: { tenant_name: string; tenant_slug: string; email: string; password: string }) =>
-    request<{ access_token: string; refresh_token: string }>("/auth/register", { method: "POST", body: JSON.stringify(body) }),
+    request<{ access_token: string; refresh_token: string; tenant_slug: string }>("/auth/register", { method: "POST", body: JSON.stringify(body) }),
   login: (email: string, password: string) =>
-    request<{ access_token: string; refresh_token: string }>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+    request<{ access_token: string; refresh_token: string; tenant_slug: string }>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
 
   // Settings
   getTenantSettings: (token: string) =>

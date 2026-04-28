@@ -26,7 +26,7 @@ export default function LoginPage() {
         tokens = await api.register({ tenant_name: form.tenant_name, tenant_slug: form.tenant_slug, email: form.email, password: form.password });
       }
       saveTokens(tokens.access_token, tokens.refresh_token);
-      router.push(`/${form.tenant_slug || "admin"}/admin`);
+      router.push(`/${tokens.tenant_slug}/admin`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "エラーが発生しました");
     } finally {
