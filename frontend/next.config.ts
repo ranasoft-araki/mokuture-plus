@@ -1,7 +1,6 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Expose sw.js at root with correct headers for service worker scope
   async headers() {
     return [
       {

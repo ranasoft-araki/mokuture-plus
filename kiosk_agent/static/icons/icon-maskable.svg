@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" fill="none">
+  <!-- Full bleed background for maskable -->
+  <rect width="192" height="192" fill="#4a7c4e"/>
+  <!-- Safe area content (center 75%) -->
+  <circle cx="88" cy="86" r="28" fill="white"/>
+  <path d="M40 156c4-38 24-54 48-54 26 0 46 16 50 54z" fill="white"/>
+  <rect x="122" y="44" width="8" height="30" rx="4" fill="rgba(255,255,255,0.85)"/>
+  <rect x="111" y="55" width="30" height="8" rx="4" fill="rgba(255,255,255,0.85)"/>
+</svg>

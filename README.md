@@ -158,7 +158,11 @@ kiosk_agent/
 
 ### 起動コマンド
 
-**開発・動作確認（RPi 以外のマシン）**
+> **前提**: `uv` が必要です。未インストールの場合は先にインストールしてください。
+> - **Linux / RPi**: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+> - **Windows**: PowerShell で `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"` を実行後、PowerShell を再起動
+
+**開発・動作確認（WSL または Linux）**
 
 ```bash
 cd kiosk_agent
@@ -166,12 +170,30 @@ cd kiosk_agent
 # 初回のみ: .env を用意
 cp .env.example .env
 # .env を編集:
-#   MOCK_GPIO=true          ← GPIO をモックに切り替え
+#   MOCK_GPIO=true              ← GPIO をモックに切り替え
 #   MEDIA_DIR=/tmp/kiosk-media  ← 書き込み可能なパスに変更
 
 # 起動
 uv run uvicorn main:app --host 0.0.0.0 --port 8080
 ```
+
+**開発・動作確認（Windows PowerShell）**
+
+```powershell
+cd kiosk_agent
+
+# 初回のみ: .env を用意（PowerShell では cp の代わりに Copy-Item）
+Copy-Item .env.example .env
+# .env を編集:
+#   MOCK_GPIO=true
+#   MEDIA_DIR=C:\Temp\kiosk-media
+
+# 起動
+uv run uvicorn main:app --host 0.0.0.0 --port 8080
+```
+
+> **注意**: Windows で実行する場合、キオスクエージェントの本番環境（Raspberry Pi / Linux）と
+> 動作環境が異なります。開発確認目的のみに使用し、GPIO 関連の動作は WSL または RPi で確認してください。
 
 **Raspberry Pi（本番）**
 

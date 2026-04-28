@@ -1,19 +1,12 @@
-"""mokuture+ Local Kiosk Device Agent
-
-Responsibilities:
-  - Serve downloaded media files from ~/kiosk-media/
-  - Serve the bundled Next.js static build (kiosk_agent/static/)
-  - Control GPIO: locker relay, PIR motion sensor
-  - Run background content-sync against the remote API
-"""
+"""mokuture+ Local Kiosk Device Agent"""
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from config import settings
@@ -23,6 +16,8 @@ from sync import find_media, sync_loop
 
 locker_ctrl = LockerController(settings.locker_pins)
 pir = PirSensor(settings.pir_pin)
+
+_KIOSK_HTML = Path(__file__).parent / "static" / "kiosk.html"
 
 
 @asynccontextmanager
@@ -49,11 +44,34 @@ class PinRequest(BaseModel):
     pin_code: str
 
 
+class ReceptionBody(BaseModel):
+    visitor_name: str
+    company: str = ""
+    purpose: str = ""
+    staff: str = ""
+    method: str = "form"
+
+
+@app.get("/kiosk.html", include_in_schema=False)
+async def serve_kiosk_html():
+    if not _KIOSK_HTML.exists():
+        raise HTTPException(status_code=404, detail="kiosk.html not found")
+    return FileResponse(_KIOSK_HTML, media_type="text/html")
+
+
+@app.get("/config")
+async def get_config():
+    return {
+        "tenant_slug": settings.tenant_slug,
+        "remote_api_url": settings.remote_api_url,
+        "device_name": get_device_name(),
+        "registered": is_registered(),
+    }
+
+
 @app.post("/setup")
 async def setup_device(body: PinRequest):
-    """管理画面で発行した PIN を使ってデバイスを登録する（一度だけ実行）。"""
-    if is_registered():
-        return {"status": "already_registered", "device_name": get_device_name()}
+    """管理画面で発行した PIN を使ってデバイスを登録する。毎回リモートAPIで検証する。"""
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.post(
@@ -69,7 +87,11 @@ async def setup_device(body: PinRequest):
 
     data = resp.json()
     save_device_state(data["device_token"], data["device_name"])
-    return {"status": "registered", "device_name": data["device_name"]}
+    return {
+        "status": "registered",
+        "device_name": data["device_name"],
+        "device_token": data["device_token"],
+    }
 
 
 @app.get("/health")
@@ -81,6 +103,70 @@ async def health():
         "media_dir": str(settings.media_dir),
         "mock_gpio": settings.mock_gpio,
     }
+
+
+@app.get("/proxy/settings")
+async def proxy_settings():
+    """テナント設定をリモートAPIから取得して返す。"""
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(
+                f"{settings.remote_api_url}/settings/public/{settings.tenant_slug}",
+                timeout=10,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail="テナント設定の取得に失敗しました")
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"リモートAPIに接続できません: {e}")
+    return resp.json()
+
+
+@app.get("/proxy/schedule")
+async def proxy_schedule(request: Request):
+    """スケジュールをリモートAPIから取得して返す。"""
+    token = request.headers.get("x-kiosk-token", "")
+    if not token:
+        raise HTTPException(status_code=401, detail="X-Kiosk-Token required")
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(
+                f"{settings.remote_api_url}/kiosk/schedule",
+                headers={"X-Kiosk-Token": token},
+                timeout=10,
+            )
+            if resp.status_code == 401:
+                raise HTTPException(status_code=401, detail="Invalid kiosk token")
+            resp.raise_for_status()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"リモートAPIに接続できません: {e}")
+    return resp.json()
+
+
+@app.post("/proxy/reception")
+async def proxy_reception(request: Request, body: ReceptionBody):
+    """受付をリモートAPIに送信する。"""
+    token = request.headers.get("x-kiosk-token", "")
+    if not token:
+        raise HTTPException(status_code=401, detail="X-Kiosk-Token required")
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                f"{settings.remote_api_url}/kiosk/reception",
+                json=body.model_dump(),
+                headers={"X-Kiosk-Token": token},
+                timeout=10,
+            )
+            if resp.status_code == 401:
+                raise HTTPException(status_code=401, detail="Invalid kiosk token")
+            resp.raise_for_status()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"リモートAPIに接続できません: {e}")
+    return resp.json()
 
 
 @app.get("/media/{media_id}")
@@ -102,11 +188,6 @@ async def open_locker(locker_id: str):
 @app.get("/device/pir")
 async def get_pir():
     return {"motion_detected": pir.motion_detected}
-
-
-# Mount Next.js static build last (catches all remaining paths)
-if settings.static_dir.exists():
-    app.mount("/", StaticFiles(directory=str(settings.static_dir), html=True), name="static")
 
 
 if __name__ == "__main__":

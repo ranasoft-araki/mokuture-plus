@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mokuture+</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{width:100vw;height:100vh;overflow:hidden;background:#0a0806;font-family:'Noto Sans JP',Inter,system-ui,sans-serif}
+#sw{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+#sc{width:1920px;height:1080px;transform-origin:center center;overflow:hidden;position:relative}
+button{font-family:inherit}
+
+@keyframes fade-in{from{opacity:0}to{opacity:1}}
+@keyframes ring-expand{0%{transform:scale(1);opacity:.4}100%{transform:scale(2.2);opacity:0}}
+@keyframes cursor-blink{0%,100%{opacity:1}50%{opacity:0}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes check-draw{to{stroke-dashoffset:0}}
+@keyframes scan-line{0%{top:4px}100%{top:calc(100% - 4px)}}
+@keyframes dot-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.7)}}
+@keyframes dot-bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+@keyframes scale-in{from{transform:scale(.7);opacity:0}to{transform:scale(1);opacity:1}}
+</style>
+</head>
+<body>
+<div id="sw"><div id="sc"></div></div>
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+let CFG = { tenant_slug: "", remote_api_url: "", device_name: "" };
+let ST = {
+  brand_color: "#4a7c4e",
+  kiosk_welcome_message: "ようこそ",
+  kiosk_sub_message: "ご用件をお選びください",
+  kiosk_calling_message: "担当者をお呼びしています",
+  kiosk_complete_message: "担当者がご案内します",
+  kiosk_idle_timeout_sec: 60,
+  kiosk_complete_timeout_sec: 10,
+};
+let ITEMS = [];
+let CLEANUPS = [];
+
+const sc = document.getElementById("sc");
+const TOKEN_KEY = "mokuture_kiosk_token";
+const NAME_KEY  = "mokuture_kiosk_name";
+
+// ─── Scale ────────────────────────────────────────────────────────────────────
+function rescale() {
+  sc.style.transform = `scale(${Math.min(innerWidth / 1920, innerHeight / 1080)})`;
+}
+window.addEventListener("resize", rescale);
+rescale();
+
+// ─── Cleanup helpers ─────────────────────────────────────────────────────────
+function later(ms, fn) {
+  const id = setTimeout(fn, ms);
+  CLEANUPS.push(() => clearTimeout(id));
+}
+function every(ms, fn) {
+  const id = setInterval(fn, ms);
+  CLEANUPS.push(() => clearInterval(id));
+  return id;
+}
+function onSc(event, fn) {
+  sc.addEventListener(event, fn);
+  CLEANUPS.push(() => sc.removeEventListener(event, fn));
+}
+function cleanup() { CLEANUPS.forEach(f => f()); CLEANUPS = []; }
+
+// ─── API helpers ─────────────────────────────────────────────────────────────
+async function apiFetch(method, path, body, token) {
+  const h = { "Content-Type": "application/json" };
+  if (token) h["X-Kiosk-Token"] = token;
+  const r = await fetch(path, {
+    method,
+    headers: h,
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({ detail: r.statusText }));
+    throw new Error(e.detail ?? "Request failed");
+  }
+  return r.status === 204 ? null : r.json();
+}
+const apiGet  = (p, tok)    => apiFetch("GET",  p, null, tok);
+const apiPost = (p, b, tok) => apiFetch("POST", p, b,    tok);
+
+// ─── Clock ────────────────────────────────────────────────────────────────────
+function fmtClock() {
+  const d = new Date();
+  return `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())} · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function pad(n) { return String(n).padStart(2, "0"); }
+function escHtml(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// ─── Romaji → Kana ───────────────────────────────────────────────────────────
+const RM = {
+  "a":"あ","i":"い","u":"う","e":"え","o":"お",
+  "ka":"か","ki":"き","ku":"く","ke":"け","ko":"こ","kya":"きゃ","kyu":"きゅ","kyo":"きょ",
+  "sa":"さ","si":"し","su":"す","se":"せ","so":"そ","shi":"し","sha":"しゃ","shu":"しゅ","sho":"しょ","sya":"しゃ","syu":"しゅ","syo":"しょ",
+  "ta":"た","ti":"ち","tu":"つ","te":"て","to":"と","chi":"ち","tsu":"つ","cha":"ちゃ","chu":"ちゅ","cho":"ちょ","tya":"ちゃ","tyu":"ちゅ","tyo":"ちょ",
+  "na":"な","ni":"に","nu":"ぬ","ne":"ね","no":"の","nya":"にゃ","nyu":"にゅ","nyo":"にょ","nn":"ん",
+  "ha":"は","hi":"ひ","hu":"ふ","fu":"ふ","he":"へ","ho":"ほ","hya":"ひゃ","hyu":"ひゅ","hyo":"ひょ",
+  "ma":"ま","mi":"み","mu":"む","me":"め","mo":"も","mya":"みゃ","myu":"みゅ","myo":"みょ",
+  "ya":"や","yu":"ゆ","yo":"よ",
+  "ra":"ら","ri":"り","ru":"る","re":"れ","ro":"ろ","rya":"りゃ","ryu":"りゅ","ryo":"りょ",
+  "wa":"わ","wo":"を",
+  "ga":"が","gi":"ぎ","gu":"ぐ","ge":"げ","go":"ご","gya":"ぎゃ","gyu":"ぎゅ","gyo":"ぎょ",
+  "za":"ざ","zi":"じ","zu":"ず","ze":"ぜ","zo":"ぞ","ji":"じ","ja":"じゃ","ju":"じゅ","jo":"じょ","zya":"じゃ","zyu":"じゅ","zyo":"じょ",
+  "da":"だ","di":"ぢ","du":"づ","de":"で","do":"ど",
+  "ba":"ば","bi":"び","bu":"ぶ","be":"べ","bo":"ぼ","bya":"びゃ","byu":"びゅ","byo":"びょ",
+  "pa":"ぱ","pi":"ぴ","pu":"ぷ","pe":"ぺ","po":"ぽ","pya":"ぴゃ","pyu":"ぴゅ","pyo":"ぴょ",
+  "xa":"ぁ","xi":"ぃ","xu":"ぅ","xe":"ぇ","xo":"ぉ","xya":"ゃ","xyu":"ゅ","xyo":"ょ","xtsu":"っ","xtu":"っ",
+  "-":"ー",
+};
+const RP = new Set(Object.keys(RM).flatMap(k => Array.from({length:k.length}, (_, i) => k.slice(0, i+1))));
+const VOWELS = new Set(["a","i","u","e","o"]);
+
+function cvt(buf, ch) {
+  const c = buf + ch;
+  if (buf === "n" && !VOWELS.has(ch) && ch !== "y" && ch !== "n") {
+    const r = cvt("", ch); return { out: "ん" + r.out, buf: r.buf };
+  }
+  if (buf.length > 0 && ch === buf[buf.length-1] && !VOWELS.has(ch) && ch !== "n") {
+    const r = cvt("", ch); return { out: "っ" + r.out, buf: r.buf };
+  }
+  if (RM[c] !== undefined) return { out: RM[c], buf: "" };
+  if (RP.has(c))           return { out: "",    buf: c  };
+  if (RP.has(ch))          return { out: buf,   buf: ch };
+  if (RM[ch] !== undefined) return { out: buf + RM[ch], buf: "" };
+  return { out: c, buf: "" };
+}
+
+// ─── SVG icons ───────────────────────────────────────────────────────────────
+const ICO = {
+  reception: `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+  qr:        `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14h1M14 20h1M17 18v3M20 17v4"/></svg>`,
+  truck:     `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>`,
+  more:      `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`,
+  arrow:     `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`,
+  bell_sm:   `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0v5l2 3H4l2-3z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>`,
+  bell_lg:   `<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0v5l2 3H4l2-3z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>`,
+  check_sm:  `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg>`,
+  check_lg:  `<svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6" stroke-dasharray="60" stroke-dashoffset="60" style="animation:check-draw .6s .3s cubic-bezier(.2,.9,.3,1) forwards"/></svg>`,
+  arrow_lg:  `<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`,
+  clock:     `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>`,
+};
+
+// ─── Navigate ─────────────────────────────────────────────────────────────────
+function go(screen, data = {}) {
+  cleanup();
+  sc.style.animation = "none";
+  sc.offsetHeight; // reflow
+  sc.style.animation = "fade-in .18s ease-out";
+  if      (screen === "idle")      showIdle();
+  else if (screen === "top")       showTop();
+  else if (screen === "reception") showReception(data.purpose ?? "");
+  else if (screen === "qr")        showQr();
+  else if (screen === "calling")   showCalling(data.name ?? "", data.staff ?? "");
+  else if (screen === "complete")  showComplete(data.name ?? "", data.staff ?? "");
+}
+
+// ─── SETUP ───────────────────────────────────────────────────────────────────
+function showSetup() {
+  let pin = "", verifying = false;
+
+  function render(errMsg) {
+    const dots = Array.from({length: 6}, (_, i) => {
+      const on = i < pin.length;
+      return `<div style="width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;border:1px solid ${on?"#4a7c4e":"#3a3530"};background:${on?"#4a7c4e":"#2a2720"};color:#faf8f4">${on?"●":""}</div>`;
+    }).join("");
+
+    const PAD = ["1","2","3","4","5","6","7","8","9","⌫","0","→"];
+    const padHtml = PAD.map(k => {
+      const isConfirm = k === "→";
+      const isDisabled = verifying || (isConfirm && pin.length < 6);
+      return `<button data-pk="${escHtml(k)}" style="height:64px;border-radius:16px;font-size:${k.length>1?14:20}px;font-weight:600;cursor:${isDisabled?"not-allowed":"pointer"};border:1px solid ${isConfirm?"#4a7c4e":"#3a3530"};background:${isConfirm?"#4a7c4e":"#2a2720"};color:${isConfirm?"#faf8f4":"#c8c0b0"};opacity:${isDisabled?.35:1};transition:opacity .15s">${isConfirm?"決定":k}</button>`;
+    }).join("");
+
+    sc.innerHTML = `
+<div style="width:1920px;height:1080px;background:#1d1a15;display:flex;align-items:center;justify-content:center">
+  <div style="display:flex;flex-direction:column;align-items:center;gap:32px;width:320px">
+    <div style="text-align:center">
+      <p style="color:#faf8f4;font-size:24px;font-weight:300;letter-spacing:6px">mokuture+</p>
+      <p style="color:#8a8070;font-size:14px;margin-top:6px">キオスク端末セットアップ</p>
+    </div>
+    <div style="display:flex;gap:12px">${dots}</div>
+    ${errMsg ? `<div style="width:100%;padding:12px 16px;background:rgba(200,60,60,.2);border:1px solid rgba(200,60,60,.4);border-radius:10px;color:#f88;font-size:13px;text-align:center">${escHtml(errMsg)}</div>` : ""}
+    ${verifying ? `<p style="color:#8a8070;font-size:14px;animation:dot-pulse 1.4s ease-in-out infinite">確認中…</p>` : ""}
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;width:100%">${padHtml}</div>
+    <p style="color:#5a5347;font-size:11px;text-align:center">管理画面「キオスク端末」→「端末を追加」でPINを発行</p>
+  </div>
+</div>`;
+    rescale();
+
+    sc.querySelectorAll("[data-pk]").forEach(btn => {
+      btn.addEventListener("click", () => handleKey(btn.dataset.pk));
+    });
+  }
+
+  async function verifyPin(code) {
+    verifying = true;
+    render("");
+    try {
+      const data = await apiPost("/setup", { pin_code: code });
+      localStorage.setItem(TOKEN_KEY, data.device_token);
+      localStorage.setItem(NAME_KEY, data.device_name);
+      cleanup();
+      await boot();
+    } catch (e) {
+      verifying = false;
+      pin = "";
+      render("PINが無効です。管理画面で新しいPINを発行してください。");
+    }
+  }
+
+  function handleKey(key) {
+    if (verifying) return;
+    if (key === "⌫") { pin = pin.slice(0, -1); render(""); }
+    else if (key === "→") { if (pin.length === 6) verifyPin(pin); }
+    else if (pin.length < 6) {
+      pin += key;
+      render("");
+      if (pin.length === 6) verifyPin(pin);
+    }
+  }
+
+  render("");
+}
+
+// ─── IDLE ─────────────────────────────────────────────────────────────────────
+function showIdle() {
+  const bc = ST.brand_color;
+  const ctaHtml = `
+<div style="position:absolute;inset:0;display:flex;flex-direction:column;z-index:10;pointer-events:none">
+  <div style="flex:1"></div>
+  <div style="padding:0 80px 80px;display:flex;justify-content:flex-end;align-items:flex-end">
+    <div style="padding:28px 36px;background:rgba(255,255,255,.96);color:#1d1a15;border-radius:20px;display:flex;align-items:center;gap:22px;box-shadow:0 12px 48px rgba(0,0,0,.4);pointer-events:auto">
+      <div style="position:relative;width:56px;height:56px;flex-shrink:0">
+        <div style="position:absolute;inset:0;border-radius:50%;border:2px solid ${bc};opacity:.4;animation:ring-expand 2.4s ease-out 0s infinite"></div>
+        <div style="position:absolute;inset:0;border-radius:50%;border:2px solid ${bc};opacity:.3;animation:ring-expand 2.4s ease-out .8s infinite"></div>
+        <div style="position:absolute;inset:8px;border-radius:50%;background:${bc};display:flex;align-items:center;justify-content:center">
+          <div style="width:14px;height:14px;border-radius:50%;background:#fff"></div>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:11px;letter-spacing:2px;color:#a8a198;text-transform:uppercase;margin-bottom:4px;font-family:Inter,system-ui,sans-serif">TAP TO BEGIN</div>
+        <div style="font-size:26px;font-weight:600;letter-spacing:-.5px">画面にタッチして受付</div>
+      </div>
+    </div>
+  </div>
+</div>`;
+
+  sc.innerHTML = `<div id="idle-root" style="width:1920px;height:1080px;position:relative;overflow:hidden;cursor:pointer;user-select:none;background:#0a0806">${ctaHtml}</div>`;
+  rescale();
+
+  const root = document.getElementById("idle-root");
+  onSc("click", () => { cleanup(); go("top"); });
+
+  if (ITEMS.length === 0) return;
+
+  let idx = 0;
+
+  function showItem() {
+    const old = root.querySelector(".media-el");
+    if (old) old.remove();
+
+    const item = ITEMS[idx];
+    if (!item?.media) { later(3000, nextItem); return; }
+
+    const url = `/media/${item.media.id}`;
+    if (item.media.mime_type === "video/mp4") {
+      const v = document.createElement("video");
+      v.className = "media-el";
+      v.src = url;
+      v.autoplay = v.muted = v.playsInline = true;
+      v.loop = ITEMS.length === 1;
+      v.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0";
+      v.onended = nextItem;
+      v.onerror = nextItem;
+      root.insertBefore(v, root.querySelector("[style*='z-index:10']"));
+      v.play().catch(() => {});
+    } else {
+      const img = document.createElement("img");
+      img.className = "media-el";
+      img.src = url;
+      img.alt = "";
+      img.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0";
+      img.onerror = nextItem;
+      root.insertBefore(img, root.querySelector("[style*='z-index:10']"));
+      later(item.duration_sec * 1000, nextItem);
+    }
+  }
+
+  function nextItem() {
+    idx = (idx + 1) % ITEMS.length;
+    showItem();
+  }
+
+  showItem();
+}
+
+// ─── TOP ──────────────────────────────────────────────────────────────────────
+function showTop() {
+  const bc = ST.brand_color;
+  const devName = escHtml(localStorage.getItem(NAME_KEY) ?? "kiosk");
+
+  const TILES = [
+    { icon: ICO.reception, label: "ご訪問",      sub: "お約束の方",            primary: true, screen: "reception", data: {purpose:""} },
+    { icon: ICO.qr,        label: "QRで受付",    sub: "招待コードをお持ちの方",              screen: "qr",        data: {} },
+    { icon: ICO.truck,     label: "配送・宅配便", sub: "お荷物のお届け",                     screen: "reception", data: {purpose:"配送・宅配便"} },
+    { icon: ICO.more,      label: "その他",       sub: "上記以外のご用件",                   screen: "reception", data: {purpose:"その他"} },
+  ];
+
+  sc.innerHTML = `
+<div style="width:1920px;height:1080px;background:#faf8f4;display:flex;flex-direction:column">
+  <div style="flex:1;padding:28px 80px 0;display:flex;flex-direction:column;min-height:0">
+    <div style="display:flex;align-items:flex-end;gap:40px;margin-bottom:40px">
+      <div>
+        <div style="font-size:14px;color:#a8a198;letter-spacing:4px;text-transform:uppercase;margin-bottom:12px;font-family:Inter,system-ui,sans-serif">RECEPTION</div>
+        <div style="font-size:78px;font-weight:600;color:#1d1a15;letter-spacing:-2.5px;line-height:1.1">${escHtml(ST.kiosk_welcome_message)}</div>
+      </div>
+      <div style="padding-bottom:16px;font-size:22px;color:#6b6559">${escHtml(ST.kiosk_sub_message)}</div>
+    </div>
+    <div id="tiles" style="display:grid;grid-template-columns:repeat(4,1fr);gap:22px;flex:1;min-height:0">
+      ${TILES.map((t, i) => `
+      <button data-ti="${i}" style="background:${t.primary?"#1d1a15":"#fffefb"};color:${t.primary?"#fff":"#2d2a24"};border:2px solid ${t.primary?"#1d1a15":"#efece5"};border-radius:22px;padding:36px 32px;display:flex;flex-direction:column;justify-content:space-between;position:relative;cursor:pointer;text-align:left;transition:transform .14s cubic-bezier(.2,.8,.3,1)">
+        <div style="width:76px;height:76px;border-radius:18px;background:${t.primary?"rgba(255,255,255,.1)":bc+"22"};color:${t.primary?"#fff":bc};display:flex;align-items:center;justify-content:center">${t.icon}</div>
+        <div>
+          <div style="font-size:38px;font-weight:600;letter-spacing:-1px;line-height:1.1">${escHtml(t.label)}</div>
+          <div style="font-size:16px;margin-top:8px;color:${t.primary?"rgba(255,255,255,.6)":"#6b6559"}">${escHtml(t.sub)}</div>
+        </div>
+        <div style="position:absolute;top:32px;right:32px;color:${t.primary?"rgba(255,255,255,.5)":"#a8a198"}">${ICO.arrow}</div>
+      </button>`).join("")}
+    </div>
+    <div style="margin:24px 0;background:#f4f1ea;border-radius:16px;padding:18px 26px;display:flex;align-items:center;gap:18px;border:1px solid #efece5;flex-shrink:0">
+      <div style="width:40px;height:40px;border-radius:10px;background:#fffefb;display:flex;align-items:center;justify-content:center;color:#b8763a">${ICO.bell_sm}</div>
+      <div style="flex:1;font-size:16px;color:#2d2a24">お困りの方は <b>受付スタッフ</b> までお声がけください</div>
+      <div style="font-size:13px;color:#a8a198">受付時間 09:00–18:00</div>
+    </div>
+  </div>
+  <div style="padding:0 80px 28px;display:flex;align-items:center;color:#a8a198;font-size:13px;flex-shrink:0">
+    <span id="top-clk" style="font-family:'JetBrains Mono',monospace;font-size:14px"></span>
+    <span style="flex:1"></span>
+    <span>${ST.kiosk_idle_timeout_sec}秒で待機画面に戻ります</span>
+    <span style="flex:1"></span>
+    <span style="font-family:'JetBrains Mono',monospace">${devName}</span>
+  </div>
+</div>`;
+  rescale();
+
+  document.getElementById("top-clk").textContent = fmtClock();
+  every(30000, () => { const c = document.getElementById("top-clk"); if (c) c.textContent = fmtClock(); });
+
+  let idleId;
+  function resetIdle() {
+    clearTimeout(idleId);
+    idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
+  }
+  CLEANUPS.push(() => clearTimeout(idleId));
+  resetIdle();
+  onSc("click", resetIdle);
+
+  document.getElementById("tiles").addEventListener("click", e => {
+    const btn = e.target.closest("[data-ti]");
+    if (!btn) return;
+    resetIdle();
+    const t = TILES[+btn.dataset.ti];
+    btn.style.transform = "scale(.97)";
+    later(160, () => { cleanup(); go(t.screen, t.data); });
+  });
+}
+
+// ─── RECEPTION ───────────────────────────────────────────────────────────────
+function showReception(initPurpose) {
+  const bc = ST.brand_color;
+  const devName = escHtml(localStorage.getItem(NAME_KEY) ?? "kiosk");
+
+  const FIELDS = [
+    { key: "visitor_name", label: "お名前",     placeholder: "山田 太郎", required: true },
+    { key: "company",      label: "会社名",     placeholder: "株式会社 〇〇" },
+    { key: "staff",        label: "ご担当者名", placeholder: "担当者のお名前" },
+    { key: "purpose",      label: "ご用件",     placeholder: "お打ち合わせ など" },
+  ];
+  const KB_ROWS = [
+    ["1","2","3","4","5","6","7","8","9","0"],
+    ["q","w","e","r","t","y","u","i","o","p"],
+    ["a","s","d","f","g","h","j","k","l"],
+    ["shift","z","x","c","v","b","n","m","⌫"],
+  ];
+
+  let form = { visitor_name: "", company: "", staff: "", purpose: initPurpose ?? "" };
+  let focus = "visitor_name";
+  let shifted = false, isKana = false, rbuf = "", submitting = false, errMsg = "";
+  let idleId;
+
+  function resetIdle() {
+    clearTimeout(idleId);
+    idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
+  }
+  CLEANUPS.push(() => clearTimeout(idleId));
+  resetIdle();
+
+  function fullRender() {
+    const fieldHtml = (f, big) => {
+      const focused = focus === f.key;
+      const disp = form[f.key] + (focused && isKana ? rbuf : "");
+      return `<div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
+          <span style="font-size:15px;font-weight:600;color:#2d2a24">${escHtml(f.label)}</span>
+          ${f.required ? `<span style="font-size:10px;color:#a84238;background:#f6e0dc;padding:2px 8px;border-radius:4px;font-weight:600">必須</span>` : ""}
+        </div>
+        <div data-field="${f.key}" style="background:#fffefb;border:2px solid ${focused?bc:(form[f.key]?bc:"#d8d3c7")};border-radius:11px;padding:14px 20px;font-size:${big?22:20}px;color:${disp?"#2d2a24":"#a8a198"};box-shadow:${focused?"0 0 0 4px "+bc+"33":"none"};cursor:default;min-height:${big?60:56}px;display:flex;align-items:center;transition:border-color .15s,box-shadow .15s">
+          ${escHtml(disp || f.placeholder)}${focused?`<span style="display:inline-block;width:2px;height:${big?26:22}px;background:${bc};margin-left:4px;animation:cursor-blink 1s step-end infinite"></span>`:""}
+        </div>
+      </div>`;
+    };
+    const kbHtml = KB_ROWS.map((row, ri) => `
+<div style="display:flex;gap:5px;margin-bottom:5px;justify-content:center;padding-left:${ri===2?24:0}px">
+  ${row.map(k => {
+    const isSh = k === "shift", isDel = k === "⌫", wide = isSh || isDel;
+    const bg = (isSh && shifted) ? "#1d1a15" : "#fffefb";
+    const col = (isSh && shifted) ? "#fff" : "#2d2a24";
+    const lbl = k === "shift" ? "⇧" : (shifted && !isSh && !isDel ? k.toUpperCase() : k);
+    return `<button data-key="${escHtml(k)}" style="flex:${wide?1.8:1};height:62px;background:${bg};border:1px solid #d8d3c7;border-radius:9px;font-size:${wide?14:24}px;font-weight:${wide?600:400};color:${col};cursor:pointer;font-family:Inter,system-ui,sans-serif;user-select:none;transition:background .1s">${escHtml(lbl)}</button>`;
+  }).join("")}
+</div>`).join("");
+
+    sc.innerHTML = `
+<div style="width:1920px;height:1080px;background:#faf8f4;display:flex;flex-direction:column">
+  <div style="flex:1;padding:16px 80px 0;display:grid;grid-template-columns:1fr 1.2fr;gap:48px;min-height:0">
+    <div style="display:flex;flex-direction:column;min-height:0">
+      <button id="rec-back" style="align-self:flex-start;display:flex;align-items:center;gap:8px;padding:10px 18px;background:#fffefb;border:1px solid #d8d3c7;border-radius:999px;font-size:14px;color:#6b6559;margin-bottom:16px;cursor:pointer">← 戻る</button>
+      <div style="font-size:44px;font-weight:600;color:#1d1a15;letter-spacing:-1.4px;line-height:1.15;margin-bottom:22px">ご来訪情報を<br>ご記入ください</div>
+      ${errMsg ? `<div style="margin-bottom:14px;background:#f6e0dc;border:1px solid rgba(168,66,56,.35);border-radius:12px;padding:12px 16px;color:#a84238;font-size:15px">${escHtml(errMsg)}</div>` : ""}
+      <div style="display:flex;flex-direction:column;gap:14px;flex:1">
+        ${FIELDS.slice(0, 2).map(f => fieldHtml(f, true)).join("")}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">${FIELDS.slice(2).map(f => fieldHtml(f, false)).join("")}</div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;justify-content:flex-end;min-height:0;padding-bottom:24px">
+      <div style="background:#f4f1ea;border-radius:18px;padding:12px;border:1px solid #efece5">
+        ${kbHtml}
+        <div style="display:flex;gap:5px;margin-top:5px;justify-content:center">
+          <button id="kana-btn" style="flex:2;height:62px;background:${isKana?"#1d1a15":"#fffefb"};border:1px solid #d8d3c7;border-radius:9px;font-size:13px;color:${isKana?"#fff":"#6b6559"};cursor:pointer;user-select:none;transition:background .1s,color .1s">かな / ABC</button>
+          <button data-key="space" style="flex:5;height:62px;background:#fffefb;border:1px solid #d8d3c7;border-radius:9px;cursor:pointer;user-select:none"></button>
+          <button id="send-btn" style="flex:2;height:62px;background:${submitting?"#7a9e7d":"#1d1a15"};border-radius:9px;border:none;display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff;font-weight:600;cursor:${submitting?"not-allowed":"pointer"};user-select:none">
+            ${submitting ? `<div style="width:22px;height:22px;border-radius:50%;border:2.5px solid rgba(255,255,255,.3);border-top-color:#fff;animation:spin .7s linear infinite"></div>` : "送信 →"}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div style="padding:12px 80px 20px;display:flex;align-items:center;color:#a8a198;font-size:13px;flex-shrink:0">
+    <span id="rec-clk" style="font-family:'JetBrains Mono',monospace;font-size:14px"></span>
+    <span style="flex:1"></span>
+    <span style="font-family:'JetBrains Mono',monospace">${devName}</span>
+  </div>
+</div>`;
+
+    rescale();
+    document.getElementById("rec-clk").textContent = fmtClock();
+    attachEvents();
+  }
+
+  function attachEvents() {
+    document.getElementById("rec-back").addEventListener("click", () => { cleanup(); go("top"); });
+
+    sc.querySelectorAll("[data-field]").forEach(el => {
+      el.addEventListener("click", () => {
+        resetIdle();
+        if (isKana && rbuf) { form[focus] += rbuf === "n" ? "ん" : rbuf; rbuf = ""; }
+        focus = el.dataset.field;
+        fullRender();
+      });
+    });
+
+    sc.querySelectorAll("[data-key]").forEach(btn => {
+      const press = e => { e.preventDefault(); resetIdle(); handleKey(btn.dataset.key); };
+      btn.addEventListener("mousedown", press);
+      btn.addEventListener("touchstart", press, { passive: false });
+    });
+
+    document.getElementById("kana-btn").addEventListener("mousedown", e => {
+      e.preventDefault(); resetIdle();
+      if (isKana && rbuf) { form[focus] += rbuf === "n" ? "ん" : rbuf; rbuf = ""; }
+      isKana = !isKana; shifted = false; fullRender();
+    });
+    document.getElementById("kana-btn").addEventListener("touchstart", e => {
+      e.preventDefault(); resetIdle();
+      if (isKana && rbuf) { form[focus] += rbuf === "n" ? "ん" : rbuf; rbuf = ""; }
+      isKana = !isKana; shifted = false; fullRender();
+    }, { passive: false });
+
+    document.getElementById("send-btn").addEventListener("click", handleSubmit);
+  }
+
+  function handleKey(key) {
+    if (key === "⌫") {
+      if (isKana && rbuf.length > 0) rbuf = rbuf.slice(0, -1);
+      else form[focus] = form[focus].slice(0, -1);
+    } else if (key === "shift") {
+      shifted = !shifted;
+    } else if (key === "space") {
+      if (isKana && rbuf) { form[focus] += rbuf === "n" ? "ん" : rbuf; rbuf = ""; }
+      form[focus] += " ";
+    } else if (isKana && /^[a-z-]$/i.test(key)) {
+      const r = cvt(rbuf, key.toLowerCase());
+      if (r.out) form[focus] += r.out;
+      rbuf = r.buf;
+    } else {
+      if (isKana && rbuf) { form[focus] += rbuf === "n" ? "ん" : rbuf; rbuf = ""; }
+      form[focus] += shifted ? key.toUpperCase() : key;
+      if (shifted) shifted = false;
+    }
+    fullRender();
+  }
+
+  async function handleSubmit() {
+    if (submitting) return;
+    if (isKana && rbuf) { form[focus] += rbuf === "n" ? "ん" : rbuf; rbuf = ""; }
+    if (!form.visitor_name.trim()) { errMsg = "お名前を入力してください"; fullRender(); return; }
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) { cleanup(); showSetup(); return; }
+    submitting = true; fullRender();
+    try {
+      await apiPost("/proxy/reception", {
+        visitor_name: form.visitor_name, company: form.company,
+        purpose: form.purpose, staff: form.staff, method: "form",
+      }, token);
+      cleanup();
+      go("calling", { name: form.visitor_name, staff: form.staff });
+    } catch (e) {
+      errMsg = e.message || "受付に失敗しました";
+      submitting = false; fullRender();
+    }
+  }
+
+  fullRender();
+}
+
+// ─── QR ───────────────────────────────────────────────────────────────────────
+function showQr() {
+  const bc = ST.brand_color;
+  const devName = escHtml(localStorage.getItem(NAME_KEY) ?? "kiosk");
+  let stream = null, scanning = false, submitting = false, errMsg = "", supported = null;
+  let idleId;
+
+  function resetIdle() {
+    clearTimeout(idleId);
+    idleId = setTimeout(() => { stopStream(); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
+  }
+  CLEANUPS.push(() => { clearTimeout(idleId); stopStream(); });
+
+  function stopStream() {
+    scanning = false;
+    stream?.getTracks().forEach(t => t.stop());
+    stream = null;
+  }
+
+  function camContent() {
+    if (submitting) return `<div style="text-align:center;color:#fff"><div style="width:60px;height:60px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:${bc};animation:spin .8s linear infinite;margin:0 auto 20px"></div><div style="font-size:18px;opacity:.7">受付処理中…</div></div>`;
+    if (supported === false) return `<div style="text-align:center;color:#fff;padding:40px;font-size:18px;opacity:.6;line-height:1.6">QRスキャン非対応のブラウザです<br>Chromiumをご利用ください</div>`;
+    const corners = [[0,0,0],[0,1,90],[1,1,180],[1,0,270]].map(([tb,lr,rot]) =>
+      `<div style="position:absolute;${tb?"bottom":"top"}:-3px;${lr?"right":"left"}:-3px;width:56px;height:56px;transform:rotate(${rot}deg);border-top:5px solid ${bc};border-left:5px solid ${bc};border-radius:12px 0 0 0"></div>`
+    ).join("");
+    return `
+<div style="position:absolute;inset:60px;border:3px dashed rgba(255,255,255,.2);border-radius:20px">
+  ${corners}
+  ${scanning ? `<div style="position:absolute;left:0;right:0;height:3px;background:${bc};box-shadow:0 0 24px ${bc};animation:scan-line 2s linear infinite"></div>` : ""}
+</div>
+<video id="qr-vid" muted playsinline style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.85"></video>
+<div style="position:absolute;bottom:24px;left:0;right:0;display:flex;justify-content:center">
+  <span style="display:inline-flex;align-items:center;gap:8px;background:rgba(0,0,0,.5);color:#fff;padding:8px 20px;border-radius:999px;font-size:15px">
+    <span style="width:7px;height:7px;border-radius:50%;background:${bc};animation:dot-pulse 1.4s ease-in-out infinite"></span>
+    ${scanning ? "読み取り中…" : "カメラ準備中…"}
+  </span>
+</div>`;
+  }
+
+  function render() {
+    sc.innerHTML = `
+<div style="width:1920px;height:1080px;background:#faf8f4;display:flex;flex-direction:column">
+  <div style="flex:1;padding:24px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center;min-height:0">
+    <div id="cam-box" style="background:#1d1a15;border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;height:100%;max-height:760px">
+      ${camContent()}
+    </div>
+    <div style="display:flex;flex-direction:column">
+      <button id="qr-back" style="align-self:flex-start;padding:11px 18px;background:#fffefb;border:1px solid #d8d3c7;border-radius:999px;font-size:14px;color:#6b6559;margin-bottom:28px;cursor:pointer">← 戻る</button>
+      <div style="font-size:64px;font-weight:600;color:#1d1a15;letter-spacing:-2px;line-height:1.15;margin-bottom:18px">QR コードを<br>かざしてください</div>
+      <div style="font-size:20px;color:#6b6559;line-height:1.6;margin-bottom:36px">メールでお送りした招待コードを<br>左の読み取り口へ</div>
+      ${errMsg ? `<div style="padding:16px 20px;background:#f6e0dc;border:1px solid rgba(168,66,56,.3);border-radius:14px;color:#a84238;font-size:16px;line-height:1.6;margin-bottom:24px">${escHtml(errMsg)}</div>` : ""}
+      <div style="display:flex;gap:14px">
+        <button id="qr-form1" style="flex:1;padding:20px;background:#fffefb;border:2px solid #d8d3c7;border-radius:14px;font-size:17px;font-weight:500;color:#2d2a24;cursor:pointer">QR を持っていない</button>
+        <button id="qr-form2" style="flex:1;padding:20px;background:#1d1a15;border:2px solid #1d1a15;border-radius:14px;font-size:17px;font-weight:600;color:#fff;cursor:pointer">フォームで受付する →</button>
+      </div>
+    </div>
+  </div>
+  <div style="padding:16px 80px 28px;display:flex;align-items:center;color:#a8a198;font-size:13px;flex-shrink:0">
+    <span id="qr-clk" style="font-family:'JetBrains Mono',monospace;font-size:14px"></span>
+    <span style="flex:1"></span>
+    <span style="font-family:'JetBrains Mono',monospace">${devName}</span>
+  </div>
+</div>`;
+    rescale();
+    document.getElementById("qr-clk").textContent = fmtClock();
+    document.getElementById("qr-back").addEventListener("click",  () => { stopStream(); cleanup(); go("top"); });
+    document.getElementById("qr-form1").addEventListener("click", () => { stopStream(); cleanup(); go("reception"); });
+    document.getElementById("qr-form2").addEventListener("click", () => { stopStream(); cleanup(); go("reception"); });
+    onSc("click", resetIdle);
+    // Re-attach video stream after re-render
+    if (stream) {
+      const vid = document.getElementById("qr-vid");
+      if (vid) { vid.srcObject = stream; vid.play().catch(() => {}); }
+    }
+  }
+
+  function refreshCam() {
+    const box = document.getElementById("cam-box");
+    if (!box) return;
+    box.innerHTML = camContent();
+    if (stream) {
+      const vid = document.getElementById("qr-vid");
+      if (vid) { vid.srcObject = stream; vid.play().catch(() => {}); }
+    }
+  }
+
+  async function startCamera() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } });
+      const vid = document.getElementById("qr-vid");
+      if (vid) { vid.srcObject = stream; await vid.play(); }
+      scanning = true; refreshCam(); scanLoop();
+    } catch {
+      errMsg = "カメラを起動できませんでした。アクセス許可を確認してください。"; render();
+    }
+  }
+
+  async function scanLoop() {
+    if (!scanning) return;
+    const vid = document.getElementById("qr-vid");
+    if (!vid) return;
+    try {
+      const det = new BarcodeDetector({ formats: ["qr_code"] });
+      const codes = await det.detect(vid);
+      if (codes.length > 0 && codes[0].rawValue) {
+        scanning = false; await handleQR(codes[0].rawValue); return;
+      }
+    } catch {}
+    if (scanning) requestAnimationFrame(scanLoop);
+  }
+
+  async function handleQR(raw) {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) { stopStream(); cleanup(); showSetup(); return; }
+    let name = "", company = "", purpose = "";
+    try {
+      const u = new URL(raw);
+      name = u.searchParams.get("name") ?? ""; company = u.searchParams.get("company") ?? ""; purpose = u.searchParams.get("purpose") ?? "";
+    } catch { name = raw.trim(); }
+    if (!name) { errMsg = "QRコードから来訪者情報を読み取れませんでした。"; scanning = true; refreshCam(); scanLoop(); return; }
+    submitting = true; refreshCam();
+    try {
+      await apiPost("/proxy/reception", { visitor_name: name, company, purpose, method: "qr" }, token);
+      stopStream(); cleanup(); go("calling", { name, staff: "" });
+    } catch (e) {
+      errMsg = e.message || "受付処理に失敗しました"; submitting = false; scanning = true; render(); scanLoop();
+    }
+  }
+
+  render();
+  resetIdle();
+
+  if (typeof BarcodeDetector === "undefined") { supported = false; refreshCam(); }
+  else { supported = true; startCamera(); }
+}
+
+// ─── CALLING ─────────────────────────────────────────────────────────────────
+function showCalling(visitorName, staff) {
+  const bc = ST.brand_color;
+  sc.innerHTML = `
+<div style="width:1920px;height:1080px;background:#faf8f4;display:flex;flex-direction:column">
+  <div style="flex:1;display:grid;grid-template-columns:auto 1fr;gap:80px;padding:0 100px;align-items:center;min-height:0">
+    <div style="position:relative;width:360px;height:360px;flex-shrink:0">
+      ${[1,.7,.4].map((s,i) => `<div style="position:absolute;inset:${(1-s)*40}%;border:2px solid ${bc};border-radius:50%;opacity:${.15+i*.18};animation:ring-expand 2.6s ease-in-out ${i*.25}s infinite"></div>`).join("")}
+      <div style="position:absolute;inset:32%;background:${bc};border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 8px 32px ${bc}72">${ICO.bell_lg}</div>
+    </div>
+    <div>
+      <div style="font-size:18px;color:#a8a198;letter-spacing:4px;text-transform:uppercase;margin-bottom:18px;font-family:Inter,system-ui,sans-serif">CALLING</div>
+      <div style="font-size:96px;font-weight:600;color:#1d1a15;letter-spacing:-3px;line-height:1.05;margin-bottom:24px">${escHtml(ST.kiosk_calling_message)}</div>
+      <div style="font-size:22px;color:#6b6559;line-height:1.7;max-width:720px;margin-bottom:28px">まもなく担当者がお迎えにあがります<br>恐れ入りますが、こちらでお待ちください</div>
+      <div style="display:flex;gap:12px">
+        ${[0,1,2].map(i => `<div style="width:14px;height:14px;border-radius:50%;background:${bc};opacity:${i===1?1:.25};animation:dot-bounce 1.5s ${i*.18}s ease-in-out infinite"></div>`).join("")}
+      </div>
+    </div>
+  </div>
+  <div style="padding:0 100px 32px;flex-shrink:0">
+    <div style="background:#fffefb;border:1px solid #efece5;border-radius:18px;padding:22px;display:flex;align-items:center;gap:18px">
+      <div style="width:48px;height:48px;border-radius:12px;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center">${ICO.check_sm}</div>
+      <div style="flex:1">
+        <div style="font-size:17px;font-weight:600;color:#2d2a24">通知を送信しました</div>
+        <div style="font-size:13px;color:#a8a198;margin-top:3px">Slack · スマートフォン</div>
+      </div>
+      <div id="cal-clk" style="font-family:'JetBrains Mono',monospace;font-size:14px;color:#6b6559"></div>
+    </div>
+  </div>
+</div>`;
+  rescale();
+  document.getElementById("cal-clk").textContent = fmtClock();
+  every(30000, () => { const c = document.getElementById("cal-clk"); if (c) c.textContent = fmtClock(); });
+  later(4000, () => { cleanup(); go("complete", { name: visitorName, staff }); });
+}
+
+// ─── COMPLETE ─────────────────────────────────────────────────────────────────
+function showComplete(visitorName, staff) {
+  const bc = ST.brand_color;
+  const returnSec = ST.kiosk_complete_timeout_sec;
+  const vName = visitorName || "お客様";
+  let count = returnSec;
+  const now = new Date().toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+
+  sc.innerHTML = `
+<div style="width:1920px;height:1080px;background:#faf8f4;display:flex;flex-direction:column">
+  <div style="height:6px;background:linear-gradient(90deg,${bc},#b8763a,#2e6b8e);flex-shrink:0"></div>
+  <div style="flex:1;display:grid;grid-template-columns:1.05fr 1fr;gap:56px;padding:16px 80px 0;min-height:0">
+    <div style="display:flex;flex-direction:column;justify-content:center">
+      <div style="width:84px;height:84px;border-radius:22px;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center;margin-bottom:24px;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
+      <div style="font-size:16px;color:#a8a198;letter-spacing:4px;text-transform:uppercase;margin-bottom:12px;font-family:Inter,system-ui,sans-serif">WELCOME</div>
+      <div style="font-size:92px;font-weight:600;color:#1d1a15;letter-spacing:-3px;line-height:1.04;margin-bottom:16px">
+        ${escHtml(vName)}<br><span style="color:#6b6559;font-size:56px;font-weight:400">様</span>
+      </div>
+      <div style="font-size:26px;color:#6b6559;line-height:1.5">お待ちしておりました</div>
+      <div style="margin-top:36px;display:flex;align-items:center;gap:14px">
+        ${ICO.clock}
+        <span style="font-size:14px;color:#6b6559;flex:1">この画面は <b><span id="cnt">${count}</span>秒後</b> に待機画面へ戻ります</span>
+        <div style="width:220px;height:4px;background:#efece5;border-radius:2px">
+          <div id="bar" style="width:0%;height:100%;background:${bc};border-radius:2px;transition:width 1s linear"></div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:18px;padding-bottom:32px;justify-content:center">
+      <div style="background:#fffefb;border:1px solid #efece5;border-radius:18px;padding:26px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:22px">
+          ${[{l:"ご担当",v:staff||"—"},{l:"ご予約時間",v:now,m:true},{l:"通知方法",v:"Slack / プッシュ"},{l:"ステータス",v:"通知済み"}].map(({l,v,m}) => `
+          <div>
+            <div style="font-size:11px;color:#a8a198;letter-spacing:1px;font-weight:600;text-transform:uppercase;margin-bottom:6px;font-family:Inter,system-ui,sans-serif">${escHtml(l)}</div>
+            <div style="font-size:22px;font-weight:600;color:#2d2a24;font-family:${m?"'JetBrains Mono',monospace":"inherit"}">${escHtml(v)}</div>
+          </div>`).join("")}
+        </div>
+      </div>
+      <div style="background:#1d1a15;color:#fff;border-radius:18px;padding:26px;display:flex;align-items:center;gap:22px">
+        <div style="width:68px;height:68px;border-radius:16px;background:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;flex-shrink:0">${ICO.arrow_lg}</div>
+        <div style="flex:1">
+          <div style="font-size:12px;color:rgba(255,255,255,.5);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;font-family:Inter,system-ui,sans-serif">NEXT — 受付へ</div>
+          <div style="font-size:32px;font-weight:600;letter-spacing:-.8px;line-height:1.15">${escHtml(ST.kiosk_complete_message)}</div>
+          <div style="font-size:15px;color:rgba(255,255,255,.6);margin-top:4px">恐れ入りますが、こちらでお待ちください</div>
+        </div>
+        <div style="width:68px;height:68px;border-radius:16px;background:#fffefb;color:#1d1a15;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;font-family:Inter,system-ui,sans-serif;flex-shrink:0">✓</div>
+      </div>
+    </div>
+  </div>
+</div>`;
+  rescale();
+
+  every(1000, () => {
+    count--;
+    if (count <= 0) { cleanup(); go("idle"); return; }
+    const cEl = document.getElementById("cnt");
+    const bEl = document.getElementById("bar");
+    if (cEl) cEl.textContent = count;
+    if (bEl) bEl.style.width = `${((returnSec - count) / returnSec) * 100}%`;
+  });
+}
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+async function boot() {
+  sc.innerHTML = `<div style="width:1920px;height:1080px;background:#0a0806;display:flex;align-items:center;justify-content:center"><div style="color:rgba(255,255,255,.3);font-size:18px">読み込み中…</div></div>`;
+  rescale();
+
+  try {
+    CFG = await apiGet("/config");
+  } catch (e) {
+    sc.innerHTML = `<div style="width:1920px;height:1080px;background:#0a0806;display:flex;align-items:center;justify-content:center"><div style="color:#f88;font-size:16px;text-align:center">エージェントに接続できません<br>${escHtml(e.message)}</div></div>`;
+    rescale(); return;
+  }
+
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) { showSetup(); return; }
+
+  // Load settings + schedule in parallel
+  try {
+    const [settings, sched] = await Promise.all([
+      apiGet("/proxy/settings").catch(() => null),
+      apiGet("/proxy/schedule", token).catch(e => {
+        if (e.message === "Invalid kiosk token") {
+          localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(NAME_KEY);
+        }
+        return null;
+      }),
+    ]);
+    if (!localStorage.getItem(TOKEN_KEY)) { showSetup(); return; }
+    if (settings) Object.assign(ST, settings);
+    ITEMS = sched?.playlist?.items ?? [];
+  } catch {}
+
+  go("idle");
+
+  // Poll schedule every 60 s
+  setInterval(async () => {
+    const t = localStorage.getItem(TOKEN_KEY);
+    if (!t) return;
+    try {
+      const s = await apiGet("/proxy/schedule", t);
+      ITEMS = s?.playlist?.items ?? [];
+    } catch {}
+  }, 60000);
+}
+
+boot();
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 
@@ -9,7 +9,7 @@ const KIOSK_NAME_KEY = "mokuture_kiosk_name";
 
 const PAD_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "←", "0", "→"] as const;
 
-export default function KioskSetupPage() {
+function KioskSetup() {
   const params = useParams<{ tenant: string }>();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -127,5 +127,13 @@ export default function KioskSetupPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function KioskSetupPage() {
+  return (
+    <Suspense>
+      <KioskSetup />
+    </Suspense>
   );
 }

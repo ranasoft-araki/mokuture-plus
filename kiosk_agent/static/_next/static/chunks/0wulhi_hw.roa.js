@@ -1,0 +1,1 @@
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,81581,e=>{"use strict";var r=e.i(71645);e.s(["PWAInit",0,function(){return(0,r.useEffect)(()=>{"serviceWorker"in navigator&&navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(e=>console.warn("SW registration failed:",e))},[]),null}])}]);

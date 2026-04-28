@@ -7,8 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
+    tenant_slug: str = ""
     remote_api_url: str = "https://mokuture-plus-api.onrender.com/api"
-    device_token: str = ""
     media_dir: Path = Path.home() / "kiosk-media"
     static_dir: Path = Path(__file__).parent / "static"
     port: int = 8080
