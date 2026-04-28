@@ -110,7 +110,7 @@ export default function KioskSettingsPage() {
         </div>
       )}
 
-      <div className="adm-grid-main" style={{ gap: 20 }}>
+      <div className="adm-grid-kiosk-settings" style={{ gap: 20 }}>
         {/* Left: Form */}
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <MkCard>

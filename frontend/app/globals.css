@@ -45,6 +45,7 @@ body {
 .adm-grid-main { display: grid; grid-template-columns: 1fr 380px; }
 .adm-grid-3    { display: grid; grid-template-columns: 1fr 340px; }
 .adm-grid-locker { display: grid; grid-template-columns: 1fr 320px; }
+.adm-grid-kiosk-settings { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(0, 2fr); }
 .adm-grid-4    { display: grid; grid-template-columns: repeat(4, 1fr); }
 .adm-grid-5    { display: grid; grid-template-columns: repeat(5, 1fr); }
 .adm-kpi-row   { display: flex; flex-wrap: wrap; }
@@ -85,6 +86,7 @@ body {
   .adm-grid-main  { grid-template-columns: 1fr; }
   .adm-grid-3     { grid-template-columns: 1fr; }
   .adm-grid-locker{ grid-template-columns: 1fr; }
+  .adm-grid-kiosk-settings { grid-template-columns: 1fr; }
   .adm-grid-4     { grid-template-columns: repeat(2, 1fr); }
   .adm-grid-5     { grid-template-columns: repeat(3, 1fr); }
   .adm-kpi-row > * { flex: 1 1 calc(50% - 7px); min-width: 0; }
