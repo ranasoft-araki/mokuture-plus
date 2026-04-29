@@ -273,6 +273,25 @@ function IdleScreen({
           </>
         )}
 
+        {settings.logo_url && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={settings.logo_url}
+            alt="logo"
+            style={{
+              position: "absolute",
+              left: `${settings.logo_pos_x * 100}%`,
+              top: `${settings.logo_pos_y * 100}%`,
+              width: `${settings.logo_width_pct}%`,
+              height: "auto",
+              objectFit: "contain",
+              pointerEvents: "none",
+              zIndex: 2,
+              filter: "brightness(0) invert(1) opacity(0.85)",
+            }}
+          />
+        )}
+
         <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", zIndex: 1 }}>
           <div style={{ flex: 1 }} />
           <div style={{ padding: "0 80px 80px", display: "flex", justifyContent: "flex-end", alignItems: "flex-end" }}>
@@ -1133,8 +1152,8 @@ export function KioskFlow() {
       }
     };
 
-    fetchSettings();
-    fetchSchedule().then(() => setReady(true));
+    // 設定・スケジュール両方の完了を待ってから ready にする(ロゴ等が初回から表示される)
+    Promise.all([fetchSettings(), fetchSchedule()]).then(() => setReady(true));
     const id = setInterval(() => { fetchSettings(); fetchSchedule(); }, 60_000);
     return () => clearInterval(id);
   }, [params.tenant, router]);
