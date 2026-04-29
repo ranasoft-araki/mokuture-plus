@@ -28,6 +28,7 @@ export default function OperatorTenantsPage() {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (form.admin_password.length < 8) { setError("パスワードは8文字以上で入力してください"); return; }
     setSubmitting(true); setError("");
     try {
       await api.createOperatorTenant(token, { ...form, reseller_id: form.reseller_id || undefined });
@@ -45,6 +46,19 @@ export default function OperatorTenantsPage() {
     if (!confirm(`テナント「${name}」を削除しますか？この操作は取り消せません。`)) return;
     await api.deleteOperatorTenant(token, id);
     await load();
+  };
+
+  const handleProxyLogin = async (tenant: OperatorTenant) => {
+    if (!confirm(`「${tenant.name}」の管理画面に代理ログインします。新しいタブで開きます。続行しますか？`)) return;
+    try {
+      const { access_token, refresh_token, tenant_slug } = await api.proxyLoginAsTenant(token, tenant.id);
+      localStorage.setItem("mk_proxy_access", access_token);
+      localStorage.setItem("mk_proxy_refresh", refresh_token);
+      localStorage.setItem("mk_proxy_tenant", tenant_slug);
+      window.open(`/${tenant_slug}/admin`, "_blank");
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "代理ログインに失敗しました");
+    }
   };
 
   return (
@@ -97,7 +111,8 @@ export default function OperatorTenantsPage() {
                   <td style={{ padding: "12px 16px", color: "#6b6559", fontFamily: '"JetBrains Mono", monospace', fontSize: 12 }}>{t.slug}</td>
                   <td style={{ padding: "12px 16px", color: "#a8a198" }}>{resellers.find((r) => r.id === t.reseller_id)?.name ?? "—"}</td>
                   <td style={{ padding: "12px 16px", color: "#a8a198", fontSize: 12 }}>{t.created_at ? new Date(t.created_at).toLocaleDateString("ja-JP") : "—"}</td>
-                  <td style={{ padding: "12px 16px", textAlign: "right" as const }}>
+                  <td style={{ padding: "12px 16px", textAlign: "right" as const, display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
+                    <button onClick={() => handleProxyLogin(t)} style={{ border: "1px solid #c8a96e", color: "#c8a96e", background: "transparent", padding: "4px 10px", borderRadius: 6, fontSize: 12, cursor: "pointer" }}>代理ログイン</button>
                     <MkBtn variant="danger" size="sm" onClick={() => handleDelete(t.id, t.name)}>削除</MkBtn>
                   </td>
                 </tr>

@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api import auth, content, reception, lockers, notifications, kiosk, devices, push, settings, operator, reseller
+from app.api import auth, content, reception, lockers, notifications, kiosk, devices, push, settings, operator, reseller, users
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
@@ -13,3 +13,4 @@ api_router.include_router(devices.router)
 api_router.include_router(settings.router)
 api_router.include_router(operator.router)
 api_router.include_router(reseller.router)
+api_router.include_router(users.router)

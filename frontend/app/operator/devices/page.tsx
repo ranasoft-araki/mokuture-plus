@@ -1,18 +1,79 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, OperatorDevice } from "@/lib/api";
+import { useEffect, useState, useRef } from "react";
+import { api, OperatorDevice, OperatorTenant } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { MkCard, MkSectionTitle, MkPill } from "@/components/AdminShell";
 
+const inputStyle: React.CSSProperties = {
+  height: 34,
+  border: "1px solid #efece5",
+  borderRadius: 6,
+  fontSize: 13,
+  padding: "0 10px",
+  outline: "none",
+  background: "#faf8f4",
+  color: "#1d1a15",
+};
+
+const selectStyle: React.CSSProperties = {
+  ...inputStyle,
+  cursor: "pointer",
+};
+
 export default function OperatorDevicesPage() {
   const [devices, setDevices] = useState<OperatorDevice[]>([]);
+  const [resellers, setResellers] = useState<OperatorTenant[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const [filterReseller, setFilterReseller] = useState("");
+  const [filterTenant, setFilterTenant] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+  const [filterQ, setFilterQ] = useState("");
+
   const token = getAccessToken() ?? "";
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const fetchDevices = (params: { reseller_id?: string; tenant_id?: string; status?: string; q?: string }) => {
+    setLoading(true);
+    api.listOperatorDevices(token, params).then(setDevices).finally(() => setLoading(false));
+  };
 
   useEffect(() => {
-    api.listOperatorDevices(token).then(setDevices).finally(() => setLoading(false));
+    api.listResellers(token).then(setResellers);
+    fetchDevices({});
   }, []);
+
+  const triggerFetch = (overrides: { reseller_id?: string; tenant_id?: string; status?: string; q?: string }) => {
+    fetchDevices({
+      reseller_id: (overrides.reseller_id ?? filterReseller) || undefined,
+      tenant_id: (overrides.tenant_id ?? filterTenant) || undefined,
+      status: (overrides.status ?? filterStatus) || undefined,
+      q: (overrides.q ?? filterQ) || undefined,
+    });
+  };
+
+  const handleResellerChange = (v: string) => {
+    setFilterReseller(v);
+    triggerFetch({ reseller_id: v || undefined });
+  };
+
+  const handleStatusChange = (v: string) => {
+    setFilterStatus(v);
+    triggerFetch({ status: v || undefined });
+  };
+
+  const handleTenantChange = (v: string) => {
+    setFilterTenant(v);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => triggerFetch({ tenant_id: v || undefined }), 300);
+  };
+
+  const handleQChange = (v: string) => {
+    setFilterQ(v);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => triggerFetch({ q: v || undefined }), 300);
+  };
 
   const isOnline = (lastSeen: string | null) => {
     if (!lastSeen) return false;
@@ -22,6 +83,41 @@ export default function OperatorDevicesPage() {
   return (
     <div style={{ padding: "28px 32px" }}>
       <MkSectionTitle title="デバイス管理" subtitle={`${devices.length} デバイス（全テナント）`} style={{ marginBottom: 24 }} />
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <select
+          style={selectStyle}
+          value={filterReseller}
+          onChange={(e) => handleResellerChange(e.target.value)}
+        >
+          <option value="">全代理店</option>
+          {resellers.map((r) => (
+            <option key={r.id} value={r.id}>{r.name}</option>
+          ))}
+        </select>
+        <input
+          style={inputStyle}
+          placeholder="テナントID で絞り込み"
+          value={filterTenant}
+          onChange={(e) => handleTenantChange(e.target.value)}
+        />
+        <select
+          style={selectStyle}
+          value={filterStatus}
+          onChange={(e) => handleStatusChange(e.target.value)}
+        >
+          <option value="">全て</option>
+          <option value="online">オンライン</option>
+          <option value="offline">オフライン</option>
+        </select>
+        <input
+          style={inputStyle}
+          placeholder="デバイス名で検索"
+          value={filterQ}
+          onChange={(e) => handleQChange(e.target.value)}
+        />
+      </div>
+
       {loading ? (
         <div style={{ color: "#a8a198", fontSize: 14 }}>読み込み中…</div>
       ) : (

@@ -24,6 +24,14 @@ export default function AdminSettingsPage() {
   const [saved, setSaved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [pwOpen, setPwOpen] = useState(false);
+  const [pwCurrent, setPwCurrent] = useState("");
+  const [pwNew, setPwNew] = useState("");
+  const [pwConfirm, setPwConfirm] = useState("");
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwError, setPwError] = useState<string | null>(null);
+  const [pwSuccess, setPwSuccess] = useState(false);
+
   useEffect(() => {
     const token = getAccessToken();
     if (!token) return;
@@ -86,6 +94,34 @@ export default function AdminSettingsPage() {
     setLogoUrl(settings.logo_url);
     setLogoPreview(null);
     setError(null);
+  };
+
+  const handlePasswordChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pwNew !== pwConfirm) {
+      setPwError("新しいパスワードと確認用パスワードが一致しません");
+      return;
+    }
+    if (pwNew.length < 8) {
+      setPwError("新しいパスワードは8文字以上にしてください");
+      return;
+    }
+    const token = getAccessToken();
+    if (!token) return;
+    setPwSaving(true);
+    setPwError(null);
+    try {
+      await api.changePassword(token, pwCurrent, pwNew);
+      setPwSuccess(true);
+      setPwCurrent("");
+      setPwNew("");
+      setPwConfirm("");
+      setTimeout(() => setPwSuccess(false), 3000);
+    } catch (err: unknown) {
+      setPwError(err instanceof Error ? err.message : "パスワードの変更に失敗しました");
+    } finally {
+      setPwSaving(false);
+    }
   };
 
   return (

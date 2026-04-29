@@ -77,8 +77,15 @@ export const api = {
   // Operator API (運営)
   getOperatorStats: (token: string) =>
     request<OperatorStats>("/operator/stats", {}, token),
-  listOperatorTenants: (token: string, reseller_id?: string) =>
-    request<OperatorTenant[]>(`/operator/tenants${reseller_id ? `?reseller_id=${reseller_id}` : ""}`, {}, token),
+  listOperatorTenants: (token: string, params?: { reseller_id?: string; q?: string; offset?: number; limit?: number }) => {
+    const p = new URLSearchParams();
+    if (params?.reseller_id) p.set("reseller_id", params.reseller_id);
+    if (params?.q) p.set("q", params.q);
+    if (params?.offset != null) p.set("offset", String(params.offset));
+    if (params?.limit != null) p.set("limit", String(params.limit));
+    const qs = p.toString();
+    return request<OperatorTenant[]>(`/operator/tenants${qs ? `?${qs}` : ""}`, {}, token);
+  },
   createOperatorTenant: (token: string, body: { name: string; slug: string; reseller_id?: string; admin_email: string; admin_password: string }) =>
     request<{ id: string; slug: string; name: string }>("/operator/tenants", { method: "POST", body: JSON.stringify(body) }, token),
   deleteOperatorTenant: (token: string, id: string) =>
@@ -89,26 +96,85 @@ export const api = {
     request<{ id: string; slug: string; name: string }>("/operator/resellers", { method: "POST", body: JSON.stringify(body) }, token),
   deleteReseller: (token: string, id: string) =>
     request(`/operator/resellers/${id}`, { method: "DELETE" }, token),
-  listOperatorUsers: (token: string, tenant_id?: string) =>
-    request<OperatorUser[]>(`/operator/users${tenant_id ? `?tenant_id=${tenant_id}` : ""}`, {}, token),
-  listOperatorDevices: (token: string, tenant_id?: string) =>
-    request<OperatorDevice[]>(`/operator/devices${tenant_id ? `?tenant_id=${tenant_id}` : ""}`, {}, token),
+  listOperatorUsers: (token: string, params?: { tenant_id?: string; role?: string; reseller_id?: string; q?: string }) => {
+    const p = new URLSearchParams();
+    if (params?.tenant_id) p.set("tenant_id", params.tenant_id);
+    if (params?.role) p.set("role", params.role);
+    if (params?.reseller_id) p.set("reseller_id", params.reseller_id);
+    if (params?.q) p.set("q", params.q);
+    const qs = p.toString();
+    return request<OperatorUser[]>(`/operator/users${qs ? `?${qs}` : ""}`, {}, token);
+  },
+  listOperatorDevices: (token: string, params?: { tenant_id?: string; reseller_id?: string; status?: string; q?: string }) => {
+    const p = new URLSearchParams();
+    if (params?.tenant_id) p.set("tenant_id", params.tenant_id);
+    if (params?.reseller_id) p.set("reseller_id", params.reseller_id);
+    if (params?.status) p.set("status", params.status);
+    if (params?.q) p.set("q", params.q);
+    const qs = p.toString();
+    return request<OperatorDevice[]>(`/operator/devices${qs ? `?${qs}` : ""}`, {}, token);
+  },
+  listOperatorReception: (token: string, params?: { tenant_id?: string; reseller_id?: string; q?: string; status?: string; date_from?: string; date_to?: string; offset?: number; limit?: number }) => {
+    const p = new URLSearchParams();
+    if (params?.tenant_id) p.set("tenant_id", params.tenant_id);
+    if (params?.reseller_id) p.set("reseller_id", params.reseller_id);
+    if (params?.q) p.set("q", params.q);
+    if (params?.status) p.set("status", params.status);
+    if (params?.date_from) p.set("date_from", params.date_from);
+    if (params?.date_to) p.set("date_to", params.date_to);
+    if (params?.offset != null) p.set("offset", String(params.offset));
+    if (params?.limit != null) p.set("limit", String(params.limit));
+    const qs = p.toString();
+    return request<OperatorReceptionItem[]>(`/operator/reception${qs ? `?${qs}` : ""}`, {}, token);
+  },
   emergencyBroadcast: (token: string, message: string, tenant_ids?: string[]) =>
     request<{ updated_tenants: number; message: string }>("/operator/broadcast", { method: "POST", body: JSON.stringify({ message, tenant_ids }) }, token),
+  proxyLoginAsTenant: (token: string, tenantId: string) =>
+    request<{ access_token: string; refresh_token: string; tenant_slug: string; role: string }>(`/operator/tenants/${tenantId}/proxy-login`, { method: "POST" }, token),
 
   // Reseller API (代理店)
   getResellerStats: (token: string) =>
     request<ResellerStats>("/reseller/stats", {}, token),
-  listResellerCustomers: (token: string) =>
-    request<OperatorTenant[]>("/reseller/customers", {}, token),
+  listResellerCustomers: (token: string, params?: { q?: string; offset?: number; limit?: number }) => {
+    const p = new URLSearchParams();
+    if (params?.q) p.set("q", params.q);
+    if (params?.offset != null) p.set("offset", String(params.offset));
+    if (params?.limit != null) p.set("limit", String(params.limit));
+    const qs = p.toString();
+    return request<OperatorTenant[]>(`/reseller/customers${qs ? `?${qs}` : ""}`, {}, token);
+  },
   createResellerCustomer: (token: string, body: { name: string; slug: string; admin_email: string; admin_password: string }) =>
     request<{ id: string; slug: string; name: string }>("/reseller/customers", { method: "POST", body: JSON.stringify(body) }, token),
   deleteResellerCustomer: (token: string, id: string) =>
     request(`/reseller/customers/${id}`, { method: "DELETE" }, token),
-  listResellerDevices: (token: string) =>
-    request<OperatorDevice[]>("/reseller/devices", {}, token),
-  listResellerUsers: (token: string) =>
-    request<OperatorUser[]>("/reseller/users", {}, token),
+  listResellerDevices: (token: string, params?: { tenant_id?: string; status?: string; q?: string }) => {
+    const p = new URLSearchParams();
+    if (params?.tenant_id) p.set("tenant_id", params.tenant_id);
+    if (params?.status) p.set("status", params.status);
+    if (params?.q) p.set("q", params.q);
+    const qs = p.toString();
+    return request<OperatorDevice[]>(`/reseller/devices${qs ? `?${qs}` : ""}`, {}, token);
+  },
+  listResellerUsers: (token: string, params?: { tenant_id?: string; role?: string; q?: string }) => {
+    const p = new URLSearchParams();
+    if (params?.tenant_id) p.set("tenant_id", params.tenant_id);
+    if (params?.role) p.set("role", params.role);
+    if (params?.q) p.set("q", params.q);
+    const qs = p.toString();
+    return request<OperatorUser[]>(`/reseller/users${qs ? `?${qs}` : ""}`, {}, token);
+  },
+  listResellerReception: (token: string, params?: { tenant_id?: string; q?: string; status?: string; date_from?: string; date_to?: string; offset?: number; limit?: number }) => {
+    const p = new URLSearchParams();
+    if (params?.tenant_id) p.set("tenant_id", params.tenant_id);
+    if (params?.q) p.set("q", params.q);
+    if (params?.status) p.set("status", params.status);
+    if (params?.date_from) p.set("date_from", params.date_from);
+    if (params?.date_to) p.set("date_to", params.date_to);
+    if (params?.offset != null) p.set("offset", String(params.offset));
+    if (params?.limit != null) p.set("limit", String(params.limit));
+    const qs = p.toString();
+    return request<ResellerReceptionItem[]>(`/reseller/reception${qs ? `?${qs}` : ""}`, {}, token);
+  },
 
   // Settings
   getTenantSettings: (token: string) =>
@@ -183,6 +249,17 @@ export const api = {
     request<ReceptionLog>("/reception", { method: "POST", body: JSON.stringify(body) }, token),
   listReception: (token: string) =>
     request<ReceptionLog[]>("/reception", {}, token),
+  exportReceptionCsv: async (token: string, params?: { q?: string; status?: string; date_from?: string; date_to?: string; method?: string }): Promise<Blob> => {
+    const p = new URLSearchParams();
+    if (params?.date_from) p.set("date_from", params.date_from);
+    if (params?.date_to) p.set("date_to", params.date_to);
+    if (params?.method) p.set("method", params.method);
+    const qs = p.toString();
+    const headers: Record<string, string> = { "Content-Type": "application/json", "Authorization": `Bearer ${token}` };
+    const res = await fetch(`${API_BASE}/reception/export.csv${qs ? `?${qs}` : ""}`, { headers });
+    if (!res.ok) throw new Error("CSV export failed");
+    return res.blob();
+  },
   todayStats: (token: string) =>
     request<{ date: string; count: number }>("/reception/stats/today", {}, token),
 
@@ -231,7 +308,28 @@ export const api = {
   // OTA
   forceKioskUpdate: (token: string) =>
     request<{ ok: boolean; forced_at: string }>("/settings/kiosk-force-push", { method: "POST" }, token),
+
+  // Tenant user management (admin)
+  listUsers: (token: string) =>
+    request<UserListItem[]>("/users", {}, token),
+  createUser: (token: string, data: { email: string; password: string; role: string }) =>
+    request<UserListItem>("/users", { method: "POST", body: JSON.stringify(data) }, token),
+  deleteUser: (token: string, userId: string) =>
+    request(`/users/${userId}`, { method: "DELETE" }, token),
+  updateUserRole: (token: string, userId: string, role: string) =>
+    request<UserListItem>(`/users/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }, token),
+  changePassword: (token: string, currentPassword: string, newPassword: string): Promise<void> =>
+    request(`/users/me/password`, { method: "PATCH", body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }, token),
+  resetUserPassword: (token: string, userId: string, newPassword: string): Promise<void> =>
+    request(`/users/${userId}/reset-password`, { method: "POST", body: JSON.stringify({ new_password: newPassword }) }, token),
 };
+
+export interface UserListItem {
+  id: string;
+  email: string;
+  role: string;
+  created_at: string;
+}
 
 export interface AuthResponse {
   access_token: string;
@@ -278,6 +376,32 @@ export interface OperatorDevice {
   name: string;
   tenant_id: string;
   last_seen_at: string | null;
+}
+
+export interface OperatorReceptionItem {
+  id: string;
+  tenant_id: string;
+  tenant_name: string;
+  visitor_name: string;
+  company: string | null;
+  staff: string | null;
+  purpose: string | null;
+  method: string | null;
+  state: string | null;
+  created_at: string;
+}
+
+export interface ResellerReceptionItem {
+  id: string;
+  tenant_id: string;
+  tenant_name: string;
+  visitor_name: string;
+  company: string | null;
+  staff: string | null;
+  purpose: string | null;
+  method: string | null;
+  state: string | null;
+  created_at: string;
 }
 
 export interface MediaUploadUrlResponse {

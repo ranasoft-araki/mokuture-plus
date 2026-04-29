@@ -8,6 +8,16 @@ import { AdminShell, MkBtn, MkCard, MkPill } from "@/components/AdminShell";
 
 type DateFilter = "today" | "week" | "month" | "all";
 
+async function downloadCsv(token: string) {
+  const blob = await api.exportReceptionCsv(token);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `reception_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 const DATE_LABELS: Record<DateFilter, string> = {
   today:  "今日",
   week:   "今週",
@@ -71,7 +81,7 @@ export default function ReceptionLogsPage() {
       subtitle={`過去30日 · 合計 ${logs.length} 件`}
     >
       {/* Filter row */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#fffefb", border: "1px solid #d8d3c7", borderRadius: 7, padding: "0 12px", height: 34, width: 280 }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a8a198" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -100,6 +110,23 @@ export default function ReceptionLogsPage() {
             </button>
           ))}
         </div>
+        <button
+          onClick={() => {
+            const token = getAccessToken();
+            if (token) downloadCsv(token).catch(() => {});
+          }}
+          style={{
+            padding: "6px 14px", fontSize: 11.5,
+            background: "#fffefb", color: "#6b6559",
+            border: "1px solid #d8d3c7", borderRadius: 999, cursor: "pointer",
+            display: "flex", alignItems: "center", gap: 5,
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          CSV出力
+        </button>
       </div>
 
       <MkCard padding="0">

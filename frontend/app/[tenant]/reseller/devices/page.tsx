@@ -1,18 +1,52 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, OperatorDevice } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { api, OperatorDevice, OperatorTenant } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { MkCard, MkSectionTitle, MkPill } from "@/components/AdminShell";
 
+const INPUT_STYLE: React.CSSProperties = { height: 34, border: "1px solid #efece5", borderRadius: 6, fontSize: 13, padding: "0 10px", background: "#fffefb", color: "#1d1a15" };
+const SELECT_STYLE: React.CSSProperties = { height: 34, border: "1px solid #efece5", borderRadius: 6, fontSize: 13, padding: "0 10px", background: "#fffefb", color: "#1d1a15" };
+
 export default function ResellerDevicesPage() {
   const [devices, setDevices] = useState<OperatorDevice[]>([]);
+  const [customers, setCustomers] = useState<OperatorTenant[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tenantId, setTenantId] = useState("");
+  const [status, setStatus] = useState("");
+  const [q, setQ] = useState("");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const token = getAccessToken() ?? "";
 
+  const load = (tid: string, st: string, search: string) => {
+    setLoading(true);
+    api.listResellerDevices(token, {
+      tenant_id: tid || undefined,
+      status: st || undefined,
+      q: search || undefined,
+    }).then(setDevices).finally(() => setLoading(false));
+  };
+
   useEffect(() => {
-    api.listResellerDevices(token).then(setDevices).finally(() => setLoading(false));
+    api.listResellerCustomers(token).then(setCustomers);
+    load("", "", "");
   }, []);
+
+  const handleTenantChange = (v: string) => {
+    setTenantId(v);
+    load(v, status, q);
+  };
+
+  const handleStatusChange = (v: string) => {
+    setStatus(v);
+    load(tenantId, v, q);
+  };
+
+  const handleQChange = (v: string) => {
+    setQ(v);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => { load(tenantId, status, v); }, 300);
+  };
 
   const isOnline = (lastSeen: string | null) => {
     if (!lastSeen) return false;
@@ -21,7 +55,27 @@ export default function ResellerDevicesPage() {
 
   return (
     <div style={{ padding: "28px 32px" }}>
-      <MkSectionTitle title="デバイス管理" subtitle={`${devices.length} デバイス（管理顧客テナント全体）`} style={{ marginBottom: 24 }} />
+      <MkSectionTitle title="デバイス管理" subtitle={`${devices.length} デバイス（管理顧客テナント全体）`} style={{ marginBottom: 16 }} />
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <select style={SELECT_STYLE} value={tenantId} onChange={(e) => handleTenantChange(e.target.value)}>
+          <option value="">全テナント</option>
+          {customers.map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+        </select>
+        <select style={SELECT_STYLE} value={status} onChange={(e) => handleStatusChange(e.target.value)}>
+          <option value="">全て</option>
+          <option value="online">オンライン</option>
+          <option value="offline">オフライン</option>
+        </select>
+        <input
+          style={INPUT_STYLE}
+          placeholder="デバイス名で検索"
+          value={q}
+          onChange={(e) => handleQChange(e.target.value)}
+        />
+        <span style={{ fontSize: 12, color: "#a8a198" }}>{devices.length} 件</span>
+      </div>
       {loading ? (
         <div style={{ color: "#a8a198", fontSize: 14 }}>読み込み中…</div>
       ) : (

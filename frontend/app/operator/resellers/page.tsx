@@ -26,6 +26,7 @@ export default function OperatorResellersPage() {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (form.admin_password.length < 8) { setError("パスワードは8文字以上で入力してください"); return; }
     setSubmitting(true); setError("");
     try {
       await api.createReseller(token, form);

@@ -83,7 +83,8 @@ mokuture/
 │       │   ├── reception.py   ← /reception (受付ログ一覧)
 │       │   ├── notifications.py ← /notifications (Slack/Chatwork 設定)
 │       │   ├── lockers.py     ← /lockers (ロッカー制御モック)
-│       │   └── push.py        ← /push (Web Push 購読管理)
+│       │   ├── push.py        ← /push (Web Push 購読管理)
+│       │   └── users.py       ← /users (テナント内ユーザー管理)
 │       ├── models/            ← SQLAlchemy ORM モデル
 │       │   ├── tenant.py      ← Tenant (ブランディング・キオスク設定・ロゴ配置)
 │       │   ├── user.py        ← User (email, password_hash, role, tenant_id)
@@ -105,6 +106,11 @@ mokuture/
 │   │   ├── layout.tsx         ← ルートレイアウト (Google Fonts 等)
 │   │   ├── page.tsx           ← / → /login リダイレクト
 │   │   ├── login/page.tsx     ← ログイン画面
+│   │   ├── ops-console/page.tsx ← 運営ログイン（隠しURL）
+│   │   ├── partner-portal/page.tsx ← 代理店ログイン（隠しURL）
+│   │   ├── operator/          ← 運営画面 (operator JWT 必須)
+│   │   │   ├── page.tsx       ← 運営ダッシュボード
+│   │   │   └── reception/page.tsx ← 受付ログ（クロステナント）
 │   │   └── [tenant]/          ← テナント別ルート (slug でテナント識別)
 │   │       ├── layout.tsx     ← テナントレイアウト
 │   │       ├── admin/         ← 管理画面 (JWT 必須)
@@ -117,7 +123,8 @@ mokuture/
 │   │       │   ├── kiosk-settings/page.tsx ← 受付設定 (キオスク文言・ロゴ配置ドラッグ)
 │   │       │   ├── settings/page.tsx  ← 基本設定 (ブランディング: ロゴ・カラー・フォント)
 │   │       │   ├── notify/page.tsx    ← 通知設定 (Slack/Chatwork/PWA)
-│   │       │   └── locker/page.tsx    ← ロッカー管理
+│   │       │   ├── locker/page.tsx    ← ロッカー管理
+│   │       │   └── users/page.tsx     ← テナント内ユーザー管理
 │   │       └── kiosk/         ← キオスク受付画面 (デバイストークン必須)
 │   │           ├── page.tsx           ← KioskFlow マウント
 │   │           ├── KioskFlow.tsx      ← メインキオスクコンポーネント (全画面遷移管理)
@@ -145,10 +152,10 @@ mokuture/
 
 | role | 説明 | ログイン画面 | ログイン後URL |
 |---|---|---|---|
-| `operator` | 運営（クロステナント全権）| `/login` → 運営タブ | `/operator` |
-| `reseller` | 代理店（自管理テナント群）| `/login` → 代理店タブ（代理店ID＋PW）| `/{reseller_slug}/reseller` |
-| `admin` | 利用者・管理者（自テナント）| `/login` → 利用者タブ | `/{tenant}/admin` |
-| `staff` | 利用者・スタッフ | `/login` → 利用者タブ | `/{tenant}/admin` |
+| `operator` | 運営（クロステナント全権）| `/ops-console`（隠しURL）| `/operator` |
+| `reseller` | 代理店（自管理テナント群）| `/partner-portal`（隠しURL、代理店ID＋PW）| `/{reseller_slug}/reseller` |
+| `admin` | 利用者・管理者（自テナント）| `/login`（利用者専用ページ）| `/{tenant}/admin` |
+| `staff` | 利用者・スタッフ | `/login`（利用者専用ページ）| `/{tenant}/admin` |
 | `kiosk` | キオスクデバイス | PIN交換 | - |
 
 ### ログインエンドポイント分割
@@ -157,21 +164,43 @@ mokuture/
 - `POST /auth/reseller/login` — 代理店（reseller_id=スラッグ + password）
 
 ### フロントエンドルート
+- `/ops-console` — 運営ログイン（隠しURL）
+- `/partner-portal` — 代理店ログイン（隠しURL）
 - `/operator` — 運営ダッシュボード（OperatorShell）
 - `/operator/tenants` — 全テナント管理
 - `/operator/resellers` — 代理店管理
 - `/operator/users` — 全ユーザー管理
 - `/operator/devices` — 全デバイス管理
 - `/operator/broadcast` — 緊急配信
+- `/operator/reception` — 受付ログ（クロステナント）
 - `/{tenant}/reseller` — 代理店ダッシュボード（ResellerShell）
 - `/{tenant}/reseller/customers` — 顧客管理
 - `/{tenant}/reseller/users` — ユーザー管理
 - `/{tenant}/reseller/devices` — デバイス管理
 - `/{tenant}/admin` — 既存利用者管理画面（変更なし）
+- `/{tenant}/admin/users` — テナント内ユーザー管理
 
 ### 新規 API エンドポイント
 - `GET/POST /operator/stats|tenants|resellers|users|devices|broadcast`
 - `GET/POST /reseller/stats|customers|devices|users`
+- `GET /operator/reception` — クロステナント受付ログ
+- `POST /operator/tenants/{id}/proxy-login` — 代理ログイン
+- `GET|POST|DELETE|PATCH /users` — テナント内ユーザー管理
+
+---
+
+## セキュリティ設計
+
+### ログインURL隠蔽
+- 運営・代理店のログインページURLは `/login` に表示しない
+- 運営: `/ops-console`（推測困難な内部URL）
+- 代理店: `/partner-portal`
+
+### 代理ログイン（Proxy Login）
+- 運営は `POST /operator/tenants/{id}/proxy-login` で対象テナントの管理者JWTを取得
+- 発行されるJWTの有効期限は15分（通常の24時間より短い）
+- フロントエンドは一時キー（`mk_proxy_*`）でlocalStorageに保存し、新タブで管理画面を開く
+- 管理画面マウント時にプロキシキーを消費して通常セッションとして引き継ぐ
 
 ---
 

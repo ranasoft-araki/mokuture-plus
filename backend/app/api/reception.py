@@ -1,5 +1,8 @@
-from datetime import date
+import csv
+import io
+from datetime import date, datetime
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -91,6 +94,48 @@ async def list_reception(
         q = q.where(ReceptionLog.method == method)
     result = await db.execute(q)
     return [_log_out(r) for r in result.scalars()]
+
+
+@router.get("/export.csv")
+async def export_reception_csv(
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    method: str | None = Query(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    q = select(ReceptionLog).where(ReceptionLog.tenant_id == user.tenant_id).order_by(ReceptionLog.created_at.desc())
+    if date_from:
+        q = q.where(func.date(ReceptionLog.created_at) >= date_from)
+    if date_to:
+        q = q.where(func.date(ReceptionLog.created_at) <= date_to)
+    if method:
+        q = q.where(ReceptionLog.method == method)
+    result = await db.execute(q)
+    logs = result.scalars().all()
+
+    output = io.StringIO()
+    output.write("﻿")
+    writer = csv.writer(output)
+    writer.writerow(["日時", "訪問者名", "会社名", "担当者", "目的", "受付方法", "ステータス"])
+    for r in logs:
+        writer.writerow([
+            r.created_at.isoformat() if r.created_at else "",
+            r.visitor_name,
+            r.company or "",
+            r.staff or "",
+            r.purpose or "",
+            r.method,
+            r.state,
+        ])
+    output.seek(0)
+
+    filename = f"reception_{datetime.today().strftime('%Y-%m-%d')}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv; charset=utf-8-sig",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/stats/today")

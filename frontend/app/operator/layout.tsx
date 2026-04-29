@@ -12,7 +12,7 @@ export default function OperatorLayout({ children }: { children: React.ReactNode
     const role = getRole();
     const token = getAccessToken();
     if (!token || role !== "operator") {
-      router.replace("/login");
+      router.replace("/ops-console");
     }
   }, [router]);
 

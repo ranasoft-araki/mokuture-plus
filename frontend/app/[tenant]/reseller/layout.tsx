@@ -12,7 +12,7 @@ export default function ResellerLayout({ children }: { children: React.ReactNode
     const role = getRole();
     const token = getAccessToken();
     if (!token || (role !== "reseller" && role !== "operator")) {
-      router.replace("/login");
+      router.replace("/partner-portal");
     }
   }, [router]);
 

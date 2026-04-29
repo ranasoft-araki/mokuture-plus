@@ -1,6 +1,7 @@
 """代理店（Reseller）専用 API — 自管理テナント群の管理"""
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime, timedelta
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -62,15 +63,18 @@ async def get_reseller_stats(
 
 @router.get("/customers")
 async def list_customers(
+    q: Optional[str] = Query(None),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
     current_user: User = Depends(require_reseller_or_operator()),
     db: AsyncSession = Depends(get_db),
 ):
     reseller_tid = _get_reseller_tenant_id(current_user)
-    result = await db.execute(
-        select(Tenant)
-        .where(Tenant.reseller_id == reseller_tid, Tenant.is_reseller == False)
-        .order_by(Tenant.created_at.desc())
-    )
+    stmt = select(Tenant).where(Tenant.reseller_id == reseller_tid, Tenant.is_reseller == False)
+    if q:
+        stmt = stmt.where(Tenant.name.ilike(f"%{q}%") | Tenant.slug.ilike(f"%{q}%"))
+    stmt = stmt.order_by(Tenant.created_at.desc()).offset(offset).limit(limit)
+    result = await db.execute(stmt)
     tenants = result.scalars().all()
     return [
         {
@@ -162,6 +166,11 @@ async def delete_customer(
 
 @router.get("/devices")
 async def list_reseller_devices(
+    tenant_id: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
     current_user: User = Depends(require_reseller_or_operator()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -173,9 +182,24 @@ async def list_reseller_devices(
     if not customer_ids:
         return []
 
-    result = await db.execute(
-        select(Device).where(Device.tenant_id.in_(customer_ids)).order_by(Device.created_at.desc())
-    )
+    if tenant_id and tenant_id in customer_ids:
+        filter_ids = [tenant_id]
+    elif tenant_id:
+        return []
+    else:
+        filter_ids = customer_ids
+
+    stmt = select(Device).where(Device.tenant_id.in_(filter_ids))
+    if q:
+        stmt = stmt.where(Device.name.ilike(f"%{q}%"))
+    if status == "online":
+        cutoff = datetime.utcnow() - timedelta(minutes=5)
+        stmt = stmt.where(Device.last_seen_at >= cutoff)
+    elif status == "offline":
+        cutoff = datetime.utcnow() - timedelta(minutes=5)
+        stmt = stmt.where((Device.last_seen_at == None) | (Device.last_seen_at < cutoff))
+    stmt = stmt.order_by(Device.created_at.desc()).offset(offset).limit(limit)
+    result = await db.execute(stmt)
     devices = result.scalars().all()
     return [
         {
@@ -188,10 +212,32 @@ async def list_reseller_devices(
     ]
 
 
-# ── Users ──────────────────────────────────────────────────────────────────
+# ── Reception Logs ────────────────────────────────────────────────────────
 
-@router.get("/users")
-async def list_reseller_users(
+class ResellerReceptionItem(BaseModel):
+    id: str
+    tenant_id: str
+    tenant_name: str
+    visitor_name: str
+    company: str | None
+    staff: str | None
+    purpose: str | None
+    method: str | None
+    state: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/reception", response_model=list[ResellerReceptionItem])
+async def list_reseller_reception(
+    tenant_id: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     current_user: User = Depends(require_reseller_or_operator()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -203,10 +249,82 @@ async def list_reseller_users(
     if not customer_ids:
         return []
 
-    result = await db.execute(
-        select(User).where(User.tenant_id.in_(customer_ids), User.role != "kiosk")
-        .order_by(User.created_at.desc())
+    if tenant_id and tenant_id in customer_ids:
+        filter_ids = [tenant_id]
+    elif tenant_id:
+        return []
+    else:
+        filter_ids = customer_ids
+
+    stmt = (
+        select(ReceptionLog, Tenant.name.label("tenant_name"))
+        .join(Tenant, ReceptionLog.tenant_id == Tenant.id)
+        .where(ReceptionLog.tenant_id.in_(filter_ids))
     )
+    if q:
+        stmt = stmt.where(
+            ReceptionLog.visitor_name.ilike(f"%{q}%") | ReceptionLog.company.ilike(f"%{q}%")
+        )
+    if status:
+        stmt = stmt.where(ReceptionLog.state == status)
+    if date_from:
+        stmt = stmt.where(ReceptionLog.created_at >= date_from)
+    if date_to:
+        stmt = stmt.where(ReceptionLog.created_at <= date_to + " 23:59:59")
+    stmt = stmt.order_by(ReceptionLog.created_at.desc()).offset(offset).limit(limit)
+    result = await db.execute(stmt)
+    rows = result.all()
+    return [
+        ResellerReceptionItem(
+            id=log.id,
+            tenant_id=log.tenant_id,
+            tenant_name=tenant_name,
+            visitor_name=log.visitor_name,
+            company=log.company,
+            staff=log.staff,
+            purpose=log.purpose,
+            method=log.method,
+            state=log.state,
+            created_at=log.created_at,
+        )
+        for log, tenant_name in rows
+    ]
+
+
+# ── Users ──────────────────────────────────────────────────────────────────
+
+@router.get("/users")
+async def list_reseller_users(
+    tenant_id: Optional[str] = Query(None),
+    role: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    current_user: User = Depends(require_reseller_or_operator()),
+    db: AsyncSession = Depends(get_db),
+):
+    reseller_tid = _get_reseller_tenant_id(current_user)
+    customer_result = await db.execute(
+        select(Tenant.id).where(Tenant.reseller_id == reseller_tid, Tenant.is_reseller == False)
+    )
+    customer_ids = [row[0] for row in customer_result.all()]
+    if not customer_ids:
+        return []
+
+    if tenant_id and tenant_id in customer_ids:
+        filter_ids = [tenant_id]
+    elif tenant_id:
+        return []
+    else:
+        filter_ids = customer_ids
+
+    stmt = select(User).where(User.tenant_id.in_(filter_ids), User.role != "kiosk")
+    if role:
+        stmt = stmt.where(User.role == role)
+    if q:
+        stmt = stmt.where(User.email.ilike(f"%{q}%"))
+    stmt = stmt.order_by(User.created_at.desc()).offset(offset).limit(limit)
+    result = await db.execute(stmt)
     users = result.scalars().all()
     return [
         {

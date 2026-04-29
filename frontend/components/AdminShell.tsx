@@ -5,7 +5,7 @@ import { clearTokens } from "@/lib/auth";
 import { useState } from "react";
 import type { ReactNode } from "react";
 
-export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "notify" | "locker" | "kiosk_settings" | "settings";
+export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "notify" | "locker" | "kiosk_settings" | "settings" | "users";
 
 interface Props {
   active: NavId;
@@ -30,6 +30,7 @@ const NAV_SETTINGS: { id: NavId; label: string }[] = [
   { id: "locker",         label: "ロッカー" },
   { id: "kiosk_settings", label: "受付設定" },
   { id: "settings",       label: "基本設定" },
+  { id: "users",          label: "ユーザー管理" },
 ];
 
 const NAV_PATHS: Record<NavId, (t: string) => string> = {
@@ -43,6 +44,7 @@ const NAV_PATHS: Record<NavId, (t: string) => string> = {
   locker:        (t) => `/${t}/admin/locker`,
   kiosk_settings:(t) => `/${t}/admin/kiosk-settings`,
   settings:      (t) => `/${t}/admin/settings`,
+  users:         (t) => `/${t}/admin/users`,
 };
 
 const FONT_UI = '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Noto Sans JP", sans-serif';
@@ -388,6 +390,10 @@ function NavIcon({ id, active }: { id: NavId; active: boolean }) {
     case "settings":
       return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
         <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 01-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 010-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 014 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 010 4h-.1a1.7 1.7 0 00-1.5 1z"/>
+      </svg>;
+    case "users":
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
       </svg>;
   }
 }

@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, OperatorTenant } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { MkCard, MkBtn, MkSectionTitle } from "@/components/AdminShell";
+
+const INPUT_STYLE: React.CSSProperties = { height: 34, border: "1px solid #efece5", borderRadius: 6, fontSize: 13, padding: "0 10px", background: "#fffefb", color: "#1d1a15" };
 
 export default function ResellerCustomersPage() {
   const [customers, setCustomers] = useState<OperatorTenant[]>([]);
@@ -12,16 +14,24 @@ export default function ResellerCustomersPage() {
   const [form, setForm] = useState({ name: "", slug: "", admin_email: "", admin_password: "" });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [q, setQ] = useState("");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const token = getAccessToken() ?? "";
 
-  const load = async () => {
+  const load = async (search?: string) => {
     setLoading(true);
-    const r = await api.listResellerCustomers(token);
+    const r = await api.listResellerCustomers(token, { q: search || undefined });
     setCustomers(r);
     setLoading(false);
   };
 
   useEffect(() => { load(); }, []);
+
+  const handleQChange = (v: string) => {
+    setQ(v);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => { load(v); }, 300);
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,7 +40,7 @@ export default function ResellerCustomersPage() {
       await api.createResellerCustomer(token, form);
       setShowForm(false);
       setForm({ name: "", slug: "", admin_email: "", admin_password: "" });
-      await load();
+      await load(q);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "エラーが発生しました");
     } finally {
@@ -41,14 +51,23 @@ export default function ResellerCustomersPage() {
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`顧客「${name}」を削除しますか？`)) return;
     await api.deleteResellerCustomer(token, id);
-    await load();
+    await load(q);
   };
 
   return (
     <div style={{ padding: "28px 32px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <MkSectionTitle title="顧客管理" subtitle={`${customers.length} 顧客テナント`} />
         <MkBtn variant="primary" size="sm" onClick={() => setShowForm(!showForm)}>+ 顧客追加</MkBtn>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <input
+          style={INPUT_STYLE}
+          placeholder="テナント名・スラッグで検索"
+          value={q}
+          onChange={(e) => handleQChange(e.target.value)}
+        />
+        <span style={{ fontSize: 12, color: "#a8a198" }}>{customers.length} 件</span>
       </div>
 
       {showForm && (

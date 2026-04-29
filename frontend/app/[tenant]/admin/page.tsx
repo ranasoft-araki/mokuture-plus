@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { api, type ReceptionLog, type Device } from "@/lib/api";
-import { getAccessToken, clearTokens } from "@/lib/auth";
+import { getAccessToken, clearTokens, saveTokens } from "@/lib/auth";
 import { AdminShell, MkCard, MkBtn, MkPill, MkSectionTitle } from "@/components/AdminShell";
 
 export default function DashboardPage() {
@@ -41,6 +41,15 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    const proxyAccess = localStorage.getItem("mk_proxy_access");
+    const proxyRefresh = localStorage.getItem("mk_proxy_refresh");
+    const proxyTenant = localStorage.getItem("mk_proxy_tenant");
+    if (proxyAccess && proxyRefresh && proxyTenant === params.tenant) {
+      saveTokens(proxyAccess, proxyRefresh, "admin");
+      localStorage.removeItem("mk_proxy_access");
+      localStorage.removeItem("mk_proxy_refresh");
+      localStorage.removeItem("mk_proxy_tenant");
+    }
     const token = getAccessToken();
     if (!token) { router.push("/login"); return; }
     void loadData(token);
