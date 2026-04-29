@@ -141,6 +141,40 @@ mokuture/
 
 ---
 
+## ロール設計（3ティア）
+
+| role | 説明 | ログイン画面 | ログイン後URL |
+|---|---|---|---|
+| `operator` | 運営（クロステナント全権）| `/login` → 運営タブ | `/operator` |
+| `reseller` | 代理店（自管理テナント群）| `/login` → 代理店タブ（代理店ID＋PW）| `/{reseller_slug}/reseller` |
+| `admin` | 利用者・管理者（自テナント）| `/login` → 利用者タブ | `/{tenant}/admin` |
+| `staff` | 利用者・スタッフ | `/login` → 利用者タブ | `/{tenant}/admin` |
+| `kiosk` | キオスクデバイス | PIN交換 | - |
+
+### ログインエンドポイント分割
+- `POST /auth/login` — 利用者（admin/staff）
+- `POST /auth/operator/login` — 運営（operator）
+- `POST /auth/reseller/login` — 代理店（reseller_id=スラッグ + password）
+
+### フロントエンドルート
+- `/operator` — 運営ダッシュボード（OperatorShell）
+- `/operator/tenants` — 全テナント管理
+- `/operator/resellers` — 代理店管理
+- `/operator/users` — 全ユーザー管理
+- `/operator/devices` — 全デバイス管理
+- `/operator/broadcast` — 緊急配信
+- `/{tenant}/reseller` — 代理店ダッシュボード（ResellerShell）
+- `/{tenant}/reseller/customers` — 顧客管理
+- `/{tenant}/reseller/users` — ユーザー管理
+- `/{tenant}/reseller/devices` — デバイス管理
+- `/{tenant}/admin` — 既存利用者管理画面（変更なし）
+
+### 新規 API エンドポイント
+- `GET/POST /operator/stats|tenants|resellers|users|devices|broadcast`
+- `GET/POST /reseller/stats|customers|devices|users`
+
+---
+
 ## DB スキーマ概要 (主要テーブル)
 
 ### tenants
@@ -151,6 +185,8 @@ mokuture/
 | id | UUID | PK |
 | slug | VARCHAR(64) | URL識別子 (ユニーク) |
 | name | VARCHAR(255) | テナント名 |
+| is_reseller | BOOLEAN | 代理店テナントフラグ |
+| reseller_id | VARCHAR(36) | 親代理店テナントFK (nullable) |
 | brand_color | VARCHAR(7) | テーマカラー (#RRGGBB) |
 | logo_url | VARCHAR(512) | ロゴ公開 URL |
 | font | VARCHAR(64) | フォント設定 |

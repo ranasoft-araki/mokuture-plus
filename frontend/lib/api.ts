@@ -66,9 +66,49 @@ export const api = {
 
   // Auth
   register: (body: { tenant_name: string; tenant_slug: string; email: string; password: string }) =>
-    request<{ access_token: string; refresh_token: string; tenant_slug: string }>("/auth/register", { method: "POST", body: JSON.stringify(body) }),
+    request<AuthResponse>("/auth/register", { method: "POST", body: JSON.stringify(body) }),
   login: (email: string, password: string) =>
-    request<{ access_token: string; refresh_token: string; tenant_slug: string }>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+    request<AuthResponse>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  operatorLogin: (email: string, password: string) =>
+    request<AuthResponse>("/auth/operator/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  resellerLogin: (reseller_id: string, password: string) =>
+    request<AuthResponse>("/auth/reseller/login", { method: "POST", body: JSON.stringify({ reseller_id, password }) }),
+
+  // Operator API (運営)
+  getOperatorStats: (token: string) =>
+    request<OperatorStats>("/operator/stats", {}, token),
+  listOperatorTenants: (token: string, reseller_id?: string) =>
+    request<OperatorTenant[]>(`/operator/tenants${reseller_id ? `?reseller_id=${reseller_id}` : ""}`, {}, token),
+  createOperatorTenant: (token: string, body: { name: string; slug: string; reseller_id?: string; admin_email: string; admin_password: string }) =>
+    request<{ id: string; slug: string; name: string }>("/operator/tenants", { method: "POST", body: JSON.stringify(body) }, token),
+  deleteOperatorTenant: (token: string, id: string) =>
+    request(`/operator/tenants/${id}`, { method: "DELETE" }, token),
+  listResellers: (token: string) =>
+    request<OperatorTenant[]>("/operator/resellers", {}, token),
+  createReseller: (token: string, body: { name: string; slug: string; admin_email: string; admin_password: string }) =>
+    request<{ id: string; slug: string; name: string }>("/operator/resellers", { method: "POST", body: JSON.stringify(body) }, token),
+  deleteReseller: (token: string, id: string) =>
+    request(`/operator/resellers/${id}`, { method: "DELETE" }, token),
+  listOperatorUsers: (token: string, tenant_id?: string) =>
+    request<OperatorUser[]>(`/operator/users${tenant_id ? `?tenant_id=${tenant_id}` : ""}`, {}, token),
+  listOperatorDevices: (token: string, tenant_id?: string) =>
+    request<OperatorDevice[]>(`/operator/devices${tenant_id ? `?tenant_id=${tenant_id}` : ""}`, {}, token),
+  emergencyBroadcast: (token: string, message: string, tenant_ids?: string[]) =>
+    request<{ updated_tenants: number; message: string }>("/operator/broadcast", { method: "POST", body: JSON.stringify({ message, tenant_ids }) }, token),
+
+  // Reseller API (代理店)
+  getResellerStats: (token: string) =>
+    request<ResellerStats>("/reseller/stats", {}, token),
+  listResellerCustomers: (token: string) =>
+    request<OperatorTenant[]>("/reseller/customers", {}, token),
+  createResellerCustomer: (token: string, body: { name: string; slug: string; admin_email: string; admin_password: string }) =>
+    request<{ id: string; slug: string; name: string }>("/reseller/customers", { method: "POST", body: JSON.stringify(body) }, token),
+  deleteResellerCustomer: (token: string, id: string) =>
+    request(`/reseller/customers/${id}`, { method: "DELETE" }, token),
+  listResellerDevices: (token: string) =>
+    request<OperatorDevice[]>("/reseller/devices", {}, token),
+  listResellerUsers: (token: string) =>
+    request<OperatorUser[]>("/reseller/users", {}, token),
 
   // Settings
   getTenantSettings: (token: string) =>
@@ -192,6 +232,53 @@ export const api = {
   forceKioskUpdate: (token: string) =>
     request<{ ok: boolean; forced_at: string }>("/settings/kiosk-force-push", { method: "POST" }, token),
 };
+
+export interface AuthResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  tenant_slug: string;
+  role: string;
+}
+
+export interface OperatorStats {
+  tenant_count: number;
+  reseller_count: number;
+  user_count: number;
+  device_count: number;
+  reception_count: number;
+}
+
+export interface ResellerStats {
+  customer_count: number;
+  device_count: number;
+  user_count: number;
+  reception_count: number;
+}
+
+export interface OperatorTenant {
+  id: string;
+  slug: string;
+  name: string;
+  reseller_id?: string | null;
+  brand_color?: string;
+  created_at: string | null;
+}
+
+export interface OperatorUser {
+  id: string;
+  email: string;
+  role: string;
+  tenant_id: string | null;
+  created_at: string | null;
+}
+
+export interface OperatorDevice {
+  id: string;
+  name: string;
+  tenant_id: string;
+  last_seen_at: string | null;
+}
 
 export interface MediaUploadUrlResponse {
   media_id: string;

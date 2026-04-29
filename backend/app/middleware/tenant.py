@@ -46,8 +46,18 @@ def require_roles(*roles: str):
 
 
 def require_admin():
-    """Shorthand: admin or superadmin."""
-    return require_roles("admin", "superadmin")
+    """Shorthand: admin or superadmin or operator."""
+    return require_roles("admin", "superadmin", "operator")
+
+
+def require_operator():
+    """Operator (運営) only."""
+    return require_roles("operator")
+
+
+def require_reseller_or_operator():
+    """Reseller (代理店) or operator (運営)."""
+    return require_roles("reseller", "operator")
 
 
 async def verify_tenant_slug(slug: str, user: User, db: AsyncSession) -> None:

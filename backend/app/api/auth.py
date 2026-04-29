@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -39,6 +39,16 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class OperatorLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class ResellerLoginRequest(BaseModel):
+    reseller_id: str  # = tenant slug of the reseller tenant
+    password: str
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 
@@ -48,21 +58,18 @@ class TokenResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     tenant_slug: str = ""
+    role: str = ""
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    # Phase 0: open registration for self-onboarding.
-    # Phase 1 TODO: require invite token or restrict to superadmin to prevent unauthorized tenant creation.
-
-    # Check slug uniqueness
     existing = await db.execute(select(Tenant).where(Tenant.slug == body.tenant_slug))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Tenant slug already taken")
 
     tenant = Tenant(slug=body.tenant_slug, name=body.tenant_name)
     db.add(tenant)
-    await db.flush()  # get tenant.id
+    await db.flush()
 
     user = User(
         tenant_id=tenant.id,
@@ -72,7 +79,6 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     )
     db.add(user)
 
-    # Auto-generate VAPID keys for push notifications
     try:
         from app.services.webpush import generate_vapid_keys
         from app.services.crypto import encrypt_dict
@@ -85,7 +91,7 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
         )
         db.add(vapid_setting)
     except Exception:
-        pass  # Don't fail registration if VAPID generation fails
+        pass
 
     await db.commit()
 
@@ -93,27 +99,80 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
         access_token=create_access_token(tenant.id, user.id, user.role),
         refresh_token=create_refresh_token(tenant.id, user.id),
         tenant_slug=body.tenant_slug,
+        role=user.role,
     )
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+    """利用者（Customer）ログイン — email + password, role=admin/staff"""
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
-    # Always run verify_password even when user is None to prevent timing-based user enumeration.
+    _dummy_hash = "$2b$12$KIXjMCBz9g8Zv1RRi.QjGOm8iI2u1RjwCZ7HXSRXHBrz8fDZWJGhK"
+    candidate_hash = user.hashed_password if user else _dummy_hash
+    password_ok = verify_password(body.password, candidate_hash)
+    if user is None or not password_ok:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if user.role not in ("admin", "staff", "superadmin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Use the appropriate login endpoint for your role")
+
+    tenant_result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
+    tenant = tenant_result.scalar_one_or_none()
+
+    return TokenResponse(
+        access_token=create_access_token(user.tenant_id or "", user.id, user.role),
+        refresh_token=create_refresh_token(user.tenant_id or "", user.id),
+        tenant_slug=tenant.slug if tenant else "",
+        role=user.role,
+    )
+
+
+@router.post("/operator/login", response_model=TokenResponse)
+async def operator_login(body: OperatorLoginRequest, db: AsyncSession = Depends(get_db)):
+    """運営（Operator）ログイン — email + password, role=operator のみ"""
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+    _dummy_hash = "$2b$12$KIXjMCBz9g8Zv1RRi.QjGOm8iI2u1RjwCZ7HXSRXHBrz8fDZWJGhK"
+    candidate_hash = user.hashed_password if user else _dummy_hash
+    password_ok = verify_password(body.password, candidate_hash)
+    if user is None or not password_ok:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if user.role != "operator":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Operator access only")
+
+    return TokenResponse(
+        access_token=create_access_token(user.tenant_id or "", user.id, user.role),
+        refresh_token=create_refresh_token(user.tenant_id or "", user.id),
+        tenant_slug="",
+        role=user.role,
+    )
+
+
+@router.post("/reseller/login", response_model=TokenResponse)
+async def reseller_login(body: ResellerLoginRequest, db: AsyncSession = Depends(get_db)):
+    """代理店（Reseller）ログイン — reseller_id (= tenant slug) + password, role=reseller のみ"""
+    tenant_result = await db.execute(
+        select(Tenant).where(Tenant.slug == body.reseller_id, Tenant.is_reseller == True)
+    )
+    tenant = tenant_result.scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    user_result = await db.execute(
+        select(User).where(User.tenant_id == tenant.id, User.role == "reseller")
+    )
+    user = user_result.scalar_one_or_none()
     _dummy_hash = "$2b$12$KIXjMCBz9g8Zv1RRi.QjGOm8iI2u1RjwCZ7HXSRXHBrz8fDZWJGhK"
     candidate_hash = user.hashed_password if user else _dummy_hash
     password_ok = verify_password(body.password, candidate_hash)
     if user is None or not password_ok:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    tenant_result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
-    tenant = tenant_result.scalar_one_or_none()
-
     return TokenResponse(
-        access_token=create_access_token(user.tenant_id, user.id, user.role),
-        refresh_token=create_refresh_token(user.tenant_id, user.id),
-        tenant_slug=tenant.slug if tenant else "",
+        access_token=create_access_token(tenant.id, user.id, user.role),
+        refresh_token=create_refresh_token(tenant.id, user.id),
+        tenant_slug=tenant.slug,
+        role=user.role,
     )
 
 
@@ -133,7 +192,14 @@ async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
+    tenant = None
+    if user.tenant_id:
+        tenant_result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
+        tenant = tenant_result.scalar_one_or_none()
+
     return TokenResponse(
-        access_token=create_access_token(user.tenant_id, user.id, user.role),
-        refresh_token=create_refresh_token(user.tenant_id, user.id),
+        access_token=create_access_token(user.tenant_id or "", user.id, user.role),
+        refresh_token=create_refresh_token(user.tenant_id or "", user.id),
+        tenant_slug=tenant.slug if tenant else "",
+        role=user.role,
     )

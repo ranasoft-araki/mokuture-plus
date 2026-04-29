@@ -11,10 +11,10 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(String(32), default="staff")  # superadmin | admin | staff | kiosk
+    role: Mapped[str] = mapped_column(String(32), default="staff")  # operator | reseller | admin | staff | kiosk
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     tenant = relationship("Tenant", back_populates="users")

@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
+from typing import Optional
 
-from sqlalchemy import String, Integer, Float, DateTime, func
+from sqlalchemy import String, Integer, Float, DateTime, Boolean, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -13,6 +14,8 @@ class Tenant(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     slug: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_reseller: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    reseller_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True, index=True)
     brand_color: Mapped[str] = mapped_column(String(7), default="#4a7c4e")
     logo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     font: Mapped[str] = mapped_column(String(64), default="Noto Sans JP / Inter")
