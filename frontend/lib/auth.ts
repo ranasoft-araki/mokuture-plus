@@ -27,3 +27,10 @@ export function clearTokens() {
   localStorage.removeItem("mokuture_refresh");
   localStorage.removeItem("mokuture_role");
 }
+
+export function getLogoutUrl(): string {
+  const role = getRole();
+  if (role === "operator") return "/ops-console";
+  if (role === "reseller") return "/partner-portal";
+  return "/login";
+}

@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import String, DateTime, Integer, ForeignKey, func, Boolean, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -20,6 +21,8 @@ class Device(Base):
     pin_code: Mapped[str | None] = mapped_column(String(6), nullable=True, index=True)
     pin_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     pin_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    force_update_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    location: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     tenant = relationship("Tenant", back_populates="devices")
 

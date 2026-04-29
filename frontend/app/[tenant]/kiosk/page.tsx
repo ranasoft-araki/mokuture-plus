@@ -2,10 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import KioskFlow from "./KioskFlow";
 
-// KioskFlow manages all screen states: idle → top → reception/qr → calling → complete
-// This page is the mount point for kiosk devices accessing the cloud frontend.
-// Raspberry Pi devices use kiosk_agent/static/kiosk.html instead.
 export default function KioskPage() {
   const params = useParams<{ tenant: string }>();
   const router = useRouter();
@@ -22,11 +20,5 @@ export default function KioskPage() {
 
   if (!token) return null;
 
-  return (
-    <div style={{ width: "100vw", height: "100vh", background: "#0a0806", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ color: "rgba(255,255,255,0.4)", fontFamily: "Inter, system-ui, sans-serif", fontSize: 16 }}>
-        読み込み中…
-      </div>
-    </div>
-  );
+  return <KioskFlow kioskToken={token} />;
 }

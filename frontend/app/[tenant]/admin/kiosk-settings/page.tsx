@@ -29,6 +29,18 @@ export default function KioskSettingsPage() {
   // Design pattern state
   const [kioskStyle, setKioskStyle] = useState("default");
 
+  // Staff list state — one name per line in the textarea
+  const [staffListText, setStaffListText] = useState("");
+  const [staffSaving, setStaffSaving] = useState(false);
+  const [staffSaved, setStaffSaved] = useState(false);
+  const [staffError, setStaffError] = useState<string | null>(null);
+
+  // Purpose list state — one purpose per line in the textarea
+  const [purposeListText, setPurposeListText] = useState("");
+  const [purposeSaving, setPurposeSaving] = useState(false);
+  const [purposeSaved, setPurposeSaved] = useState(false);
+  const [purposeError, setPurposeError] = useState<string | null>(null);
+
   // Logo placement state
   const [logoPosX, setLogoPosX] = useState(0.04);
   const [logoPosY, setLogoPosY] = useState(0.04);
@@ -51,6 +63,18 @@ export default function KioskSettingsPage() {
       setLogoWidthPct(s.logo_width_pct);
       setLogoUrl(s.logo_url);
       setKioskStyle(s.kiosk_style ?? "default");
+      // Populate staff list textarea: stored as CSV, display as one per line
+      if (s.staff_list) {
+        setStaffListText(
+          s.staff_list.split(",").map((n) => n.trim()).filter(Boolean).join("\n")
+        );
+      }
+      // Populate purpose list textarea: stored as CSV, display as one per line
+      if (s.purpose_list) {
+        setPurposeListText(
+          s.purpose_list.split(",").map((p) => p.trim()).filter(Boolean).join("\n")
+        );
+      }
     }).catch(() => {});
   }, []);
 
@@ -93,7 +117,67 @@ export default function KioskSettingsPage() {
     setLogoPosY(settings.logo_pos_y);
     setLogoWidthPct(settings.logo_width_pct);
     setKioskStyle(settings.kiosk_style ?? "default");
+    if (settings.staff_list) {
+      setStaffListText(
+        settings.staff_list.split(",").map((n) => n.trim()).filter(Boolean).join("\n")
+      );
+    } else {
+      setStaffListText("");
+    }
+    if (settings.purpose_list) {
+      setPurposeListText(
+        settings.purpose_list.split(",").map((p) => p.trim()).filter(Boolean).join("\n")
+      );
+    } else {
+      setPurposeListText("");
+    }
     setError(null);
+  };
+
+  const handleStaffSave = async () => {
+    const token = getAccessToken();
+    if (!token) return;
+    setStaffSaving(true);
+    setStaffError(null);
+    try {
+      // Convert newline-separated names back to CSV
+      const csv = staffListText
+        .split("\n")
+        .map((n) => n.trim())
+        .filter(Boolean)
+        .join(",");
+      const updated = await api.updateTenantSettings(token, { staff_list: csv || null });
+      setSettings(updated);
+      setStaffSaved(true);
+      setTimeout(() => setStaffSaved(false), 2000);
+    } catch (err: unknown) {
+      setStaffError(err instanceof Error ? err.message : "保存に失敗しました");
+    } finally {
+      setStaffSaving(false);
+    }
+  };
+
+  const handlePurposeSave = async () => {
+    const token = getAccessToken();
+    if (!token) return;
+    setPurposeSaving(true);
+    setPurposeError(null);
+    try {
+      // Convert newline-separated purposes back to CSV
+      const csv = purposeListText
+        .split("\n")
+        .map((p) => p.trim())
+        .filter(Boolean)
+        .join(",");
+      const updated = await api.updateTenantSettings(token, { purpose_list: csv || null });
+      setSettings(updated);
+      setPurposeSaved(true);
+      setTimeout(() => setPurposeSaved(false), 2000);
+    } catch (err: unknown) {
+      setPurposeError(err instanceof Error ? err.message : "保存に失敗しました");
+    } finally {
+      setPurposeSaving(false);
+    }
   };
 
   return (
@@ -120,81 +204,34 @@ export default function KioskSettingsPage() {
       {/* Design pattern selector — full width above the two-column grid */}
       <MkCard style={{ marginBottom: 20 }}>
         <MkSectionTitle title="デザインパターン" subtitle="キオスクの「ようこそ」画面のテーマを選択" />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
-          {KIOSK_STYLES.map((style) => {
-            const selected = kioskStyle === style.id;
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 8 }}>
+          {KIOSK_STYLES.map((s) => {
+            const selected = kioskStyle === s.id;
             return (
-              <button
-                key={style.id}
-                onClick={() => setKioskStyle(style.id)}
+              <div
+                key={s.id}
+                onClick={() => setKioskStyle(s.id)}
                 style={{
-                  border: selected ? "2px solid #1d1a15" : "1px solid #efece5",
-                  borderRadius: 10,
-                  padding: 0,
-                  background: "none",
+                  border: selected ? "2px solid #2d6a4f" : "2px solid #efece5",
+                  borderRadius: 8,
                   cursor: "pointer",
-                  textAlign: "left",
                   overflow: "hidden",
-                  boxShadow: selected ? "0 0 0 3px rgba(29,26,21,0.12)" : "none",
-                  transition: "box-shadow 0.15s, border-color 0.15s",
                 }}
               >
-                {/* Color thumbnail */}
-                <div style={{
-                  height: 56,
-                  background: style.bg,
-                  position: "relative",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 6,
-                }}>
-                  <div style={{
-                    width: 22,
-                    height: 22,
-                    borderRadius: "50%",
-                    background: style.accentGradient ?? style.accent,
-                    border: "2px solid rgba(255,255,255,0.25)",
-                    flexShrink: 0,
-                  }} />
-                  <div style={{
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: style.text,
-                    opacity: 0.85,
-                    letterSpacing: 0.3,
-                    maxWidth: 90,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}>
-                    Welcome
+                <div style={{ width: "100%", paddingTop: "70%", position: "relative", background: s.bg, borderRadius: "6px 6px 0 0", overflow: "hidden" }}>
+                  <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "35%", background: s.accentGradient ?? s.accent, opacity: 0.9 }} />
+                  <div style={{ position: "absolute", bottom: "15%", left: "15%", right: "15%", display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ height: 4, background: s.text, opacity: 0.3, borderRadius: 2 }} />
+                    <div style={{ height: 4, background: s.text, opacity: 0.2, width: "70%", borderRadius: 2 }} />
                   </div>
                   {selected && (
-                    <div style={{
-                      position: "absolute",
-                      top: 6,
-                      right: 6,
-                      width: 18,
-                      height: 18,
-                      borderRadius: "50%",
-                      background: "#1d1a15",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="#fffefb" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 10, height: 10 }}>
-                        <path d="M5 12l5 5L20 6" />
-                      </svg>
-                    </div>
+                    <div style={{ position: "absolute", top: 6, right: 6, width: 16, height: 16, background: s.accent === "#000000" ? "#fff" : s.accent, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#fff" }}>✓</div>
                   )}
                 </div>
-                {/* Label */}
-                <div style={{ padding: "8px 10px", background: "#fffefb" }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: "#1d1a15", marginBottom: 2 }}>{style.name}</div>
-                  <div style={{ fontSize: 10.5, color: "#a8a198", lineHeight: 1.4 }}>{style.description}</div>
+                <div style={{ padding: "6px 8px", fontSize: 11, fontWeight: 600, color: "#1d1a15", background: "#fffefb", borderRadius: "0 0 6px 6px", textAlign: "center" }}>
+                  {s.name}
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>
@@ -236,6 +273,82 @@ export default function KioskSettingsPage() {
               <Field label="完了画面の表示時間" hint="5〜60 秒">
                 <TextInputNumber value={kioskCompleteTimeout} onChange={setKioskCompleteTimeout} suffix="秒" />
               </Field>
+            </div>
+          </MkCard>
+
+          <MkCard>
+            <MkSectionTitle
+              title="スタッフリスト"
+              subtitle="受付フォームで担当者をドロップダウンから選択できるようにします"
+            />
+            {staffError && (
+              <div style={{ background: "#fdf2f1", border: "1px solid #f0b9b5", borderRadius: 7, padding: "8px 12px", fontSize: 12, color: "#a84238", marginBottom: 10 }}>
+                {staffError}
+              </div>
+            )}
+            <Field label="スタッフ名" hint="名前を1行ずつ入力してください。設定すると受付フォームで担当者をドロップダウンから選択できます">
+              <textarea
+                value={staffListText}
+                onChange={(e) => setStaffListText(e.target.value)}
+                rows={5}
+                placeholder={"山田太郎\n鈴木花子\n田中一郎"}
+                style={{
+                  width: "100%",
+                  border: "1px solid #d8d3c7",
+                  borderRadius: 7,
+                  background: "#fffefb",
+                  padding: "8px 10px",
+                  fontSize: 12.5,
+                  color: "#2d2a24",
+                  resize: "vertical",
+                  outline: "none",
+                  fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif",
+                  boxSizing: "border-box",
+                }}
+              />
+            </Field>
+            <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+              <MkBtn variant="primary" size="sm" onClick={handleStaffSave} disabled={staffSaving}>
+                {staffSaving ? "保存中..." : staffSaved ? "保存しました ✓" : "保存"}
+              </MkBtn>
+            </div>
+          </MkCard>
+
+          <MkCard>
+            <MkSectionTitle
+              title="来訪目的リスト"
+              subtitle="受付フォームで訪問目的をドロップダウンから選択できるようにします"
+            />
+            {purposeError && (
+              <div style={{ background: "#fdf2f1", border: "1px solid #f0b9b5", borderRadius: 7, padding: "8px 12px", fontSize: 12, color: "#a84238", marginBottom: 10 }}>
+                {purposeError}
+              </div>
+            )}
+            <Field label="来訪目的" hint="空の場合は自由入力になります">
+              <textarea
+                value={purposeListText}
+                onChange={(e) => setPurposeListText(e.target.value)}
+                rows={7}
+                placeholder={"商談・打合せ\n採用面接\n配送・搬入\n会議・打合せ\n視察・見学\nその他"}
+                style={{
+                  width: "100%",
+                  border: "1px solid #d8d3c7",
+                  borderRadius: 7,
+                  background: "#fffefb",
+                  padding: "8px 10px",
+                  fontSize: 12.5,
+                  color: "#2d2a24",
+                  resize: "vertical",
+                  outline: "none",
+                  fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif",
+                  boxSizing: "border-box",
+                }}
+              />
+            </Field>
+            <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+              <MkBtn variant="primary" size="sm" onClick={handlePurposeSave} disabled={purposeSaving}>
+                {purposeSaving ? "保存中..." : purposeSaved ? "保存しました ✓" : "保存"}
+              </MkBtn>
             </div>
           </MkCard>
 

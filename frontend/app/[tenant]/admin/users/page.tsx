@@ -30,6 +30,11 @@ export default function AdminUsersPage() {
   const [formSaving, setFormSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [pwResetId, setPwResetId] = useState<string | null>(null);
+  const [pwResetValue, setPwResetValue] = useState("");
+  const [pwResetSaving, setPwResetSaving] = useState(false);
+  const [pwResetError, setPwResetError] = useState<string | null>(null);
+  const [pwResetSuccess, setPwResetSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     const token = getAccessToken();
@@ -92,6 +97,31 @@ export default function AdminUsersPage() {
       setUsers((prev) => prev.map((u) => u.id === userId ? updated : u));
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : "ロール変更に失敗しました");
+    }
+  }
+
+  function openPwReset(userId: string) {
+    setPwResetId(userId);
+    setPwResetValue("");
+    setPwResetError(null);
+    setPwResetSuccess(null);
+  }
+
+  async function handlePasswordReset(e: React.FormEvent, userId: string) {
+    e.preventDefault();
+    const token = getAccessToken();
+    if (!token) return;
+    setPwResetSaving(true);
+    setPwResetError(null);
+    try {
+      await api.resetUserPassword(token, userId, pwResetValue);
+      setPwResetSuccess(userId);
+      setPwResetValue("");
+      setTimeout(() => { setPwResetSuccess(null); setPwResetId(null); }, 2000);
+    } catch (err: unknown) {
+      setPwResetError(err instanceof Error ? err.message : "パスワードのリセットに失敗しました");
+    } finally {
+      setPwResetSaving(false);
     }
   }
 
@@ -263,14 +293,47 @@ export default function AdminUsersPage() {
                       {new Date(u.created_at).toLocaleDateString("ja-JP")}
                     </td>
                     <td style={{ padding: "12px 20px" }}>
-                      <MkBtn
-                        variant="danger"
-                        size="sm"
-                        disabled={u.id === currentUserId || deletingId === u.id}
-                        onClick={() => handleDelete(u.id)}
-                      >
-                        {deletingId === u.id ? "削除中..." : "削除"}
-                      </MkBtn>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        {u.id !== currentUserId && (
+                          pwResetId === u.id ? (
+                            <form onSubmit={(e) => handlePasswordReset(e, u.id)} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              <input
+                                type="password"
+                                required
+                                minLength={8}
+                                placeholder="新パスワード (8文字以上)"
+                                value={pwResetValue}
+                                onChange={(e) => setPwResetValue(e.target.value)}
+                                style={{
+                                  padding: "4px 8px", fontSize: 12, border: "1px solid #d8d3c7",
+                                  borderRadius: 6, fontFamily: FONT_JP, background: "#faf8f4", width: 180,
+                                }}
+                              />
+                              <MkBtn type="submit" variant="primary" size="sm" disabled={pwResetSaving}>
+                                {pwResetSuccess === u.id ? "完了" : pwResetSaving ? "保存中..." : "保存"}
+                              </MkBtn>
+                              <MkBtn variant="default" size="sm" onClick={() => { setPwResetId(null); setPwResetError(null); }}>
+                                ×
+                              </MkBtn>
+                              {pwResetError && pwResetId === u.id && (
+                                <span style={{ fontSize: 11.5, color: "#a84238", fontFamily: FONT_JP }}>{pwResetError}</span>
+                              )}
+                            </form>
+                          ) : (
+                            <MkBtn variant="default" size="sm" onClick={() => openPwReset(u.id)}>
+                              PW変更
+                            </MkBtn>
+                          )
+                        )}
+                        <MkBtn
+                          variant="danger"
+                          size="sm"
+                          disabled={u.id === currentUserId || deletingId === u.id}
+                          onClick={() => handleDelete(u.id)}
+                        >
+                          {deletingId === u.id ? "削除中..." : "削除"}
+                        </MkBtn>
+                      </div>
                     </td>
                   </tr>
                 ))}

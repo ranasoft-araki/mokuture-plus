@@ -11,6 +11,7 @@ from pathlib import Path
 
 _JST = zoneinfo.ZoneInfo("Asia/Tokyo")
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from slowapi import Limiter
@@ -115,7 +116,12 @@ async def get_kiosk_device(
 @router.get("/schedule")
 async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device), db: AsyncSession = Depends(get_db)):
     """Return the current scheduled playlist with embedded media data."""
-    tenant, _ = ctx
+    tenant, device = ctx
+
+    # Return suspension status immediately — kiosk handles UI
+    if tenant.is_suspended:
+        return {"suspended": True, "message": "このテナントは現在停止中です", "playlist": None, "force_update_at": None}
+
     now = datetime.now(_JST)
     day = now.weekday()
     time_str = now.strftime("%H:%M")
@@ -129,13 +135,15 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
         )
     )
     schedule = result.scalars().first()
+    force_update_at = device.force_update_at.isoformat() if device.force_update_at else None
+
     if schedule is None:
-        return {"playlist": None}
+        return {"playlist": None, "force_update_at": force_update_at}
 
     pl_result = await db.execute(select(Playlist).where(Playlist.id == schedule.playlist_id))
     pl = pl_result.scalar_one_or_none()
     if pl is None:
-        return {"playlist": None}
+        return {"playlist": None, "force_update_at": force_update_at}
 
     items_result = await db.execute(
         select(PlaylistItem)
@@ -145,7 +153,7 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     items = items_result.scalars().all()
 
     if not items:
-        return {"playlist": {"id": pl.id, "name": pl.name, "items": []}}
+        return {"playlist": {"id": pl.id, "name": pl.name, "items": []}, "force_update_at": force_update_at}
 
     media_ids = [i.media_id for i in items]
     media_result = await db.execute(
@@ -183,7 +191,8 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
                 }
                 for i in items
             ],
-        }
+        },
+        "force_update_at": force_update_at,
     }
 
 
@@ -277,6 +286,7 @@ async def kiosk_reception(
 
     await _notify_slack(tenant.id, log, db)
     await _notify_push(tenant.id, log, db)
+    await _notify_webhook(tenant.id, log, db)
 
     return {
         "id": log.id,
@@ -353,6 +363,43 @@ async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> N
             private_key=private_key,
             subject=settings.vapid_subject,
         )  # fire-and-forget: ignore (bool, str) return
+
+
+async def _send_webhook(url: str, data: dict) -> None:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(url, json=data)
+    except Exception:
+        pass
+
+
+async def _notify_webhook(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:
+    result = await db.execute(
+        select(NotificationSetting).where(
+            NotificationSetting.tenant_id == tenant_id,
+            NotificationSetting.type == "webhook",
+        )
+    )
+    setting = result.scalar_one_or_none()
+    if setting is None or not setting.config_json or setting.config_json == "{}":
+        return
+    try:
+        config = decrypt_dict(setting.config_json)
+        webhook_url = config.get("webhook_url", "")
+        if webhook_url:
+            payload = {
+                "event": "reception",
+                "tenant_id": tenant_id,
+                "visitor_name": log.visitor_name,
+                "company": log.company,
+                "staff": log.staff,
+                "purpose": log.purpose,
+                "method": log.method,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+            }
+            await _send_webhook(webhook_url, payload)
+    except Exception:
+        pass
 
 
 # ── OTA bundle endpoints ───────────────────────────────────────────────────────

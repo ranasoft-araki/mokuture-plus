@@ -23,6 +23,10 @@ class ChatworkConfig(BaseModel):
     room_id: str
 
 
+class WebhookConfig(BaseModel):
+    webhook_url: str
+
+
 @router.get("/settings")
 async def get_settings(user: User = Depends(require_roles("admin", "superadmin")), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(NotificationSetting).where(NotificationSetting.tenant_id == user.tenant_id))
@@ -62,6 +66,16 @@ async def update_chatwork(
     return {"ok": True}
 
 
+@router.put("/settings/webhook")
+async def update_webhook(
+    body: WebhookConfig,
+    user: User = Depends(require_roles("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    await _upsert_setting(user.tenant_id, "webhook", {"webhook_url": body.webhook_url}, db)
+    return {"ok": True}
+
+
 @router.post("/test/slack")
 async def test_slack(user: User = Depends(require_roles("admin", "superadmin")), db: AsyncSession = Depends(get_db)):
     result = await db.execute(
@@ -96,6 +110,34 @@ async def test_chatwork(user: User = Depends(require_roles("admin", "superadmin"
                 data={"body": "mokuture+ テスト通知"},
             )
         ok = res.status_code == 200
+    except Exception:
+        ok = False
+    return {"ok": ok}
+
+
+@router.post("/test/webhook")
+async def test_webhook(user: User = Depends(require_roles("admin", "superadmin")), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(NotificationSetting).where(NotificationSetting.tenant_id == user.tenant_id, NotificationSetting.type == "webhook")
+    )
+    setting = result.scalar_one_or_none()
+    if not setting:
+        raise HTTPException(status_code=404, detail="Webhook not configured")
+    config = decrypt_dict(setting.config_json)
+    webhook_url = config.get("webhook_url", "")
+    if not webhook_url:
+        raise HTTPException(status_code=400, detail="Webhook URL missing")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            res = await client.post(
+                webhook_url,
+                json={
+                    "event": "test",
+                    "message": "mokuture+ テスト通知",
+                    "tenant_id": user.tenant_id,
+                },
+            )
+        ok = res.status_code < 400
     except Exception:
         ok = False
     return {"ok": ok}

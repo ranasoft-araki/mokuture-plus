@@ -99,7 +99,7 @@ function ConfirmDialog({ message, onConfirm, onCancel }: { message: string; onCo
   );
 }
 
-type FilterType = "all" | "video" | "image";
+type FilterType = "all" | "video" | "image" | "other";
 
 export default function AdminMediaPage() {
   const params = useParams<{ tenant: string }>();
@@ -141,14 +141,16 @@ export default function AdminMediaPage() {
   const stats = useMemo(() => {
     const images = media.filter((m) => m.mime_type.startsWith("image/")).length;
     const videos = media.filter((m) => m.mime_type.startsWith("video/")).length;
+    const others = media.filter((m) => !m.mime_type.startsWith("image/") && !m.mime_type.startsWith("video/")).length;
     const totalBytes = media.reduce((s, m) => s + m.size_bytes, 0);
-    return { images, videos, totalBytes };
+    return { images, videos, others, totalBytes };
   }, [media]);
 
   const filtered = useMemo(() => {
     let list = media;
     if (filter === "video") list = list.filter((m) => m.mime_type.startsWith("video/"));
     if (filter === "image") list = list.filter((m) => m.mime_type.startsWith("image/"));
+    if (filter === "other") list = list.filter((m) => !m.mime_type.startsWith("image/") && !m.mime_type.startsWith("video/"));
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter((m) => m.filename.toLowerCase().includes(q));
@@ -208,8 +210,9 @@ export default function AdminMediaPage() {
     all:   media.length,
     video: stats.videos,
     image: stats.images,
+    other: stats.others,
   };
-  const filterLabels: Record<FilterType, string> = { all: "すべて", video: "動画", image: "静止画" };
+  const filterLabels: Record<FilterType, string> = { all: "すべて", video: "動画", image: "静止画", other: "その他" };
 
   return (
     <AdminShell
@@ -237,7 +240,7 @@ export default function AdminMediaPage() {
         </div>
         {/* Filter chips */}
         <div style={{ display: "flex", gap: 6 }}>
-          {(["all", "video", "image"] as FilterType[]).map((f) => (
+          {(["all", "video", "image", "other"] as FilterType[]).map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -352,6 +355,7 @@ export default function AdminMediaPage() {
 
 function MediaTile({ item, onDelete, onPreview }: { item: MediaItem; onDelete: () => void; onPreview: () => void }) {
   const isVideo = item.mime_type.startsWith("video/");
+  const isImage = item.mime_type.startsWith("image/");
   const ext = item.mime_type.split("/")[1]?.toUpperCase() ?? "FILE";
 
   return (
@@ -386,8 +390,12 @@ function MediaTile({ item, onDelete, onPreview }: { item: MediaItem; onDelete: (
               </div>
             </div>
           </>
+        ) : isImage ? (
+          <img src={item.url} alt={item.filename} style={{ width: 80, height: 60, objectFit: "cover", borderRadius: 4, border: "1px solid #efece5" }} />
         ) : (
-          <img src={item.url} alt={item.filename} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#a8a198" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/>
+          </svg>
         )}
         <div style={{ position: "absolute", top: 8, left: 8 }}>
           <MkPill tone={isVideo ? "info" : "neutral"} dot={false}>{isVideo ? "MP4" : ext}</MkPill>
@@ -419,16 +427,19 @@ function MediaTile({ item, onDelete, onPreview }: { item: MediaItem; onDelete: (
 
 function MediaRow({ item, onDelete, onPreview, isFirst }: { item: MediaItem; onDelete: () => void; onPreview: () => void; isFirst: boolean }) {
   const isVideo = item.mime_type.startsWith("video/");
+  const isImage = item.mime_type.startsWith("image/");
   const ext = item.mime_type.split("/")[1]?.toUpperCase() ?? "FILE";
   return (
     <div onClick={onPreview} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", borderTop: isFirst ? "none" : "1px solid #efece5", cursor: "pointer" }}>
-      <div style={{ width: 56, height: 36, borderRadius: 5, overflow: "hidden", background: isVideo ? "#1d1a15" : "#f4f1ea", flexShrink: 0 }}>
+      <div style={{ width: 80, height: 60, borderRadius: 4, border: "1px solid #efece5", overflow: "hidden", background: isVideo ? "#1d1a15" : "#f4f1ea", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
         {isVideo ? (
-          <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="#fffefb" stroke="none"><polygon points="6 4 20 12 6 20 6 4"/></svg>
-          </div>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="#fffefb" stroke="none"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+        ) : isImage ? (
+          <img src={item.url} alt={item.filename} style={{ width: 80, height: 60, objectFit: "cover" }} />
         ) : (
-          <img src={item.url} alt={item.filename} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a8a198" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/>
+          </svg>
         )}
       </div>
       <MkPill tone={isVideo ? "info" : "neutral"} dot={false}>{isVideo ? "MP4" : ext}</MkPill>

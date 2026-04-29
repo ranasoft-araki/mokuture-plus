@@ -83,7 +83,7 @@ export default function ResellerDevicesPage() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: "1px solid #efece5" }}>
-                {["デバイス名", "ステータス", "テナントID", "最終接続"].map((h) => (
+                {["デバイス名", "場所", "ステータス", "テナントID", "最終接続"].map((h) => (
                   <th key={h} style={{ padding: "10px 16px", textAlign: "left" as const, fontSize: 11, fontWeight: 600, color: "#a8a198", letterSpacing: "0.4px" }}>{h}</th>
                 ))}
               </tr>
@@ -92,6 +92,7 @@ export default function ResellerDevicesPage() {
               {devices.map((d) => (
                 <tr key={d.id} style={{ borderBottom: "1px solid #f4f1ea" }}>
                   <td style={{ padding: "12px 16px", fontWeight: 600, color: "#1d1a15" }}>{d.name}</td>
+                  <td style={{ padding: "12px 16px", color: d.location ? "#2d2a24" : "#a8a198", fontSize: 12 }}>{d.location ?? "—"}</td>
                   <td style={{ padding: "12px 16px" }}>
                     <MkPill tone={isOnline(d.last_seen_at) ? "live" : "off"}>{isOnline(d.last_seen_at) ? "オンライン" : "オフライン"}</MkPill>
                   </td>
@@ -100,7 +101,7 @@ export default function ResellerDevicesPage() {
                 </tr>
               ))}
               {devices.length === 0 && (
-                <tr><td colSpan={4} style={{ padding: "24px", textAlign: "center" as const, color: "#a8a198" }}>デバイスがありません</td></tr>
+                <tr><td colSpan={5} style={{ padding: "24px", textAlign: "center" as const, color: "#a8a198" }}>デバイスがありません</td></tr>
               )}
             </tbody>
           </table>

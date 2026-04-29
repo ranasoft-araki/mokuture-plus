@@ -124,7 +124,16 @@ mokuture/
 │   │       │   ├── settings/page.tsx  ← 基本設定 (ブランディング: ロゴ・カラー・フォント)
 │   │       │   ├── notify/page.tsx    ← 通知設定 (Slack/Chatwork/PWA)
 │   │       │   ├── locker/page.tsx    ← ロッカー管理
-│   │       │   └── users/page.tsx     ← テナント内ユーザー管理
+│   │       │   ├── users/page.tsx     ← テナント内ユーザー管理
+│   │       │   └── profile/page.tsx   ← 管理者プロフィール（メール変更・パスワード変更）
+│   │       ├── reseller/      ← 代理店画面 (reseller JWT 必須)
+│   │       │   ├── page.tsx           ← 代理店ダッシュボード
+│   │       │   ├── customers/page.tsx ← 顧客管理
+│   │       │   ├── users/page.tsx     ← ユーザー管理
+│   │       │   ├── devices/page.tsx   ← デバイス管理
+│   │       │   ├── reception/page.tsx ← 代理店クロステナント受付ログ
+│   │       │   ├── profile/page.tsx   ← 代理店プロフィール
+│   │       │   └── settings/page.tsx  ← 代理店テナント設定
 │   │       └── kiosk/         ← キオスク受付画面 (デバイストークン必須)
 │   │           ├── page.tsx           ← KioskFlow マウント
 │   │           ├── KioskFlow.tsx      ← メインキオスクコンポーネント (全画面遷移管理)
@@ -179,6 +188,10 @@ mokuture/
 - `/{tenant}/reseller/devices` — デバイス管理
 - `/{tenant}/admin` — 既存利用者管理画面（変更なし）
 - `/{tenant}/admin/users` — テナント内ユーザー管理
+- `/{tenant}/admin/profile` — 管理者プロフィール（メール変更・パスワード変更）
+- `/{tenant}/reseller/reception` — 代理店クロステナント受付ログ
+- `/{tenant}/reseller/profile` — 代理店プロフィール
+- `/{tenant}/reseller/settings` — 代理店テナント設定
 
 ### 新規 API エンドポイント
 - `GET/POST /operator/stats|tenants|resellers|users|devices|broadcast`
@@ -186,6 +199,25 @@ mokuture/
 - `GET /operator/reception` — クロステナント受付ログ
 - `POST /operator/tenants/{id}/proxy-login` — 代理ログイン
 - `GET|POST|DELETE|PATCH /users` — テナント内ユーザー管理
+- `POST /operator/tenants/{id}/suspend` — テナント停止/再開
+- `POST /devices/{id}/force-refresh` — デバイス強制更新
+- `GET /reception/export.csv` — 受付ログCSVエクスポート（管理者）
+- `GET /operator/reception/export.csv` — 受付ログCSVエクスポート（運営）
+- `GET /reseller/reception/export.csv` — 受付ログCSVエクスポート（代理店）
+- `GET /reseller/reception` — 代理店クロステナント受付ログ
+- `PATCH /reception/{id}` — 受付ログのステータス・スタッフメモ更新 (body: `{ state?, staff_notes? }`)
+- `PATCH /users/me/password` — 自分のパスワード変更
+- `POST /users/{id}/reset-password` — 管理者によるパスワードリセット
+- `GET /settings/stats` — テナント統計（受付件数・デバイス数等）
+- `DELETE /reception/bulk` — 受付ログ一括削除（管理者）
+- `GET /users/me` — 自分のプロフィール取得
+- `PATCH /users/me` — 自分のプロフィール更新（名前等）
+- `POST /reseller/customers/{id}/proxy-login` — 代理店による顧客テナントへの代理ログイン
+- `PATCH /operator/tenants/{id}/notes` — 運営によるテナントメモ更新
+- `GET /reseller/reception/daily-stats` — 代理店向け受付日次統計（過去14日）
+
+### フロントエンド機能
+- 受付ログ自動更新（Auto-refresh）: 管理画面 `/reception` および運営画面 `/operator/reception` に ON/OFF トグル付き自動更新機能（`setInterval` ポーリング）を実装
 
 ---
 
@@ -201,6 +233,11 @@ mokuture/
 - 発行されるJWTの有効期限は15分（通常の24時間より短い）
 - フロントエンドは一時キー（`mk_proxy_*`）でlocalStorageに保存し、新タブで管理画面を開く
 - 管理画面マウント時にプロキシキーを消費して通常セッションとして引き継ぐ
+
+### テナント停止
+- 運営は `PATCH /operator/tenants/{id}/suspend` でテナントを停止/再開
+- 停止中のテナントのキオスクは `GET /kiosk/schedule` でメンテナンスレスポンスを受け取る
+- 停止中テナントの公開設定（`GET /settings/public/{slug}`）にも `is_suspended: true` が含まれる
 
 ---
 
@@ -229,15 +266,23 @@ mokuture/
 | logo_pos_y | FLOAT | ロゴ Y 位置 (0.0–0.9、画面高比) |
 | logo_width_pct | FLOAT | ロゴ幅 (2.0–30.0、画面幅に対する %) |
 | kiosk_style | VARCHAR(32) | ようこそ画面デザインパターン ID (default / medical / retail / hotel / startup / school / craft / industrial / restaurant / mono / gym) |
+| is_suspended | BOOLEAN | テナント停止フラグ |
+| operator_notes | TEXT | 運営用内部メモ (nullable) |
+
+### devices (追加カラム)
+
+| カラム | 型 | 説明 |
+|---|---|---|
+| force_update_at | TIMESTAMP | 強制更新フラグ（NULLでない場合キオスクがリロード）|
 
 ### その他テーブル
 - **users** — email / password_hash / role / tenant_id
 - **media** — アップロードファイル (URL, mime_type, duration_sec)
 - **playlists / playlist_items** — メディアのプレイリスト
 - **schedules** — 曜日・時間帯ごとのプレイリスト割当
-- **devices** — キオスク端末 (token, PIN, last_seen_at)
+- **devices** — キオスク端末 (token, PIN, last_seen_at, force_update_at)
 - **lockers** — ロッカー (gpio_pin, state)
-- **reception_logs** — 受付ログ (visitor_name, company, staff, purpose, method, state)
+- **reception_logs** — 受付ログ (visitor_name, company, staff, purpose, method, state, staff_notes)
 - **notification_settings** — Slack/Chatwork Webhook URL (Fernet 暗号化)
 - **push_subscriptions** — Web Push 購読情報
 

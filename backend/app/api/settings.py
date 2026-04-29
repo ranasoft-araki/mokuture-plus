@@ -1,16 +1,19 @@
 """Tenant settings API – brand_color, font, logo_url."""
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.database import get_db
 from app.middleware.tenant import get_current_user
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.models.device import Device
+from app.models.reception import ReceptionLog
+from app.models.content import Media, Playlist
 from app.services import storage
 from app.config import settings as app_settings
 
@@ -44,6 +47,8 @@ class TenantSettingsOut(BaseModel):
     logo_pos_y: float
     logo_width_pct: float
     kiosk_style: str
+    staff_list: str | None
+    purpose_list: str | None
 
 
 class PublicTenantSettingsOut(BaseModel):
@@ -60,9 +65,13 @@ class PublicTenantSettingsOut(BaseModel):
     logo_pos_y: float
     logo_width_pct: float
     kiosk_style: str
+    is_suspended: bool
+    staff_list: list[str]
+    purpose_list: list[str]
 
 
 class TenantSettingsPatch(BaseModel):
+    name: str | None = None
     brand_color: str | None = None
     font: str | None = None
     kiosk_welcome_message: str | None = None
@@ -75,6 +84,8 @@ class TenantSettingsPatch(BaseModel):
     logo_pos_y: float | None = None
     logo_width_pct: float | None = None
     kiosk_style: str | None = None
+    staff_list: str | None = None
+    purpose_list: str | None = None
 
 
 class LogoUploadUrlRequest(BaseModel):
@@ -84,6 +95,20 @@ class LogoUploadUrlRequest(BaseModel):
 
 class LogoUrlPatch(BaseModel):
     logo_url: str
+
+
+class TenantStatsResponse(BaseModel):
+    device_count: int
+    online_device_count: int
+    devices_online: int
+    devices_offline: int
+    reception_count: int
+    reception_today: int
+    reception_this_week: int
+    user_count: int
+    media_count: int
+    playlist_count: int
+    unread_count: int
 
 
 async def _get_tenant(user: User, db: AsyncSession) -> Tenant:
@@ -111,10 +136,16 @@ def _out(tenant: Tenant) -> TenantSettingsOut:
         logo_pos_y=getattr(tenant, "logo_pos_y", 0.04),
         logo_width_pct=getattr(tenant, "logo_width_pct", 8.0),
         kiosk_style=getattr(tenant, "kiosk_style", "default"),
+        staff_list=getattr(tenant, "staff_list", None),
+        purpose_list=getattr(tenant, "purpose_list", None),
     )
 
 
 def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
+    raw_staff = getattr(tenant, "staff_list", None) or ""
+    staff_list = [n.strip() for n in raw_staff.split(",") if n.strip()]
+    raw_purpose = getattr(tenant, "purpose_list", None) or ""
+    purpose_list = [p.strip() for p in raw_purpose.split(",") if p.strip()]
     return PublicTenantSettingsOut(
         brand_color=tenant.brand_color,
         logo_url=tenant.logo_url,
@@ -129,6 +160,9 @@ def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
         logo_pos_y=getattr(tenant, "logo_pos_y", 0.04),
         logo_width_pct=getattr(tenant, "logo_width_pct", 8.0),
         kiosk_style=getattr(tenant, "kiosk_style", "default"),
+        is_suspended=getattr(tenant, "is_suspended", False),
+        staff_list=staff_list,
+        purpose_list=purpose_list,
     )
 
 
@@ -140,6 +174,73 @@ async def get_settings(
     return _out(await _get_tenant(user, db))
 
 
+@router.get("/stats", response_model=TenantStatsResponse)
+async def get_tenant_stats(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tid = user.tenant_id
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    online_threshold = now - timedelta(minutes=5)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=today_start.weekday())
+
+    device_count = (await db.execute(
+        select(func.count()).select_from(Device).where(Device.tenant_id == tid)
+    )).scalar_one()
+    online_device_count = (await db.execute(
+        select(func.count()).select_from(Device).where(
+            Device.tenant_id == tid,
+            Device.last_seen_at >= online_threshold,
+        )
+    )).scalar_one()
+    reception_count = (await db.execute(
+        select(func.count()).select_from(ReceptionLog).where(ReceptionLog.tenant_id == tid)
+    )).scalar_one()
+    reception_today = (await db.execute(
+        select(func.count()).select_from(ReceptionLog).where(
+            ReceptionLog.tenant_id == tid,
+            ReceptionLog.created_at >= today_start,
+        )
+    )).scalar_one()
+    reception_this_week = (await db.execute(
+        select(func.count()).select_from(ReceptionLog).where(
+            ReceptionLog.tenant_id == tid,
+            ReceptionLog.created_at >= week_start,
+        )
+    )).scalar_one()
+    unread_count = (await db.execute(
+        select(func.count()).select_from(ReceptionLog).where(
+            ReceptionLog.tenant_id == tid,
+            ReceptionLog.created_at >= today_start,
+            ReceptionLog.state == "received",
+        )
+    )).scalar_one()
+    user_count = (await db.execute(
+        select(func.count()).select_from(User).where(User.tenant_id == tid)
+    )).scalar_one()
+    media_count = (await db.execute(
+        select(func.count()).select_from(Media).where(Media.tenant_id == tid)
+    )).scalar_one()
+    playlist_count = (await db.execute(
+        select(func.count()).select_from(Playlist).where(Playlist.tenant_id == tid)
+    )).scalar_one()
+
+    return TenantStatsResponse(
+        device_count=device_count,
+        online_device_count=online_device_count,
+        devices_online=online_device_count,
+        devices_offline=device_count - online_device_count,
+        reception_count=reception_count,
+        reception_today=reception_today,
+        reception_this_week=reception_this_week,
+        unread_count=unread_count,
+        user_count=user_count,
+        media_count=media_count,
+        playlist_count=playlist_count,
+    )
+
+
 @router.patch("", response_model=TenantSettingsOut)
 async def patch_settings(
     body: TenantSettingsPatch,
@@ -147,6 +248,11 @@ async def patch_settings(
     db: AsyncSession = Depends(get_db),
 ):
     tenant = await _get_tenant(user, db)
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="テナント名を入力してください")
+        tenant.name = name[:255]
     if body.brand_color is not None:
         if not _COLOR_RE.match(body.brand_color):
             raise HTTPException(status_code=422, detail="Invalid color format (expected #RRGGBB)")
@@ -177,6 +283,10 @@ async def patch_settings(
         if body.kiosk_style not in ALLOWED_KIOSK_STYLES:
             raise HTTPException(status_code=422, detail=f"kiosk_style not allowed: {body.kiosk_style}")
         tenant.kiosk_style = body.kiosk_style
+    if "staff_list" in body.model_fields_set:
+        tenant.staff_list = body.staff_list
+    if "purpose_list" in body.model_fields_set:
+        tenant.purpose_list = body.purpose_list
     await db.commit()
     return _out(tenant)
 

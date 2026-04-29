@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
@@ -280,6 +280,37 @@ async def update_playlist_items(
     await db.execute(delete(PlaylistItem).where(PlaylistItem.playlist_id == playlist_id))
     for item in items:
         db.add(PlaylistItem(playlist_id=playlist_id, **item.model_dump()))
+    await db.commit()
+    return {"ok": True}
+
+
+class ReorderItemsRequest(BaseModel):
+    items: list[dict]  # [{ id: str, sort_order: int }]
+
+
+@router.patch("/playlists/{playlist_id}/items/reorder")
+async def reorder_playlist_items(
+    playlist_id: str,
+    body: ReorderItemsRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Verify playlist belongs to this tenant
+    result = await db.execute(
+        select(Playlist).where(Playlist.id == playlist_id, Playlist.tenant_id == user.tenant_id)
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    for item_update in body.items:
+        await db.execute(
+            update(PlaylistItem)
+            .where(
+                PlaylistItem.playlist_id == playlist_id,
+                PlaylistItem.media_id == item_update["id"],
+            )
+            .values(display_order=item_update["sort_order"])
+        )
     await db.commit()
     return {"ok": True}
 

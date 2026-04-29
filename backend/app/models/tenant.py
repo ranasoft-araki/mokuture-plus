@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Integer, Float, DateTime, Boolean, ForeignKey, func
+from sqlalchemy import String, Integer, Float, DateTime, Boolean, ForeignKey, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -37,8 +37,19 @@ class Tenant(Base):
     # Kiosk design pattern selection
     kiosk_style: Mapped[str] = mapped_column(String(32), default="default")
 
+    # Suspension flag — set by operator to block kiosk access
+    is_suspended: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # OTA: timestamp set by admin to trigger force-push to all devices of this tenant
     kiosk_force_update_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    operator_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Staff list — comma-separated names for kiosk dropdown (e.g. "山田太郎,鈴木花子")
+    staff_list: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Purpose list — comma-separated visit purposes for kiosk dropdown (e.g. "商談・打合せ,採用面接,配送・搬入")
+    purpose_list: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     media = relationship("Media", back_populates="tenant", cascade="all, delete-orphan")

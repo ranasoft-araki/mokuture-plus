@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter, usePathname } from "next/navigation";
-import { clearTokens } from "@/lib/auth";
+import { clearTokens, getLogoutUrl } from "@/lib/auth";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 const FONT_UI = '"Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
@@ -18,9 +19,20 @@ const NAV_ITEMS = [
   { id: "broadcast", label: "緊急配信", path: "/operator/broadcast", icon: "broadcast" },
 ] as const;
 
-export function OperatorShell({ children }: { children: ReactNode }) {
+export function OperatorShell({ children, receptionUnread }: { children: ReactNode; receptionUnread?: number }) {
   const router = useRouter();
   const pathname = usePathname();
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    import("@/lib/auth").then(({ getAccessToken }) => {
+      const token = getAccessToken();
+      if (!token) return;
+      import("@/lib/api").then(({ api }) => {
+        api.getMe(token).then((p) => setUserEmail(p.email)).catch(() => {});
+      });
+    });
+  }, []);
 
   const getActive = () => {
     if (pathname === "/operator") return "dashboard";
@@ -74,6 +86,16 @@ export function OperatorShell({ children }: { children: ReactNode }) {
               >
                 <OperatorNavIcon id={item.icon} active={isActive} />
                 <span>{item.label}</span>
+                {item.id === "reception" && receptionUnread != null && receptionUnread > 0 && (
+                  <span style={{
+                    background: "#c8a96e", color: "#1d1a15",
+                    borderRadius: 999, fontSize: 10, fontWeight: 700,
+                    padding: "1px 5px", minWidth: 16, textAlign: "center",
+                    marginLeft: 4, lineHeight: "14px", display: "inline-block",
+                  }}>
+                    {receptionUnread > 99 ? "99+" : receptionUnread}
+                  </span>
+                )}
                 {item.id === "broadcast" && (
                   <span style={{ marginLeft: "auto", fontSize: 9, padding: "2px 6px", background: "rgba(168,66,56,0.25)", border: "1px solid rgba(168,66,56,0.4)", borderRadius: 4, color: "#e06060", fontFamily: FONT_MONO, letterSpacing: 0.5 }}>緊急</span>
                 )}
@@ -83,16 +105,29 @@ export function OperatorShell({ children }: { children: ReactNode }) {
         </nav>
 
         {/* Footer */}
-        <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: 12 }}>
-          <button
-            onClick={() => { clearTokens(); router.push("/login"); }}
-            style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.4)", fontSize: 12.5, fontFamily: FONT_JP, textAlign: "left" as const }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.7)"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.4)"; }}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
-            ログアウト
-          </button>
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+          {userEmail && (
+            <div style={{ padding: "10px 14px 6px", display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(74,124,78,0.2)", color: "#7ec483", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", textTransform: "uppercase" as const, letterSpacing: "0.6px", fontFamily: FONT_MONO }}>アカウント</div>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", fontFamily: FONT_JP, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{userEmail}</div>
+              </div>
+            </div>
+          )}
+          <div style={{ padding: "4px 12px 12px" }}>
+            <button
+              onClick={() => { clearTokens(); router.push(getLogoutUrl()); }}
+              style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.4)", fontSize: 12.5, fontFamily: FONT_JP, textAlign: "left" as const }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.7)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.4)"; }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+              ログアウト
+            </button>
+          </div>
         </div>
       </aside>
 

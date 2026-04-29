@@ -9,6 +9,9 @@ import httpx
 from config import settings
 from state import get_device_token
 
+# Last known force_update_at value — used to detect remote force-refresh signals
+_last_force_update_at: str | None = None
+
 def _manifest_file() -> Path:
     return settings.media_dir / "manifest.json"
 
@@ -40,6 +43,36 @@ def find_media(media_id: str) -> Path | None:
         if p.stem == media_id and p.suffix != ".json":
             return p
     return None
+
+
+async def check_force_refresh(client: httpx.AsyncClient) -> None:
+    """Poll /kiosk/schedule and trigger a reload if force_update_at has changed."""
+    global _last_force_update_at
+    token = get_device_token()
+    if not token:
+        return
+    try:
+        resp = await client.get(
+            f"{settings.remote_api_url}/kiosk/schedule",
+            headers={"X-Kiosk-Token": token},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        fat = data.get("force_update_at")
+        if fat is not None and fat != _last_force_update_at:
+            _last_force_update_at = fat
+            print(f"[sync] force_update_at が変更されました ({fat}) — 設定を再読み込みします")
+            # Trigger settings reload: log prominently so the kiosk process notices.
+            # The kiosk HTML polls /proxy/schedule independently and will pick up any
+            # content changes on its next cycle. This log line signals a forced reload
+            # has been requested by the admin.
+            print("[sync] FORCE_REFRESH: admin requested immediate settings reload")
+        else:
+            if _last_force_update_at is None and fat is not None:
+                _last_force_update_at = fat
+    except Exception as e:
+        print(f"[sync] force-refresh check failed: {e}")
 
 
 async def sync_once(client: httpx.AsyncClient) -> None:
@@ -96,5 +129,6 @@ async def sync_once(client: httpx.AsyncClient) -> None:
 async def sync_loop() -> None:
     async with httpx.AsyncClient() as client:
         while True:
+            await check_force_refresh(client)
             await sync_once(client)
             await asyncio.sleep(settings.sync_interval_sec)

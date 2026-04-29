@@ -216,6 +216,71 @@ export default function AdminSettingsPage() {
               </Field>
             </div>
           </MkCard>
+
+          <MkCard>
+            <div
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", userSelect: "none" }}
+              onClick={() => { setPwOpen((v) => !v); setPwError(null); setPwSuccess(false); }}
+            >
+              <MkSectionTitle title="パスワード変更" subtitle="ログインパスワードを変更します" />
+              <span style={{ fontSize: 12, color: "#a8a198", marginLeft: 12 }}>{pwOpen ? "▲" : "▼"}</span>
+            </div>
+            {pwOpen && (
+              <form onSubmit={handlePasswordChange} style={{ marginTop: 16 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <Field label="現在のパスワード">
+                    <div style={{ display: "flex", alignItems: "center", border: "1px solid #d8d3c7", borderRadius: 7, background: "#fffefb", padding: "0 10px", height: 34 }}>
+                      <input
+                        type="password"
+                        required
+                        value={pwCurrent}
+                        onChange={(e) => setPwCurrent(e.target.value)}
+                        style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 12.5, color: "#2d2a24", height: "100%" }}
+                      />
+                    </div>
+                  </Field>
+                  <Field label="新しいパスワード" hint="8文字以上">
+                    <div style={{ display: "flex", alignItems: "center", border: "1px solid #d8d3c7", borderRadius: 7, background: "#fffefb", padding: "0 10px", height: 34 }}>
+                      <input
+                        type="password"
+                        required
+                        minLength={8}
+                        value={pwNew}
+                        onChange={(e) => setPwNew(e.target.value)}
+                        style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 12.5, color: "#2d2a24", height: "100%" }}
+                      />
+                    </div>
+                  </Field>
+                  <Field label="確認用パスワード">
+                    <div style={{ display: "flex", alignItems: "center", border: "1px solid #d8d3c7", borderRadius: 7, background: "#fffefb", padding: "0 10px", height: 34 }}>
+                      <input
+                        type="password"
+                        required
+                        value={pwConfirm}
+                        onChange={(e) => setPwConfirm(e.target.value)}
+                        style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 12.5, color: "#2d2a24", height: "100%" }}
+                      />
+                    </div>
+                  </Field>
+                </div>
+                {pwError && (
+                  <div style={{ background: "#fdf2f1", border: "1px solid #f0b9b5", borderRadius: 7, padding: "10px 14px", fontSize: 12.5, color: "#a84238", marginTop: 12 }}>
+                    {pwError}
+                  </div>
+                )}
+                {pwSuccess && (
+                  <div style={{ background: "#f1f8f2", border: "1px solid #b5d9b8", borderRadius: 7, padding: "10px 14px", fontSize: 12.5, color: "#2d6a32", marginTop: 12 }}>
+                    パスワードを変更しました
+                  </div>
+                )}
+                <div style={{ marginTop: 16 }}>
+                  <MkBtn type="submit" variant="primary" size="sm" disabled={pwSaving}>
+                    {pwSaving ? "変更中..." : "パスワードを変更"}
+                  </MkBtn>
+                </div>
+              </form>
+            )}
+          </MkCard>
       </div>
     </AdminShell>
   );

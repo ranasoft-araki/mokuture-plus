@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api, type Device } from "@/lib/api";
 import { clearTokens, getAccessToken } from "@/lib/auth";
@@ -34,6 +34,16 @@ export default function AdminKioskPage() {
   const [confirmTarget, setConfirmTarget] = useState<{ id: string; name: string } | null>(null);
   const [forcePushing, setForcePushing] = useState(false);
   const [forcePushMsg, setForcePushMsg] = useState("");
+  const [refreshingDeviceId, setRefreshingDeviceId] = useState<string | null>(null);
+  const [refreshMsg, setRefreshMsg] = useState("");
+  const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
+  const [editingLocation, setEditingLocation] = useState("");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [regenPin, setRegenPin] = useState<Record<string, { pin_code: string; expires_minutes: number; copiedPin: boolean }>>({});
+  const [regenPinLoading, setRegenPinLoading] = useState<string | null>(null);
 
   const loadDevices = useCallback(async (token: string) => {
     try {
@@ -91,6 +101,22 @@ export default function AdminKioskPage() {
     }
   }
 
+  async function handleForceRefreshDevice(deviceId: string, deviceName: string) {
+    const token = getAccessToken();
+    if (!token) { router.push("/login"); return; }
+    setRefreshingDeviceId(deviceId);
+    setRefreshMsg("");
+    try {
+      await api.forceRefreshDevice(token, deviceId);
+      setRefreshMsg(`「${deviceName}」に更新信号を送信しました`);
+      setTimeout(() => setRefreshMsg(""), 5000);
+    } catch (err: unknown) {
+      setRefreshMsg(err instanceof Error ? err.message : "強制更新に失敗しました");
+    } finally {
+      setRefreshingDeviceId(null);
+    }
+  }
+
   async function handleForcePush() {
     if (!window.confirm("すべてのデバイスに強制配信します。キオスクは次の待機画面で自動更新されます。続けますか？")) return;
     const token = getAccessToken();
@@ -108,10 +134,67 @@ export default function AdminKioskPage() {
     }
   }
 
+  async function handleSaveDeviceName(deviceId: string) {
+    const t = getAccessToken();
+    if (!t) { router.push("/login"); return; }
+    try {
+      const updated = await api.updateDevice(t, deviceId, editingName.trim());
+      setDevices((d) => d.map((dev) => dev.id === deviceId ? { ...dev, name: updated.name } : dev));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "名前の更新に失敗しました");
+    }
+    setEditingDeviceId(null);
+    setEditingName("");
+  }
+
+  async function handleSaveDeviceLocation(deviceId: string) {
+    const t = getAccessToken();
+    if (!t) { router.push("/login"); return; }
+    try {
+      const loc = editingLocation.trim() || null;
+      const updated = await api.updateDeviceLocation(t, deviceId, loc);
+      setDevices((d) => d.map((dev) => dev.id === deviceId ? { ...dev, location: updated.location } : dev));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "場所の更新に失敗しました");
+    }
+    setEditingLocationId(null);
+    setEditingLocation("");
+  }
+
   async function handleCopy(text: string, type: "token" | "url") {
     await navigator.clipboard.writeText(text);
     setCopied(type);
     setTimeout(() => setCopied(null), 2000);
+  }
+
+  async function handleRegeneratePin(deviceId: string) {
+    const token = getAccessToken();
+    if (!token) { router.push("/login"); return; }
+    setRegenPinLoading(deviceId);
+    try {
+      const result = await api.regenerateDevicePin(token, deviceId);
+      setRegenPin((prev) => ({ ...prev, [deviceId]: { ...result, copiedPin: false } }));
+      // Auto-hide after 60 seconds
+      setTimeout(() => {
+        setRegenPin((prev) => {
+          const next = { ...prev };
+          delete next[deviceId];
+          return next;
+        });
+      }, 60000);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "PINの再発行に失敗しました");
+    } finally {
+      setRegenPinLoading(null);
+    }
+  }
+
+  async function handleCopyRegenPin(deviceId: string, pinCode: string) {
+    await navigator.clipboard.writeText(pinCode);
+    setRegenPin((prev) => prev[deviceId] ? { ...prev, [deviceId]: { ...prev[deviceId], copiedPin: true } } : prev);
+    setTimeout(() => {
+      setRegenPin((prev) => prev[deviceId] ? { ...prev, [deviceId]: { ...prev[deviceId], copiedPin: false } } : prev);
+    }, 2000);
   }
 
   const kioskUrl = typeof window !== "undefined"
@@ -119,6 +202,18 @@ export default function AdminKioskPage() {
     : `/${params.tenant}/kiosk`;
 
   const isOnline = (d: Device) => !!d.last_seen_at && (Date.now() - new Date(d.last_seen_at).getTime()) < 2 * 60 * 1000;
+
+  const filtered = useMemo(() => {
+    let list = devices;
+    if (search.trim()) list = list.filter(d =>
+      d.name.toLowerCase().includes(search.trim().toLowerCase()) ||
+      (d.location ?? "").toLowerCase().includes(search.trim().toLowerCase())
+    );
+    if (statusFilter === "online") list = list.filter(d => isOnline(d));
+    if (statusFilter === "offline") list = list.filter(d => !isOnline(d));
+    return list;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [devices, search, statusFilter]);
 
   const onlineCount = devices.filter(isOnline).length;
   const offlineCount = devices.filter((d) => !!d.last_seen_at && !isOnline(d)).length;
@@ -139,6 +234,11 @@ export default function AdminKioskPage() {
       {forcePushMsg && (
         <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 8, background: "#eaf4eb", border: "1px solid #4a7c4e", fontSize: 12.5, color: "#2d4e30" }}>
           {forcePushMsg}
+        </div>
+      )}
+      {refreshMsg && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 8, background: "#fdf6e8", border: "1px solid #c8a96e", fontSize: 12.5, color: "#7a5a1e" }}>
+          {refreshMsg}
         </div>
       )}
       {/* Summary strip — 4 cards */}
@@ -162,18 +262,33 @@ export default function AdminKioskPage() {
           <p style={{ fontWeight: 600, color: "#7a4e10", fontSize: 13, marginBottom: 4 }}>「{newToken.name}」のデバイスが登録されました</p>
 
           {/* PIN */}
-          <div style={{ margin: "16px 0", textAlign: "center" }}>
-            <p style={{ fontSize: 11, color: "#7a4e10", marginBottom: 6 }}>ワンタイムPIN（{newToken.pin_expires_minutes}分以内・1回限り）</p>
-            <div style={{ display: "inline-flex", gap: 6 }}>
-              {newToken.pin_code.split("").map((d, i) => (
-                <div key={i} style={{ width: 44, height: 52, borderRadius: 8, background: "#fffefb", border: "1px solid #efece5", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, fontWeight: 700, color: "#1d1a15", fontFamily: "monospace" }}>
-                  {d}
-                </div>
-              ))}
+          <div style={{ margin: "16px 0", display: "flex", gap: 24, alignItems: "flex-start", justifyContent: "center", flexWrap: "wrap" }}>
+            <div style={{ textAlign: "center" }}>
+              <p style={{ fontSize: 11, color: "#7a4e10", marginBottom: 6 }}>ワンタイムPIN（{newToken.pin_expires_minutes}分以内・1回限り）</p>
+              <div style={{ display: "inline-flex", gap: 6 }}>
+                {newToken.pin_code.split("").map((d, i) => (
+                  <div key={i} style={{ width: 44, height: 52, borderRadius: 8, background: "#fffefb", border: "1px solid #efece5", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, fontWeight: 700, color: "#1d1a15", fontFamily: "monospace" }}>
+                    {d}
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <button
+                  onClick={() => handleCopy(newToken.pin_code, "token")}
+                  style={{ padding: "5px 14px", borderRadius: 6, background: "#7a4e10", color: "#fffefb", border: "none", fontSize: 11, fontWeight: 500, cursor: "pointer" }}
+                >
+                  {copied === "token" ? "コピー済" : "PINをコピー"}
+                </button>
+              </div>
             </div>
-            <p style={{ fontSize: 11, color: "#7a4e10", marginTop: 8 }}>
-              キオスク端末の画面でこのPINをタップ入力してください
-            </p>
+            <div style={{ textAlign: "center" }}>
+              <p style={{ fontSize: 11, color: "#7a4e10", marginBottom: 6 }}>QRコードをスキャンしてデバイスを設定してください</p>
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(newToken.pin_code)}&format=png&bgcolor=fffefb&color=1d1a15`}
+                alt="QR Code"
+                style={{ width: 160, height: 160, borderRadius: 8, border: "1px solid #efece5", display: "block" }}
+              />
+            </div>
           </div>
 
           {/* Setup URL (SSH provisioning) */}
@@ -213,12 +328,33 @@ export default function AdminKioskPage() {
         </div>
       )}
 
+      {/* Search / filter toolbar */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="端末名・場所で検索"
+          style={{ height: 32, border: "1px solid #efece5", borderRadius: 6, fontSize: 13, padding: "0 10px", background: "#fffefb", color: "#2d2a24", outline: "none", minWidth: 200 }}
+        />
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          style={{ height: 32, border: "1px solid #efece5", borderRadius: 6, fontSize: 13, padding: "0 10px", background: "#fffefb", color: "#2d2a24", outline: "none", cursor: "pointer" }}
+        >
+          <option value="">全て</option>
+          <option value="online">オンライン</option>
+          <option value="offline">オフライン</option>
+        </select>
+        <span style={{ fontSize: 12, color: "#a8a198", marginLeft: "auto" }}>{filtered.length} 台</span>
+      </div>
+
       {/* Device list */}
       <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 20 }}>
         {loading ? (
           <MkCard><div style={{ textAlign: "center", color: "#a8a198" }}>読み込み中…</div></MkCard>
-        ) : devices.length === 0 ? null : (
-          devices.map((d) => {
+        ) : filtered.length === 0 ? null : (
+          filtered.map((d) => {
             const online = isOnline(d);
             return (
               <MkCard key={d.id} padding="0">
@@ -244,11 +380,76 @@ export default function AdminKioskPage() {
 
                   {/* Details */}
                   <div style={{ flex: 1, padding: "18px 22px" }}>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                      <div style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15" }}>{d.name}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      {editingDeviceId === d.id ? (
+                        <>
+                          <input
+                            value={editingName}
+                            onChange={(e) => setEditingName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") { void handleSaveDeviceName(d.id); }
+                              if (e.key === "Escape") { setEditingDeviceId(null); setEditingName(""); }
+                            }}
+                            autoFocus
+                            style={{ border: "1px solid #c8a96e", borderRadius: 4, padding: "3px 8px", fontSize: 13, color: "#1d1a15", background: "#fffefb" }}
+                          />
+                          <button
+                            onClick={() => void handleSaveDeviceName(d.id)}
+                            style={{ padding: "3px 8px", fontSize: 11, borderRadius: 4, background: "#4a7c4e", color: "#fffefb", border: "none", cursor: "pointer" }}
+                          >
+                            保存
+                          </button>
+                          <button
+                            onClick={() => { setEditingDeviceId(null); setEditingName(""); }}
+                            style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, background: "#f4f1ea", color: "#6b6559", border: "1px solid #d8d3c7", cursor: "pointer" }}
+                          >
+                            ×
+                          </button>
+                        </>
+                      ) : (
+                        <div
+                          onDoubleClick={() => { setEditingDeviceId(d.id); setEditingName(d.name); }}
+                          title="ダブルクリックで編集"
+                          style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15", cursor: "text" }}
+                        >
+                          {d.name}
+                        </div>
+                      )}
                       <div style={{ fontSize: 11, color: "#a8a198", fontFamily: "monospace" }}>{d.id}</div>
                     </div>
-                    <div style={{ fontSize: 11.5, color: "#6b6559", marginTop: 3 }}>キオスク端末</div>
+                    <div style={{ fontSize: 11.5, color: "#6b6559", marginTop: 3 }}>
+                      {editingLocationId === d.id ? (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          <input
+                            value={editingLocation}
+                            onChange={(e) => setEditingLocation(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") { void handleSaveDeviceLocation(d.id); }
+                              if (e.key === "Escape") { setEditingLocationId(null); setEditingLocation(""); }
+                            }}
+                            placeholder="例: 1F受付デスク"
+                            autoFocus
+                            style={{ border: "1px solid #c8a96e", borderRadius: 4, padding: "2px 8px", fontSize: 12, color: "#1d1a15", background: "#fffefb", width: 180 }}
+                          />
+                          <button
+                            onClick={() => void handleSaveDeviceLocation(d.id)}
+                            style={{ padding: "2px 8px", fontSize: 11, borderRadius: 4, background: "#4a7c4e", color: "#fffefb", border: "none", cursor: "pointer" }}
+                          >保存</button>
+                          <button
+                            onClick={() => { setEditingLocationId(null); setEditingLocation(""); }}
+                            style={{ padding: "2px 6px", fontSize: 11, borderRadius: 4, background: "#f4f1ea", color: "#6b6559", border: "1px solid #d8d3c7", cursor: "pointer" }}
+                          >×</button>
+                        </span>
+                      ) : (
+                        <span
+                          onDoubleClick={() => { setEditingLocationId(d.id); setEditingLocation(d.location ?? ""); }}
+                          title="ダブルクリックで場所を編集"
+                          style={{ cursor: "text", color: d.location ? "#6b6559" : "#a8a198" }}
+                        >
+                          {d.location ?? "場所未設定"}
+                        </span>
+                      )}
+                    </div>
                     <div style={{
                       display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16,
                       marginTop: 18, paddingTop: 14, borderTop: "1px solid #efece5",
@@ -280,11 +481,86 @@ export default function AdminKioskPage() {
                     <MkBtn size="sm" variant="default" onClick={() => window.open(kioskUrl, "_blank")}>
                       画面プレビュー
                     </MkBtn>
+                    <button
+                      onClick={() => handleForceRefreshDevice(d.id, d.name)}
+                      disabled={refreshingDeviceId === d.id}
+                      style={{
+                        border: "1px solid #c8a96e",
+                        color: refreshingDeviceId === d.id ? "#a8a198" : "#b88b44",
+                        background: "transparent",
+                        padding: "4px 10px",
+                        borderRadius: 6,
+                        fontSize: 11,
+                        cursor: refreshingDeviceId === d.id ? "default" : "pointer",
+                        textAlign: "center",
+                      }}
+                    >
+                      {refreshingDeviceId === d.id ? "送信中…" : "強制更新"}
+                    </button>
+                    <button
+                      onClick={() => void handleRegeneratePin(d.id)}
+                      disabled={regenPinLoading === d.id}
+                      style={{
+                        border: "1px solid #a78060",
+                        color: regenPinLoading === d.id ? "#a8a198" : "#7a4e10",
+                        background: "transparent",
+                        padding: "4px 10px",
+                        borderRadius: 6,
+                        fontSize: 11,
+                        cursor: regenPinLoading === d.id ? "default" : "pointer",
+                        textAlign: "center",
+                      }}
+                    >
+                      {regenPinLoading === d.id ? "発行中…" : "PINを再発行"}
+                    </button>
                     <MkBtn size="sm" variant="ghost" onClick={() => handleDelete(d.id, d.name)}>
                       削除
                     </MkBtn>
                   </div>
                 </div>
+                {regenPin[d.id] && (
+                  <div style={{
+                    margin: "0 18px 14px",
+                    padding: "12px 16px",
+                    borderRadius: 8,
+                    background: "#fef9c3",
+                    border: "1px solid #d4b946",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 14,
+                    flexWrap: "wrap",
+                  }}>
+                    <span style={{ fontSize: 11, color: "#7a6010", fontWeight: 600, flexShrink: 0 }}>新しいPIN</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 22, fontWeight: 700, letterSpacing: "0.15em", color: "#1d1a15" }}>
+                      {regenPin[d.id].pin_code}
+                    </span>
+                    <span style={{ fontSize: 11, color: "#7a6010", flexShrink: 0 }}>
+                      {regenPin[d.id].expires_minutes}分間有効
+                    </span>
+                    <button
+                      onClick={() => void handleCopyRegenPin(d.id, regenPin[d.id].pin_code)}
+                      style={{
+                        padding: "4px 12px",
+                        borderRadius: 6,
+                        background: "#7a4e10",
+                        color: "#fffefb",
+                        border: "none",
+                        fontSize: 11,
+                        fontWeight: 500,
+                        cursor: "pointer",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {regenPin[d.id].copiedPin ? "コピー済" : "コピー"}
+                    </button>
+                    <button
+                      onClick={() => setRegenPin((prev) => { const next = { ...prev }; delete next[d.id]; return next; })}
+                      style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#a8a198", textDecoration: "underline", flexShrink: 0 }}
+                    >
+                      閉じる
+                    </button>
+                  </div>
+                )}
               </MkCard>
             );
           })

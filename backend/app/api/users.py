@@ -22,6 +22,15 @@ class UserListItem(BaseModel):
     created_at: datetime
 
 
+class MeResponse(BaseModel):
+    id: str
+    email: str
+    name: str | None
+    role: str
+    tenant_id: str | None
+    created_at: datetime
+
+
 class CreateUserRequest(BaseModel):
     email: str
     password: str
@@ -32,6 +41,10 @@ class UpdateUserRequest(BaseModel):
     role: str
 
 
+class UpdateMeRequest(BaseModel):
+    name: str | None = None
+
+
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
@@ -39,6 +52,26 @@ class ChangePasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     new_password: str
+
+
+@router.get("/me", response_model=MeResponse)
+async def get_me(
+    user: User = Depends(get_current_user),
+):
+    return _out_me(user)
+
+
+@router.patch("/me", response_model=MeResponse)
+async def update_me(
+    body: UpdateMeRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if body.name is not None:
+        user.name = body.name
+    await db.commit()
+    await db.refresh(user)
+    return _out_me(user)
 
 
 @router.get("", response_model=list[UserListItem])
@@ -99,6 +132,21 @@ async def delete_user(
     await db.commit()
 
 
+@router.patch("/me/password")
+async def change_own_password(
+    body: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not verify_password(body.current_password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="現在のパスワードが正しくありません")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=422, detail="New password must be at least 8 characters")
+    user.hashed_password = hash_password(body.new_password)
+    await db.commit()
+    return {"message": "パスワードを変更しました"}
+
+
 @router.patch("/{user_id}", response_model=UserListItem)
 async def update_user_role(
     user_id: str,
@@ -120,21 +168,6 @@ async def update_user_role(
     return _out(target)
 
 
-@router.patch("/me/password")
-async def change_own_password(
-    body: ChangePasswordRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    if not verify_password(body.current_password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Current password is incorrect")
-    if len(body.new_password) < 8:
-        raise HTTPException(status_code=422, detail="New password must be at least 8 characters")
-    user.hashed_password = hash_password(body.new_password)
-    await db.commit()
-    return {"ok": True}
-
-
 @router.post("/{user_id}/reset-password")
 async def reset_user_password(
     user_id: str,
@@ -152,7 +185,7 @@ async def reset_user_password(
         raise HTTPException(status_code=403, detail="User not found in your tenant")
     target.hashed_password = hash_password(body.new_password)
     await db.commit()
-    return {"ok": True}
+    return {"message": "パスワードをリセットしました"}
 
 
 def _out(u: User) -> dict:
@@ -160,5 +193,16 @@ def _out(u: User) -> dict:
         "id": u.id,
         "email": u.email,
         "role": u.role,
+        "created_at": u.created_at,
+    }
+
+
+def _out_me(u: User) -> dict:
+    return {
+        "id": u.id,
+        "email": u.email,
+        "name": u.name,
+        "role": u.role,
+        "tenant_id": u.tenant_id,
         "created_at": u.created_at,
     }

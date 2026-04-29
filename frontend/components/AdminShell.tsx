@@ -1,11 +1,11 @@
 "use client";
 
 import { useRouter, useParams } from "next/navigation";
-import { clearTokens } from "@/lib/auth";
+import { clearTokens, getLogoutUrl } from "@/lib/auth";
 import { useState } from "react";
 import type { ReactNode } from "react";
 
-export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "notify" | "locker" | "kiosk_settings" | "settings" | "users";
+export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "notify" | "locker" | "kiosk_settings" | "settings" | "users" | "profile";
 
 interface Props {
   active: NavId;
@@ -14,6 +14,7 @@ interface Props {
   breadcrumb?: string;
   actions?: ReactNode;
   children: ReactNode;
+  receptionUnread?: number;
 }
 
 const NAV_OPS: { id: NavId; label: string }[] = [
@@ -31,6 +32,7 @@ const NAV_SETTINGS: { id: NavId; label: string }[] = [
   { id: "kiosk_settings", label: "受付設定" },
   { id: "settings",       label: "基本設定" },
   { id: "users",          label: "ユーザー管理" },
+  { id: "profile",        label: "アカウント" },
 ];
 
 const NAV_PATHS: Record<NavId, (t: string) => string> = {
@@ -45,13 +47,14 @@ const NAV_PATHS: Record<NavId, (t: string) => string> = {
   kiosk_settings:(t) => `/${t}/admin/kiosk-settings`,
   settings:      (t) => `/${t}/admin/settings`,
   users:         (t) => `/${t}/admin/users`,
+  profile:       (t) => `/${t}/admin/profile`,
 };
 
 const FONT_UI = '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Noto Sans JP", sans-serif';
 const FONT_JP = '"Noto Sans JP", "Inter", system-ui, sans-serif';
 const FONT_MONO = '"JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace';
 
-export function AdminShell({ active, title, subtitle, breadcrumb, actions, children }: Props) {
+export function AdminShell({ active, title, subtitle, breadcrumb, actions, children, receptionUnread }: Props) {
   const params = useParams<{ tenant: string }>();
   const router = useRouter();
   const tenant = params.tenant ?? "";
@@ -123,7 +126,14 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
             運用
           </div>
           {NAV_OPS.map((item) => (
-            <NavItem key={item.id} id={item.id} label={item.label} active={active === item.id} onClick={() => router.push(NAV_PATHS[item.id](tenant))} />
+            <NavItem
+              key={item.id}
+              id={item.id}
+              label={item.label}
+              active={active === item.id}
+              onClick={() => router.push(NAV_PATHS[item.id](tenant))}
+              badge={item.id === "reception" && receptionUnread && receptionUnread > 0 ? receptionUnread : undefined}
+            />
           ))}
           <div style={{ fontSize: 10.5, color: "#a8a198", textTransform: "uppercase", letterSpacing: "0.6px", padding: "14px 10px 6px" }}>
             設定
@@ -145,7 +155,7 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
             </div>
           </div>
           <button
-            onClick={() => { clearTokens(); router.push("/login"); }}
+            onClick={() => { clearTokens(); router.push(getLogoutUrl()); }}
             style={{
               width: "100%", display: "flex", alignItems: "center", gap: 8,
               padding: "9px 14px", background: "none", border: "none",
@@ -201,7 +211,7 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
   );
 }
 
-function NavItem({ id, label, active, onClick }: { id: NavId; label: string; active: boolean; onClick: () => void }) {
+function NavItem({ id, label, active, onClick, badge }: { id: NavId; label: string; active: boolean; onClick: () => void; badge?: number }) {
   return (
     <button
       onClick={onClick}
@@ -221,7 +231,24 @@ function NavItem({ id, label, active, onClick }: { id: NavId; label: string; act
       onMouseLeave={(e) => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
     >
       <NavIcon id={id} active={active} />
-      <span>{label}</span>
+      <span style={{ flex: 1 }}>{label}</span>
+      {badge !== undefined && badge > 0 && (
+        <span style={{
+          background: "#c8a96e",
+          color: "#1d1a15",
+          borderRadius: 999,
+          fontSize: 10,
+          fontWeight: 700,
+          padding: "1px 5px",
+          minWidth: 16,
+          textAlign: "center",
+          marginLeft: 4,
+          lineHeight: "14px",
+          display: "inline-block",
+        }}>
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
     </button>
   );
 }
@@ -394,6 +421,10 @@ function NavIcon({ id, active }: { id: NavId; active: boolean }) {
     case "users":
       return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
         <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
+      </svg>;
+    case "profile":
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
       </svg>;
   }
 }

@@ -320,20 +320,27 @@ export default function AdminNotifyPage() {
   const params = useParams<{ tenant: string }>();
   const [authToken, setAuthToken] = useState("");
 
-  // Slack state
   const [webhookUrl, setWebhookUrl] = useState("");
   const [slackConfigured, setSlackConfigured] = useState(false);
   const [slackSaving, setSlackSaving] = useState(false);
+  const [slackTesting, setSlackTesting] = useState(false);
   const [slackError, setSlackError] = useState("");
   const [slackTested, setSlackTested] = useState(false);
 
-  // Chatwork state
   const [cwApiToken, setCwApiToken] = useState("");
   const [cwRoomId, setCwRoomId] = useState("");
   const [cwConfigured, setCwConfigured] = useState(false);
   const [cwSaving, setCwSaving] = useState(false);
+  const [cwTesting, setCwTesting] = useState(false);
   const [cwError, setCwError] = useState("");
   const [cwTested, setCwTested] = useState(false);
+
+  const [customWebhookUrl, setCustomWebhookUrl] = useState("");
+  const [customWebhookConfigured, setCustomWebhookConfigured] = useState(false);
+  const [customWebhookSaving, setCustomWebhookSaving] = useState(false);
+  const [customWebhookTesting, setCustomWebhookTesting] = useState(false);
+  const [customWebhookError, setCustomWebhookError] = useState("");
+  const [customWebhookTested, setCustomWebhookTested] = useState(false);
 
   useEffect(() => {
     setAuthToken(getAccessToken() ?? "");
@@ -344,8 +351,10 @@ export default function AdminNotifyPage() {
     api.getNotificationSettings(authToken).then((settings) => {
       const slack = settings["slack"] ?? {};
       const cw = settings["chatwork"] ?? {};
+      const wh = settings["webhook"] ?? {};
       if (slack["webhook_url"]) setSlackConfigured(true);
       if (cw["api_token"]) setCwConfigured(true);
+      if (wh["webhook_url"]) setCustomWebhookConfigured(true);
     }).catch(() => {});
   }, [authToken]);
 
@@ -379,24 +388,70 @@ export default function AdminNotifyPage() {
   };
 
   const handleTestSlack = async () => {
+    setSlackTesting(true);
     setSlackError("");
     try {
-      await api.testSlackNotification(authToken);
-      setSlackTested(true);
-      setTimeout(() => setSlackTested(false), 3000);
+      const res = await api.testNotification(authToken, "slack");
+      if (res.ok) {
+        setSlackTested(true);
+        setTimeout(() => setSlackTested(false), 3000);
+      } else {
+        setSlackError(res.error ?? "送信に失敗しました");
+      }
     } catch (e: unknown) {
       setSlackError(e instanceof Error ? e.message : "送信に失敗しました");
+    } finally {
+      setSlackTesting(false);
     }
   };
 
   const handleTestChatwork = async () => {
+    setCwTesting(true);
     setCwError("");
     try {
-      await api.testChatworkNotification(authToken);
-      setCwTested(true);
-      setTimeout(() => setCwTested(false), 3000);
+      const res = await api.testNotification(authToken, "chatwork");
+      if (res.ok) {
+        setCwTested(true);
+        setTimeout(() => setCwTested(false), 3000);
+      } else {
+        setCwError(res.error ?? "送信に失敗しました");
+      }
     } catch (e: unknown) {
       setCwError(e instanceof Error ? e.message : "送信に失敗しました");
+    } finally {
+      setCwTesting(false);
+    }
+  };
+
+  const handleSaveCustomWebhook = async () => {
+    setCustomWebhookSaving(true);
+    setCustomWebhookError("");
+    try {
+      await api.updateWebhookSettings(authToken, customWebhookUrl);
+      setCustomWebhookConfigured(true);
+      setCustomWebhookUrl("");
+    } catch (e: unknown) {
+      setCustomWebhookError(e instanceof Error ? e.message : "保存に失敗しました");
+    } finally {
+      setCustomWebhookSaving(false);
+    }
+  };
+
+  const handleTestCustomWebhook = async () => {
+    setCustomWebhookTesting(true);
+    setCustomWebhookError("");
+    try {
+      const res = await api.testNotification(authToken, "webhook");
+      if (res.ok) {
+        setCustomWebhookTested(true);
+        setTimeout(() => setCustomWebhookTested(false), 3000);
+      } else {
+        setCustomWebhookError(res.error ?? "送信に失敗しました");
+      }
+    } catch (e: unknown) {
+      setCustomWebhookError(e instanceof Error ? e.message : "送信に失敗しました");
+    } finally {
+      setCustomWebhookTesting(false);
     }
   };
 
@@ -442,14 +497,21 @@ export default function AdminNotifyPage() {
               {slackError}
             </div>
           )}
-          <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
+          <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center" }}>
             <MkBtn variant="primary" size="sm" onClick={handleSaveSlack}>
               {slackSaving ? "保存中…" : "保存"}
             </MkBtn>
             {slackConfigured && (
-              <MkBtn variant="ghost" size="sm" onClick={handleTestSlack}>
-                {slackTested ? "✓ 送信しました" : "テスト送信"}
-              </MkBtn>
+              <button
+                onClick={handleTestSlack}
+                disabled={slackTesting}
+                style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: slackTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: slackTesting ? 0.6 : 1 }}
+              >
+                {slackTesting ? "送信中..." : "テスト送信"}
+              </button>
+            )}
+            {slackTested && (
+              <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
             )}
           </div>
         </MkCard>
@@ -499,14 +561,21 @@ export default function AdminNotifyPage() {
               {cwError}
             </div>
           )}
-          <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
+          <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center" }}>
             <MkBtn variant="primary" size="sm" onClick={handleSaveChatwork}>
               {cwSaving ? "保存中…" : "保存"}
             </MkBtn>
             {cwConfigured && (
-              <MkBtn variant="ghost" size="sm" onClick={handleTestChatwork}>
-                {cwTested ? "✓ 送信しました" : "テスト送信"}
-              </MkBtn>
+              <button
+                onClick={handleTestChatwork}
+                disabled={cwTesting}
+                style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: cwTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: cwTesting ? 0.6 : 1 }}
+              >
+                {cwTesting ? "送信中..." : "テスト送信"}
+              </button>
+            )}
+            {cwTested && (
+              <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
             )}
           </div>
         </MkCard>
@@ -522,6 +591,81 @@ export default function AdminNotifyPage() {
           ) : (
             <div style={{ padding: "20px 0", color: "#a8a198", fontSize: 13 }}>認証が必要です。ページを再読み込みしてください。</div>
           )}
+        </MkCard>
+
+        {/* Custom Webhook */}
+        <MkCard style={{ gridColumn: "span 2" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 18 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 7, background: "#f0eaf5", color: "#6b3fa0", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+              </svg>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>カスタムWebhook</div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>受付があった際に指定URLへPOSTリクエストを送信します</div>
+            </div>
+            <MkPill tone={customWebhookConfigured ? "live" : "off"}>{customWebhookConfigured ? "設定済" : "未設定"}</MkPill>
+          </div>
+          <div className="adm-grid-2" style={{ gap: 20 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <Field label="Webhook URL" required>
+                <TextInput
+                  placeholder="https://hooks.example.com/..."
+                  mono
+                  value={customWebhookUrl}
+                  onChange={setCustomWebhookUrl}
+                />
+              </Field>
+              <div style={{ padding: "12px 14px", background: "#f4f1ea", borderRadius: 8, border: "1px solid #efece5" }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#6b6559", marginBottom: 6 }}>送信されるJSONペイロード例</div>
+                <pre style={{ fontSize: 10.5, color: "#2d2a24", margin: 0, lineHeight: 1.6, fontFamily: "monospace", whiteSpace: "pre-wrap" }}>{`{
+  "event": "reception",
+  "tenant_id": "...",
+  "visitor_name": "佐々木 美咲",
+  "company": "アルチザン株式会社",
+  "staff": "田中 誠",
+  "purpose": "打ち合わせ",
+  "method": "form",
+  "created_at": "2026-01-01T10:00:00"
+}`}</pre>
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ padding: "14px", background: "#f4f1ea", borderRadius: 8, border: "1px solid #efece5" }}>
+                <div style={{ fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 8 }}>使い方</div>
+                <ul style={{ fontSize: 11.5, color: "#6b6559", margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
+                  <li>Zapier・Make・n8n などの自動化ツールと連携できます</li>
+                  <li>自社システムへのリアルタイム通知に利用できます</li>
+                  <li>HTTP POST（JSON形式）で受付情報を送信します</li>
+                  <li>送信失敗時もキオスク受付処理はブロックしません</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          {customWebhookError && (
+            <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
+              {customWebhookError}
+            </div>
+          )}
+          <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center" }}>
+            <MkBtn variant="primary" size="sm" onClick={handleSaveCustomWebhook}>
+              {customWebhookSaving ? "保存中…" : "保存"}
+            </MkBtn>
+            {customWebhookConfigured && (
+              <button
+                onClick={handleTestCustomWebhook}
+                disabled={customWebhookTesting}
+                style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: customWebhookTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: customWebhookTesting ? 0.6 : 1 }}
+              >
+                {customWebhookTesting ? "送信中..." : "テスト送信"}
+              </button>
+            )}
+            {customWebhookTested && (
+              <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
+            )}
+          </div>
         </MkCard>
       </div>
     </AdminShell>

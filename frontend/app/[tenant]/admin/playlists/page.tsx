@@ -27,6 +27,8 @@ export default function AdminPlaylistsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [dragOver, setDragOver] = useState<number | null>(null);
 
   const load = useCallback(async (token: string) => {
     setLoading(true);
@@ -78,6 +80,41 @@ export default function AdminPlaylistsPage() {
     if (target < 0 || target >= next.length) return;
     [next[index], next[target]] = [next[target], next[index]];
     setDraftItems(next.map((d, i) => ({ ...d, display_order: i })));
+  }
+
+  function handleDragStart(e: React.DragEvent, idx: number) {
+    setDragIdx(idx);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleDragOver(e: React.DragEvent, idx: number) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOver(idx);
+  }
+
+  async function handleDrop(e: React.DragEvent, targetIdx: number) {
+    e.preventDefault();
+    if (dragIdx === null || dragIdx === targetIdx) { setDragIdx(null); setDragOver(null); return; }
+    const newItems = [...draftItems];
+    const [moved] = newItems.splice(dragIdx, 1);
+    newItems.splice(targetIdx, 0, moved);
+    const updated = newItems.map((d, i) => ({ ...d, display_order: i }));
+    setDraftItems(updated);
+    setDragIdx(null);
+    setDragOver(null);
+    const token = getAccessToken();
+    if (!token || !selectedId) return;
+    try {
+      await api.reorderPlaylistItems(token, selectedId, updated.map((d, i) => ({ id: d.media_id, sort_order: i })));
+    } catch {
+      // reorder is best-effort; full save will sync on next explicit save
+    }
+  }
+
+  function handleDragEnd() {
+    setDragIdx(null);
+    setDragOver(null);
   }
 
   function setDuration(index: number, v: number) {
@@ -220,7 +257,14 @@ export default function AdminPlaylistsPage() {
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 500, color: "#2d2a24" }}>{pl.name}</div>
-                    <div style={{ fontSize: 11, color: "#a8a198", marginTop: 3, fontFamily: "monospace" }}>{pl.items.length} アイテム</div>
+                    <div style={{ fontSize: 11, color: "#a8a198", marginTop: 3, fontFamily: "monospace" }}>
+                      {pl.items.length} アイテム
+                      {pl.items.length > 0 && (
+                        <span style={{ marginLeft: 8, color: "#b0a898" }}>
+                          · {fmtDuration(pl.items.reduce((s, i) => s + i.duration_sec, 0))}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <span style={{ fontSize: 12, color: "#a8a198" }}>編集 →</span>
                   <button
@@ -242,7 +286,7 @@ export default function AdminPlaylistsPage() {
             <div style={{ padding: "16px 20px", borderBottom: "1px solid #efece5", display: "flex", alignItems: "center" }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1d1a15" }}>再生順</div>
-                <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>▲▼で並び替え · 画像の表示秒数は編集可能</div>
+                <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>ドラッグで並び替え · 画像の表示秒数は編集可能</div>
               </div>
               <MkBtn size="sm" variant="default" onClick={() => document.getElementById("media-picker")?.scrollIntoView({ behavior: "smooth" })}>
                 + 追加
@@ -256,12 +300,21 @@ export default function AdminPlaylistsPage() {
               draftItems.map((item, i) => (
                 <div
                   key={item.media_id}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, i)}
+                  onDragOver={(e) => handleDragOver(e, i)}
+                  onDrop={(e) => { void handleDrop(e, i); }}
+                  onDragEnd={handleDragEnd}
                   style={{
                     display: "flex", alignItems: "center", gap: 14, padding: "14px 20px",
-                    borderTop: i > 0 ? "1px solid #efece5" : "none",
+                    borderTop: dragOver === i ? "2px dashed #c8a96e" : (i > 0 ? "1px solid #efece5" : "none"),
                     background: "#fffefb", position: "relative",
+                    opacity: dragIdx === i ? 0.4 : 1,
+                    cursor: "grab",
                   }}
                 >
+                  {/* Drag handle */}
+                  <span style={{ fontSize: 16, color: "#c8c0b0", flexShrink: 0, userSelect: "none", lineHeight: 1 }}>⠿</span>
                   {/* Order number */}
                   <div style={{
                     width: 32, height: 32, borderRadius: 5, background: "#1d1a15", color: "#fffefb",

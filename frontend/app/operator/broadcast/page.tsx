@@ -52,8 +52,9 @@ function TenantSelectModal({
 
   const loadTenants = (q: string, reseller_id: string, off: number, append: boolean) => {
     setLoading(true);
-    api.listOperatorTenants(token, { q: q || undefined, reseller_id: reseller_id || undefined, offset: off, limit: LIMIT })
-      .then((data) => {
+    api.listOperatorTenants(token, { q: q || undefined, reseller_id: reseller_id || undefined, page: Math.floor(off / LIMIT) + 1, page_size: LIMIT })
+      .then((res) => {
+        const data = res.items;
         setTenants((prev) => append ? [...prev, ...data] : data);
         setHasMore(data.length === LIMIT);
         setOffset(off + data.length);
@@ -187,9 +188,9 @@ export default function OperatorBroadcastPage() {
 
   const handleModalConfirm = (ids: string[]) => {
     setSelectedIds(ids);
-    api.listOperatorTenants(token, { limit: 200 }).then((all) => {
+    api.listOperatorTenants(token, { page_size: 200, page: 1 }).then((res) => {
       const map = new Map<string, string>();
-      all.forEach((t) => { if (ids.includes(t.id)) map.set(t.id, t.name); });
+      res.items.forEach((t) => { if (ids.includes(t.id)) map.set(t.id, t.name); });
       setSelectedTenants(map);
     });
     setModalOpen(false);
