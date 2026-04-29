@@ -217,11 +217,13 @@ mokuture/
 
 ### キオスク デザインパターン追加方法
 
-新しい「ようこそ」画面パターンを追加するには以下の3箇所を更新すること:
+新しいデザインパターンを追加するには以下の4箇所を更新すること:
 
 1. **`frontend/app/[tenant]/admin/kiosk-settings/kioskStyles.ts`** に `KioskStyleDef` エントリを追加
 2. **`backend/app/api/settings.py`** の `ALLOWED_KIOSK_STYLES` セットに ID を追加
-3. **`kiosk_agent/static/kiosk.html`** に `buildComplete_XXX(vName, staff, bc, count, now, completeMsg)` 関数を追加し、`COMPLETE_TEMPLATES` オブジェクトに登録
+3. **`kiosk_agent/static/kiosk.html`** — 2つの関数を追加し、各レジストリに登録:
+   - `buildIdle_XXX(bc)` → `IDLE_TEMPLATES` に登録（待機画面）
+   - `buildComplete_XXX(vName, staff, bc, count, now, completeMsg)` → `COMPLETE_TEMPLATES` に登録（受付完了画面）
 
 DB マイグレーション不要（`kiosk_style` カラムはフリーテキスト）。
 

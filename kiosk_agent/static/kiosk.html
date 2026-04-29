@@ -39,6 +39,7 @@ let ST = {
 };
 let ITEMS = [];
 let CLEANUPS = [];
+let CURRENT_SCREEN = "idle";
 
 const sc = document.getElementById("sc");
 const TOKEN_KEY = "mokuture_kiosk_token";
@@ -150,6 +151,7 @@ const ICO = {
 
 // ─── Navigate ─────────────────────────────────────────────────────────────────
 function go(screen, data = {}) {
+  CURRENT_SCREEN = screen;
   cleanup();
   sc.style.animation = "none";
   sc.offsetHeight; // reflow
@@ -230,30 +232,79 @@ function showSetup() {
   render("");
 }
 
+// ─── IDLE SCREEN BUILDERS ─────────────────────────────────────────────────────
+// To add a new pattern: add buildIdle_XXX below, register in IDLE_TEMPLATES,
+// then add the ID to kioskStyles.ts and ALLOWED_KIOSK_STYLES.
+// CTA overlay MUST include z-index:10 in its style (media insertBefore depends on it).
+
+function buildIdle_default(bc) {
+  return `<div style="position:absolute;inset:0;background:#0a0806"></div><div style="position:absolute;inset:0;display:flex;flex-direction:column;z-index:10;pointer-events:none"><div style="flex:1"></div><div style="padding:0 80px 80px;display:flex;justify-content:flex-end;align-items:flex-end"><div style="padding:28px 36px;background:rgba(255,255,255,.96);color:#1d1a15;border-radius:20px;display:flex;align-items:center;gap:22px;box-shadow:0 12px 48px rgba(0,0,0,.4);pointer-events:auto"><div style="position:relative;width:56px;height:56px;flex-shrink:0"><div style="position:absolute;inset:0;border-radius:50%;border:2px solid ${bc};opacity:.4;animation:ring-expand 2.4s ease-out 0s infinite"></div><div style="position:absolute;inset:0;border-radius:50%;border:2px solid ${bc};opacity:.3;animation:ring-expand 2.4s ease-out .8s infinite"></div><div style="position:absolute;inset:8px;border-radius:50%;background:${bc};display:flex;align-items:center;justify-content:center"><div style="width:14px;height:14px;border-radius:50%;background:#fff"></div></div></div><div><div style="font-size:11px;letter-spacing:2px;color:#a8a198;text-transform:uppercase;margin-bottom:4px;font-family:Inter,system-ui,sans-serif">TAP TO BEGIN</div><div style="font-size:26px;font-weight:600;letter-spacing:-.5px">画面にタッチして受付</div></div></div></div></div>`;
+}
+
+function buildIdle_medical(bc) {
+  return `<div style="position:absolute;inset:0;background:#f5f9fc"></div><div style="position:absolute;top:0;left:0;right:0;height:6px;background:linear-gradient(90deg,#1f6fa8,#3aa86b)"></div><div style="position:absolute;inset:0;display:flex;flex-direction:column;z-index:10;pointer-events:none"><div style="flex:1"></div><div style="padding:0 80px 80px;display:flex;justify-content:flex-end;align-items:flex-end"><div style="padding:28px 36px;background:rgba(255,255,255,.97);color:#0e2a3d;border-radius:20px;display:flex;align-items:center;gap:22px;box-shadow:0 12px 48px rgba(31,111,168,.2);border:1px solid #d8e4ee;pointer-events:auto"><div style="width:52px;height:52px;border-radius:50%;background:#e4eef5;display:flex;align-items:center;justify-content:center;flex-shrink:0"><div style="width:22px;height:22px;border-radius:50%;background:#1f6fa8"></div></div><div><div style="font-size:11px;letter-spacing:2px;color:#7895ad;text-transform:uppercase;margin-bottom:4px;font-family:Inter,system-ui,sans-serif">TAP TO BEGIN</div><div style="font-size:26px;font-weight:600;letter-spacing:-.5px;color:#0e2a3d">画面にタッチして受付</div></div></div></div></div>`;
+}
+
+function buildIdle_retail(bc) {
+  return `<div style="position:absolute;inset:0;background:#fffbe6"></div><div style="position:absolute;top:0;left:0;right:0;height:110px;background:repeating-linear-gradient(90deg,#ff5b3a 0 80px,#ffcd3c 80px 160px)"></div><div style="position:absolute;inset:0;display:flex;flex-direction:column;z-index:10;pointer-events:none"><div style="flex:1"></div><div style="padding:0 80px 80px;display:flex;justify-content:flex-end;align-items:flex-end"><div style="padding:28px 36px;background:#ff5b3a;color:#fff;border-radius:20px;display:flex;align-items:center;gap:22px;box-shadow:0 12px 48px rgba(255,91,58,.4);pointer-events:auto"><div style="width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:28px">👆</div><div><div style="font-size:11px;letter-spacing:2px;color:rgba(255,255,255,.8);text-transform:uppercase;margin-bottom:4px;font-family:Inter,system-ui,sans-serif">TAP TO BEGIN</div><div style="font-size:26px;font-weight:700;letter-spacing:-.5px">画面にタッチして受付</div></div></div></div></div>`;
+}
+
+function buildIdle_hotel(bc) {
+  return `<div style="position:absolute;inset:0;background:radial-gradient(ellipse at 50% 30%,#1a1410 0%,#0a0907 70%)"></div><svg width="100%" height="100%" style="position:absolute;inset:0;opacity:.1"><defs><pattern id="h-orn" x="0" y="0" width="240" height="240" patternUnits="userSpaceOnUse"><circle cx="120" cy="120" r="80" fill="none" stroke="#c9a55a" stroke-width="0.5"/><circle cx="120" cy="120" r="40" fill="none" stroke="#c9a55a" stroke-width="0.5"/></pattern></defs><rect width="100%" height="100%" fill="url(#h-orn)"/></svg><div style="position:absolute;inset:0;display:flex;flex-direction:column;z-index:10;pointer-events:none"><div style="flex:1"></div><div style="padding:0 0 80px;display:flex;justify-content:center"><div style="display:flex;flex-direction:column;align-items:center;gap:16px;pointer-events:auto"><div style="width:48px;height:1px;background:#c9a55a;opacity:.7"></div><div style="font-size:13px;letter-spacing:6px;color:#c9a55a;text-transform:uppercase;font-weight:300;font-family:Inter,system-ui,sans-serif">TOUCH TO BEGIN · 画面にタッチして受付</div><div style="width:48px;height:1px;background:#c9a55a;opacity:.7"></div></div></div></div>`;
+}
+
+function buildIdle_startup(bc) {
+  return `<div style="position:absolute;inset:0;background:#0a0a14"></div><div style="position:absolute;top:-20%;left:-10%;width:800px;height:800px;border-radius:50%;background:radial-gradient(circle,#6b3aff,transparent 70%);filter:blur(80px);opacity:.6"></div><div style="position:absolute;bottom:-30%;right:-10%;width:900px;height:900px;border-radius:50%;background:radial-gradient(circle,#ff3a8e,transparent 70%);filter:blur(100px);opacity:.4"></div><svg width="100%" height="100%" style="position:absolute;inset:0;opacity:.08"><defs><pattern id="s-g" x="0" y="0" width="60" height="60" patternUnits="userSpaceOnUse"><path d="M60 0H0v60" fill="none" stroke="#fff" stroke-width="0.5"/></pattern></defs><rect width="100%" height="100%" fill="url(#s-g)"/></svg><div style="position:absolute;inset:0;display:flex;flex-direction:column;z-index:10;pointer-events:none"><div style="flex:1"></div><div style="padding:0 80px 80px;display:flex;justify-content:flex-start;align-items:flex-end"><div style="padding:22px 40px;border-radius:14px;background:linear-gradient(135deg,#6b3aff,#ff3a8e);color:#fff;font-size:20px;font-weight:700;letter-spacing:.5px;pointer-events:auto;font-family:Inter,system-ui,sans-serif">画面にタッチして受付 →</div></div></div>`;
+}
+
+function buildIdle_school(bc) {
+  const dots = [[`#ffcd3c`,200,100],[`#ff9d6c`,600,200],[`#7ec4cf`,1100,80],[`#a4d65e`,1500,180],[`#ffcd3c`,1800,300],[`#ff9d6c`,300,500],[`#7ec4cf`,800,600],[`#a4d65e`,1300,400],[`#ffcd3c`,1700,550],[`#ff9d6c`,100,700],[`#7ec4cf`,500,800],[`#a4d65e`,900,900],[`#ffcd3c`,1400,850],[`#ff9d6c`,1700,750]].map(([c,x,y])=>`<circle cx="${x}" cy="${y}" r="${8+(x%3)*5}" fill="${c}" opacity="0.5"/>`).join('');
+  return `<div style="position:absolute;inset:0;background:#fff5e6"></div><svg width="100%" height="100%" style="position:absolute;inset:0;overflow:visible">${dots}</svg><div style="position:absolute;inset:0;display:flex;flex-direction:column;z-index:10;pointer-events:none"><div style="flex:1"></div><div style="padding:0 80px 80px;display:flex;justify-content:flex-end;align-items:flex-end"><div style="padding:24px 32px;background:#fff;color:#3a2818;border-radius:999px;display:flex;align-items:center;gap:16px;box-shadow:0 8px 32px rgba(58,40,24,.15);border:3px solid #ff9d6c;pointer-events:auto"><span style="font-size:36px">👋</span><div><div style="font-size:11px;letter-spacing:2px;color:#a87850;text-transform:uppercase;margin-bottom:4px;font-family:Inter,system-ui,sans-serif">TAP TO BEGIN</div><div style="font-size:26px;font-weight:800;letter-spacing:-.5px">画面にタッチして受付</div></div></div></div></div>`;
+}
+
+function buildIdle_craft(bc) {
+  return `<div style="position:absolute;inset:0;background:#f4ede0"></div><svg width="100%" height="100%" style="position:absolute;inset:0;opacity:.08"><filter id="c-paper"><feTurbulence baseFrequency="0.7" numOctaves="2"/><feColorMatrix values="0 0 0 0 0.4  0 0 0 0 0.3  0 0 0 0 0.2  0 0 0 0.4 0"/></filter><rect width="100%" height="100%" filter="url(#c-paper)"/></svg><div style="position:absolute;inset:0;display:flex;flex-direction:column;z-index:10;pointer-events:none"><div style="flex:1"></div><div style="padding:0 80px 80px;display:flex;justify-content:flex-end;align-items:flex-end"><div style="padding:20px 32px;background:transparent;color:#1a1612;display:inline-flex;align-items:center;gap:20px;border-bottom:1.5px solid #1a1612;pointer-events:auto"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1a1612" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg><span style="font-size:16px;font-style:italic;letter-spacing:1px;font-family:'Hiragino Mincho ProN',serif">touch to begin · 画面にタッチして受付</span></div></div></div>`;
+}
+
+function buildIdle_industrial(bc) {
+  return `<div style="position:absolute;inset:0;background:#1a1d22"></div><div style="position:absolute;top:0;left:0;right:0;height:12px;background:repeating-linear-gradient(45deg,#ffd23a 0 24px,#1a1d22 24px 48px)"></div><div style="position:absolute;bottom:0;left:0;right:0;height:12px;background:repeating-linear-gradient(45deg,#ffd23a 0 24px,#1a1d22 24px 48px)"></div><div style="position:absolute;inset:0;display:flex;flex-direction:column;z-index:10;pointer-events:none"><div style="flex:1"></div><div style="padding:0 80px 80px;display:flex;justify-content:flex-end;align-items:flex-end"><div style="padding:22px 36px;background:#ffd23a;color:#1a1d22;display:inline-flex;align-items:center;gap:18px;clip-path:polygon(0 0,100% 0,96% 100%,0% 100%);pointer-events:auto"><span style="font-size:28px;font-weight:900">⚡</span><div><div style="font-size:11px;letter-spacing:3px;font-weight:700;text-transform:uppercase;margin-bottom:2px;font-family:Inter,monospace">TAP TO CHECK IN</div><div style="font-size:24px;font-weight:800;letter-spacing:.5px">画面にタッチして受付</div></div></div></div></div>`;
+}
+
+function buildIdle_restaurant(bc) {
+  const bulbs = [200,600,1000,1400,1800].map(x=>`<g><line x1="${x}" y1="0" x2="${x}" y2="80" stroke="#5a4838" stroke-width="1"/><circle cx="${x}" cy="92" r="14" fill="#ffcd3c" opacity="0.9"/><circle cx="${x}" cy="92" r="32" fill="#ffcd3c" opacity="0.15"/></g>`).join('');
+  return `<div style="position:absolute;inset:0;background:radial-gradient(ellipse at 50% 100%,#4a2818 0%,#2a1810 70%)"></div><svg width="100%" height="100%" style="position:absolute;inset:0">${bulbs}</svg><div style="position:absolute;inset:0;display:flex;flex-direction:column;z-index:10;pointer-events:none"><div style="flex:1"></div><div style="padding:0 0 80px;display:flex;justify-content:center"><div style="display:flex;flex-direction:column;align-items:center;gap:12px;pointer-events:auto"><div style="display:flex;align-items:center;gap:24px"><div style="width:60px;height:1px;background:#d4a868"></div><span style="font-size:15px;letter-spacing:5px;color:#d4a868;text-transform:uppercase;font-weight:300;font-family:Inter,sans-serif">TAP TO BEGIN</span><div style="width:60px;height:1px;background:#d4a868"></div></div><div style="font-size:22px;color:#c8b88a;font-style:italic;font-family:'Hiragino Mincho ProN',serif;letter-spacing:2px">画面にタッチしてご案内</div></div></div></div>`;
+}
+
+function buildIdle_mono(bc) {
+  return `<div style="position:absolute;inset:0;background:#fff"></div><div style="position:absolute;top:0;left:0;right:0;height:8px;background:#000"></div><div style="position:absolute;bottom:60px;left:0;right:0;height:1px;background:#000"></div><div style="position:absolute;inset:0;display:flex;flex-direction:column;z-index:10;pointer-events:none"><div style="flex:1"></div><div style="padding:0 80px 28px;display:flex;justify-content:space-between;align-items:flex-end"><span style="font-size:11px;letter-spacing:4px;color:#000;font-family:Inter,system-ui,sans-serif">mokuture+</span><span style="font-size:11px;letter-spacing:4px;color:#000;font-family:Inter,system-ui,sans-serif;pointer-events:auto">PRESS [ TAP ] TO BEGIN · 画面にタッチして受付</span><span style="font-size:11px;letter-spacing:4px;color:#000;font-family:Inter,system-ui,sans-serif">RECEPTION</span></div></div>`;
+}
+
+function buildIdle_gym(bc) {
+  const lines = Array.from({length:15},(_,i)=>`<line x1="${1920-i*90}" y1="0" x2="${1920-i*90-200}" y2="1080" stroke="#c4ff3a" stroke-width="${i%3===0?2:0.5}" opacity="${0.05+(i%3)*0.05}"/>`).join('');
+  return `<div style="position:absolute;inset:0;background:linear-gradient(135deg,#0a0e0a 0%,#1a2418 50%,#0a0e0a 100%)"></div><svg width="100%" height="100%" style="position:absolute;inset:0">${lines}</svg><div style="position:absolute;inset:0;display:flex;flex-direction:column;z-index:10;pointer-events:none"><div style="flex:1"></div><div style="padding:0 80px 80px;display:flex;justify-content:flex-start;align-items:flex-end"><div style="padding:22px 40px;background:#c4ff3a;color:#0a0e0a;display:inline-flex;align-items:center;gap:18px;clip-path:polygon(0 0,100% 0,96% 100%,0% 100%);pointer-events:auto"><span style="font-size:24px;font-weight:900">⚡</span><div><div style="font-size:11px;letter-spacing:3px;font-weight:800;text-transform:uppercase;margin-bottom:2px;font-family:Inter,system-ui,sans-serif">TAP TO CHECK IN</div><div style="font-size:24px;font-weight:900;font-style:italic;letter-spacing:.5px">画面にタッチして受付</div></div></div></div></div>`;
+}
+
+// Pattern registry — add new entries here (keep in sync with kioskStyles.ts & ALLOWED_KIOSK_STYLES)
+const IDLE_TEMPLATES = {
+  default:    buildIdle_default,
+  medical:    buildIdle_medical,
+  retail:     buildIdle_retail,
+  hotel:      buildIdle_hotel,
+  startup:    buildIdle_startup,
+  school:     buildIdle_school,
+  craft:      buildIdle_craft,
+  industrial: buildIdle_industrial,
+  restaurant: buildIdle_restaurant,
+  mono:       buildIdle_mono,
+  gym:        buildIdle_gym,
+};
+
 // ─── IDLE ─────────────────────────────────────────────────────────────────────
 function showIdle() {
   const bc = ST.brand_color;
-  const ctaHtml = `
-<div style="position:absolute;inset:0;display:flex;flex-direction:column;z-index:10;pointer-events:none">
-  <div style="flex:1"></div>
-  <div style="padding:0 80px 80px;display:flex;justify-content:flex-end;align-items:flex-end">
-    <div style="padding:28px 36px;background:rgba(255,255,255,.96);color:#1d1a15;border-radius:20px;display:flex;align-items:center;gap:22px;box-shadow:0 12px 48px rgba(0,0,0,.4);pointer-events:auto">
-      <div style="position:relative;width:56px;height:56px;flex-shrink:0">
-        <div style="position:absolute;inset:0;border-radius:50%;border:2px solid ${bc};opacity:.4;animation:ring-expand 2.4s ease-out 0s infinite"></div>
-        <div style="position:absolute;inset:0;border-radius:50%;border:2px solid ${bc};opacity:.3;animation:ring-expand 2.4s ease-out .8s infinite"></div>
-        <div style="position:absolute;inset:8px;border-radius:50%;background:${bc};display:flex;align-items:center;justify-content:center">
-          <div style="width:14px;height:14px;border-radius:50%;background:#fff"></div>
-        </div>
-      </div>
-      <div>
-        <div style="font-size:11px;letter-spacing:2px;color:#a8a198;text-transform:uppercase;margin-bottom:4px;font-family:Inter,system-ui,sans-serif">TAP TO BEGIN</div>
-        <div style="font-size:26px;font-weight:600;letter-spacing:-.5px">画面にタッチして受付</div>
-      </div>
-    </div>
-  </div>
-</div>`;
+  const builder = IDLE_TEMPLATES[ST.kiosk_style] ?? IDLE_TEMPLATES.default;
 
-  sc.innerHTML = `<div id="idle-root" style="width:1920px;height:1080px;position:relative;overflow:hidden;cursor:pointer;user-select:none;background:#0a0806">${ctaHtml}</div>`;
+  sc.innerHTML = `<div id="idle-root" style="width:1920px;height:1080px;position:relative;overflow:hidden;cursor:pointer;user-select:none">${builder(bc)}</div>`;
   rescale();
 
   const root = document.getElementById("idle-root");
@@ -892,6 +943,17 @@ async function boot() {
       ITEMS = s?.playlist?.items ?? [];
     } catch {}
   }, 60000);
+
+  // Poll /update-status every 30 s; apply when idle or force-flagged
+  setInterval(async () => {
+    try {
+      const s = await fetch("/update-status").then(r => r.json());
+      if (!s.ready) return;
+      if (!s.force && CURRENT_SCREEN !== "idle") return;
+      await fetch("/apply-update", { method: "POST" });
+      setTimeout(() => location.reload(), 500);
+    } catch {}
+  }, 30000);
 }
 
 boot();

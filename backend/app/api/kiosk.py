@@ -3,12 +3,16 @@
 The device token is stored in the kiosk's localStorage and sent via
 the X-Kiosk-Token header. It identifies both the device and the tenant.
 """
+import hashlib
+import os
 import zoneinfo
 from datetime import datetime, timezone
+from pathlib import Path
 
 _JST = zoneinfo.ZoneInfo("Asia/Tokyo")
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import FileResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from pydantic import BaseModel, field_validator
@@ -32,6 +36,37 @@ _limiter = Limiter(key_func=get_remote_address)
 
 _ALLOWED_METHODS = {"form", "qr"}
 _PIN_FAIL_MSG = "PINが無効または期限切れです"
+
+# ── OTA bundle ────────────────────────────────────────────────────────────────
+# Env var override; default resolves to <repo>/kiosk_agent relative to this file.
+_KIOSK_AGENT_DIR = Path(
+    os.environ.get("KIOSK_BUNDLE_DIR", str(Path(__file__).parents[3] / "kiosk_agent"))
+)
+
+# Files distributed via OTA (relative to kiosk_agent root); order is stable for hashing.
+BUNDLE_FILES = [
+    "static/kiosk.html",
+    "main.py",
+    "updater.py",
+    "gpio.py",
+    "sync.py",
+    "state.py",
+    "config.py",
+]
+_FORCE_WINDOW_SEC = 7200  # force flag stays active for 2 hours after trigger
+
+
+def _file_sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def _bundle_version() -> str:
+    parts = []
+    for rel in BUNDLE_FILES:
+        p = _KIOSK_AGENT_DIR / rel
+        if p.exists():
+            parts.append(f"{rel}:{_file_sha(p)}")
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
 class PinVerifyRequest(BaseModel):
@@ -318,3 +353,42 @@ async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> N
             private_key=private_key,
             subject=settings.vapid_subject,
         )  # fire-and-forget: ignore (bool, str) return
+
+
+# ── OTA bundle endpoints ───────────────────────────────────────────────────────
+
+@router.get("/bundle/manifest")
+async def kiosk_bundle_manifest(
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+):
+    """Return current bundle version + per-file hashes. Device uses this to detect changes."""
+    tenant, _ = ctx
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    force = False
+    fat = getattr(tenant, "kiosk_force_update_at", None)
+    if fat is not None:
+        diff = (now - fat).total_seconds()
+        force = 0 <= diff <= _FORCE_WINDOW_SEC
+
+    files = []
+    for rel in BUNDLE_FILES:
+        p = _KIOSK_AGENT_DIR / rel
+        if p.exists():
+            files.append({"path": rel, "hash": _file_sha(p), "size": p.stat().st_size})
+
+    return {"version": _bundle_version(), "files": files, "force": force}
+
+
+@router.get("/bundle/file/{file_path:path}")
+async def kiosk_bundle_file(
+    file_path: str,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+):
+    """Download a single bundle file. Path must be in BUNDLE_FILES whitelist."""
+    if file_path not in BUNDLE_FILES:
+        raise HTTPException(status_code=404, detail="Not in bundle")
+    p = _KIOSK_AGENT_DIR / file_path
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(p)

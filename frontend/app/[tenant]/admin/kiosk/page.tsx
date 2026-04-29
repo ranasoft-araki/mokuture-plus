@@ -32,6 +32,8 @@ export default function AdminKioskPage() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState<"token" | "url" | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<{ id: string; name: string } | null>(null);
+  const [forcePushing, setForcePushing] = useState(false);
+  const [forcePushMsg, setForcePushMsg] = useState("");
 
   const loadDevices = useCallback(async (token: string) => {
     try {
@@ -89,6 +91,23 @@ export default function AdminKioskPage() {
     }
   }
 
+  async function handleForcePush() {
+    if (!window.confirm("すべてのデバイスに強制配信します。キオスクは次の待機画面で自動更新されます。続けますか？")) return;
+    const token = getAccessToken();
+    if (!token) { router.push("/login"); return; }
+    setForcePushing(true);
+    setForcePushMsg("");
+    try {
+      await api.forceKioskUpdate(token);
+      setForcePushMsg("強制配信を設定しました。デバイスは次回の待機状態で更新されます。");
+      setTimeout(() => setForcePushMsg(""), 6000);
+    } catch (err: unknown) {
+      setForcePushMsg(err instanceof Error ? err.message : "強制配信に失敗しました");
+    } finally {
+      setForcePushing(false);
+    }
+  }
+
   async function handleCopy(text: string, type: "token" | "url") {
     await navigator.clipboard.writeText(text);
     setCopied(type);
@@ -111,7 +130,17 @@ export default function AdminKioskPage() {
       title="キオスク端末"
       breadcrumb="ホーム / キオスク端末"
       subtitle={`接続済み端末を管理 · ${devices.length} 台`}
+      actions={
+        <MkBtn variant="default" size="sm" onClick={handleForcePush} disabled={forcePushing}>
+          {forcePushing ? "配信中…" : "強制配信"}
+        </MkBtn>
+      }
     >
+      {forcePushMsg && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 8, background: "#eaf4eb", border: "1px solid #4a7c4e", fontSize: 12.5, color: "#2d4e30" }}>
+          {forcePushMsg}
+        </div>
+      )}
       {/* Summary strip — 4 cards */}
       <div style={{ display: "flex", gap: 14, marginBottom: 22 }}>
         {[

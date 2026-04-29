@@ -34,6 +34,9 @@ class Tenant(Base):
     # Kiosk design pattern selection
     kiosk_style: Mapped[str] = mapped_column(String(32), default="default")
 
+    # OTA: timestamp set by admin to trigger force-push to all devices of this tenant
+    kiosk_force_update_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     media = relationship("Media", back_populates="tenant", cascade="all, delete-orphan")
     playlists = relationship("Playlist", back_populates="tenant", cascade="all, delete-orphan")

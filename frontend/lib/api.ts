@@ -187,6 +187,10 @@ export const api = {
     request<Locker>("/lockers", { method: "POST", body: JSON.stringify({ door_number, auto_relock_sec }) }, token),
   deleteLocker: (token: string, id: string) =>
     request(`/lockers/${id}`, { method: "DELETE" }, token),
+
+  // OTA
+  forceKioskUpdate: (token: string) =>
+    request<{ ok: boolean; forced_at: string }>("/settings/kiosk-force-push", { method: "POST" }, token),
 };
 
 export interface MediaUploadUrlResponse {

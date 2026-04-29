@@ -1,5 +1,6 @@
 """mokuture+ Local Kiosk Device Agent"""
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from config import settings
 from gpio import LockerController, PirSensor
 from state import get_device_name, get_device_token, is_registered, save_device_state
 from sync import find_media, sync_loop
+from updater import updater, read_version
 
 locker_ctrl = LockerController(settings.locker_pins)
 pir = PirSensor(settings.pir_pin)
@@ -24,8 +26,10 @@ _KIOSK_HTML = Path(__file__).parent / "static" / "kiosk.html"
 async def lifespan(app: FastAPI):
     settings.media_dir.mkdir(parents=True, exist_ok=True)
     task = asyncio.create_task(sync_loop())
+    update_task = asyncio.create_task(updater.run())
     yield
     task.cancel()
+    update_task.cancel()
     locker_ctrl.close()
     pir.close()
 
@@ -188,6 +192,24 @@ async def open_locker(locker_id: str):
 @app.get("/device/pir")
 async def get_pir():
     return {"motion_detected": pir.motion_detected}
+
+
+@app.get("/update-status")
+async def update_status():
+    return {"ready": updater.is_ready(), "force": updater.is_force(), "version": read_version()}
+
+
+@app.post("/apply-update")
+async def apply_update():
+    needs_restart = await updater.apply()
+    if needs_restart:
+        asyncio.create_task(_do_restart())
+    return {"ok": True, "restart": needs_restart}
+
+
+async def _do_restart():
+    await asyncio.sleep(1.5)
+    os._exit(0)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 """Tenant settings API – brand_color, font, logo_url."""
 import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -216,3 +217,15 @@ async def confirm_logo(
     tenant.logo_url = body.logo_url
     await db.commit()
     return _out(tenant)
+
+
+@router.post("/kiosk-force-push")
+async def kiosk_force_push(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set force_update_at on the tenant — all devices will urgently apply the next update."""
+    tenant = await _get_tenant(user, db)
+    tenant.kiosk_force_update_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    await db.commit()
+    return {"ok": True, "forced_at": tenant.kiosk_force_update_at.isoformat()}
