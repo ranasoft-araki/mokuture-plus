@@ -328,12 +328,22 @@ function TopScreen({
   onIdle: () => void;
 }) {
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const countIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [pressed, setPressed] = useState<number | null>(null);
   const [now, setNow] = useState("");
+  const [count, setCount] = useState(settings.kiosk_idle_timeout_sec);
 
   const resetIdle = useCallback(() => {
     if (idleRef.current) clearTimeout(idleRef.current);
+    if (countIntervalRef.current) clearInterval(countIntervalRef.current);
+    setCount(settings.kiosk_idle_timeout_sec);
     idleRef.current = setTimeout(onIdle, settings.kiosk_idle_timeout_sec * 1000);
+    countIntervalRef.current = setInterval(() => {
+      setCount(c => {
+        if (c <= 1) { clearInterval(countIntervalRef.current!); return 0; }
+        return c - 1;
+      });
+    }, 1000);
   }, [onIdle, settings.kiosk_idle_timeout_sec]);
 
   useEffect(() => {
@@ -344,7 +354,11 @@ function TopScreen({
     };
     tick();
     const id = setInterval(tick, 30_000);
-    return () => { if (idleRef.current) clearTimeout(idleRef.current); clearInterval(id); };
+    return () => {
+      if (idleRef.current) clearTimeout(idleRef.current);
+      if (countIntervalRef.current) clearInterval(countIntervalRef.current);
+      clearInterval(id);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -436,10 +450,29 @@ function TopScreen({
           </div>
         </div>
 
-        <div style={{ padding: "0 80px 28px", display: "flex", alignItems: "center", color: "#a8a198", fontSize: 13, flexShrink: 0 }}>
+        <div style={{ padding: "0 80px 28px", display: "flex", alignItems: "center", color: "#a8a198", fontSize: 13, flexShrink: 0, gap: 20 }}>
           <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 14 }}>{now}</span>
           <span style={{ flex: 1 }} />
-          <span>{settings.kiosk_idle_timeout_sec}秒で待機画面に戻ります</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ color: count <= 10 ? "#a84238" : "#a8a198", transition: "color 0.3s" }}>
+              待機画面に戻るまで
+            </span>
+            <span style={{
+              fontSize: 20, fontWeight: 700, fontFamily: "JetBrains Mono, monospace",
+              color: count <= 10 ? "#a84238" : "#6b6559",
+              minWidth: 36, textAlign: "right", transition: "color 0.3s",
+            }}>{count}</span>
+            <span style={{ color: count <= 10 ? "#a84238" : "#a8a198", transition: "color 0.3s" }}>秒</span>
+            <div style={{ width: 160, height: 6, background: "#efece5", borderRadius: 3, overflow: "hidden" }}>
+              <div style={{
+                width: `${(count / settings.kiosk_idle_timeout_sec) * 100}%`,
+                height: "100%",
+                background: count <= 10 ? "#a84238" : "#6b6559",
+                borderRadius: 3,
+                transition: "width 1s linear, background 0.3s",
+              }} />
+            </div>
+          </div>
           <span style={{ flex: 1 }} />
           <span style={{ fontFamily: "JetBrains Mono, monospace" }}>{deviceName || "kiosk"}</span>
         </div>
@@ -718,6 +751,7 @@ function QrScreen({
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const countIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const scanningRef = useRef(false);
 
   const [supported, setSupported] = useState<boolean | null>(null);
@@ -725,10 +759,19 @@ function QrScreen({
   const [scanning, setScanning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [now, setNow] = useState("");
+  const [count, setCount] = useState(settings.kiosk_idle_timeout_sec);
 
   const resetIdle = useCallback(() => {
     if (idleRef.current) clearTimeout(idleRef.current);
+    if (countIntervalRef.current) clearInterval(countIntervalRef.current);
+    setCount(settings.kiosk_idle_timeout_sec);
     idleRef.current = setTimeout(onIdle, settings.kiosk_idle_timeout_sec * 1000);
+    countIntervalRef.current = setInterval(() => {
+      setCount(c => {
+        if (c <= 1) { clearInterval(countIntervalRef.current!); return 0; }
+        return c - 1;
+      });
+    }, 1000);
   }, [onIdle, settings.kiosk_idle_timeout_sec]);
 
   const stopCamera = useCallback(() => {
@@ -813,6 +856,7 @@ function QrScreen({
     }
     return () => {
       if (idleRef.current) clearTimeout(idleRef.current);
+      if (countIntervalRef.current) clearInterval(countIntervalRef.current);
       clearInterval(id);
       stopCamera();
     };
@@ -906,8 +950,29 @@ function QrScreen({
           </div>
         </div>
 
-        <div style={{ padding: "16px 80px 28px", display: "flex", alignItems: "center", color: "#a8a198", fontSize: 13, flexShrink: 0 }}>
+        <div style={{ padding: "16px 80px 28px", display: "flex", alignItems: "center", color: "#a8a198", fontSize: 13, flexShrink: 0, gap: 20 }}>
           <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 14 }}>{now}</span>
+          <span style={{ flex: 1 }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ color: count <= 10 ? "#a84238" : "#a8a198", transition: "color 0.3s" }}>
+              待機画面に戻るまで
+            </span>
+            <span style={{
+              fontSize: 20, fontWeight: 700, fontFamily: "JetBrains Mono, monospace",
+              color: count <= 10 ? "#a84238" : "#6b6559",
+              minWidth: 36, textAlign: "right", transition: "color 0.3s",
+            }}>{count}</span>
+            <span style={{ color: count <= 10 ? "#a84238" : "#a8a198", transition: "color 0.3s" }}>秒</span>
+            <div style={{ width: 160, height: 6, background: "#efece5", borderRadius: 3, overflow: "hidden" }}>
+              <div style={{
+                width: `${(count / settings.kiosk_idle_timeout_sec) * 100}%`,
+                height: "100%",
+                background: count <= 10 ? "#a84238" : "#6b6559",
+                borderRadius: 3,
+                transition: "width 1s linear, background 0.3s",
+              }} />
+            </div>
+          </div>
           <span style={{ flex: 1 }} />
           <span style={{ fontFamily: "JetBrains Mono, monospace" }}>{deviceName || "kiosk"}</span>
         </div>
