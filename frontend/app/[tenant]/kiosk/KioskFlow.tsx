@@ -1024,7 +1024,6 @@ function CompleteScreen({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const progress = ((returnSec - count) / returnSec) * 100;
   const visitorName = name || "お客様";
 
   return (
@@ -1048,11 +1047,27 @@ function CompleteScreen({
 
             <div style={{ fontSize: 26, color: "#6b6559", lineHeight: 1.5 }}>お待ちしておりました</div>
 
-            <div style={{ marginTop: 36, display: "flex", alignItems: "center", gap: 14 }}>
-              <ClockIcon />
-              <span style={{ fontSize: 14, color: "#6b6559", flex: 1 }}>この画面は <b>{count}秒後</b> に待機画面へ戻ります</span>
-              <div style={{ width: 220, height: 4, background: "#efece5", borderRadius: 2 }}>
-                <div style={{ width: `${progress}%`, height: "100%", background: brandColor, borderRadius: 2, transition: "width 1s linear" }} />
+            <div style={{ marginTop: 36 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+                <ClockIcon />
+                <span style={{ fontSize: 14, color: "#6b6559", flex: 1 }}>待機画面に戻るまで</span>
+                <span style={{
+                  fontSize: 36, fontWeight: 700,
+                  color: count <= 5 ? "#a84238" : brandColor,
+                  fontFamily: "JetBrains Mono, monospace",
+                  minWidth: 52, textAlign: "right",
+                  transition: "color 0.3s",
+                }}>{count}</span>
+                <span style={{ fontSize: 16, color: "#6b6559" }}>秒</span>
+              </div>
+              <div style={{ height: 8, background: "#efece5", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{
+                  width: `${(count / returnSec) * 100}%`,
+                  height: "100%",
+                  background: count <= 5 ? "#a84238" : brandColor,
+                  borderRadius: 4,
+                  transition: "width 1s linear, background 0.3s",
+                }} />
               </div>
             </div>
           </div>
