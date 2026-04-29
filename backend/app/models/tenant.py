@@ -31,6 +31,9 @@ class Tenant(Base):
     logo_pos_y: Mapped[float] = mapped_column(Float, default=0.04)
     logo_width_pct: Mapped[float] = mapped_column(Float, default=8.0)
 
+    # Kiosk design pattern selection
+    kiosk_style: Mapped[str] = mapped_column(String(32), default="default")
+
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     media = relationship("Media", back_populates="tenant", cascade="all, delete-orphan")
     playlists = relationship("Playlist", back_populates="tenant", cascade="all, delete-orphan")

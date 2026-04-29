@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkSectionTitle } from "@/components/AdminShell";
 import { api, TenantSettings } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
+import { KIOSK_STYLES } from "./kioskStyles";
 
 type PreviewTab = "top" | "calling" | "complete";
 
@@ -24,6 +25,9 @@ export default function KioskSettingsPage() {
   const [kioskComplete, setKioskComplete] = useState("担当者がご案内します");
   const [kioskIdleTimeout, setKioskIdleTimeout] = useState("60");
   const [kioskCompleteTimeout, setKioskCompleteTimeout] = useState("10");
+
+  // Design pattern state
+  const [kioskStyle, setKioskStyle] = useState("default");
 
   // Logo placement state
   const [logoPosX, setLogoPosX] = useState(0.04);
@@ -46,6 +50,7 @@ export default function KioskSettingsPage() {
       setLogoPosY(s.logo_pos_y);
       setLogoWidthPct(s.logo_width_pct);
       setLogoUrl(s.logo_url);
+      setKioskStyle(s.kiosk_style ?? "default");
     }).catch(() => {});
   }, []);
 
@@ -65,6 +70,7 @@ export default function KioskSettingsPage() {
         logo_pos_x: logoPosX,
         logo_pos_y: logoPosY,
         logo_width_pct: logoWidthPct,
+        kiosk_style: kioskStyle,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -86,6 +92,7 @@ export default function KioskSettingsPage() {
     setLogoPosX(settings.logo_pos_x);
     setLogoPosY(settings.logo_pos_y);
     setLogoWidthPct(settings.logo_width_pct);
+    setKioskStyle(settings.kiosk_style ?? "default");
     setError(null);
   };
 
@@ -109,6 +116,89 @@ export default function KioskSettingsPage() {
           {error}
         </div>
       )}
+
+      {/* Design pattern selector — full width above the two-column grid */}
+      <MkCard style={{ marginBottom: 20 }}>
+        <MkSectionTitle title="デザインパターン" subtitle="キオスクの「ようこそ」画面のテーマを選択" />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
+          {KIOSK_STYLES.map((style) => {
+            const selected = kioskStyle === style.id;
+            return (
+              <button
+                key={style.id}
+                onClick={() => setKioskStyle(style.id)}
+                style={{
+                  border: selected ? "2px solid #1d1a15" : "1px solid #efece5",
+                  borderRadius: 10,
+                  padding: 0,
+                  background: "none",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  overflow: "hidden",
+                  boxShadow: selected ? "0 0 0 3px rgba(29,26,21,0.12)" : "none",
+                  transition: "box-shadow 0.15s, border-color 0.15s",
+                }}
+              >
+                {/* Color thumbnail */}
+                <div style={{
+                  height: 56,
+                  background: style.bg,
+                  position: "relative",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 6,
+                }}>
+                  <div style={{
+                    width: 22,
+                    height: 22,
+                    borderRadius: "50%",
+                    background: style.accentGradient ?? style.accent,
+                    border: "2px solid rgba(255,255,255,0.25)",
+                    flexShrink: 0,
+                  }} />
+                  <div style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: style.text,
+                    opacity: 0.85,
+                    letterSpacing: 0.3,
+                    maxWidth: 90,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}>
+                    Welcome
+                  </div>
+                  {selected && (
+                    <div style={{
+                      position: "absolute",
+                      top: 6,
+                      right: 6,
+                      width: 18,
+                      height: 18,
+                      borderRadius: "50%",
+                      background: "#1d1a15",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="#fffefb" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 10, height: 10 }}>
+                        <path d="M5 12l5 5L20 6" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+                {/* Label */}
+                <div style={{ padding: "8px 10px", background: "#fffefb" }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#1d1a15", marginBottom: 2 }}>{style.name}</div>
+                  <div style={{ fontSize: 10.5, color: "#a8a198", lineHeight: 1.4 }}>{style.description}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </MkCard>
 
       <div className="adm-grid-kiosk-settings" style={{ gap: 20 }}>
         {/* Left: Form */}

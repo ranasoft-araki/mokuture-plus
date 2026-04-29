@@ -163,6 +163,7 @@ mokuture/
 | logo_pos_x | FLOAT | ロゴ X 位置 (0.0–0.9、画面幅比) |
 | logo_pos_y | FLOAT | ロゴ Y 位置 (0.0–0.9、画面高比) |
 | logo_width_pct | FLOAT | ロゴ幅 (2.0–30.0、画面幅に対する %) |
+| kiosk_style | VARCHAR(32) | ようこそ画面デザインパターン ID (default / medical / retail / hotel / startup / school / craft / industrial / restaurant / mono / gym) |
 
 ### その他テーブル
 - **users** — email / password_hash / role / tenant_id
@@ -214,11 +215,48 @@ mokuture/
 - `get_current_user` が JWT から `user.tenant_id` を取得し、各エンドポイントで `WHERE tenant_id = user.tenant_id` を適用。
 - キオスク公開 API (`/kiosk/*`) はデバイストークンで `tenant_id` を解決。
 
+### キオスク デザインパターン追加方法
+
+新しい「ようこそ」画面パターンを追加するには以下の3箇所を更新すること:
+
+1. **`frontend/app/[tenant]/admin/kiosk-settings/kioskStyles.ts`** に `KioskStyleDef` エントリを追加
+2. **`backend/app/api/settings.py`** の `ALLOWED_KIOSK_STYLES` セットに ID を追加
+3. **`kiosk_agent/static/kiosk.html`** に `buildComplete_XXX(vName, staff, bc, count, now, completeMsg)` 関数を追加し、`COMPLETE_TEMPLATES` オブジェクトに登録
+
+DB マイグレーション不要（`kiosk_style` カラムはフリーテキスト）。
+
 ### キオスク画面
 - `KioskFlow.tsx` が全画面状態 (`idle → top → reception/qr → calling → complete`) を管理。
 - `KioskScaler` が 1920×1080 固定サイズを CSS `transform: scale()` でビューポートにフィット。
 - `PublicTenantSettings` は `localStorage` にキャッシュ（オフライン対応）。
 - TopScreen にはロゴを `position: absolute` で `logo_pos_x/y/width_pct` に従い表示。
+
+### 「戻る」ボタンの配置ルール（キオスク・管理画面 共通）
+
+**キオスク (`kiosk.html`)**: 「← 戻る」ボタンは **必ずページ最上部・コンテンツグリッドの外側**に配置する。
+- ラッパー: `<div style="padding:20px 80px 0;flex-shrink:0">`
+- ボタンスタイル: `display:inline-flex;align-items:center;gap:8px;padding:10px 20px;background:#fffefb;border:1px solid #d8d3c7;border-radius:999px;font-size:15px;color:#6b6559;cursor:pointer`
+- **コンテンツグリッド内（左右どちらの列にも）配置しないこと。**
+
+```html
+<!-- ✅ 正しい配置 -->
+<div style="width:1920px;height:1080px;...display:flex;flex-direction:column">
+  <div style="padding:20px 80px 0;flex-shrink:0">
+    <button id="xxx-back" style="display:inline-flex;align-items:center;gap:8px;padding:10px 20px;background:#fffefb;border:1px solid #d8d3c7;border-radius:999px;font-size:15px;color:#6b6559;cursor:pointer">← 戻る</button>
+  </div>
+  <div style="flex:1;padding:...;display:grid;...">
+    <!-- グリッドの中には戻るボタンを入れない -->
+  </div>
+</div>
+```
+
+**管理画面 (`AdminShell`)**: ページ内に「一覧へ戻る」などのナビゲーションが必要な場合は、**必ず `AdminShell` の `actions` props** に `MkBtn` で配置する（コンテンツエリア内には置かない）。
+```tsx
+// ✅ 正しい配置
+<AdminShell ... actions={
+  <MkBtn variant="default" size="sm" onClick={...}>← 一覧へ</MkBtn>
+}>
+```
 
 ### 管理画面ナビゲーション
 - `AdminShell.tsx` の `NavId` 型・`NAV_SETTINGS`・`NAV_PATHS`・`NavIcon` を一括管理。

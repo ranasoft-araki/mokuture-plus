@@ -79,6 +79,7 @@ export const api = {
     kiosk_calling_message?: string; kiosk_complete_message?: string;
     kiosk_idle_timeout_sec?: number; kiosk_complete_timeout_sec?: number;
     logo_pos_x?: number; logo_pos_y?: number; logo_width_pct?: number;
+    kiosk_style?: string;
   }) =>
     request<TenantSettings>("/settings", { method: "PATCH", body: JSON.stringify(body) }, token),
   getPublicTenantSettings: (tenantSlug: string) =>
@@ -293,6 +294,7 @@ export interface TenantSettings {
   logo_pos_x: number;
   logo_pos_y: number;
   logo_width_pct: number;
+  kiosk_style: string;
 }
 
 export interface PublicTenantSettings {
@@ -308,6 +310,7 @@ export interface PublicTenantSettings {
   logo_pos_x: number;
   logo_pos_y: number;
   logo_width_pct: number;
+  kiosk_style: string;
 }
 
 export interface KioskScheduleResponse {

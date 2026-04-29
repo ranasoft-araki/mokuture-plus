@@ -1,8 +1,9 @@
 "use client";
 import { useEffect } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
-export default function KioskTopRedirect() {
+// KioskFlow manages all screen state — sub-routes redirect to the main kiosk page.
+export default function KioskSubPage() {
   const params = useParams<{ tenant: string }>();
   const router = useRouter();
   useEffect(() => {

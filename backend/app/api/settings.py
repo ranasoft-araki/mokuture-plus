@@ -20,6 +20,10 @@ ALLOWED_FONTS = {
     "Noto Serif JP / Georgia",
     "BIZ UDPGothic / System",
 }
+ALLOWED_KIOSK_STYLES = {
+    "default", "medical", "retail", "hotel", "startup",
+    "school", "craft", "industrial", "restaurant", "mono", "gym",
+}
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
@@ -38,6 +42,7 @@ class TenantSettingsOut(BaseModel):
     logo_pos_x: float
     logo_pos_y: float
     logo_width_pct: float
+    kiosk_style: str
 
 
 class PublicTenantSettingsOut(BaseModel):
@@ -53,6 +58,7 @@ class PublicTenantSettingsOut(BaseModel):
     logo_pos_x: float
     logo_pos_y: float
     logo_width_pct: float
+    kiosk_style: str
 
 
 class TenantSettingsPatch(BaseModel):
@@ -67,6 +73,7 @@ class TenantSettingsPatch(BaseModel):
     logo_pos_x: float | None = None
     logo_pos_y: float | None = None
     logo_width_pct: float | None = None
+    kiosk_style: str | None = None
 
 
 class LogoUploadUrlRequest(BaseModel):
@@ -102,6 +109,7 @@ def _out(tenant: Tenant) -> TenantSettingsOut:
         logo_pos_x=getattr(tenant, "logo_pos_x", 0.04),
         logo_pos_y=getattr(tenant, "logo_pos_y", 0.04),
         logo_width_pct=getattr(tenant, "logo_width_pct", 8.0),
+        kiosk_style=getattr(tenant, "kiosk_style", "default"),
     )
 
 
@@ -119,6 +127,7 @@ def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
         logo_pos_x=getattr(tenant, "logo_pos_x", 0.04),
         logo_pos_y=getattr(tenant, "logo_pos_y", 0.04),
         logo_width_pct=getattr(tenant, "logo_width_pct", 8.0),
+        kiosk_style=getattr(tenant, "kiosk_style", "default"),
     )
 
 
@@ -163,6 +172,10 @@ async def patch_settings(
         tenant.logo_pos_y = max(0.0, min(0.9, body.logo_pos_y))
     if body.logo_width_pct is not None:
         tenant.logo_width_pct = max(2.0, min(30.0, body.logo_width_pct))
+    if body.kiosk_style is not None:
+        if body.kiosk_style not in ALLOWED_KIOSK_STYLES:
+            raise HTTPException(status_code=422, detail=f"kiosk_style not allowed: {body.kiosk_style}")
+        tenant.kiosk_style = body.kiosk_style
     await db.commit()
     return _out(tenant)
 
