@@ -728,9 +728,9 @@ export default function AdminPlaylistsPage() {
                   </span>
                 )}
               </div>
-              <div style={{ fontSize: 11.5, color: "#a8a198", marginBottom: 12 }}>縦型サイネージ (9:16)</div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginBottom: 12 }}>横型サイネージ (16:9)</div>
               <div style={{
-                aspectRatio: "9/16", background: "#1d1a15", borderRadius: 7, overflow: "hidden",
+                aspectRatio: "16/9", background: "#1d1a15", borderRadius: 7, overflow: "hidden",
                 position: "relative",
                 backgroundImage: "repeating-linear-gradient(45deg, rgba(255,255,255,0.03) 0 10px, transparent 10px 20px)",
               }}>
