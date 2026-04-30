@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { api, type MediaItem } from "@/lib/api";
+import { api, type MediaItem, type Playlist } from "@/lib/api";
 import { clearTokens, getAccessToken } from "@/lib/auth";
 import { AdminShell, MkBtn, MkCard, MkPill } from "@/components/AdminShell";
 
-function MediaPreviewModal({ item, onClose }: { item: MediaItem; onClose: () => void }) {
+function MediaPreviewModal({ item, usedIn, onClose }: { item: MediaItem; usedIn: string[]; onClose: () => void }) {
   const isVideo = item.mime_type.startsWith("video/");
 
   useEffect(() => {
@@ -75,6 +75,16 @@ function MediaPreviewModal({ item, onClose }: { item: MediaItem; onClose: () => 
             <span style={{ fontSize: 11.5, color: "#a8a198", fontFamily: "monospace" }}>{formatDuration(item.duration_sec)}</span>
           )}
           <span style={{ fontSize: 11.5, color: "#a8a198", fontFamily: "monospace" }}>{formatDate(item.uploaded_at)}</span>
+          {usedIn.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 10.5, color: "#a8a198" }}>使用中:</span>
+              {usedIn.map((name) => (
+                <span key={name} style={{ fontSize: 10.5, padding: "2px 7px", borderRadius: 999, background: "#eaf0e8", color: "#3a6240", border: "1px solid #c6ddc8", whiteSpace: "nowrap" }}>
+                  {name}
+                </span>
+              ))}
+            </div>
+          )}
           <div style={{ flex: 1 }} />
           <a href={item.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#6b6559", textDecoration: "none" }}>
             別タブで開く ↗
@@ -106,6 +116,7 @@ export default function AdminMediaPage() {
   const router = useRouter();
 
   const [media, setMedia] = useState<MediaItem[]>([]);
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -121,7 +132,9 @@ export default function AdminMediaPage() {
   const loadMedia = useCallback(async (token: string) => {
     setLoading(true);
     try {
-      setMedia(await api.listMedia(token));
+      const [mediaList, pls] = await Promise.all([api.listMedia(token), api.listPlaylists(token)]);
+      setMedia(mediaList);
+      setPlaylists(pls);
     } catch {
       clearTokens();
       router.push("/login");
@@ -145,6 +158,16 @@ export default function AdminMediaPage() {
     const totalBytes = media.reduce((s, m) => s + m.size_bytes, 0);
     return { images, videos, others, totalBytes };
   }, [media]);
+
+  const usageLookup = useMemo<Record<string, string[]>>(() => {
+    const map: Record<string, string[]> = {};
+    for (const pl of playlists) {
+      for (const item of pl.items) {
+        (map[item.media_id] ??= []).push(pl.name);
+      }
+    }
+    return map;
+  }, [playlists]);
 
   const filtered = useMemo(() => {
     let list = media;
@@ -331,17 +354,17 @@ export default function AdminMediaPage() {
       ) : viewMode === "grid" ? (
         <div className="adm-grid-4" style={{ gap: 16 }}>
           {filtered.map((item) => (
-            <MediaTile key={item.id} item={item} onDelete={() => handleDelete(item.id, item.filename)} onPreview={() => setPreviewItem(item)} />
+            <MediaTile key={item.id} item={item} usedIn={usageLookup[item.id] ?? []} onDelete={() => handleDelete(item.id, item.filename)} onPreview={() => setPreviewItem(item)} />
           ))}
         </div>
       ) : (
         <MkCard padding="0">
           {filtered.map((item, i) => (
-            <MediaRow key={item.id} item={item} onDelete={() => handleDelete(item.id, item.filename)} onPreview={() => setPreviewItem(item)} isFirst={i === 0} />
+            <MediaRow key={item.id} item={item} usedIn={usageLookup[item.id] ?? []} onDelete={() => handleDelete(item.id, item.filename)} onPreview={() => setPreviewItem(item)} isFirst={i === 0} />
           ))}
         </MkCard>
       )}
-      {previewItem && <MediaPreviewModal item={previewItem} onClose={() => setPreviewItem(null)} />}
+      {previewItem && <MediaPreviewModal item={previewItem} usedIn={usageLookup[previewItem.id] ?? []} onClose={() => setPreviewItem(null)} />}
       {confirmTarget && (
         <ConfirmDialog
           message={`「${confirmTarget.name}」を削除しますか？`}
@@ -353,7 +376,7 @@ export default function AdminMediaPage() {
   );
 }
 
-function MediaTile({ item, onDelete, onPreview }: { item: MediaItem; onDelete: () => void; onPreview: () => void }) {
+function MediaTile({ item, usedIn, onDelete, onPreview }: { item: MediaItem; usedIn: string[]; onDelete: () => void; onPreview: () => void }) {
   const isVideo = item.mime_type.startsWith("video/");
   const isImage = item.mime_type.startsWith("image/");
   const ext = item.mime_type.split("/")[1]?.toUpperCase() ?? "FILE";
@@ -420,12 +443,21 @@ function MediaTile({ item, onDelete, onPreview }: { item: MediaItem; onDelete: (
           <span style={{ color: "#d8d3c7" }}>·</span>
           <span>{formatDate(item.uploaded_at)}</span>
         </div>
+        {usedIn.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+            {usedIn.map((name) => (
+              <span key={name} style={{ fontSize: 9, padding: "2px 6px", borderRadius: 999, background: "#eaf0e8", color: "#3a6240", border: "1px solid #c6ddc8", whiteSpace: "nowrap", maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis" }} title={name}>
+                {name}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function MediaRow({ item, onDelete, onPreview, isFirst }: { item: MediaItem; onDelete: () => void; onPreview: () => void; isFirst: boolean }) {
+function MediaRow({ item, usedIn, onDelete, onPreview, isFirst }: { item: MediaItem; usedIn: string[]; onDelete: () => void; onPreview: () => void; isFirst: boolean }) {
   const isVideo = item.mime_type.startsWith("video/");
   const isImage = item.mime_type.startsWith("image/");
   const ext = item.mime_type.split("/")[1]?.toUpperCase() ?? "FILE";
@@ -446,6 +478,15 @@ function MediaRow({ item, onDelete, onPreview, isFirst }: { item: MediaItem; onD
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12.5, fontWeight: 600, color: "#2d2a24", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.filename}</div>
         <div style={{ fontSize: 10.5, color: "#a8a198", marginTop: 2, fontFamily: "monospace" }}>{formatBytes(item.size_bytes)} · {formatDate(item.uploaded_at)}</div>
+        {usedIn.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 5 }}>
+            {usedIn.map((name) => (
+              <span key={name} style={{ fontSize: 9, padding: "2px 6px", borderRadius: 999, background: "#eaf0e8", color: "#3a6240", border: "1px solid #c6ddc8", whiteSpace: "nowrap", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }} title={name}>
+                {name}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
       <button onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ background: "none", border: "none", color: "#a84238", cursor: "pointer", fontSize: 12, padding: "4px 8px" }}>削除</button>
     </div>
