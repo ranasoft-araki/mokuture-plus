@@ -42,7 +42,7 @@ export default function DashboardPage() {
     const proxyRefresh = localStorage.getItem("mk_proxy_refresh");
     const proxyTenant = localStorage.getItem("mk_proxy_tenant");
     if (proxyAccess && proxyRefresh && proxyTenant === params.tenant) {
-      saveTokens(proxyAccess, proxyRefresh, "admin");
+      saveTokens(proxyAccess, proxyRefresh, "admin", true);
       localStorage.removeItem("mk_proxy_access");
       localStorage.removeItem("mk_proxy_refresh");
       localStorage.removeItem("mk_proxy_tenant");

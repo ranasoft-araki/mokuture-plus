@@ -13,6 +13,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [tab, setTab] = useState<"login" | "register">("login");
   const [form, setForm] = useState({ email: "", password: "", tenant_name: "", tenant_slug: "" });
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -34,7 +35,7 @@ export default function LoginPage() {
           password: form.password,
         });
       }
-      saveTokens(tokens.access_token, tokens.refresh_token, tokens.role);
+      saveTokens(tokens.access_token, tokens.refresh_token, tokens.role, rememberMe);
       if (tokens.role === "operator") {
         router.push("/ops-console");
       } else if (tokens.role === "reseller") {
@@ -101,7 +102,12 @@ export default function LoginPage() {
             {tab === "login" && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#6b6559", cursor: "pointer" }}>
-                  <span style={{ width: 16, height: 16, borderRadius: 4, border: "1.5px solid #d8d3c7", background: "#fffefb", display: "block" }} />
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    style={{ width: 16, height: 16, accentColor: "#4a7c4e", cursor: "pointer" }}
+                  />
                   ログイン状態を保持
                 </label>
                 <a href="#" style={{ fontSize: 13, color: "#4a7c4e", fontWeight: 500, textDecoration: "none" }}>お困りですか？</a>

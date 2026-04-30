@@ -22,7 +22,7 @@ export default function OpsConsolePage() {
     setLoading(true);
     try {
       const tokens = await api.operatorLogin(email, password);
-      saveTokens(tokens.access_token, tokens.refresh_token, tokens.role);
+      saveTokens(tokens.access_token, tokens.refresh_token, tokens.role, true);
       if (tokens.role === "operator") {
         router.push("/operator");
       } else {

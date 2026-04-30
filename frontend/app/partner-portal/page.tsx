@@ -22,7 +22,7 @@ export default function PartnerPortalPage() {
     setLoading(true);
     try {
       const tokens = await api.resellerLogin(resellerId, password);
-      saveTokens(tokens.access_token, tokens.refresh_token, tokens.role);
+      saveTokens(tokens.access_token, tokens.refresh_token, tokens.role, true);
       if (tokens.role === "reseller") {
         router.push(`/${tokens.tenant_slug}/reseller`);
       } else {

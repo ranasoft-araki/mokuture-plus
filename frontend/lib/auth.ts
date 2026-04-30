@@ -1,31 +1,40 @@
 "use client";
 
-export function saveTokens(access: string, refresh: string, role?: string) {
+export function saveTokens(access: string, refresh: string, role: string | undefined, remember: boolean) {
   if (typeof window === "undefined") return;
-  localStorage.setItem("mokuture_access", access);
-  localStorage.setItem("mokuture_refresh", refresh);
-  if (role) localStorage.setItem("mokuture_role", role);
+  const store = remember ? localStorage : sessionStorage;
+  store.setItem("mokuture_access", access);
+  store.setItem("mokuture_refresh", refresh);
+  if (role) store.setItem("mokuture_role", role);
 }
 
 export function getAccessToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("mokuture_access");
+  return sessionStorage.getItem("mokuture_access") ?? localStorage.getItem("mokuture_access");
 }
 
 export function getRefreshToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("mokuture_refresh");
+  return sessionStorage.getItem("mokuture_refresh") ?? localStorage.getItem("mokuture_refresh");
 }
 
 export function getRole(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("mokuture_role");
+  return sessionStorage.getItem("mokuture_role") ?? localStorage.getItem("mokuture_role");
 }
 
 export function clearTokens() {
-  localStorage.removeItem("mokuture_access");
-  localStorage.removeItem("mokuture_refresh");
-  localStorage.removeItem("mokuture_role");
+  ["mokuture_access", "mokuture_refresh", "mokuture_role"].forEach((k) => {
+    localStorage.removeItem(k);
+    sessionStorage.removeItem(k);
+  });
+}
+
+export function refreshSaveTokens(access: string, refresh: string) {
+  if (typeof window === "undefined") return;
+  const store = sessionStorage.getItem("mokuture_access") ? sessionStorage : localStorage;
+  store.setItem("mokuture_access", access);
+  store.setItem("mokuture_refresh", refresh);
 }
 
 export function getLogoutUrl(): string {

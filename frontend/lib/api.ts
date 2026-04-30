@@ -10,7 +10,7 @@ async function _fetch(path: string, init?: RequestInit, token?: string): Promise
 let _pendingRefresh: Promise<string | null> | null = null;
 
 async function _doRefresh(): Promise<string | null> {
-  const { getRefreshToken, saveTokens, clearTokens } = await import("@/lib/auth");
+  const { getRefreshToken, refreshSaveTokens, clearTokens } = await import("@/lib/auth");
   const rt = getRefreshToken();
   if (!rt) return null;
   const res = await _fetch("/auth/refresh", {
@@ -19,7 +19,7 @@ async function _doRefresh(): Promise<string | null> {
   });
   if (res.ok) {
     const { access_token, refresh_token } = await res.json();
-    saveTokens(access_token, refresh_token);
+    refreshSaveTokens(access_token, refresh_token);
     return access_token;
   }
   clearTokens();

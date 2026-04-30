@@ -25,7 +25,7 @@ export default function ProxyLoginHandler({
     localStorage.removeItem(proxyKey);
 
     // Install the proxy token as the active session
-    saveTokens(shortToken, "", "admin");
+    saveTokens(shortToken, "", "admin", true);
 
     // Clean the ?proxy= param from the URL
     router.replace("/" + tenant + "/admin");
