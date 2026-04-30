@@ -1,18 +1,24 @@
 /** Web Push subscription utilities */
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 
-export type PushStatus = "unsupported" | "ios-not-pwa" | "denied" | "granted" | "default";
+export type PushStatus = "unsupported" | "insecure-context" | "ios-not-pwa" | "denied" | "granted" | "default";
 
 /** Detect why push notifications may not be available on this device. */
 export function getPushStatus(): PushStatus {
-  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
-    return "unsupported";
-  }
+  // iOS non-PWA must be checked FIRST: on iOS Safari (non-standalone), the Push/Notification
+  // APIs may be absent specifically because the app isn't installed — not because Safari
+  // lacks support. Showing "unsupported" in that case is misleading.
   const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent.toLowerCase());
   const isStandalone =
     window.matchMedia("(display-mode: standalone)").matches ||
     (navigator as unknown as { standalone?: boolean }).standalone === true;
   if (isIOS && !isStandalone) return "ios-not-pwa";
+
+  if (!window.isSecureContext) return "insecure-context";
+
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    return "unsupported";
+  }
   return Notification.permission as "denied" | "granted" | "default";
 }
 

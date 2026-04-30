@@ -86,8 +86,12 @@ function PushPanel({ authToken }: { authToken: string }) {
     try {
       const status = getPushStatus();
       setPushStatus(status);
+      if (status === "insecure-context") {
+        setError("プッシュ通知には HTTPS 接続が必要です。本番 URL（https://）からアクセスしてください。");
+        return;
+      }
       if (status === "unsupported") {
-        setError("このブラウザはプッシュ通知に対応していません。Chrome または Edge をお使いください。");
+        setError("このブラウザはプッシュ通知に対応していません。Chrome・Edge・Safari（macOS/iOS 16.4+）をお使いください。");
         return;
       }
       if (status === "ios-not-pwa") {
