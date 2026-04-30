@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
 import { api } from "@/lib/api";
-import { requestAndSubscribe, getCurrentPushSubscription } from "@/lib/push";
+import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, type PushStatus } from "@/lib/push";
 import { getAccessToken } from "@/lib/auth";
 
 function Field({ label, hint, children, required }: { label: string; hint?: string; children: React.ReactNode; required?: boolean }) {
@@ -43,6 +43,7 @@ function PushPanel({ authToken }: { authToken: string }) {
   const [testSent, setTestSent] = useState(false);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<"settings" | "devices">("settings");
+  const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -63,6 +64,7 @@ function PushPanel({ authToken }: { authToken: string }) {
   }, [authToken]);
 
   useEffect(() => { reload(); }, [reload]);
+  useEffect(() => { setPushStatus(getPushStatus()); }, []);
 
   const handleSetupVapid = async () => {
     setWorking(true);
@@ -82,8 +84,22 @@ function PushPanel({ authToken }: { authToken: string }) {
     setWorking(true);
     setError("");
     try {
+      const status = getPushStatus();
+      setPushStatus(status);
+      if (status === "unsupported") {
+        setError("このブラウザはプッシュ通知に対応していません。Chrome または Edge をお使いください。");
+        return;
+      }
+      if (status === "ios-not-pwa") {
+        setError('Safari の「共有」→「ホーム画面に追加」でアプリをインストールしてから再度お試しください。');
+        return;
+      }
+      if (status === "denied") {
+        setError("通知がブロックされています。ブラウザの設定から mokuture+ の通知を「許可」に変更してください。");
+        return;
+      }
       const sub = await requestAndSubscribe(vapidKey);
-      if (!sub) { setError("通知の許可が拒否されました。ブラウザの設定を確認してください。"); return; }
+      if (!sub) { setError("通知の許可が必要です。ダイアログが表示されたら「許可」を選択してください。"); return; }
       const json = sub.toJSON();
       await api.subscribePush(authToken, {
         endpoint: sub.endpoint,
@@ -91,6 +107,7 @@ function PushPanel({ authToken }: { authToken: string }) {
         auth: json.keys?.auth ?? "",
       });
       setIsSubscribed(true);
+      setPushStatus(getPushStatus());
       await reload();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "登録に失敗しました");
@@ -211,6 +228,13 @@ function PushPanel({ authToken }: { authToken: string }) {
                 >
                   再生成
                 </button>
+              </div>
+            )}
+
+            {vapidKey && pushStatus === "ios-not-pwa" && (
+              <div style={{ marginBottom: 12, padding: "10px 14px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.3)", borderRadius: 8, fontSize: 12, color: "#7a5c00", display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <span style={{ flexShrink: 0 }}>⚠️</span>
+                <span>iPhone/iPad の場合は、Safari の「共有」→「ホーム画面に追加」でインストールしてから通知を有効にしてください。</span>
               </div>
             )}
 

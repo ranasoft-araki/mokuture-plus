@@ -1,6 +1,21 @@
 /** Web Push subscription utilities */
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 
+export type PushStatus = "unsupported" | "ios-not-pwa" | "denied" | "granted" | "default";
+
+/** Detect why push notifications may not be available on this device. */
+export function getPushStatus(): PushStatus {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    return "unsupported";
+  }
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent.toLowerCase());
+  const isStandalone =
+    window.matchMedia("(display-mode: standalone)").matches ||
+    (navigator as unknown as { standalone?: boolean }).standalone === true;
+  if (isIOS && !isStandalone) return "ios-not-pwa";
+  return Notification.permission as "denied" | "granted" | "default";
+}
+
 /** Convert VAPID public key (base64url) to ArrayBuffer for PushManager.subscribe */
 function urlBase64ToArrayBuffer(base64String: string): ArrayBuffer {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
