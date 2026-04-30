@@ -308,6 +308,7 @@ export default function AdminPlaylistsPage() {
   const [previewPlaying, setPreviewPlaying] = useState(false);
   const [previewIdx, setPreviewIdx] = useState(0);
   const [previewProgress, setPreviewProgress] = useState(0);
+  const [previewFullscreen, setPreviewFullscreen] = useState(false);
 
   // Clamp previewIdx when items change
   useEffect(() => {
@@ -324,7 +325,16 @@ export default function AdminPlaylistsPage() {
     setPreviewPlaying(false);
     setPreviewIdx(0);
     setPreviewProgress(0);
+    setPreviewFullscreen(false);
   }, [selectedId]);
+
+  // Escape key closes full screen
+  useEffect(() => {
+    if (!previewFullscreen) return;
+    const fn = (e: KeyboardEvent) => { if (e.key === "Escape") { setPreviewFullscreen(false); setPreviewPlaying(false); } };
+    document.addEventListener("keydown", fn);
+    return () => document.removeEventListener("keydown", fn);
+  }, [previewFullscreen]);
 
   // Image timing effect
   useEffect(() => {
@@ -723,10 +733,21 @@ export default function AdminPlaylistsPage() {
               <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
                 <div style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: "#1d1a15" }}>プレビュー</div>
                 {draftItems.length > 0 && (
-                  <span style={{ fontSize: 10.5, color: "#a8a198", fontFamily: "monospace" }}>
+                  <span style={{ fontSize: 10.5, color: "#a8a198", fontFamily: "monospace", marginRight: 8 }}>
                     {previewIdx + 1} / {draftItems.length}
                   </span>
                 )}
+                <button
+                  onClick={() => { setPreviewFullscreen(true); setPreviewPlaying(false); }}
+                  disabled={draftItems.length === 0}
+                  title="全画面プレビュー"
+                  style={{ width: 26, height: 26, borderRadius: 5, border: "1px solid #d8d3c7", background: "#f4f1ea", cursor: draftItems.length === 0 ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", opacity: draftItems.length === 0 ? 0.35 : 1 }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6b6559" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+                    <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+                  </svg>
+                </button>
               </div>
               <div style={{ fontSize: 11.5, color: "#a8a198", marginBottom: 12 }}>横型サイネージ (16:9)</div>
               <div style={{
@@ -841,6 +862,140 @@ export default function AdminPlaylistsPage() {
                 </div>
               ))}
             </MkCard>
+          </div>
+        </div>
+      )}
+
+      {/* ─ FULLSCREEN PREVIEW OVERLAY ─ */}
+      {previewFullscreen && (
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 200,
+            background: "#000",
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          }}
+        >
+          {/* Close button */}
+          <button
+            onClick={() => { setPreviewFullscreen(false); setPreviewPlaying(false); }}
+            style={{
+              position: "absolute", top: 16, right: 16,
+              width: 36, height: 36, borderRadius: "50%",
+              background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.2)",
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+              zIndex: 10,
+            }}
+            title="閉じる (Esc)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fffefb" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+
+          {/* Item counter */}
+          {draftItems.length > 0 && (
+            <div style={{ position: "absolute", top: 20, left: 20, fontSize: 12, color: "rgba(255,255,255,0.5)", fontFamily: "monospace" }}>
+              {previewIdx + 1} / {draftItems.length}
+            </div>
+          )}
+
+          {/* 16:9 canvas */}
+          <div style={{
+            width: "min(100vw, calc(100vh * 16 / 9))",
+            height: "min(100vh, calc(100vw * 9 / 16))",
+            background: "#1d1a15",
+            position: "relative",
+            overflow: "hidden",
+          }}>
+            {previewItem ? (
+              previewItem.media.mime_type.startsWith("image/") ? (
+                <img src={previewItem.media.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+              ) : (
+                <video
+                  key={previewItem.media_id + "-fs"}
+                  src={previewItem.media.url}
+                  autoPlay={previewPlaying}
+                  playsInline
+                  onEnded={advancePreview}
+                  onTimeUpdate={(e) => {
+                    const v = e.currentTarget;
+                    if (v.duration) setPreviewProgress(v.currentTime / v.duration);
+                  }}
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                />
+              )
+            ) : null}
+
+            {/* Progress bar */}
+            {previewItem && (
+              <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 3, background: "rgba(255,255,255,0.15)" }}>
+                <div style={{ width: `${previewProgress * 100}%`, height: "100%", background: "#4a7c4e", transition: "width 0.05s linear" }} />
+              </div>
+            )}
+
+            {/* Playlist position dots */}
+            {draftItems.length > 1 && (
+              <div style={{ position: "absolute", bottom: 16, left: 0, right: 0, display: "flex", justifyContent: "center", gap: 6 }}>
+                {draftItems.map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => { setPreviewIdx(i); setPreviewProgress(0); }}
+                    style={{
+                      width: i === previewIdx ? 24 : 7, height: 7, borderRadius: 4,
+                      background: i === previewIdx ? "#4a7c4e" : "rgba(255,255,255,0.35)",
+                      border: "none", cursor: "pointer", padding: 0,
+                      transition: "all 0.2s",
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* Controls overlay — bottom center, hidden until hover */}
+            <div
+              style={{
+                position: "absolute", bottom: 32, left: "50%", transform: "translateX(-50%)",
+                display: "flex", alignItems: "center", gap: 10,
+                background: "rgba(0,0,0,0.55)", backdropFilter: "blur(8px)",
+                borderRadius: 999, padding: "8px 18px",
+              }}
+            >
+              <button
+                onClick={() => { setPreviewIdx(Math.max(0, previewIdx - 1)); setPreviewProgress(0); }}
+                disabled={previewIdx === 0}
+                style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: "rgba(255,255,255,0.12)", cursor: previewIdx === 0 ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", opacity: previewIdx === 0 ? 0.3 : 1 }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fffefb" strokeWidth="2.5" strokeLinecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+              </button>
+              <button
+                onClick={() => { setPreviewPlaying(false); setPreviewIdx(0); setPreviewProgress(0); }}
+                style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: "rgba(255,255,255,0.12)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="#fffefb"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+              </button>
+              <button
+                onClick={() => setPreviewPlaying((p) => !p)}
+                style={{ width: 44, height: 44, borderRadius: "50%", border: "none", background: "#4a7c4e", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+              >
+                {previewPlaying ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="#fffefb"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="#fffefb"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                )}
+              </button>
+              <button
+                onClick={() => { setPreviewIdx(Math.min(draftItems.length - 1, previewIdx + 1)); setPreviewProgress(0); }}
+                disabled={previewIdx >= draftItems.length - 1}
+                style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: "rgba(255,255,255,0.12)", cursor: previewIdx >= draftItems.length - 1 ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", opacity: previewIdx >= draftItems.length - 1 ? 0.3 : 1 }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fffefb" strokeWidth="2.5" strokeLinecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+            </div>
+
+            {/* Filename label */}
+            {previewItem && (
+              <div style={{ position: "absolute", top: 16, left: 0, right: 0, textAlign: "center", fontSize: 12, color: "rgba(255,255,255,0.45)", fontFamily: "monospace", pointerEvents: "none" }}>
+                {previewItem.media.filename}
+              </div>
+            )}
           </div>
         </div>
       )}
