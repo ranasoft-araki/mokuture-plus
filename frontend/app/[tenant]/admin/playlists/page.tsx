@@ -304,8 +304,68 @@ export default function AdminPlaylistsPage() {
   const imageCount = draftItems.length - videoCount;
   const totalBytes = draftItems.reduce((s, d) => s + d.media.size_bytes, 0);
 
-  // Preview: first item
-  const previewItem = draftItems[0] ?? null;
+  // Preview playback state
+  const [previewPlaying, setPreviewPlaying] = useState(false);
+  const [previewIdx, setPreviewIdx] = useState(0);
+  const [previewProgress, setPreviewProgress] = useState(0);
+
+  // Clamp previewIdx when items change
+  useEffect(() => {
+    if (draftItems.length === 0) { setPreviewIdx(0); setPreviewProgress(0); return; }
+    if (previewIdx >= draftItems.length) {
+      setPreviewIdx(0);
+      setPreviewProgress(0);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftItems.length]);
+
+  // Stop preview when playlist is deselected
+  useEffect(() => {
+    setPreviewPlaying(false);
+    setPreviewIdx(0);
+    setPreviewProgress(0);
+  }, [selectedId]);
+
+  // Image timing effect
+  useEffect(() => {
+    const item = draftItems[previewIdx];
+    if (!previewPlaying || !item || !item.media.mime_type.startsWith("image/")) return;
+    const dur = item.duration_sec * 1000;
+    const startTime = Date.now();
+    const interval = setInterval(() => {
+      const progress = Math.min((Date.now() - startTime) / dur, 1);
+      setPreviewProgress(progress);
+      if (progress >= 1) {
+        clearInterval(interval);
+        const next = previewIdx + 1;
+        if (next < draftItems.length) {
+          setPreviewIdx(next);
+          setPreviewProgress(0);
+        } else {
+          setPreviewPlaying(false);
+          setPreviewIdx(0);
+          setPreviewProgress(0);
+        }
+      }
+    }, 50);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewPlaying, previewIdx]);
+
+  function advancePreview() {
+    const next = previewIdx + 1;
+    if (next < draftItems.length) {
+      setPreviewIdx(next);
+      setPreviewProgress(0);
+    } else {
+      setPreviewPlaying(false);
+      setPreviewIdx(0);
+      setPreviewProgress(0);
+    }
+  }
+
+  // Preview: current item
+  const previewItem = draftItems[previewIdx] ?? null;
 
   return (
     <AdminShell
@@ -458,7 +518,9 @@ export default function AdminPlaylistsPage() {
                     style={{
                       display: "flex", alignItems: "center", gap: 14, padding: "14px 20px",
                       borderTop: dragOver === i ? "2px dashed #c8a96e" : (i > 0 ? "1px solid #efece5" : "none"),
-                      background: "#fffefb", position: "relative",
+                      background: i === previewIdx && previewPlaying ? "#f0f6f0" : "#fffefb",
+                      borderLeft: i === previewIdx && previewPlaying ? "3px solid #4a7c4e" : "3px solid transparent",
+                      position: "relative",
                       opacity: dragIdx === i ? 0.4 : 1,
                       cursor: "grab",
                     }}
@@ -658,7 +720,14 @@ export default function AdminPlaylistsPage() {
           {/* Right: preview + summary */}
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <MkCard>
-              <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1d1a15", marginBottom: 4 }}>プレビュー</div>
+              <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
+                <div style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: "#1d1a15" }}>プレビュー</div>
+                {draftItems.length > 0 && (
+                  <span style={{ fontSize: 10.5, color: "#a8a198", fontFamily: "monospace" }}>
+                    {previewIdx + 1} / {draftItems.length}
+                  </span>
+                )}
+              </div>
               <div style={{ fontSize: 11.5, color: "#a8a198", marginBottom: 12 }}>縦型サイネージ (9:16)</div>
               <div style={{
                 aspectRatio: "9/16", background: "#1d1a15", borderRadius: 7, overflow: "hidden",
@@ -669,14 +738,19 @@ export default function AdminPlaylistsPage() {
                   previewItem.media.mime_type.startsWith("image/") ? (
                     <img src={previewItem.media.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                   ) : (
-                    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#fffefb", gap: 10 }}>
-                      <div style={{ width: 48, height: 48, borderRadius: "50%", border: "1.5px solid rgba(255,255,255,0.4)", background: "rgba(255,255,255,0.08)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="#fffefb" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                      </div>
-                      <div style={{ fontSize: 10.5, fontFamily: "monospace", opacity: 0.7, textAlign: "center", padding: "0 12px", wordBreak: "break-all" }}>
-                        {previewItem.media.filename}
-                      </div>
-                    </div>
+                    <video
+                      key={previewItem.media_id}
+                      src={previewItem.media.url}
+                      autoPlay={previewPlaying}
+                      muted={false}
+                      playsInline
+                      onEnded={advancePreview}
+                      onTimeUpdate={(e) => {
+                        const v = e.currentTarget;
+                        if (v.duration) setPreviewProgress(v.currentTime / v.duration);
+                      }}
+                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                    />
                   )
                 ) : (
                   <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#fffefb", gap: 8, opacity: 0.4 }}>
@@ -684,12 +758,74 @@ export default function AdminPlaylistsPage() {
                     <div style={{ fontSize: 10.5, fontFamily: "monospace" }}>アイテムなし</div>
                   </div>
                 )}
-                {draftItems.length > 0 && (
-                  <div style={{ position: "absolute", left: 12, right: 12, bottom: 10, height: 2, background: "rgba(255,255,255,0.2)", borderRadius: 2 }}>
-                    <div style={{ width: `${100 / draftItems.length}%`, height: "100%", background: "#4a7c4e", borderRadius: 2 }} />
+                {/* Progress bar — shows progress within current item */}
+                {previewItem && (
+                  <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 3, background: "rgba(255,255,255,0.15)" }}>
+                    <div style={{ width: `${previewProgress * 100}%`, height: "100%", background: "#4a7c4e", transition: "width 0.05s linear" }} />
+                  </div>
+                )}
+                {/* Playlist position dots */}
+                {draftItems.length > 1 && (
+                  <div style={{ position: "absolute", bottom: 10, left: 0, right: 0, display: "flex", justifyContent: "center", gap: 4 }}>
+                    {draftItems.map((_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => { setPreviewIdx(i); setPreviewProgress(0); }}
+                        style={{
+                          width: i === previewIdx ? 16 : 5, height: 5, borderRadius: 3,
+                          background: i === previewIdx ? "#4a7c4e" : "rgba(255,255,255,0.35)",
+                          border: "none", cursor: "pointer", padding: 0,
+                          transition: "all 0.2s",
+                        }}
+                      />
+                    ))}
                   </div>
                 )}
               </div>
+              {/* Playback controls */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 12 }}>
+                {/* Previous */}
+                <button
+                  onClick={() => { setPreviewIdx(Math.max(0, previewIdx - 1)); setPreviewProgress(0); }}
+                  disabled={previewIdx === 0 || draftItems.length === 0}
+                  style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid #d8d3c7", background: "#f4f1ea", cursor: previewIdx === 0 ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", opacity: previewIdx === 0 ? 0.35 : 1 }}
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#6b6559" strokeWidth="2.2" strokeLinecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                {/* Stop */}
+                <button
+                  onClick={() => { setPreviewPlaying(false); setPreviewIdx(0); setPreviewProgress(0); }}
+                  disabled={draftItems.length === 0}
+                  style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid #d8d3c7", background: "#f4f1ea", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", opacity: draftItems.length === 0 ? 0.35 : 1 }}
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="#6b6559"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+                </button>
+                {/* Play / Pause */}
+                <button
+                  onClick={() => { if (draftItems.length === 0) return; setPreviewPlaying((p) => !p); }}
+                  disabled={draftItems.length === 0}
+                  style={{ width: 36, height: 36, borderRadius: "50%", border: "none", background: "#1d1a15", cursor: draftItems.length === 0 ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", opacity: draftItems.length === 0 ? 0.35 : 1 }}
+                >
+                  {previewPlaying ? (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="#fffefb"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                  ) : (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="#fffefb"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  )}
+                </button>
+                {/* Next */}
+                <button
+                  onClick={() => { setPreviewIdx(Math.min(draftItems.length - 1, previewIdx + 1)); setPreviewProgress(0); }}
+                  disabled={previewIdx >= draftItems.length - 1 || draftItems.length === 0}
+                  style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid #d8d3c7", background: "#f4f1ea", cursor: previewIdx >= draftItems.length - 1 ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", opacity: previewIdx >= draftItems.length - 1 ? 0.35 : 1 }}
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#6b6559" strokeWidth="2.2" strokeLinecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+              </div>
+              {previewItem && (
+                <div style={{ marginTop: 8, fontSize: 10.5, color: "#a8a198", textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {previewItem.media.filename}
+                </div>
+              )}
             </MkCard>
 
             <MkCard>
