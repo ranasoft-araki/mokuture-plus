@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { api, type ResellerStats, type ReceptionDailyStats } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
-import { ResellerShell } from "@/components/ResellerShell";
 
 function KpiCard({ label, value, sub }: { label: string; value: number | string; sub?: string }) {
   return (
@@ -47,8 +46,7 @@ export default function ResellerDashboard() {
   const todayStr = new Date().toISOString().slice(0, 10);
 
   return (
-    <ResellerShell>
-      <div style={{ padding: "28px 32px" }}>
+    <div style={{ padding: "28px 32px" }}>
         {loading ? (
           <div style={{ color: "#a8a198", fontSize: 14 }}>読み込み中…</div>
         ) : (
@@ -149,6 +147,5 @@ export default function ResellerDashboard() {
           </>
         )}
       </div>
-    </ResellerShell>
   );
 }

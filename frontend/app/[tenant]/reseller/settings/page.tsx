@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { ResellerShell } from "@/components/ResellerShell";
 import { api, type TenantSettings } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 
@@ -130,8 +129,7 @@ export default function ResellerSettingsPage() {
   }
 
   return (
-    <ResellerShell>
-      <div style={{ padding: "28px 32px", maxWidth: 640, fontFamily: FONT_JP }}>
+    <div style={{ padding: "28px 32px", maxWidth: 640, fontFamily: FONT_JP }}>
         {loading && (
           <div style={{ color: "#a8a198", fontSize: 13, fontFamily: FONT_JP }}>読み込み中…</div>
         )}
@@ -274,6 +272,5 @@ export default function ResellerSettingsPage() {
           </>
         )}
       </div>
-    </ResellerShell>
   );
 }

@@ -41,7 +41,13 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail ?? "Request failed");
+    let errorMsg: string;
+    if (Array.isArray(err.detail)) {
+      errorMsg = err.detail[0]?.msg ?? "Validation failed";
+    } else {
+      errorMsg = typeof err.detail === "string" ? err.detail : "Request failed";
+    }
+    throw new Error(errorMsg);
   }
   if (res.status === 204) return undefined as T;
   return res.json();

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ResellerShell } from "@/components/ResellerShell";
 import { api, type MeProfile } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 
@@ -148,8 +147,7 @@ export default function ResellerProfilePage() {
   });
 
   return (
-    <ResellerShell>
-      <div style={{ padding: "28px 32px", maxWidth: 600, display: "flex", flexDirection: "column", gap: 20, fontFamily: FONT_JP }}>
+    <div style={{ padding: "28px 32px", maxWidth: 600, display: "flex", flexDirection: "column", gap: 20, fontFamily: FONT_JP }}>
         {loadError && (
           <div style={{ padding: "10px 14px", background: "#f6e0dc", borderRadius: 8, color: "#a84238", fontSize: 13 }}>
             {loadError}
@@ -282,6 +280,5 @@ export default function ResellerProfilePage() {
           </>
         )}
       </div>
-    </ResellerShell>
   );
 }
