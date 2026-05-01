@@ -177,7 +177,7 @@ export const api = {
   emergencyBroadcast: (token: string, message: string, tenant_ids?: string[]) =>
     request<{ updated_tenants: number; message: string }>("/operator/broadcast", { method: "POST", body: JSON.stringify({ message, tenant_ids }) }, token),
   proxyLoginAsTenant: (token: string, tenantId: string) =>
-    request<{ access_token: string; refresh_token: string; tenant_slug: string; role: string }>(`/operator/tenants/${tenantId}/proxy-login`, { method: "POST" }, token),
+    request<{ access_token: string; tenant_slug: string; tenant_name: string }>(`/operator/tenants/${tenantId}/proxy-login`, { method: "POST" }, token),
   suspendTenant: (token: string, tenantId: string, suspended: boolean) =>
     request<{ ok: boolean; tenant_id: string; is_suspended: boolean }>(`/operator/tenants/${tenantId}/suspend`, { method: "PATCH", body: JSON.stringify({ suspended }) }, token),
   updateTenantNotes: (token: string, tenantId: string, notes: string): Promise<void> =>

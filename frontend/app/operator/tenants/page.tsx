@@ -234,11 +234,9 @@ export default function OperatorTenantsPage() {
     )
       return;
     try {
-      const { access_token, refresh_token, tenant_slug } = await api.proxyLoginAsTenant(token, tenant.id);
+      const { access_token, tenant_slug } = await api.proxyLoginAsTenant(token, tenant.id);
       localStorage.setItem("mk_proxy_access", access_token);
-      localStorage.setItem("mk_proxy_refresh", refresh_token);
-      localStorage.setItem("mk_proxy_tenant", tenant_slug);
-      window.open(`/${tenant_slug}/admin`, "_blank");
+      window.open(`/${tenant_slug}/admin?proxy=mk_proxy_access`, "_blank");
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : "代理ログインに失敗しました");
     }

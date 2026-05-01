@@ -397,7 +397,7 @@ async def proxy_login(
     short_token = _jwt.encode(payload, _settings.jwt_secret_key, algorithm=_settings.jwt_algorithm)
 
     return {
-        "token": short_token,
+        "access_token": short_token,
         "tenant_slug": tenant.slug,
         "tenant_name": tenant.name,
     }
