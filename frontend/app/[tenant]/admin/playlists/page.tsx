@@ -47,6 +47,8 @@ export default function AdminPlaylistsPage() {
   const [pxPerSec, setPxPerSec] = useState(10);
   const [tlDrag, setTlDrag] = useState<TimelineDragState | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+  const previewFsVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const load = useCallback(async (token: string) => {
     setLoading(true);
@@ -335,6 +337,17 @@ export default function AdminPlaylistsPage() {
     document.addEventListener("keydown", fn);
     return () => document.removeEventListener("keydown", fn);
   }, [previewFullscreen]);
+
+  // Imperative video play/pause control (autoPlay prop alone doesn't work on already-mounted elements)
+  useEffect(() => {
+    const vid = (previewFullscreen ? previewFsVideoRef : previewVideoRef).current;
+    if (!vid) return;
+    if (previewPlaying) {
+      vid.play().catch(() => {});
+    } else {
+      vid.pause();
+    }
+  }, [previewPlaying, previewFullscreen]);
 
   // Image timing effect
   useEffect(() => {
@@ -760,10 +773,9 @@ export default function AdminPlaylistsPage() {
                     <img src={previewItem.media.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                   ) : (
                     <video
+                      ref={previewVideoRef}
                       key={previewItem.media_id}
                       src={previewItem.media.url}
-                      autoPlay={previewPlaying}
-                      muted={false}
                       playsInline
                       onEnded={advancePreview}
                       onTimeUpdate={(e) => {
@@ -910,9 +922,9 @@ export default function AdminPlaylistsPage() {
                 <img src={previewItem.media.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
               ) : (
                 <video
+                  ref={previewFsVideoRef}
                   key={previewItem.media_id + "-fs"}
                   src={previewItem.media.url}
-                  autoPlay={previewPlaying}
                   playsInline
                   onEnded={advancePreview}
                   onTimeUpdate={(e) => {
