@@ -13,6 +13,7 @@ export default function PartnerPortalPage() {
   const router = useRouter();
   const [resellerId, setResellerId] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -22,7 +23,7 @@ export default function PartnerPortalPage() {
     setLoading(true);
     try {
       const tokens = await api.resellerLogin(resellerId, password);
-      saveTokens(tokens.access_token, tokens.refresh_token, tokens.role, true);
+      saveTokens(tokens.access_token, tokens.refresh_token, tokens.role, rememberMe);
       if (tokens.role === "reseller") {
         router.push(`/${tokens.tenant_slug}/reseller`);
       } else {
@@ -79,7 +80,12 @@ export default function PartnerPortalPage() {
 
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4, marginBottom: 24 }}>
               <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#6b6559", cursor: "pointer" }}>
-                <span style={{ width: 16, height: 16, borderRadius: 4, border: "1.5px solid #d8d3c7", background: "#fffefb", display: "block" }} />
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  style={{ width: 16, height: 16, accentColor: "#c8a96e", cursor: "pointer" }}
+                />
                 このデバイスを30日間記憶
               </label>
               <a href="#" style={{ fontSize: 13, color: "#c8a96e", fontWeight: 500, textDecoration: "none" }}>お困りの方</a>
