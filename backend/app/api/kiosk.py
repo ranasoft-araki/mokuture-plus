@@ -26,6 +26,7 @@ from app.models.tenant import Tenant
 from app.models.content import Media, Playlist, PlaylistItem, Schedule
 from app.models.reception import ReceptionLog
 from app.models.notification import NotificationSetting, PushSubscription
+from app.models.visitor_appointment import VisitorAppointment
 from app.services.slack import send_slack_notification
 from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
@@ -35,7 +36,7 @@ from app.config import settings
 router = APIRouter(prefix="/kiosk", tags=["kiosk"])
 _limiter = Limiter(key_func=get_remote_address)
 
-_ALLOWED_METHODS = {"form", "qr"}
+_ALLOWED_METHODS = {"form", "qr", "appointment"}
 _PIN_FAIL_MSG = "PINが無効または期限切れです"
 
 # ── OTA bundle ────────────────────────────────────────────────────────────────
@@ -252,6 +253,7 @@ class ReceptionCreate(BaseModel):
     purpose: str | None = None
     staff: str | None = None
     method: str = "form"
+    appointment_id: str | None = None
 
     @field_validator("visitor_name")
     @classmethod
@@ -271,6 +273,34 @@ class ReceptionCreate(BaseModel):
         return v
 
 
+@router.get("/appointment/{token}")
+async def kiosk_get_appointment(
+    token: str,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """QR トークンから来社予定を取得（デバイストークン認証）"""
+    tenant, _ = ctx
+    result = await db.execute(
+        select(VisitorAppointment).where(
+            VisitorAppointment.token == token,
+            VisitorAppointment.tenant_id == tenant.id,
+        )
+    )
+    appt = result.scalar_one_or_none()
+    if appt is None:
+        raise HTTPException(status_code=404, detail="予約が見つかりません")
+    return {
+        "id": appt.id,
+        "visitor_name": appt.visitor_name,
+        "company": appt.company,
+        "purpose": appt.purpose,
+        "staff": appt.staff,
+        "scheduled_at": appt.scheduled_at.isoformat(),
+        "status": appt.status,
+    }
+
+
 @router.post("/reception", status_code=201)
 async def kiosk_reception(
     body: ReceptionCreate,
@@ -279,8 +309,29 @@ async def kiosk_reception(
 ):
     """Submit a reception form entry using device token authentication."""
     tenant, _ = ctx
-    log = ReceptionLog(tenant_id=tenant.id, **body.model_dump())
+    log = ReceptionLog(
+        tenant_id=tenant.id,
+        visitor_name=body.visitor_name,
+        company=body.company,
+        purpose=body.purpose,
+        staff=body.staff,
+        method=body.method,
+        appointment_id=body.appointment_id,
+    )
     db.add(log)
+
+    # チェックイン時に予約ステータスを更新
+    if body.appointment_id:
+        appt_result = await db.execute(
+            select(VisitorAppointment).where(
+                VisitorAppointment.id == body.appointment_id,
+                VisitorAppointment.tenant_id == tenant.id,
+            )
+        )
+        appt = appt_result.scalar_one_or_none()
+        if appt:
+            appt.status = "received"
+
     await db.commit()
     await db.refresh(log)
 

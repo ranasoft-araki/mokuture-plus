@@ -20,6 +20,7 @@ class ReceptionLog(Base):
     method: Mapped[str] = mapped_column(String(32), default="form")  # form | qr | calendar
     state: Mapped[str] = mapped_column(String(32), default="received")  # received | notified | completed
     staff_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    appointment_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("visitor_appointments.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     tenant = relationship("Tenant", back_populates="reception_logs")

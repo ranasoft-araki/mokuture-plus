@@ -955,6 +955,29 @@ function showQr() {
   async function handleQR(raw) {
     const token = localStorage.getItem(TOKEN_KEY);
     if (!token) { stopStream(); cleanup(); showSetup(); return; }
+
+    // 予約トークン方式: appt:{token}
+    if (raw.startsWith("appt:")) {
+      const apptToken = raw.slice(5).trim();
+      submitting = true; refreshCam();
+      try {
+        const appt = await apiGet("/proxy/appointment/" + encodeURIComponent(apptToken), token);
+        await apiPost("/proxy/reception", {
+          visitor_name: appt.visitor_name,
+          company: appt.company || "",
+          purpose: appt.purpose || "",
+          staff: appt.staff || "",
+          method: "appointment",
+          appointment_id: appt.id,
+        }, token);
+        stopStream(); cleanup(); go("calling", { name: appt.visitor_name, staff: appt.staff || "" });
+      } catch (e) {
+        errMsg = e.message || "予約情報の取得に失敗しました"; submitting = false; scanning = true; render(); scanLoop();
+      }
+      return;
+    }
+
+    // 既存: URL パース方式（後方互換）
     let name = "", company = "", purpose = "";
     try {
       const u = new URL(raw);

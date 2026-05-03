@@ -120,6 +120,7 @@ mokuture/
 │   │       │   ├── schedules/page.tsx ← スケジュール管理
 │   │       │   ├── kiosk/page.tsx     ← キオスク端末管理・PIN 発行
 │   │       │   ├── reception/page.tsx ← 受付ログ一覧・フィルター
+│   │       │   ├── appointments/page.tsx ← 来社予定管理・QRコード発行 (qrcode.react)
 │   │       │   ├── kiosk-settings/page.tsx ← 受付設定 (キオスク文言・ロゴ配置ドラッグ)
 │   │       │   ├── settings/page.tsx  ← 基本設定 (ブランディング: ロゴ・カラー・フォント)
 │   │       │   ├── notify/page.tsx    ← 通知設定 (Slack/Chatwork/PWA)
@@ -291,7 +292,8 @@ mokuture/
 - **schedules** — 曜日・時間帯ごとのプレイリスト割当
 - **devices** — キオスク端末 (token, PIN, last_seen_at, force_update_at)
 - **lockers** — ロッカー (gpio_pin, state)
-- **reception_logs** — 受付ログ (visitor_name, company, staff, purpose, method, state, staff_notes)
+- **reception_logs** — 受付ログ (visitor_name, company, staff, purpose, method, state, staff_notes, appointment_id)
+- **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired)
 - **notification_settings** — Slack/Chatwork Webhook URL (Fernet 暗号化)
 - **push_subscriptions** — Web Push 購読情報
 
@@ -318,8 +320,13 @@ mokuture/
 | GET/POST/DELETE | /devices | JWT | デバイス CRUD |
 | POST | /devices/{id}/pin | JWT | PIN 発行 |
 | GET | /kiosk/schedule | デバイストークン | 現在のプレイリスト取得 |
-| POST | /kiosk/reception | デバイストークン | 受付フォーム送信 |
+| POST | /kiosk/reception | デバイストークン | 受付フォーム送信 (appointment_id 対応) |
+| GET | /kiosk/appointment/{token} | デバイストークン | QR トークンから来社予定取得 |
 | POST | /kiosk/verify-pin | なし | PIN → デバイストークン交換 |
+| GET | /appointments | JWT | 来社予定一覧 |
+| POST | /appointments | JWT | 来社予定作成 |
+| PATCH | /appointments/{id} | JWT | 来社予定更新 |
+| DELETE | /appointments/{id} | JWT | 来社予定削除 |
 | GET | /reception | JWT | 受付ログ一覧 |
 | GET/PATCH | /notifications | JWT | 通知設定 |
 | GET/POST | /lockers | JWT | ロッカー管理 |

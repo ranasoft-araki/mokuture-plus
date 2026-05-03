@@ -5,7 +5,7 @@ import { clearTokens, getLogoutUrl } from "@/lib/auth";
 import { useState } from "react";
 import type { ReactNode } from "react";
 
-export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "notify" | "locker" | "kiosk_settings" | "settings" | "users" | "profile";
+export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "appointments" | "notify" | "locker" | "kiosk_settings" | "settings" | "users" | "profile";
 
 interface Props {
   active: NavId;
@@ -22,8 +22,9 @@ const NAV_OPS: { id: NavId; label: string }[] = [
   { id: "media",     label: "メディア" },
   { id: "playlist",  label: "プレイリスト" },
   { id: "schedule",  label: "スケジュール" },
-  { id: "device",    label: "キオスク端末" },
-  { id: "reception", label: "受付ログ" },
+  { id: "device",       label: "キオスク端末" },
+  { id: "reception",    label: "受付ログ" },
+  { id: "appointments", label: "来社予定" },
 ];
 
 const NAV_SETTINGS: { id: NavId; label: string }[] = [
@@ -42,6 +43,7 @@ const NAV_PATHS: Record<NavId, (t: string) => string> = {
   schedule:      (t) => `/${t}/admin/schedules`,
   device:        (t) => `/${t}/admin/kiosk`,
   reception:     (t) => `/${t}/admin/reception`,
+  appointments:  (t) => `/${t}/admin/appointments`,
   notify:        (t) => `/${t}/admin/notify`,
   locker:        (t) => `/${t}/admin/locker`,
   kiosk_settings:(t) => `/${t}/admin/kiosk-settings`,

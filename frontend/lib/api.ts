@@ -421,6 +421,26 @@ export const api = {
   forceKioskUpdate: (token: string) =>
     request<{ ok: boolean; forced_at: string }>("/settings/kiosk-force-push", { method: "POST" }, token),
 
+  // Visitor appointments (admin)
+  listAppointments: (token: string, params?: { status?: string; date_from?: string; date_to?: string }) => {
+    const p = new URLSearchParams();
+    if (params?.status) p.set("status", params.status);
+    if (params?.date_from) p.set("date_from", params.date_from);
+    if (params?.date_to) p.set("date_to", params.date_to);
+    const qs = p.toString();
+    return request<VisitorAppointment[]>(`/appointments${qs ? `?${qs}` : ""}`, {}, token);
+  },
+  createAppointment: (token: string, body: AppointmentCreate) =>
+    request<VisitorAppointment>("/appointments", { method: "POST", body: JSON.stringify(body) }, token),
+  updateAppointment: (token: string, id: string, body: Partial<AppointmentCreate> & { status?: string }) =>
+    request<VisitorAppointment>(`/appointments/${id}`, { method: "PATCH", body: JSON.stringify(body) }, token),
+  deleteAppointment: (token: string, id: string): Promise<void> =>
+    request(`/appointments/${id}`, { method: "DELETE" }, token),
+
+  // Kiosk appointment lookup (device token auth)
+  getKioskAppointment: (kioskToken: string, apptToken: string) =>
+    request<KioskAppointmentResponse>(`/kiosk/appointment/${encodeURIComponent(apptToken)}`, { headers: { "X-Kiosk-Token": kioskToken } }),
+
   // Tenant user management (admin)
   listUsers: (token: string) =>
     request<UserListItem[]>("/users", {}, token),
@@ -753,6 +773,38 @@ export const localAgent = {
   getHealth: (): Promise<{ status: string; token_set: boolean; mock_gpio: boolean }> =>
     fetch(`${_LOCAL_AGENT}/health`).then(r => r.json()),
 };
+
+export interface VisitorAppointment {
+  id: string;
+  visitor_name: string;
+  company: string | null;
+  purpose: string | null;
+  staff: string | null;
+  scheduled_at: string;
+  token: string;
+  status: "pending" | "received" | "expired";
+  notes: string | null;
+  created_at: string;
+}
+
+export interface AppointmentCreate {
+  visitor_name: string;
+  company?: string;
+  purpose?: string;
+  staff?: string;
+  scheduled_at: string;
+  notes?: string;
+}
+
+export interface KioskAppointmentResponse {
+  id: string;
+  visitor_name: string;
+  company: string | null;
+  purpose: string | null;
+  staff: string | null;
+  scheduled_at: string;
+  status: string;
+}
 
 const _SETTINGS_KEY = "mokuture_kiosk_settings";
 

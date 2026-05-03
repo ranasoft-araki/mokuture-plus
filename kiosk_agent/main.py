@@ -54,6 +54,7 @@ class ReceptionBody(BaseModel):
     purpose: str = ""
     staff: str = ""
     method: str = "form"
+    appointment_id: str | None = None
 
 
 @app.get("/kiosk.html", include_in_schema=False)
@@ -165,6 +166,31 @@ async def proxy_reception(request: Request, body: ReceptionBody):
             )
             if resp.status_code == 401:
                 raise HTTPException(status_code=401, detail="Invalid kiosk token")
+            resp.raise_for_status()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"リモートAPIに接続できません: {e}")
+    return resp.json()
+
+
+@app.get("/proxy/appointment/{token}")
+async def proxy_appointment(token: str, request: Request):
+    """QR トークンから来社予定を取得する。"""
+    kiosk_token = request.headers.get("x-kiosk-token", "")
+    if not kiosk_token:
+        raise HTTPException(status_code=401, detail="X-Kiosk-Token required")
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(
+                f"{settings.remote_api_url}/kiosk/appointment/{token}",
+                headers={"X-Kiosk-Token": kiosk_token},
+                timeout=10,
+            )
+            if resp.status_code == 401:
+                raise HTTPException(status_code=401, detail="Invalid kiosk token")
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail="予約が見つかりません")
             resp.raise_for_status()
         except HTTPException:
             raise
