@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 from config import settings
@@ -55,6 +55,11 @@ class ReceptionBody(BaseModel):
     staff: str = ""
     method: str = "form"
     appointment_id: str | None = None
+
+
+@app.get("/", include_in_schema=False)
+async def index():
+    return RedirectResponse(url="/kiosk.html")
 
 
 @app.get("/kiosk.html", include_in_schema=False)
