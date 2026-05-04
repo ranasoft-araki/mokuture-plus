@@ -45,6 +45,22 @@ export default function AdminSettingsPage() {
 
   const handleLogoClick = () => fileInputRef.current?.click();
 
+  const handleLogoDelete = async () => {
+    const token = getAccessToken();
+    if (!token) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const updated = await api.deleteLogo(token);
+      setLogoUrl(updated.logo_url);
+      setLogoPreview(null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "ロゴの削除に失敗しました");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -179,8 +195,13 @@ export default function AdminSettingsPage() {
                       onChange={handleFileChange}
                     />
                     <MkBtn size="sm" variant="default" onClick={handleLogoClick} disabled={uploading}>
-                      {uploading ? "アップロード中..." : "アップロード"}
+                      {uploading ? "処理中..." : "アップロード"}
                     </MkBtn>
+                    {(logoPreview ?? logoUrl) && (
+                      <MkBtn size="sm" variant="ghost" onClick={handleLogoDelete} disabled={uploading}>
+                        削除
+                      </MkBtn>
+                    )}
                   </div>
                 </Field>
               </div>

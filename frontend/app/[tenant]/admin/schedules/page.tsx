@@ -309,6 +309,7 @@ export default function AdminSchedulesPage() {
   const [dragging, setDragging] = useState<DraggingState | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const schedulesRef = useRef<Schedule[]>([]);
+  const dragJustEndedRef = useRef(false);
 
   const load = useCallback(async (token: string) => {
     setLoading(true);
@@ -376,6 +377,7 @@ export default function AdminSchedulesPage() {
       const token = getAccessToken();
       if (!token) return;
 
+      dragJustEndedRef.current = true;
       const { id, tempStartMin, tempEndMin, tempDay, origStartMin, origEndMin, origDay, origDayOfWeek } = dragging;
       setDragging(null);
 
@@ -711,7 +713,10 @@ export default function AdminSchedulesPage() {
                             });
                           }}
                           onClick={(e) => {
-                            if (dragging) return;
+                            if (dragJustEndedRef.current) {
+                              dragJustEndedRef.current = false;
+                              return;
+                            }
                             e.stopPropagation();
                             setConfirmTarget(s.id);
                           }}

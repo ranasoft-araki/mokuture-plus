@@ -271,6 +271,8 @@ export const api = {
     request<{ upload_url: string; public_url: string }>("/settings/logo-upload-url", { method: "POST", body: JSON.stringify({ filename, mime_type }) }, token),
   confirmLogoUpload: (token: string, logo_url: string) =>
     request<TenantSettings>("/settings/logo", { method: "PATCH", body: JSON.stringify({ logo_url }) }, token),
+  deleteLogo: (token: string) =>
+    request<TenantSettings>("/settings/logo", { method: "DELETE" }, token),
 
   // Content
   uploadMedia: async (token: string, file: File): Promise<MediaItem> => {

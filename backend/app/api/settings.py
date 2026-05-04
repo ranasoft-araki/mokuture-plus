@@ -329,6 +329,17 @@ async def confirm_logo(
     return _out(tenant)
 
 
+@router.delete("/logo", response_model=TenantSettingsOut)
+async def delete_logo(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant = await _get_tenant(user, db)
+    tenant.logo_url = None
+    await db.commit()
+    return _out(tenant)
+
+
 @router.post("/kiosk-force-push")
 async def kiosk_force_push(
     user: User = Depends(get_current_user),
