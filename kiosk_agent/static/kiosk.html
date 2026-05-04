@@ -21,6 +21,7 @@ button{font-family:inherit}
 @keyframes dot-bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
 @keyframes scale-in{from{transform:scale(.7);opacity:0}to{transform:scale(1);opacity:1}}
 </style>
+<script src="/jsqr.min.js"></script>
 </head>
 <body>
 <div id="sw"><div id="sc"></div></div>
@@ -821,7 +822,7 @@ function showQr() {
   const bc = ST.brand_color;
   const qt = QR_THEMES[ST.kiosk_style] ?? QR_THEMES.default;
   const devName = escHtml(localStorage.getItem(NAME_KEY) ?? "kiosk");
-  let stream = null, scanning = false, submitting = false, errMsg = "", supported = null;
+  let stream = null, scanning = false, submitting = false, errMsg = "";
   let idleId, countId;
 
   function resetIdle() {
@@ -851,7 +852,6 @@ function showQr() {
 
   function camContent() {
     if (submitting) return `<div style="text-align:center;color:#fff"><div style="width:60px;height:60px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:${qt.accent};animation:spin .8s linear infinite;margin:0 auto 20px"></div><div style="font-size:18px;opacity:.7">受付処理中…</div></div>`;
-    if (supported === false) return `<div style="text-align:center;color:#fff;padding:40px;font-size:18px;opacity:.6;line-height:1.6">QRスキャン非対応のブラウザです<br>Chromiumをご利用ください</div>`;
     const corners = [[0,0,0],[0,1,90],[1,1,180],[1,0,270]].map(([tb,lr,rot]) =>
       `<div style="position:absolute;${tb?"bottom":"top"}:-3px;${lr?"right":"left"}:-3px;width:56px;height:56px;transform:rotate(${rot}deg);border-top:5px solid ${qt.accent};border-left:5px solid ${qt.accent};border-radius:12px 0 0 0"></div>`
     ).join("");
@@ -938,17 +938,25 @@ function showQr() {
     }
   }
 
+  let _qrCanvas = null, _qrCtx = null;
   async function scanLoop() {
     if (!scanning) return;
     const vid = document.getElementById("qr-vid");
-    if (!vid) return;
-    try {
-      const det = new BarcodeDetector({ formats: ["qr_code"] });
-      const codes = await det.detect(vid);
-      if (codes.length > 0 && codes[0].rawValue) {
-        scanning = false; await handleQR(codes[0].rawValue); return;
-      }
-    } catch {}
+    if (!vid || vid.readyState < 2) { if (scanning) requestAnimationFrame(scanLoop); return; }
+    if (typeof BarcodeDetector !== "undefined") {
+      try {
+        const det = new BarcodeDetector({ formats: ["qr_code"] });
+        const codes = await det.detect(vid);
+        if (codes.length > 0 && codes[0].rawValue) { scanning = false; await handleQR(codes[0].rawValue); return; }
+      } catch {}
+    } else if (typeof jsQR !== "undefined") {
+      if (!_qrCanvas) { _qrCanvas = document.createElement("canvas"); _qrCtx = _qrCanvas.getContext("2d", { willReadFrequently: true }); }
+      _qrCanvas.width = vid.videoWidth || 640; _qrCanvas.height = vid.videoHeight || 480;
+      _qrCtx.drawImage(vid, 0, 0);
+      const imageData = _qrCtx.getImageData(0, 0, _qrCanvas.width, _qrCanvas.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+      if (code) { scanning = false; await handleQR(code.data); return; }
+    }
     if (scanning) requestAnimationFrame(scanLoop);
   }
 
@@ -996,8 +1004,7 @@ function showQr() {
   render();
   resetIdle();
 
-  if (typeof BarcodeDetector === "undefined") { supported = false; refreshCam(); }
-  else { supported = true; startCamera(); }
+  startCamera();
 }
 
 // ─── CALLING SCREEN BUILDERS ─────────────────────────────────────────────────

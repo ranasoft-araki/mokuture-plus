@@ -20,6 +20,7 @@ locker_ctrl = LockerController(settings.locker_pins)
 pir = PirSensor(settings.pir_pin)
 
 _KIOSK_HTML = Path(__file__).parent / "static" / "kiosk.html"
+_JSQR_JS   = Path(__file__).parent / "static" / "jsqr.min.js"
 
 
 @asynccontextmanager
@@ -60,6 +61,13 @@ class ReceptionBody(BaseModel):
 @app.get("/", include_in_schema=False)
 async def index():
     return RedirectResponse(url="/kiosk.html")
+
+
+@app.get("/jsqr.min.js", include_in_schema=False)
+async def serve_jsqr():
+    if not _JSQR_JS.exists():
+        raise HTTPException(status_code=404, detail="jsqr.min.js not found")
+    return FileResponse(_JSQR_JS, media_type="application/javascript")
 
 
 @app.get("/kiosk.html", include_in_schema=False)
