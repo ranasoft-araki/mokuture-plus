@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
+import { AnimatePresence, motion } from "framer-motion";
 import { api, type PublicTenantSettings, getCachedKioskSettings, setCachedKioskSettings } from "@/lib/api";
 
 type KioskScreen = "loading" | "suspended" | "ready";
@@ -51,62 +52,108 @@ export default function KioskFlow({ kioskToken }: { kioskToken: string }) {
     };
   }, [params.tenant, kioskToken]);
 
-  if (suspended) {
-    return (
-      <div
-        style={{
-          position: "fixed",
-          inset: 0,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          background: "#2d2a24",
-          color: "#fff",
-          gap: 32,
-          userSelect: "none",
-          pointerEvents: "none",
-          zIndex: 9999,
-        }}
-      >
-        <div style={{ fontSize: 64, lineHeight: 1 }}>🔒</div>
-        <h1
+  const ease = [0.25, 0.46, 0.45, 0.94] as const;
+
+  return (
+    <AnimatePresence mode="wait">
+      {suspended ? (
+        <motion.div
+          key="suspended"
+          initial={{ opacity: 0, scale: 0.97 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 1.02 }}
+          transition={{ duration: 1.1, ease }}
           style={{
-            fontSize: 24,
-            fontWeight: 700,
-            margin: 0,
-            textAlign: "center",
-            letterSpacing: "0.02em",
+            position: "fixed",
+            inset: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "#2d2a24",
+            color: "#fff",
+            gap: 32,
+            userSelect: "none",
+            pointerEvents: "none",
+            zIndex: 9999,
           }}
         >
-          このサービスは現在停止中です
-        </h1>
-        <p
-          style={{
-            fontSize: 16,
-            margin: 0,
-            opacity: 0.6,
-            textAlign: "center",
-          }}
+          <div style={{ fontSize: 64, lineHeight: 1 }}>🔒</div>
+          <h1
+            style={{
+              fontSize: 24,
+              fontWeight: 700,
+              margin: 0,
+              textAlign: "center",
+              letterSpacing: "0.02em",
+            }}
+          >
+            このサービスは現在停止中です
+          </h1>
+          <p
+            style={{
+              fontSize: 16,
+              margin: 0,
+              opacity: 0.6,
+              textAlign: "center",
+            }}
+          >
+            詳細はスタッフにお問い合わせください
+          </p>
+        </motion.div>
+      ) : screen === "loading" || !settings ? (
+        <motion.div
+          key="loading"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.7 }}
+          style={{ width: "100vw", height: "100vh", background: "#0a0806", display: "flex", alignItems: "center", justifyContent: "center" }}
         >
-          詳細はスタッフにお問い合わせください
-        </p>
-      </div>
-    );
-  }
-
-  if (screen === "loading" || !settings) {
-    return (
-      <div style={{ width: "100vw", height: "100vh", background: "#0a0806", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ color: "rgba(255,255,255,0.4)", fontFamily: "Inter, system-ui, sans-serif", fontSize: 16 }}>
-          読み込み中…
-        </div>
-      </div>
-    );
-  }
-
-  return <ReceptionForm settings={settings} kioskToken={kioskToken} />;
+          <div style={{ color: "rgba(255,255,255,0.4)", fontFamily: "Inter, system-ui, sans-serif", fontSize: 16 }}>
+            読み込み中…
+          </div>
+        </motion.div>
+      ) : (
+        <motion.div
+          key="ready"
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 1.2, ease }}
+        >
+          <ReceptionForm settings={settings} kioskToken={kioskToken} />
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
 }
+
+// ─── Animation variants ───────────────────────────────────────────────────────
+
+const ease = [0.25, 0.46, 0.45, 0.94] as const;
+
+const containerVariants = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.24, delayChildren: 0.3 } },
+};
+
+const fieldVariants = {
+  hidden: { opacity: 0, y: 14 },
+  visible: { opacity: 1, y: 0, transition: { duration: 1.0, ease } },
+};
+
+const shakeVariants = {
+  hidden: { opacity: 0, x: 0 },
+  visible: {
+    opacity: 1,
+    x: [0, -8, 8, -6, 6, -3, 3, 0],
+    transition: {
+      opacity: { duration: 0.4 },
+      x: { duration: 1.2 },
+    },
+  },
+};
 
 // ─── Reception Form ───────────────────────────────────────────────────────────
 
@@ -151,176 +198,290 @@ function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSetting
     }
   };
 
-  if (submitted) {
-    return (
-      <div style={{
-        width: "100vw", height: "100vh", background: "#1d1a15",
-        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 24,
-        fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif",
-      }}>
-        <div style={{ width: 80, height: 80, borderRadius: "50%", background: `${bc}33`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <svg viewBox="0 0 24 24" fill="none" stroke={bc} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ width: 40, height: 40 }}>
-            <path d="M5 12l5 5L20 6" />
-          </svg>
-        </div>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 28, fontWeight: 600, color: "#fffefb" }}>{visitorName} 様</div>
-          <div style={{ fontSize: 16, color: "rgba(255,255,255,0.5)", marginTop: 8 }}>
-            {settings.kiosk_complete_message}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div style={{
-      width: "100vw", minHeight: "100vh", background: "#faf8f4",
-      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-      padding: "40px 24px",
-      fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif",
-    }}>
-      <div style={{ width: "100%", maxWidth: 560 }}>
-        <h1 style={{ fontSize: 28, fontWeight: 700, color: "#1d1a15", marginBottom: 32, letterSpacing: "-0.02em" }}>
-          ご来訪情報をご記入ください
-        </h1>
+    <AnimatePresence mode="wait">
+      {submitted ? (
+        <motion.div
+          key="complete"
+          initial={{ opacity: 0, scale: 0.98, y: 16 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 1.3, ease }}
+        >
+          <SuccessScreen visitorName={visitorName} settings={settings} />
+        </motion.div>
+      ) : (
+        <motion.div
+          key="form"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0, scale: 0.96, filter: "blur(4px)" }}
+          transition={{ duration: 0.8 }}
+          style={{
+            width: "100vw",
+            minHeight: "100vh",
+            background: "#faf8f4",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "40px 24px",
+            fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif",
+          }}
+        >
+          <div style={{ width: "100%", maxWidth: 560 }}>
+            <motion.h1
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 1.0, ease }}
+              style={{ fontSize: 28, fontWeight: 700, color: "#1d1a15", marginBottom: 32, letterSpacing: "-0.02em" }}
+            >
+              ご来訪情報をご記入ください
+            </motion.h1>
 
-        {error && (
-          <div style={{ background: "#fdf2f1", border: "1px solid #f0b9b5", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#a84238", marginBottom: 16 }}>
-            {error}
+            <AnimatePresence>
+              {error && (
+                <motion.div
+                  key={error}
+                  variants={shakeVariants}
+                  initial="hidden"
+                  animate="visible"
+                  exit={{ opacity: 0, transition: { duration: 0.5 } }}
+                  style={{ background: "#fdf2f1", border: "1px solid #f0b9b5", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#a84238", marginBottom: 16 }}
+                >
+                  {error}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <motion.form
+              onSubmit={handleSubmit}
+              variants={containerVariants}
+              initial="hidden"
+              animate="visible"
+              style={{ display: "flex", flexDirection: "column", gap: 18 }}
+            >
+              {/* Visitor name */}
+              <motion.div variants={fieldVariants}>
+                <FormField label="お名前" required>
+                  <input
+                    value={visitorName}
+                    onChange={(e) => setVisitorName(e.target.value)}
+                    placeholder="山田 太郎"
+                    style={inputStyle}
+                  />
+                </FormField>
+              </motion.div>
+
+              {/* Company */}
+              <motion.div variants={fieldVariants}>
+                <FormField label="会社名">
+                  <input
+                    value={company}
+                    onChange={(e) => setCompany(e.target.value)}
+                    placeholder="株式会社 〇〇"
+                    style={inputStyle}
+                  />
+                </FormField>
+              </motion.div>
+
+              {/* Staff */}
+              <motion.div variants={fieldVariants}>
+                <FormField label="ご担当者名">
+                  {useDropdown && staffMode === "dropdown" ? (
+                    <div>
+                      <motion.div
+                        style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: staff ? 8 : 0 }}
+                        variants={containerVariants}
+                        initial="hidden"
+                        animate="visible"
+                      >
+                        {staffList.map((name) => (
+                          <motion.button
+                            key={name}
+                            type="button"
+                            onClick={() => setStaff(name)}
+                            variants={fieldVariants}
+                            whileHover={{ scale: 1.04 }}
+                            whileTap={{ scale: 0.96 }}
+                            transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                            style={{
+                              padding: "8px 16px",
+                              borderRadius: 999,
+                              border: `2px solid ${staff === name ? bc : "#d8d3c7"}`,
+                              background: staff === name ? bc : "transparent",
+                              color: staff === name ? "#fff" : "#2d2a24",
+                              fontSize: 14,
+                              cursor: "pointer",
+                            }}
+                          >
+                            {name}
+                          </motion.button>
+                        ))}
+                        <motion.button
+                          type="button"
+                          onClick={() => { setStaff(""); setStaffMode("freetext"); }}
+                          variants={fieldVariants}
+                          whileTap={{ scale: 0.96 }}
+                          style={{
+                            padding: "8px 16px",
+                            borderRadius: 999,
+                            border: "2px solid #d8d3c7",
+                            background: "transparent",
+                            color: "#6b6559",
+                            fontSize: 14,
+                            cursor: "pointer",
+                          }}
+                        >
+                          直接入力...
+                        </motion.button>
+                      </motion.div>
+                      {staff && (
+                        <div style={{ fontSize: 12, color: "#6b6559" }}>
+                          選択中: <strong>{staff}</strong>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <input
+                        value={staff}
+                        onChange={(e) => setStaff(e.target.value)}
+                        placeholder="担当者のお名前"
+                        style={inputStyle}
+                        autoFocus={useDropdown}
+                      />
+                      {useDropdown && (
+                        <button
+                          type="button"
+                          onClick={() => { setStaff(""); setStaffMode("dropdown"); }}
+                          style={{
+                            alignSelf: "flex-start",
+                            fontSize: 12,
+                            padding: "4px 10px",
+                            borderRadius: 999,
+                            border: "1px solid #d8d3c7",
+                            background: "transparent",
+                            color: "#6b6559",
+                            cursor: "pointer",
+                          }}
+                        >
+                          ← リストに戻る
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </FormField>
+              </motion.div>
+
+              {/* Purpose */}
+              <motion.div variants={fieldVariants}>
+                <FormField label="ご用件">
+                  <input
+                    value={purpose}
+                    onChange={(e) => setPurpose(e.target.value)}
+                    placeholder="お打ち合わせ など"
+                    style={inputStyle}
+                  />
+                </FormField>
+              </motion.div>
+
+              <motion.div variants={fieldVariants}>
+                <motion.button
+                  type="submit"
+                  disabled={submitting}
+                  whileTap={submitting ? {} : { scale: 0.97 }}
+                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                  style={{
+                    width: "100%",
+                    marginTop: 8,
+                    padding: "14px",
+                    borderRadius: 10,
+                    border: "none",
+                    background: bc,
+                    color: "#fff",
+                    fontSize: 16,
+                    fontWeight: 600,
+                    cursor: submitting ? "not-allowed" : "pointer",
+                    opacity: submitting ? 0.7 : 1,
+                    fontFamily: "inherit",
+                  }}
+                >
+                  {submitting ? "送信中..." : "受付する →"}
+                </motion.button>
+              </motion.div>
+            </motion.form>
           </div>
-        )}
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
 
-        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          {/* Visitor name */}
-          <FormField label="お名前" required>
-            <input
-              value={visitorName}
-              onChange={(e) => setVisitorName(e.target.value)}
-              placeholder="山田 太郎"
-              style={inputStyle}
-            />
-          </FormField>
+// ─── Success Screen ───────────────────────────────────────────────────────────
 
-          {/* Company */}
-          <FormField label="会社名">
-            <input
-              value={company}
-              onChange={(e) => setCompany(e.target.value)}
-              placeholder="株式会社 〇〇"
-              style={inputStyle}
-            />
-          </FormField>
+function SuccessScreen({ visitorName, settings }: { visitorName: string; settings: PublicTenantSettings }) {
+  const bc = settings.brand_color;
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.9 }}
+      style={{
+        width: "100vw",
+        height: "100vh",
+        background: "#1d1a15",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 24,
+        fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif",
+      }}
+    >
+      {/* Circle + checkmark */}
+      <motion.div
+        initial={{ scale: 0, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ duration: 0.55, delay: 0.2, ease: [0.34, 1.56, 0.64, 1] }}
+        style={{
+          width: 80,
+          height: 80,
+          borderRadius: "50%",
+          background: `${bc}33`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke={bc} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ width: 40, height: 40 }}>
+          <motion.path
+            d="M5 12l5 5L20 6"
+            initial={{ pathLength: 0, opacity: 0 }}
+            animate={{ pathLength: 1, opacity: 1 }}
+            transition={{ duration: 0.7, delay: 0.6, ease: "easeOut" }}
+          />
+        </svg>
+      </motion.div>
 
-          {/* Staff — dropdown or free text */}
-          <FormField label="ご担当者名">
-            {useDropdown && staffMode === "dropdown" ? (
-              <div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: staff ? 8 : 0 }}>
-                  {staffList.map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      onClick={() => setStaff(name)}
-                      style={{
-                        padding: "8px 16px",
-                        borderRadius: 999,
-                        border: `2px solid ${staff === name ? bc : "#d8d3c7"}`,
-                        background: staff === name ? bc : "transparent",
-                        color: staff === name ? "#fff" : "#2d2a24",
-                        fontSize: 14,
-                        cursor: "pointer",
-                        transition: "background .12s, color .12s, border-color .12s",
-                      }}
-                    >
-                      {name}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => { setStaff(""); setStaffMode("freetext"); }}
-                    style={{
-                      padding: "8px 16px",
-                      borderRadius: 999,
-                      border: "2px solid #d8d3c7",
-                      background: "transparent",
-                      color: "#6b6559",
-                      fontSize: 14,
-                      cursor: "pointer",
-                    }}
-                  >
-                    直接入力...
-                  </button>
-                </div>
-                {staff && (
-                  <div style={{ fontSize: 12, color: "#6b6559" }}>
-                    選択中: <strong>{staff}</strong>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <input
-                  value={staff}
-                  onChange={(e) => setStaff(e.target.value)}
-                  placeholder="担当者のお名前"
-                  style={inputStyle}
-                  autoFocus={useDropdown}
-                />
-                {useDropdown && (
-                  <button
-                    type="button"
-                    onClick={() => { setStaff(""); setStaffMode("dropdown"); }}
-                    style={{
-                      alignSelf: "flex-start",
-                      fontSize: 12,
-                      padding: "4px 10px",
-                      borderRadius: 999,
-                      border: "1px solid #d8d3c7",
-                      background: "transparent",
-                      color: "#6b6559",
-                      cursor: "pointer",
-                    }}
-                  >
-                    ← リストに戻る
-                  </button>
-                )}
-              </div>
-            )}
-          </FormField>
-
-          {/* Purpose */}
-          <FormField label="ご用件">
-            <input
-              value={purpose}
-              onChange={(e) => setPurpose(e.target.value)}
-              placeholder="お打ち合わせ など"
-              style={inputStyle}
-            />
-          </FormField>
-
-          <button
-            type="submit"
-            disabled={submitting}
-            style={{
-              marginTop: 8,
-              padding: "14px",
-              borderRadius: 10,
-              border: "none",
-              background: bc,
-              color: "#fff",
-              fontSize: 16,
-              fontWeight: 600,
-              cursor: submitting ? "not-allowed" : "pointer",
-              opacity: submitting ? 0.7 : 1,
-              fontFamily: "inherit",
-            }}
-          >
-            {submitting ? "送信中..." : "受付する →"}
-          </button>
-        </form>
-      </div>
-    </div>
+      {/* Name + message */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.95, ease }}
+        style={{ textAlign: "center" }}
+      >
+        <div style={{ fontSize: 28, fontWeight: 600, color: "#fffefb" }}>{visitorName} 様</div>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.4, delay: 1.25 }}
+          style={{ fontSize: 16, color: "rgba(255,255,255,0.5)", marginTop: 8 }}
+        >
+          {settings.kiosk_complete_message}
+        </motion.div>
+      </motion.div>
+    </motion.div>
   );
 }
 
