@@ -78,6 +78,7 @@ type DraggingState = {
   origStartMin: number;
   origEndMin: number;
   origDay: number;
+  origDayOfWeek: number;
   offsetMin: number;
   tempStartMin: number;
   tempEndMin: number;
@@ -307,6 +308,7 @@ export default function AdminSchedulesPage() {
   const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
   const [dragging, setDragging] = useState<DraggingState | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const schedulesRef = useRef<Schedule[]>([]);
 
   const load = useCallback(async (token: string) => {
     setLoading(true);
@@ -330,6 +332,8 @@ export default function AdminSchedulesPage() {
     void load(token);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => { schedulesRef.current = schedules; }, [schedules]);
 
   // Drag event handlers
   useEffect(() => {
@@ -372,25 +376,33 @@ export default function AdminSchedulesPage() {
       const token = getAccessToken();
       if (!token) return;
 
-      const { id, tempStartMin, tempEndMin, tempDay, origStartMin, origEndMin, origDay } = dragging;
+      const { id, tempStartMin, tempEndMin, tempDay, origStartMin, origEndMin, origDay, origDayOfWeek } = dragging;
       setDragging(null);
 
-      // No change
-      if (tempStartMin === origStartMin && tempEndMin === origEndMin && tempDay === origDay) return;
+      // No change — for daily schedules ignore row movement (day_of_week stays -1)
+      const dayUnchanged = origDayOfWeek === -1 || tempDay === origDay;
+      if (tempStartMin === origStartMin && tempEndMin === origEndMin && dayUnchanged) return;
 
-      const sched = schedules.find((s) => s.id === id);
+      const sched = schedulesRef.current.find((s) => s.id === id);
       if (!sched) return;
 
+      const finalDow = origDayOfWeek === -1 ? -1 : tempDay;
       try {
         await api.deleteSchedule(token, id);
-        await api.createSchedule(token, {
+        const created = await api.createSchedule(token, {
           playlist_id: sched.playlist_id,
-          day_of_week: tempDay,
+          day_of_week: finalDow,
           start_time: minutesToTime(tempStartMin),
           end_time: minutesToTime(tempEndMin),
         });
-        const ss = await api.listSchedules(token);
-        setSchedules(ss);
+        const newSchedule: Schedule = {
+          id: created.id,
+          playlist_id: sched.playlist_id,
+          day_of_week: finalDow,
+          start_time: minutesToTime(tempStartMin),
+          end_time: minutesToTime(tempEndMin),
+        };
+        setSchedules((prev) => [...prev.filter((s) => s.id !== id), newSchedule]);
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "移動に失敗しました");
         await load(token);
@@ -404,7 +416,7 @@ export default function AdminSchedulesPage() {
       document.removeEventListener("mouseup", onMouseUp);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dragging, schedules]);
+  }, [dragging]);
 
   async function handleCreate() {
     const token = getAccessToken();
@@ -691,6 +703,7 @@ export default function AdminSchedulesPage() {
                               origStartMin: startMin0,
                               origEndMin: endMin0,
                               origDay: di,
+                              origDayOfWeek: s.day_of_week,
                               offsetMin: Math.max(0, offsetMin),
                               tempStartMin: startMin0,
                               tempEndMin: endMin0,
@@ -728,6 +741,7 @@ export default function AdminSchedulesPage() {
                                 origStartMin: startMin0,
                                 origEndMin: endMin0,
                                 origDay: di,
+                                origDayOfWeek: s.day_of_week,
                                 offsetMin: 0,
                                 tempStartMin: startMin0,
                                 tempEndMin: endMin0,
