@@ -92,13 +92,17 @@ async def create_appointment(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    scheduled_at = body.scheduled_at
+    if scheduled_at.tzinfo is not None:
+        scheduled_at = scheduled_at.replace(tzinfo=None)
+
     appt = VisitorAppointment(
         tenant_id=user.tenant_id,
         visitor_name=body.visitor_name.strip(),
         company=body.company,
         purpose=body.purpose,
         staff=body.staff,
-        scheduled_at=body.scheduled_at,
+        scheduled_at=scheduled_at,
         notes=body.notes,
     )
     db.add(appt)
@@ -133,7 +137,10 @@ async def update_appointment(
     if body.staff is not None:
         appt.staff = body.staff
     if body.scheduled_at is not None:
-        appt.scheduled_at = body.scheduled_at
+        sched = body.scheduled_at
+        if sched.tzinfo is not None:
+            sched = sched.replace(tzinfo=None)
+        appt.scheduled_at = sched
     if body.notes is not None:
         appt.notes = body.notes
     if body.status is not None:
