@@ -27,6 +27,98 @@ function toLocalDatetimeValue(iso: string) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+const INPUT_STYLE: React.CSSProperties = {
+  width: "100%", padding: "8px 10px", fontSize: 13,
+  border: "1px solid #d8d3c7", borderRadius: 7,
+  fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box",
+};
+
+function AppointmentForm({
+  data,
+  onChange,
+  onSubmit,
+  onCancel,
+  saving,
+  error,
+  submitLabel,
+  staffList,
+  purposeList,
+}: {
+  data: AppointmentCreate;
+  onChange: (d: AppointmentCreate) => void;
+  onSubmit: (e: React.FormEvent) => void;
+  onCancel: () => void;
+  saving: boolean;
+  error: string | null;
+  submitLabel: string;
+  staffList: string[];
+  purposeList: string[];
+}) {
+  return (
+    <form onSubmit={onSubmit}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>氏名 *</label>
+          <input type="text" required value={data.visitor_name}
+            onChange={(e) => onChange({ ...data, visitor_name: e.target.value })}
+            style={INPUT_STYLE} />
+        </div>
+        <div>
+          <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>会社名</label>
+          <input type="text" value={data.company ?? ""}
+            onChange={(e) => onChange({ ...data, company: e.target.value })}
+            style={INPUT_STYLE} />
+        </div>
+        <div>
+          <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>目的</label>
+          {purposeList.length > 0 ? (
+            <select value={data.purpose ?? ""} onChange={(e) => onChange({ ...data, purpose: e.target.value })} style={INPUT_STYLE}>
+              <option value="">未選択</option>
+              {purposeList.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          ) : (
+            <input type="text" value={data.purpose ?? ""}
+              onChange={(e) => onChange({ ...data, purpose: e.target.value })}
+              style={INPUT_STYLE} />
+          )}
+        </div>
+        <div>
+          <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>担当者</label>
+          {staffList.length > 0 ? (
+            <select value={data.staff ?? ""} onChange={(e) => onChange({ ...data, staff: e.target.value })} style={INPUT_STYLE}>
+              <option value="">未選択</option>
+              {staffList.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          ) : (
+            <input type="text" value={data.staff ?? ""}
+              onChange={(e) => onChange({ ...data, staff: e.target.value })}
+              style={INPUT_STYLE} />
+          )}
+        </div>
+        <div>
+          <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>来社日時 *</label>
+          <input type="datetime-local" required value={data.scheduled_at}
+            onChange={(e) => onChange({ ...data, scheduled_at: e.target.value })}
+            style={INPUT_STYLE} />
+        </div>
+        <div>
+          <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>メモ</label>
+          <input type="text" value={data.notes ?? ""}
+            onChange={(e) => onChange({ ...data, notes: e.target.value })}
+            style={INPUT_STYLE} />
+        </div>
+      </div>
+      {error && <div style={{ fontSize: 12.5, color: "#a84238", marginBottom: 12, fontFamily: FONT_JP }}>{error}</div>}
+      <div style={{ display: "flex", gap: 10 }}>
+        <MkBtn type="submit" variant="primary" size="sm" disabled={saving}>
+          {saving ? "保存中..." : submitLabel}
+        </MkBtn>
+        <MkBtn variant="default" size="sm" onClick={onCancel}>キャンセル</MkBtn>
+      </div>
+    </form>
+  );
+}
+
 export default function AppointmentsPage() {
   const params = useParams<{ tenant: string }>();
   const tenant = params.tenant ?? "";
@@ -52,6 +144,15 @@ export default function AppointmentsPage() {
   const [editFormData, setEditFormData] = useState<AppointmentCreate>({ visitor_name: "", scheduled_at: "" });
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 640);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
 
   useEffect(() => {
     const token = getAccessToken();
@@ -180,6 +281,8 @@ export default function AppointmentsPage() {
     win.print();
   }
 
+  const sortedAppointments = appointments;
+
   return (
     <AdminShell
       active="appointments"
@@ -195,109 +298,27 @@ export default function AppointmentsPage() {
         </MkBtn>
       }
     >
-      <div style={{ padding: "24px 28px", maxWidth: 960 }}>
+      <div style={{ padding: isMobile ? "16px 12px" : "24px 28px" }}>
 
         {/* 新規作成フォーム */}
         {showForm && (
           <MkCard style={{ marginBottom: 20 }}>
             <MkSectionTitle title="来社予定を追加" />
-            <form onSubmit={handleCreate}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-                <div>
-                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>氏名 *</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.visitor_name}
-                    onChange={(e) => setFormData((p) => ({ ...p, visitor_name: e.target.value }))}
-                    style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>会社名</label>
-                  <input
-                    type="text"
-                    value={formData.company ?? ""}
-                    onChange={(e) => setFormData((p) => ({ ...p, company: e.target.value }))}
-                    style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>目的</label>
-                  {purposeList.length > 0 ? (
-                    <select
-                      value={formData.purpose ?? ""}
-                      onChange={(e) => setFormData((p) => ({ ...p, purpose: e.target.value }))}
-                      style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                    >
-                      <option value="">未選択</option>
-                      {purposeList.map((v) => <option key={v} value={v}>{v}</option>)}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={formData.purpose ?? ""}
-                      onChange={(e) => setFormData((p) => ({ ...p, purpose: e.target.value }))}
-                      style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                    />
-                  )}
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>担当者</label>
-                  {staffList.length > 0 ? (
-                    <select
-                      value={formData.staff ?? ""}
-                      onChange={(e) => setFormData((p) => ({ ...p, staff: e.target.value }))}
-                      style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                    >
-                      <option value="">未選択</option>
-                      {staffList.map((v) => <option key={v} value={v}>{v}</option>)}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={formData.staff ?? ""}
-                      onChange={(e) => setFormData((p) => ({ ...p, staff: e.target.value }))}
-                      style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                    />
-                  )}
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>来社日時 *</label>
-                  <input
-                    type="datetime-local"
-                    required
-                    value={formData.scheduled_at}
-                    onChange={(e) => setFormData((p) => ({ ...p, scheduled_at: e.target.value }))}
-                    style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>メモ</label>
-                  <input
-                    type="text"
-                    value={formData.notes ?? ""}
-                    onChange={(e) => setFormData((p) => ({ ...p, notes: e.target.value }))}
-                    style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                  />
-                </div>
-              </div>
-              {formError && (
-                <div style={{ fontSize: 12.5, color: "#a84238", marginBottom: 12, fontFamily: FONT_JP }}>{formError}</div>
-              )}
-              <div style={{ display: "flex", gap: 10 }}>
-                <MkBtn type="submit" variant="primary" size="sm" disabled={formSaving}>
-                  {formSaving ? "作成中..." : "作成"}
-                </MkBtn>
-                <MkBtn variant="default" size="sm" onClick={() => { setShowForm(false); setFormError(null); }}>
-                  キャンセル
-                </MkBtn>
-              </div>
-            </form>
+            <AppointmentForm
+              data={formData}
+              onChange={setFormData}
+              onSubmit={handleCreate}
+              onCancel={() => { setShowForm(false); setFormError(null); }}
+              saving={formSaving}
+              error={formError}
+              submitLabel="作成"
+              staffList={staffList}
+              purposeList={purposeList}
+            />
           </MkCard>
         )}
 
-        {/* 一覧テーブル */}
+        {/* 一覧 */}
         <MkCard padding="0">
           <div style={{ padding: "16px 20px 12px", borderBottom: "1px solid #efece5" }}>
             <MkSectionTitle title="予定一覧" subtitle={`${appointments.length} 件`} style={{ marginBottom: 0 }} />
@@ -307,74 +328,112 @@ export default function AppointmentsPage() {
             <div style={{ padding: 32, textAlign: "center", fontSize: 13, color: "#a8a198", fontFamily: FONT_JP }}>読み込み中...</div>
           ) : error ? (
             <div style={{ padding: 32, textAlign: "center", fontSize: 13, color: "#a84238", fontFamily: FONT_JP }}>{error}</div>
-          ) : appointments.length === 0 ? (
+          ) : sortedAppointments.length === 0 ? (
             <div style={{ padding: 40, textAlign: "center", fontSize: 13, color: "#a8a198", fontFamily: FONT_JP }}>
               来社予定がありません。「予定を追加」から登録してください。
             </div>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid #efece5" }}>
-                    {["来社日時", "氏名", "会社", "担当", "目的", "ステータス", "QR", "操作"].map((h) => (
-                      <th
-                        key={h}
-                        style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, color: "#a8a198", fontWeight: 600, letterSpacing: "0.4px", textTransform: "uppercase", fontFamily: FONT_MONO, whiteSpace: "nowrap" }}
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {appointments.map((appt, idx) => (
-                    <tr
-                      key={appt.id}
-                      style={{ borderBottom: idx < appointments.length - 1 ? "1px solid #efece5" : "none" }}
+          ) : isMobile ? (
+            /* ---- スマホ: カード形式 ---- */
+            <div>
+              {sortedAppointments.map((appt, idx) => (
+                <div
+                  key={appt.id}
+                  style={{
+                    padding: "16px",
+                    borderBottom: idx < sortedAppointments.length - 1 ? "1px solid #efece5" : "none",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6, gap: 8 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15", fontFamily: FONT_JP }}>{appt.visitor_name}</div>
+                      {appt.company && (
+                        <div style={{ fontSize: 12.5, color: "#6b6559", fontFamily: FONT_JP, marginTop: 1 }}>{appt.company}</div>
+                      )}
+                    </div>
+                    <div style={{ flexShrink: 0 }}>
+                      <StatusBadge status={appt.status} />
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#a8a198", fontFamily: FONT_MONO, marginBottom: 4 }}>
+                    {fmtDatetime(appt.scheduled_at)}
+                  </div>
+                  {(appt.staff || appt.purpose) && (
+                    <div style={{ fontSize: 12.5, color: "#6b6559", fontFamily: FONT_JP, marginBottom: 10 }}>
+                      {[appt.staff, appt.purpose].filter(Boolean).join(" / ")}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <MkBtn variant="default" size="sm" onClick={() => setQrAppt(appt)}>QR表示</MkBtn>
+                    <MkBtn variant="default" size="sm" onClick={() => openEdit(appt)}>編集</MkBtn>
+                    <MkBtn
+                      variant="danger"
+                      size="sm"
+                      disabled={deletingId === appt.id}
+                      onClick={() => handleDelete(appt.id)}
                     >
-                      <td style={{ padding: "12px 16px", fontSize: 12.5, color: "#1d1a15", fontFamily: FONT_MONO, whiteSpace: "nowrap" }}>
-                        {fmtDatetime(appt.scheduled_at)}
-                      </td>
-                      <td style={{ padding: "12px 16px", fontSize: 13, color: "#1d1a15", fontFamily: FONT_JP, whiteSpace: "nowrap" }}>
-                        {appt.visitor_name}
-                      </td>
-                      <td style={{ padding: "12px 16px", fontSize: 13, color: "#6b6559", fontFamily: FONT_JP, whiteSpace: "nowrap" }}>
-                        {appt.company ?? "—"}
-                      </td>
-                      <td style={{ padding: "12px 16px", fontSize: 13, color: "#6b6559", fontFamily: FONT_JP, whiteSpace: "nowrap" }}>
-                        {appt.staff ?? "—"}
-                      </td>
-                      <td style={{ padding: "12px 16px", fontSize: 13, color: "#6b6559", fontFamily: FONT_JP, whiteSpace: "nowrap" }}>
-                        {appt.purpose ?? "—"}
-                      </td>
-                      <td style={{ padding: "12px 16px" }}>
-                        <StatusBadge status={appt.status} />
-                      </td>
-                      <td style={{ padding: "12px 16px" }}>
-                        <MkBtn variant="default" size="sm" onClick={() => setQrAppt(appt)}>
-                          QR表示
-                        </MkBtn>
-                      </td>
-                      <td style={{ padding: "12px 16px" }}>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <MkBtn variant="default" size="sm" onClick={() => openEdit(appt)}>
-                            編集
-                          </MkBtn>
-                          <MkBtn
-                            variant="danger"
-                            size="sm"
-                            disabled={deletingId === appt.id}
-                            onClick={() => handleDelete(appt.id)}
-                          >
-                            {deletingId === appt.id ? "削除中..." : "削除"}
-                          </MkBtn>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      {deletingId === appt.id ? "削除中..." : "削除"}
+                    </MkBtn>
+                  </div>
+                </div>
+              ))}
             </div>
+          ) : (
+            /* ---- PC: テーブル形式 ---- */
+            <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "auto" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #efece5" }}>
+                  {["来社日時", "氏名", "会社", "担当", "目的", "ステータス", "操作"].map((h) => (
+                    <th
+                      key={h}
+                      style={{ padding: "10px 12px", textAlign: "left", fontSize: 11, color: "#a8a198", fontWeight: 600, letterSpacing: "0.4px", textTransform: "uppercase", fontFamily: FONT_MONO, whiteSpace: "nowrap" }}
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedAppointments.map((appt, idx) => (
+                  <tr
+                    key={appt.id}
+                    style={{ borderBottom: idx < sortedAppointments.length - 1 ? "1px solid #efece5" : "none" }}
+                  >
+                    <td style={{ padding: "10px 12px", fontSize: 12.5, color: "#1d1a15", fontFamily: FONT_MONO, whiteSpace: "nowrap" }}>
+                      {fmtDatetime(appt.scheduled_at)}
+                    </td>
+                    <td style={{ padding: "10px 12px", fontSize: 13, color: "#1d1a15", fontFamily: FONT_JP, whiteSpace: "nowrap" }}>
+                      {appt.visitor_name}
+                    </td>
+                    <td style={{ padding: "10px 12px", fontSize: 13, color: "#6b6559", fontFamily: FONT_JP, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {appt.company ?? "—"}
+                    </td>
+                    <td style={{ padding: "10px 12px", fontSize: 13, color: "#6b6559", fontFamily: FONT_JP, whiteSpace: "nowrap" }}>
+                      {appt.staff ?? "—"}
+                    </td>
+                    <td style={{ padding: "10px 12px", fontSize: 13, color: "#6b6559", fontFamily: FONT_JP, whiteSpace: "nowrap" }}>
+                      {appt.purpose ?? "—"}
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <StatusBadge status={appt.status} />
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                        <MkBtn variant="default" size="sm" onClick={() => setQrAppt(appt)}>QR</MkBtn>
+                        <MkBtn variant="default" size="sm" onClick={() => openEdit(appt)}>編集</MkBtn>
+                        <MkBtn
+                          variant="danger"
+                          size="sm"
+                          disabled={deletingId === appt.id}
+                          onClick={() => handleDelete(appt.id)}
+                        >
+                          {deletingId === appt.id ? "削除中..." : "削除"}
+                        </MkBtn>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </MkCard>
       </div>
@@ -385,107 +444,31 @@ export default function AppointmentsPage() {
           style={{
             position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex",
             alignItems: "center", justifyContent: "center", zIndex: 1000,
+            padding: isMobile ? "16px" : 0,
           }}
           onClick={() => setEditAppt(null)}
         >
           <div
-            style={{ background: "#fffefb", borderRadius: 20, padding: "32px 36px", maxWidth: 560, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
+            style={{
+              background: "#fffefb", borderRadius: 20,
+              padding: isMobile ? "24px 20px" : "32px 36px",
+              maxWidth: 560, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+              maxHeight: "90vh", overflowY: "auto",
+            }}
             onClick={(e) => e.stopPropagation()}
           >
             <MkSectionTitle title="来社予定を編集" style={{ marginBottom: 20 }} />
-            <form onSubmit={handleUpdate}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-                <div>
-                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>氏名 *</label>
-                  <input
-                    type="text"
-                    required
-                    value={editFormData.visitor_name}
-                    onChange={(e) => setEditFormData((p) => ({ ...p, visitor_name: e.target.value }))}
-                    style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>会社名</label>
-                  <input
-                    type="text"
-                    value={editFormData.company ?? ""}
-                    onChange={(e) => setEditFormData((p) => ({ ...p, company: e.target.value }))}
-                    style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>目的</label>
-                  {purposeList.length > 0 ? (
-                    <select
-                      value={editFormData.purpose ?? ""}
-                      onChange={(e) => setEditFormData((p) => ({ ...p, purpose: e.target.value }))}
-                      style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                    >
-                      <option value="">未選択</option>
-                      {purposeList.map((v) => <option key={v} value={v}>{v}</option>)}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={editFormData.purpose ?? ""}
-                      onChange={(e) => setEditFormData((p) => ({ ...p, purpose: e.target.value }))}
-                      style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                    />
-                  )}
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>担当者</label>
-                  {staffList.length > 0 ? (
-                    <select
-                      value={editFormData.staff ?? ""}
-                      onChange={(e) => setEditFormData((p) => ({ ...p, staff: e.target.value }))}
-                      style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                    >
-                      <option value="">未選択</option>
-                      {staffList.map((v) => <option key={v} value={v}>{v}</option>)}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={editFormData.staff ?? ""}
-                      onChange={(e) => setEditFormData((p) => ({ ...p, staff: e.target.value }))}
-                      style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                    />
-                  )}
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>来社日時 *</label>
-                  <input
-                    type="datetime-local"
-                    required
-                    value={editFormData.scheduled_at}
-                    onChange={(e) => setEditFormData((p) => ({ ...p, scheduled_at: e.target.value }))}
-                    style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>メモ</label>
-                  <input
-                    type="text"
-                    value={editFormData.notes ?? ""}
-                    onChange={(e) => setEditFormData((p) => ({ ...p, notes: e.target.value }))}
-                    style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
-                  />
-                </div>
-              </div>
-              {editError && (
-                <div style={{ fontSize: 12.5, color: "#a84238", marginBottom: 12, fontFamily: FONT_JP }}>{editError}</div>
-              )}
-              <div style={{ display: "flex", gap: 10 }}>
-                <MkBtn type="submit" variant="primary" size="sm" disabled={editSaving}>
-                  {editSaving ? "保存中..." : "保存"}
-                </MkBtn>
-                <MkBtn variant="default" size="sm" onClick={() => setEditAppt(null)}>
-                  キャンセル
-                </MkBtn>
-              </div>
-            </form>
+            <AppointmentForm
+              data={editFormData}
+              onChange={setEditFormData}
+              onSubmit={handleUpdate}
+              onCancel={() => setEditAppt(null)}
+              saving={editSaving}
+              error={editError}
+              submitLabel="保存"
+              staffList={staffList}
+              purposeList={purposeList}
+            />
           </div>
         </div>
       )}
@@ -496,18 +479,23 @@ export default function AppointmentsPage() {
           style={{
             position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex",
             alignItems: "center", justifyContent: "center", zIndex: 1000,
+            padding: isMobile ? "16px" : 0,
           }}
           onClick={() => setQrAppt(null)}
         >
           <div
-            style={{ background: "#fffefb", borderRadius: 20, padding: "40px 48px", maxWidth: 480, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
+            style={{
+              background: "#fffefb", borderRadius: 20,
+              padding: isMobile ? "28px 24px" : "40px 48px",
+              maxWidth: 480, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+            }}
             onClick={(e) => e.stopPropagation()}
           >
             <div ref={printRef} style={{ textAlign: "center" }}>
               <div style={{ marginBottom: 20 }}>
                 <QRCodeSVG
                   value={`appt:${qrAppt.token}`}
-                  size={200}
+                  size={isMobile ? 160 : 200}
                   level="M"
                   style={{ border: "1px solid #efece5", borderRadius: 8, padding: 8, background: "#fff" }}
                 />
