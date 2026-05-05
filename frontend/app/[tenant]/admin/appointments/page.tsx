@@ -48,6 +48,11 @@ export default function AppointmentsPage() {
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  const [editAppt, setEditAppt] = useState<VisitorAppointment | null>(null);
+  const [editFormData, setEditFormData] = useState<AppointmentCreate>({ visitor_name: "", scheduled_at: "" });
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
   useEffect(() => {
     const token = getAccessToken();
     if (!token) return;
@@ -100,6 +105,43 @@ export default function AppointmentsPage() {
       setFormError(err instanceof Error ? err.message : "作成に失敗しました");
     } finally {
       setFormSaving(false);
+    }
+  }
+
+  function openEdit(appt: VisitorAppointment) {
+    setEditFormData({
+      visitor_name: appt.visitor_name,
+      company: appt.company ?? "",
+      purpose: appt.purpose ?? "",
+      staff: appt.staff ?? "",
+      scheduled_at: toLocalDatetimeValue(appt.scheduled_at),
+      notes: appt.notes ?? "",
+    });
+    setEditError(null);
+    setEditAppt(appt);
+  }
+
+  async function handleUpdate(e: React.FormEvent) {
+    e.preventDefault();
+    const token = getAccessToken();
+    if (!token || !editAppt) return;
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      const updated = await api.updateAppointment(token, editAppt.id, {
+        ...editFormData,
+        scheduled_at: new Date(editFormData.scheduled_at).toISOString(),
+      });
+      setAppointments((prev) =>
+        prev.map((a) => (a.id === updated.id ? updated : a)).sort(
+          (a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()
+        )
+      );
+      setEditAppt(null);
+    } catch (err: unknown) {
+      setEditError(err instanceof Error ? err.message : "更新に失敗しました");
+    } finally {
+      setEditSaving(false);
     }
   }
 
@@ -314,14 +356,19 @@ export default function AppointmentsPage() {
                         </MkBtn>
                       </td>
                       <td style={{ padding: "12px 16px" }}>
-                        <MkBtn
-                          variant="danger"
-                          size="sm"
-                          disabled={deletingId === appt.id}
-                          onClick={() => handleDelete(appt.id)}
-                        >
-                          {deletingId === appt.id ? "削除中..." : "削除"}
-                        </MkBtn>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <MkBtn variant="default" size="sm" onClick={() => openEdit(appt)}>
+                            編集
+                          </MkBtn>
+                          <MkBtn
+                            variant="danger"
+                            size="sm"
+                            disabled={deletingId === appt.id}
+                            onClick={() => handleDelete(appt.id)}
+                          >
+                            {deletingId === appt.id ? "削除中..." : "削除"}
+                          </MkBtn>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -331,6 +378,117 @@ export default function AppointmentsPage() {
           )}
         </MkCard>
       </div>
+
+      {/* 編集モーダル */}
+      {editAppt && (
+        <div
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex",
+            alignItems: "center", justifyContent: "center", zIndex: 1000,
+          }}
+          onClick={() => setEditAppt(null)}
+        >
+          <div
+            style={{ background: "#fffefb", borderRadius: 20, padding: "32px 36px", maxWidth: 560, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <MkSectionTitle title="来社予定を編集" style={{ marginBottom: 20 }} />
+            <form onSubmit={handleUpdate}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                <div>
+                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>氏名 *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editFormData.visitor_name}
+                    onChange={(e) => setEditFormData((p) => ({ ...p, visitor_name: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>会社名</label>
+                  <input
+                    type="text"
+                    value={editFormData.company ?? ""}
+                    onChange={(e) => setEditFormData((p) => ({ ...p, company: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>目的</label>
+                  {purposeList.length > 0 ? (
+                    <select
+                      value={editFormData.purpose ?? ""}
+                      onChange={(e) => setEditFormData((p) => ({ ...p, purpose: e.target.value }))}
+                      style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
+                    >
+                      <option value="">未選択</option>
+                      {purposeList.map((v) => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={editFormData.purpose ?? ""}
+                      onChange={(e) => setEditFormData((p) => ({ ...p, purpose: e.target.value }))}
+                      style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
+                    />
+                  )}
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>担当者</label>
+                  {staffList.length > 0 ? (
+                    <select
+                      value={editFormData.staff ?? ""}
+                      onChange={(e) => setEditFormData((p) => ({ ...p, staff: e.target.value }))}
+                      style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
+                    >
+                      <option value="">未選択</option>
+                      {staffList.map((v) => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={editFormData.staff ?? ""}
+                      onChange={(e) => setEditFormData((p) => ({ ...p, staff: e.target.value }))}
+                      style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
+                    />
+                  )}
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>来社日時 *</label>
+                  <input
+                    type="datetime-local"
+                    required
+                    value={editFormData.scheduled_at}
+                    onChange={(e) => setEditFormData((p) => ({ ...p, scheduled_at: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>メモ</label>
+                  <input
+                    type="text"
+                    value={editFormData.notes ?? ""}
+                    onChange={(e) => setEditFormData((p) => ({ ...p, notes: e.target.value }))}
+                    style={{ width: "100%", padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, fontFamily: FONT_JP, background: "#faf8f4", boxSizing: "border-box" }}
+                  />
+                </div>
+              </div>
+              {editError && (
+                <div style={{ fontSize: 12.5, color: "#a84238", marginBottom: 12, fontFamily: FONT_JP }}>{editError}</div>
+              )}
+              <div style={{ display: "flex", gap: 10 }}>
+                <MkBtn type="submit" variant="primary" size="sm" disabled={editSaving}>
+                  {editSaving ? "保存中..." : "保存"}
+                </MkBtn>
+                <MkBtn variant="default" size="sm" onClick={() => setEditAppt(null)}>
+                  キャンセル
+                </MkBtn>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* QRモーダル */}
       {qrAppt && (
