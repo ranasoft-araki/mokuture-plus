@@ -275,16 +275,24 @@ export const api = {
     request<TenantSettings>("/settings/logo", { method: "DELETE" }, token),
 
   // Content
-  uploadMedia: async (token: string, file: File): Promise<MediaItem> => {
+  uploadMedia: async (token: string, file: File, onProgress?: (pct: number) => void): Promise<MediaItem> => {
     const urlData = await api.getMediaUploadUrl(token, file.name, file.type);
-    const putRes = await fetch(urlData.upload_url, {
-      method: "PUT",
-      headers: { "Content-Type": file.type },
-      body: file,
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", urlData.upload_url);
+      xhr.setRequestHeader("Content-Type", file.type);
+      if (onProgress) {
+        xhr.upload.addEventListener("progress", (e) => {
+          if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+        });
+      }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(`ストレージへのアップロードに失敗しました (${xhr.status})`));
+      };
+      xhr.onerror = () => reject(new Error("ストレージへのアップロードに失敗しました"));
+      xhr.send(file);
     });
-    if (!putRes.ok) {
-      throw new Error(`ストレージへのアップロードに失敗しました (${putRes.status})`);
-    }
     return api.registerMedia(token, {
       media_id: urlData.media_id,
       filename: file.name,

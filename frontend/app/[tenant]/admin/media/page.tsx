@@ -119,6 +119,8 @@ export default function AdminMediaPage() {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadingFilename, setUploadingFilename] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -185,16 +187,20 @@ export default function AdminMediaPage() {
     const token = getAccessToken();
     if (!token) { router.push("/login"); return; }
     setUploading(true);
+    setUploadProgress(0);
+    setUploadingFilename(file.name);
     setError("");
     setSuccess("");
     try {
-      const created = await api.uploadMedia(token, file);
+      const created = await api.uploadMedia(token, file, (pct) => setUploadProgress(pct));
       setMedia((cur) => [created, ...cur]);
       setSuccess(`「${file.name}」をアップロードしました`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "アップロードに失敗しました");
     } finally {
       setUploading(false);
+      setUploadProgress(null);
+      setUploadingFilename("");
     }
   }
 
@@ -309,39 +315,71 @@ export default function AdminMediaPage() {
 
       {/* Drop zone */}
       <div
-        onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+        onDragOver={(e) => { e.preventDefault(); if (!uploading) setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}
-        onDrop={handleDrop}
-        onClick={() => inputRef.current?.click()}
+        onDrop={uploading ? (e) => e.preventDefault() : handleDrop}
+        onClick={uploading ? undefined : () => inputRef.current?.click()}
         style={{
-          border: `1.5px dashed ${isDragging ? "#4a7c4e" : "#d8d3c7"}`,
+          border: `1.5px dashed ${isDragging ? "#4a7c4e" : uploading ? "#c49a3a" : "#d8d3c7"}`,
           borderRadius: 10,
-          background: isDragging ? "#eaf0e8" : "#fffefb",
+          background: isDragging ? "#eaf0e8" : uploading ? "#fdf8ee" : "#fffefb",
           padding: 18,
           marginBottom: 22,
           display: "flex",
           alignItems: "center",
           gap: 16,
-          cursor: "pointer",
+          cursor: uploading ? "default" : "pointer",
           transition: "all 0.15s",
         }}
       >
-        <div style={{ width: 44, height: 44, borderRadius: 7, flexShrink: 0, background: "#eaf0e8", color: "#3a6240", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 3v12M7 8l5-5 5 5"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/>
-          </svg>
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#2d2a24" }}>
-            ドラッグ&amp;ドロップ、またはクリックしてアップロード
-          </div>
-          <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3 }}>
-            MP4 (H.264) · JPEG · PNG · SVG — 1ファイルあたり最大 500 MB
-          </div>
-        </div>
-        <MkBtn variant="default" size="sm" onClick={() => { inputRef.current?.click(); }}>
-          ファイルを選択
-        </MkBtn>
+        {uploading ? (
+          <>
+            <div style={{ width: 44, height: 44, borderRadius: 7, flexShrink: 0, background: "#faefd4", color: "#a87832", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "kiosk-spin 1.2s linear infinite" }}>
+                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+              </svg>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#2d2a24" }}>アップロード中…</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#a87832", fontFamily: "monospace" }}>
+                  {uploadProgress !== null ? `${uploadProgress}%` : ""}
+                </span>
+              </div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginBottom: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {uploadingFilename}
+              </div>
+              <div style={{ height: 6, background: "#efece5", borderRadius: 999, overflow: "hidden" }}>
+                <div style={{
+                  height: "100%",
+                  width: `${uploadProgress ?? 0}%`,
+                  background: "linear-gradient(90deg, #c49a3a, #a87832)",
+                  borderRadius: 999,
+                  transition: "width 0.2s ease",
+                }} />
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ width: 44, height: 44, borderRadius: 7, flexShrink: 0, background: "#eaf0e8", color: "#3a6240", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3v12M7 8l5-5 5 5"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/>
+              </svg>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#2d2a24" }}>
+                ドラッグ&amp;ドロップ、またはクリックしてアップロード
+              </div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3 }}>
+                MP4 (H.264) · JPEG · PNG · SVG — 1ファイルあたり最大 500 MB
+              </div>
+            </div>
+            <MkBtn variant="default" size="sm" onClick={() => { inputRef.current?.click(); }}>
+              ファイルを選択
+            </MkBtn>
+          </>
+        )}
       </div>
 
       {/* Grid / List */}
