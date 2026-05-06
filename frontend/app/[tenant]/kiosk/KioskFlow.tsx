@@ -287,7 +287,7 @@ function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSetting
 
               {/* Staff */}
               <motion.div variants={fieldVariants}>
-                <FormField label="ご担当者名">
+                <FormField label="担当者名">
                   {useDropdown && staffMode === "dropdown" ? (
                     <div>
                       <motion.div
