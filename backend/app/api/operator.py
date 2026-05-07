@@ -742,7 +742,7 @@ async def list_all_devices(
             "tenant_id": d.tenant_id,
             "tenant_name": t_name,
             "reseller_name": r_name,
-            "last_seen_at": d.last_seen_at.isoformat() if d.last_seen_at else None,
+            "last_seen_at": d.last_seen_at.isoformat() + "Z" if d.last_seen_at else None,
             "is_online": is_online,
             "pin_code": d.pin_code if hasattr(d, "pin_code") else None,
         })

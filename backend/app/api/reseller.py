@@ -365,7 +365,7 @@ async def list_reseller_devices(
             "name": d.name,
             "location": d.location,
             "tenant_id": d.tenant_id,
-            "last_seen_at": d.last_seen_at.isoformat() if d.last_seen_at else None,
+            "last_seen_at": d.last_seen_at.isoformat() + "Z" if d.last_seen_at else None,
         }
         for d in devices
     ]

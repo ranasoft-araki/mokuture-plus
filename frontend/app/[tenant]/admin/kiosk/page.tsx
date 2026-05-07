@@ -201,7 +201,7 @@ export default function AdminKioskPage() {
     ? `${window.location.origin}/${params.tenant}/kiosk`
     : `/${params.tenant}/kiosk`;
 
-  const isOnline = (d: Device) => !!d.last_seen_at && (Date.now() - new Date(d.last_seen_at).getTime()) < 3 * 60 * 1000;
+  const isOnline = (d: Device) => !!d.last_seen_at && (Date.now() - utcDate(d.last_seen_at).getTime()) < 3 * 60 * 1000;
 
   const filtered = useMemo(() => {
     let list = [...devices];
@@ -621,14 +621,20 @@ export default function AdminKioskPage() {
   );
 }
 
+function utcDate(value: string): Date {
+  // Append "Z" if no timezone info to force UTC parsing
+  return new Date(/[Z+]/.test(value) ? value : value + "Z");
+}
+
 function formatDate(value: string) {
   if (!value) return "—";
-  return new Date(value).toLocaleString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return utcDate(value).toLocaleString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function formatRelative(value: string) {
-  const diff = Date.now() - new Date(value).getTime();
+  const diff = Date.now() - utcDate(value).getTime();
   const sec = Math.floor(diff / 1000);
+  if (sec < 5) return "たった今";
   if (sec < 60) return `${sec}秒前`;
   const min = Math.floor(sec / 60);
   if (min < 60) return `${min}分前`;

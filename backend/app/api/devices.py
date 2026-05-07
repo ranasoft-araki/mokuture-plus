@@ -152,6 +152,6 @@ def _out(d: Device) -> dict:
         "id": d.id,
         "name": d.name,
         "location": d.location,
-        "last_seen_at": d.last_seen_at.isoformat() if d.last_seen_at else None,
-        "created_at": d.created_at.isoformat() if d.created_at else "",
+        "last_seen_at": d.last_seen_at.isoformat() + "Z" if d.last_seen_at else None,
+        "created_at": d.created_at.isoformat() + "Z" if d.created_at else "",
     }
