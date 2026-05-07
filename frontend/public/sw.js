@@ -2,6 +2,9 @@
 const CACHE = 'mokuture-v1';
 const SHELL = ['/', '/icons/icon.svg', '/manifest.json'];
 
+// Badge count — in-memory; resets on SW restart (acceptable trade-off)
+let badgeCount = 0;
+
 // ── Install: pre-cache shell ──────────────────────────────────────────
 self.addEventListener('install', (e) => {
   e.waitUntil(
@@ -57,12 +60,20 @@ self.addEventListener('push', (e) => {
     ],
   };
 
-  e.waitUntil(self.registration.showNotification(payload.title, options));
+  badgeCount = typeof payload.badge === 'number' ? payload.badge : badgeCount + 1;
+  e.waitUntil(
+    self.registration.showNotification(payload.title, options).then(() => {
+      if ('setAppBadge' in navigator) return navigator.setAppBadge(badgeCount).catch(() => {});
+    })
+  );
 });
 
 // ── Notification click: focus or open window ───────────────────────────
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
+  badgeCount = 0;
+  if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => {});
+
   if (e.action === 'dismiss') return;
 
   const targetUrl = e.notification.data?.url ?? '/';
@@ -73,4 +84,12 @@ self.addEventListener('notificationclick', (e) => {
       if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
     })
   );
+});
+
+// ── Message: clear badge from page context ────────────────────────────
+self.addEventListener('message', (e) => {
+  if (e.data?.type === 'CLEAR_BADGE') {
+    badgeCount = 0;
+    if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => {});
+  }
 });
