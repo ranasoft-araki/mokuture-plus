@@ -201,16 +201,21 @@ export default function AdminKioskPage() {
     ? `${window.location.origin}/${params.tenant}/kiosk`
     : `/${params.tenant}/kiosk`;
 
-  const isOnline = (d: Device) => !!d.last_seen_at && (Date.now() - new Date(d.last_seen_at).getTime()) < 2 * 60 * 1000;
+  const isOnline = (d: Device) => !!d.last_seen_at && (Date.now() - new Date(d.last_seen_at).getTime()) < 3 * 60 * 1000;
 
   const filtered = useMemo(() => {
-    let list = devices;
+    let list = [...devices];
     if (search.trim()) list = list.filter(d =>
       d.name.toLowerCase().includes(search.trim().toLowerCase()) ||
       (d.location ?? "").toLowerCase().includes(search.trim().toLowerCase())
     );
     if (statusFilter === "online") list = list.filter(d => isOnline(d));
     if (statusFilter === "offline") list = list.filter(d => !isOnline(d));
+    // オフライン（要対応）を先頭に、次にオンライン、未接続を末尾に
+    list.sort((a, b) => {
+      const score = (d: Device) => !d.last_seen_at ? 2 : isOnline(d) ? 1 : 0;
+      return score(a) - score(b);
+    });
     return list;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [devices, search, statusFilter]);
@@ -239,6 +244,12 @@ export default function AdminKioskPage() {
       {refreshMsg && (
         <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 8, background: "#fdf6e8", border: "1px solid #c8a96e", fontSize: 12.5, color: "#7a5a1e" }}>
           {refreshMsg}
+        </div>
+      )}
+      {offlineCount > 0 && (
+        <div style={{ marginBottom: 14, padding: "10px 14px", borderRadius: 8, background: "#fef3cd", border: "1px solid #d4a017", fontSize: 12.5, color: "#7a5000", display: "flex", alignItems: "center", gap: 8 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d4a017" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <strong>{offlineCount} 台</strong>がオフラインです。接続状況を確認してください。
         </div>
       )}
       {/* Summary strip — 4 cards */}
@@ -357,7 +368,7 @@ export default function AdminKioskPage() {
           filtered.map((d) => {
             const online = isOnline(d);
             return (
-              <MkCard key={d.id} padding="0">
+              <MkCard key={d.id} padding="0" style={!online && d.last_seen_at ? { borderLeft: "3px solid #d4a017" } : undefined}>
                 <div style={{ display: "flex", alignItems: "stretch" }}>
                   {/* Preview area */}
                   <div

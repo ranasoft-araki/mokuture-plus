@@ -114,6 +114,12 @@ async def get_kiosk_device(
     return tenant, device
 
 
+@router.post("/heartbeat", status_code=200)
+async def kiosk_heartbeat(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device)):
+    """軽量生存確認。get_kiosk_device が last_seen_at を更新するためここでの追加処理不要。"""
+    return {"ok": True}
+
+
 @router.get("/schedule")
 async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device), db: AsyncSession = Depends(get_db)):
     """Return the current scheduled playlist with embedded media data."""

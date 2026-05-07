@@ -63,7 +63,7 @@ async def get_operator_stats(
     device_count = (await db.execute(select(func.count()).select_from(Device))).scalar()
     reception_count = (await db.execute(select(func.count()).select_from(ReceptionLog))).scalar()
 
-    online_cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+    online_cutoff = datetime.now(timezone.utc) - timedelta(minutes=3)
     online_device_count = (await db.execute(
         select(func.count()).select_from(Device).where(Device.last_seen_at >= online_cutoff)
     )).scalar()
@@ -683,7 +683,7 @@ async def list_all_devices(
 ):
     import math
 
-    online_cutoff = datetime.now(timezone.utc) - timedelta(minutes=2)
+    online_cutoff = datetime.now(timezone.utc) - timedelta(minutes=3)
 
     # Build joined query so we can fetch tenant + reseller names
     tenant_alias = Tenant.__table__.alias("t")

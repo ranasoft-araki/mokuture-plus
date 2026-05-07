@@ -132,3 +132,25 @@ async def sync_loop() -> None:
             await check_force_refresh(client)
             await sync_once(client)
             await asyncio.sleep(settings.sync_interval_sec)
+
+
+_HEARTBEAT_INTERVAL_SEC = 60
+
+
+async def heartbeat_loop() -> None:
+    """60秒ごとに /kiosk/heartbeat を送信。コンテンツ同期とは独立して動作。"""
+    async with httpx.AsyncClient() as client:
+        while True:
+            token = get_device_token()
+            if token:
+                try:
+                    resp = await client.post(
+                        f"{settings.remote_api_url}/kiosk/heartbeat",
+                        headers={"X-Kiosk-Token": token},
+                        timeout=10,
+                    )
+                    if resp.status_code not in (200, 204):
+                        print(f"[heartbeat] unexpected status {resp.status_code}")
+                except Exception as e:
+                    print(f"[heartbeat] failed: {e}")
+            await asyncio.sleep(_HEARTBEAT_INTERVAL_SEC)

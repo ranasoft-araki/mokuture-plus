@@ -122,7 +122,7 @@ async def get_reseller_stats(
         reception_count = (await db.execute(
             select(func.count()).select_from(ReceptionLog).where(ReceptionLog.tenant_id.in_(customer_ids))
         )).scalar()
-        online_cutoff = datetime.utcnow() - timedelta(minutes=5)
+        online_cutoff = datetime.utcnow() - timedelta(minutes=3)
         online_device_count = (await db.execute(
             select(func.count()).select_from(Device).where(
                 Device.tenant_id.in_(customer_ids),
@@ -351,10 +351,10 @@ async def list_reseller_devices(
     if q:
         stmt = stmt.where(Device.name.ilike(f"%{q}%"))
     if status == "online":
-        cutoff = datetime.utcnow() - timedelta(minutes=5)
+        cutoff = datetime.utcnow() - timedelta(minutes=3)
         stmt = stmt.where(Device.last_seen_at >= cutoff)
     elif status == "offline":
-        cutoff = datetime.utcnow() - timedelta(minutes=5)
+        cutoff = datetime.utcnow() - timedelta(minutes=3)
         stmt = stmt.where((Device.last_seen_at == None) | (Device.last_seen_at < cutoff))
     stmt = stmt.order_by(Device.created_at.desc()).offset(offset).limit(limit)
     result = await db.execute(stmt)

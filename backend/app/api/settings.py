@@ -181,7 +181,7 @@ async def get_tenant_stats(
 ):
     tid = user.tenant_id
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    online_threshold = now - timedelta(minutes=5)
+    online_threshold = now - timedelta(minutes=3)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
 

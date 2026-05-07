@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from config import settings
 from gpio import LockerController, PirSensor
 from state import get_device_name, get_device_token, is_registered, save_device_state
-from sync import find_media, sync_loop
+from sync import find_media, heartbeat_loop, sync_loop
 from updater import updater, read_version
 
 locker_ctrl = LockerController(settings.locker_pins)
@@ -28,9 +28,11 @@ async def lifespan(app: FastAPI):
     settings.media_dir.mkdir(parents=True, exist_ok=True)
     task = asyncio.create_task(sync_loop())
     update_task = asyncio.create_task(updater.run())
+    heartbeat_task = asyncio.create_task(heartbeat_loop())
     yield
     task.cancel()
     update_task.cancel()
+    heartbeat_task.cancel()
     locker_ctrl.close()
     pir.close()
 

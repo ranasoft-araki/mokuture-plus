@@ -50,7 +50,7 @@ export default function ResellerDevicesPage() {
 
   const isOnline = (lastSeen: string | null) => {
     if (!lastSeen) return false;
-    return Date.now() - new Date(lastSeen).getTime() < 5 * 60 * 1000;
+    return Date.now() - new Date(lastSeen).getTime() < 3 * 60 * 1000;
   };
 
   return (
