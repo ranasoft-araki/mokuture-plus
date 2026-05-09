@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ResellerReceptionItem, OperatorTenant } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { MkCard, MkSectionTitle } from "@/components/AdminShell";
+import { ConfirmModal } from "@/components/ConfirmModal";
 
 const LIMIT = 100;
 
@@ -263,6 +264,7 @@ export default function ResellerReceptionPage() {
   const [selectedLog, setSelectedLog] = useState<ResellerReceptionItem | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [modal, setModal] = useState<{ msg: string; confirmLabel?: string; action: () => Promise<void> } | null>(null);
 
   const [filterTenant, setFilterTenant] = useState("");
   const [filterQ, setFilterQ] = useState("");
@@ -359,29 +361,36 @@ export default function ResellerReceptionPage() {
   const allSelected = filteredLogs.length > 0 && filteredLogs.every((r) => selectedIds.has(r.id));
   const someSelected = filteredLogs.some((r) => selectedIds.has(r.id));
 
-  const handleBulkStateUpdate = async (newState: string) => {
+  const handleBulkStateUpdate = (newState: string) => {
     const label = newState === "notified" ? "通知済み" : "完了";
-    if (!window.confirm(`${selectedIds.size}件を${label}に変更しますか？`)) return;
-    const ids = [...selectedIds];
-    await Promise.all(ids.map(id =>
-      api.updateReceptionLog(token, id, { state: newState }).catch(() => {})
-    ));
-    setLogs(prev => prev.map(l => selectedIds.has(l.id) ? { ...l, state: newState } : l));
-    setSelectedIds(new Set());
+    setModal({
+      msg: `${selectedIds.size}件を${label}に変更しますか？`,
+      confirmLabel: "変更する",
+      action: async () => {
+        const ids = [...selectedIds];
+        await Promise.all(ids.map(id =>
+          api.updateReceptionLog(token, id, { state: newState }).catch(() => {})
+        ));
+        setLogs(prev => prev.map(l => selectedIds.has(l.id) ? { ...l, state: newState } : l));
+        setSelectedIds(new Set());
+      },
+    });
   };
 
   const handleBulkDelete = () => {
-    if (!window.confirm(`${selectedIds.size}件の受付ログを削除しますか？`)) return;
-    setBulkDeleting(true);
-    api.bulkDeleteReceptionLogs(token, [...selectedIds])
-      .then(({ deleted }) => {
-        if (deleted > 0) {
-          setLogs((prev) => prev.filter((l) => !selectedIds.has(l.id)));
+    setModal({
+      msg: `${selectedIds.size}件の受付ログを削除しますか？`,
+      action: async () => {
+        setBulkDeleting(true);
+        try {
+          const { deleted } = await api.bulkDeleteReceptionLogs(token, [...selectedIds]);
+          if (deleted > 0) setLogs((prev) => prev.filter((l) => !selectedIds.has(l.id)));
+          setSelectedIds(new Set());
+        } finally {
+          setBulkDeleting(false);
         }
-        setSelectedIds(new Set());
-      })
-      .catch(() => {})
-      .finally(() => setBulkDeleting(false));
+      },
+    });
   };
 
   const toggleSelectAll = () => {
@@ -411,6 +420,14 @@ export default function ResellerReceptionPage() {
 
   return (
     <div style={{ padding: "28px 32px" }}>
+      {modal && (
+        <ConfirmModal
+          message={modal.msg}
+          confirmLabel={modal.confirmLabel}
+          onConfirm={async () => { const action = modal.action; setModal(null); await action(); }}
+          onCancel={() => setModal(null)}
+        />
+      )}
       {selectedLog && (
         <ResellerReceptionDetailModal log={selectedLog} token={token} onClose={() => setSelectedLog(null)} onNotesUpdate={handleNotesUpdate} />
       )}

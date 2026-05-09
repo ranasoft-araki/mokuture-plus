@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
+import { ConfirmModal } from "@/components/ConfirmModal";
 import { api, type MeetingRoom, type MeetingRoomCreate } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 
@@ -227,6 +228,7 @@ export default function MeetingRoomsPage() {
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [modal, setModal] = useState<{ msg: string; action: () => Promise<void> } | null>(null);
 
   useEffect(() => {
     const token = getAccessToken();
@@ -273,19 +275,23 @@ export default function MeetingRoomsPage() {
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm("この会議室を削除しますか？")) return;
-    const token = getAccessToken();
-    if (!token) return;
-    setDeletingId(id);
-    try {
-      await api.deleteMeetingRoom(token, id);
-      setRooms((prev) => prev.filter((r) => r.id !== id));
-    } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : "削除に失敗しました");
-    } finally {
-      setDeletingId(null);
-    }
+  function handleDelete(id: string) {
+    setModal({
+      msg: "この会議室を削除しますか？",
+      action: async () => {
+        const token = getAccessToken();
+        if (!token) return;
+        setDeletingId(id);
+        try {
+          await api.deleteMeetingRoom(token, id);
+          setRooms((prev) => prev.filter((r) => r.id !== id));
+        } catch (e: unknown) {
+          setError(e instanceof Error ? e.message : "削除に失敗しました");
+        } finally {
+          setDeletingId(null);
+        }
+      },
+    });
   }
 
   async function handleToggle(id: string, active: boolean) {
@@ -296,7 +302,7 @@ export default function MeetingRoomsPage() {
       const updated = await api.updateMeetingRoom(token, id, { is_active: active });
       setRooms((prev) => prev.map((r) => r.id === updated.id ? updated : r));
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : "更新に失敗しました");
+      setError(e instanceof Error ? e.message : "更新に失敗しました");
     } finally {
       setTogglingId(null);
     }
@@ -399,6 +405,13 @@ export default function MeetingRoomsPage() {
       </div>
 
       {/* Edit modal */}
+      {modal && (
+        <ConfirmModal
+          message={modal.msg}
+          onConfirm={async () => { const action = modal.action; setModal(null); await action(); }}
+          onCancel={() => setModal(null)}
+        />
+      )}
       {editRoom && (
         <div
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}

@@ -5,20 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { api, type Device } from "@/lib/api";
 import { clearTokens, getAccessToken } from "@/lib/auth";
 import { AdminShell, MkBtn, MkCard, MkPill } from "@/components/AdminShell";
-
-function ConfirmDialog({ message, onConfirm, onCancel }: { message: string; onConfirm: () => void; onCancel: () => void }) {
-  return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ background: "#fffefb", borderRadius: 12, padding: 28, maxWidth: 400, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
-        <p style={{ fontSize: 14, color: "#2d2a24", marginBottom: 20 }}>{message}</p>
-        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-          <button onClick={onCancel} style={{ padding: "8px 16px", borderRadius: 7, background: "#f4f1ea", border: "1px solid #d8d3c7", color: "#6b6559", cursor: "pointer", fontSize: 13 }}>キャンセル</button>
-          <button onClick={onConfirm} style={{ padding: "8px 16px", borderRadius: 7, background: "#a84238", border: "none", color: "#fffefb", cursor: "pointer", fontSize: 13, fontWeight: 500 }}>削除</button>
-        </div>
-      </div>
-    </div>
-  );
-}
+import { ConfirmModal } from "@/components/ConfirmModal";
 
 export default function AdminKioskPage() {
   const params = useParams<{ tenant: string }>();
@@ -44,6 +31,7 @@ export default function AdminKioskPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [regenPin, setRegenPin] = useState<Record<string, { pin_code: string; expires_minutes: number; copiedPin: boolean }>>({});
   const [regenPinLoading, setRegenPinLoading] = useState<string | null>(null);
+  const [modal, setModal] = useState<{ msg: string; confirmLabel?: string; action: () => Promise<void> } | null>(null);
 
   const loadDevices = useCallback(async (token: string) => {
     try {
@@ -117,21 +105,26 @@ export default function AdminKioskPage() {
     }
   }
 
-  async function handleForcePush() {
-    if (!window.confirm("すべてのデバイスに強制配信します。キオスクは次の待機画面で自動更新されます。続けますか？")) return;
-    const token = getAccessToken();
-    if (!token) { router.push("/login"); return; }
-    setForcePushing(true);
-    setForcePushMsg("");
-    try {
-      await api.forceKioskUpdate(token);
-      setForcePushMsg("強制配信を設定しました。デバイスは次回の待機状態で更新されます。");
-      setTimeout(() => setForcePushMsg(""), 6000);
-    } catch (err: unknown) {
-      setForcePushMsg(err instanceof Error ? err.message : "強制配信に失敗しました");
-    } finally {
-      setForcePushing(false);
-    }
+  function handleForcePush() {
+    setModal({
+      msg: "すべてのデバイスに強制配信します。キオスクは次の待機画面で自動更新されます。続けますか？",
+      confirmLabel: "配信する",
+      action: async () => {
+        const token = getAccessToken();
+        if (!token) { router.push("/login"); return; }
+        setForcePushing(true);
+        setForcePushMsg("");
+        try {
+          await api.forceKioskUpdate(token);
+          setForcePushMsg("強制配信を設定しました。デバイスは次回の待機状態で更新されます。");
+          setTimeout(() => setForcePushMsg(""), 6000);
+        } catch (err: unknown) {
+          setForcePushMsg(err instanceof Error ? err.message : "強制配信に失敗しました");
+        } finally {
+          setForcePushing(false);
+        }
+      },
+    });
   }
 
   async function handleSaveDeviceName(deviceId: string) {
@@ -608,10 +601,18 @@ export default function AdminKioskPage() {
         </ol>
       </div>
       {confirmTarget && (
-        <ConfirmDialog
+        <ConfirmModal
           message={`「${confirmTarget.name}」を削除すると、そのキオスク端末は使用できなくなります。続けますか？`}
           onConfirm={doDelete}
           onCancel={() => setConfirmTarget(null)}
+        />
+      )}
+      {modal && (
+        <ConfirmModal
+          message={modal.msg}
+          confirmLabel={modal.confirmLabel}
+          onConfirm={async () => { const action = modal.action; setModal(null); await action(); }}
+          onCancel={() => setModal(null)}
         />
       )}
     </AdminShell>

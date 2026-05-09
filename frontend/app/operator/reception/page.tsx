@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { api, OperatorReceptionItem, OperatorTenant } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { MkCard, MkSectionTitle } from "@/components/AdminShell";
+import { ConfirmModal } from "@/components/ConfirmModal";
 
 const LIMIT = 100;
 
@@ -267,6 +268,8 @@ export default function OperatorReceptionPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [modal, setModal] = useState<{ msg: string; confirmLabel?: string; action: () => Promise<void> } | null>(null);
+  const [exportError, setExportError] = useState("");
 
   const [filterReseller, setFilterReseller] = useState("");
   const [filterTenant, setFilterTenant] = useState("");
@@ -446,30 +449,37 @@ export default function OperatorReceptionPage() {
   };
 
   const handleBulkDelete = () => {
-    if (!window.confirm(`${selectedIds.size}件の受付ログを削除しますか？`)) return;
-    setBulkDeleting(true);
-    api.bulkDeleteOperatorReception(token, [...selectedIds])
-      .then(({ deleted }) => {
-        if (deleted > 0) {
-          setLogs((prev) => prev.filter((l) => !selectedIds.has(l.id)));
+    setModal({
+      msg: `${selectedIds.size}件の受付ログを削除しますか？`,
+      action: async () => {
+        setBulkDeleting(true);
+        try {
+          const { deleted } = await api.bulkDeleteOperatorReception(token, [...selectedIds]);
+          if (deleted > 0) setLogs((prev) => prev.filter((l) => !selectedIds.has(l.id)));
+          setSelectedIds(new Set());
+        } finally {
+          setBulkDeleting(false);
         }
-        setSelectedIds(new Set());
-      })
-      .catch(() => {})
-      .finally(() => setBulkDeleting(false));
+      },
+    });
   };
 
-  const handleBulkStateUpdate = async (newState: string) => {
+  const handleBulkStateUpdate = (newState: string) => {
     const label = newState === "notified" ? "通知済み" : "完了";
-    if (!window.confirm(`${selectedIds.size}件を${label}に変更しますか？`)) return;
-    setBulkUpdating(true);
-    const ids = [...selectedIds];
-    await Promise.all(ids.map((id) =>
-      api.updateOperatorReceptionLog(token, id, { state: newState }).catch(() => {})
-    ));
-    setLogs((prev) => prev.map((l) => selectedIds.has(l.id) ? { ...l, state: newState } : l));
-    setSelectedIds(new Set());
-    setBulkUpdating(false);
+    setModal({
+      msg: `${selectedIds.size}件を${label}に変更しますか？`,
+      confirmLabel: "変更する",
+      action: async () => {
+        setBulkUpdating(true);
+        const ids = [...selectedIds];
+        await Promise.all(ids.map((id) =>
+          api.updateOperatorReceptionLog(token, id, { state: newState }).catch(() => {})
+        ));
+        setLogs((prev) => prev.map((l) => selectedIds.has(l.id) ? { ...l, state: newState } : l));
+        setSelectedIds(new Set());
+        setBulkUpdating(false);
+      },
+    });
   };
 
   const handleNotesUpdate = (id: string, staff_notes: string | null) => {
@@ -480,8 +490,22 @@ export default function OperatorReceptionPage() {
   return (
     <div style={{ padding: "28px 32px" }}>
       <style>{`@keyframes mk-pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
+      {modal && (
+        <ConfirmModal
+          message={modal.msg}
+          confirmLabel={modal.confirmLabel}
+          onConfirm={async () => { const action = modal.action; setModal(null); await action(); }}
+          onCancel={() => setModal(null)}
+        />
+      )}
       {selectedLog && (
         <OperatorReceptionDetailModal log={selectedLog} token={token} onClose={() => setSelectedLog(null)} onNotesUpdate={handleNotesUpdate} />
+      )}
+      {exportError && (
+        <div style={{ marginBottom: 12, padding: "8px 14px", background: "#f6e0dc", border: "1px solid #a84238", borderRadius: 7, color: "#a84238", fontSize: 13, display: "flex", justifyContent: "space-between" }}>
+          {exportError}
+          <button onClick={() => setExportError("")} style={{ background: "none", border: "none", cursor: "pointer", color: "#a84238" }}>×</button>
+        </div>
       )}
 
       <div style={{ display: "flex", alignItems: "center", marginBottom: 24, gap: 12 }}>
@@ -504,7 +528,7 @@ export default function OperatorReceptionPage() {
               a.click();
               URL.revokeObjectURL(url);
             } catch {
-              alert("エクスポートに失敗しました");
+              setExportError("エクスポートに失敗しました");
             }
           }}
           style={{ marginLeft: "auto", height: 34, padding: "0 16px", border: "1px solid #efece5", borderRadius: 6, fontSize: 12, cursor: "pointer", background: "#faf8f4", color: "#6b6559" }}

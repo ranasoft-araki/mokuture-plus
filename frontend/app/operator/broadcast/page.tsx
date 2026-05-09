@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import { api, OperatorTenant } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { MkCard, MkBtn, MkSectionTitle } from "@/components/AdminShell";
+import { ConfirmModal } from "@/components/ConfirmModal";
 
 const inputStyle: React.CSSProperties = {
   height: 34,
@@ -168,22 +169,28 @@ export default function OperatorBroadcastPage() {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ updated_tenants: number; message: string } | null>(null);
   const [error, setError] = useState("");
+  const [confirmModal, setConfirmModal] = useState<{ msg: string; action: () => Promise<void> } | null>(null);
 
   const token = getAccessToken() ?? "";
 
-  const handleSend = async (e: React.FormEvent) => {
+  const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!confirm(`「${message}」を${allTenants ? "全テナント" : `${selectedIds.length} テナント`}に緊急配信しますか？`)) return;
-    setSending(true); setError(""); setResult(null);
-    try {
-      const r = await api.emergencyBroadcast(token, message, allTenants ? undefined : selectedIds);
-      setResult(r);
-      setMessage("");
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "エラーが発生しました");
-    } finally {
-      setSending(false);
-    }
+    const target = allTenants ? "全テナント" : `${selectedIds.length} テナント`;
+    setConfirmModal({
+      msg: `「${message}」を${target}に緊急配信しますか？`,
+      action: async () => {
+        setSending(true); setError(""); setResult(null);
+        try {
+          const r = await api.emergencyBroadcast(token, message, allTenants ? undefined : selectedIds);
+          setResult(r);
+          setMessage("");
+        } catch (err: unknown) {
+          setError(err instanceof Error ? err.message : "エラーが発生しました");
+        } finally {
+          setSending(false);
+        }
+      },
+    });
   };
 
   const handleModalConfirm = (ids: string[]) => {
@@ -287,6 +294,14 @@ export default function OperatorBroadcastPage() {
           selectedIds={selectedIds}
           onConfirm={handleModalConfirm}
           onClose={() => setModalOpen(false)}
+        />
+      )}
+      {confirmModal && (
+        <ConfirmModal
+          message={confirmModal.msg}
+          confirmLabel="配信する"
+          onConfirm={async () => { const action = confirmModal.action; setConfirmModal(null); await action(); }}
+          onCancel={() => setConfirmModal(null)}
         />
       )}
     </div>

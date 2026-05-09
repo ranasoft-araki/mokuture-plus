@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import { api, OperatorUser, OperatorTenant } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { MkCard, MkSectionTitle, MkPill } from "@/components/AdminShell";
+import { ConfirmModal } from "@/components/ConfirmModal";
 
 const ROLE_LABELS: Record<string, string> = {
   operator: "運営", reseller: "代理店", admin: "管理者", staff: "スタッフ", kiosk: "キオスク",
@@ -71,6 +72,8 @@ export default function OperatorUsersPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [modal, setModal] = useState<{ msg: string; action: () => Promise<void> } | null>(null);
 
   const token = getAccessToken() ?? "";
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -86,17 +89,21 @@ export default function OperatorUsersPage() {
       .finally(() => setLoading(false));
   };
 
-  const handleDeleteUser = async (userId: string) => {
-    if (!window.confirm("このユーザーを削除しますか？")) return;
-    setDeletingId(userId);
-    try {
-      await api.deleteOperatorUser(token, userId);
-      setUsers((prev) => prev.filter((u) => u.id !== userId));
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "削除に失敗しました");
-    } finally {
-      setDeletingId(null);
-    }
+  const handleDeleteUser = (userId: string) => {
+    setModal({
+      msg: "このユーザーを削除しますか？",
+      action: async () => {
+        setDeletingId(userId);
+        try {
+          await api.deleteOperatorUser(token, userId);
+          setUsers((prev) => prev.filter((u) => u.id !== userId));
+        } catch (err: unknown) {
+          setActionError(err instanceof Error ? err.message : "削除に失敗しました");
+        } finally {
+          setDeletingId(null);
+        }
+      },
+    });
   };
 
   const handleRoleEdit = async (userId: string, newRole: string) => {
@@ -104,7 +111,7 @@ export default function OperatorUsersPage() {
       const updated = await api.updateOperatorUserRole(token, userId, newRole);
       setUsers((prev) => prev.map((u) => u.id === userId ? updated : u));
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "ロール変更に失敗しました");
+      setActionError(err instanceof Error ? err.message : "ロール変更に失敗しました");
     }
   };
 
@@ -195,6 +202,19 @@ export default function OperatorUsersPage() {
 
   return (
     <div style={{ padding: "28px 32px" }}>
+      {modal && (
+        <ConfirmModal
+          message={modal.msg}
+          onConfirm={async () => { const action = modal.action; setModal(null); await action(); }}
+          onCancel={() => setModal(null)}
+        />
+      )}
+      {actionError && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#f6e0dc", border: "1px solid #a84238", color: "#a84238", fontSize: 13, display: "flex", justifyContent: "space-between" }}>
+          {actionError}
+          <button onClick={() => setActionError(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#a84238" }}>×</button>
+        </div>
+      )}
       <MkSectionTitle title="ユーザー管理" subtitle={`${total} ユーザー（全テナント）`} style={{ marginBottom: 24 }} />
 
       {/* Filter bar + Add button */}

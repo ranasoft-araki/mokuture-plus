@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AdminShell, MkBtn, MkSectionTitle } from "@/components/AdminShell";
+import { ConfirmModal } from "@/components/ConfirmModal";
 import { api, Locker } from "@/lib/api";
 import { getAccessToken, clearTokens } from "@/lib/auth";
 
@@ -167,6 +168,7 @@ export default function AdminLockerPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Create form state
+  const [modal, setModal] = useState<{ msg: string; action: () => Promise<void> } | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formName, setFormName] = useState("");
   const [formGpioPin, setFormGpioPin] = useState("");
@@ -241,16 +243,16 @@ export default function AdminLockerPage() {
     }
   }
 
-  async function handleDelete(lockerId: string) {
-    if (!confirm("このロッカーを削除しますか？")) return;
-    const token = getAccessToken();
-    if (!token) return;
-    try {
-      await api.deleteLocker(token, lockerId);
-      setLockers((prev) => prev.filter((l) => l.id !== lockerId));
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "削除に失敗しました");
-    }
+  function handleDelete(lockerId: string) {
+    setModal({
+      msg: "このロッカーを削除しますか？",
+      action: async () => {
+        const token = getAccessToken();
+        if (!token) return;
+        await api.deleteLocker(token, lockerId);
+        setLockers((prev) => prev.filter((l) => l.id !== lockerId));
+      },
+    });
   }
 
   if (loading) {
@@ -264,6 +266,18 @@ export default function AdminLockerPage() {
   }
 
   return (
+    <>
+    {modal && (
+      <ConfirmModal
+        message={modal.msg}
+        onConfirm={async () => {
+          const action = modal.action;
+          setModal(null);
+          try { await action(); } catch (err: unknown) { setError(err instanceof Error ? err.message : "削除に失敗しました"); }
+        }}
+        onCancel={() => setModal(null)}
+      />
+    )}
     <AdminShell
       active="locker"
       title="ロッカー管理"
@@ -403,5 +417,6 @@ export default function AdminLockerPage() {
         </div>
       )}
     </AdminShell>
+    </>
   );
 }

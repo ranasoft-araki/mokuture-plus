@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, OperatorTenant } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { MkCard, MkBtn, MkSectionTitle } from "@/components/AdminShell";
+import { ConfirmModal } from "@/components/ConfirmModal";
 
 // ── Dark operator theme constants ──────────────────────────────────────────
 const DARK_CARD: React.CSSProperties = {
@@ -113,6 +114,8 @@ export default function OperatorTenantsPage() {
 
   // delete error banner
   const [deleteError, setDeleteError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [modal, setModal] = useState<{ msg: string; confirmLabel?: string; action: () => Promise<void> } | null>(null);
 
   // panel height for animation
   const formPanelRef = useRef<HTMLDivElement>(null);
@@ -199,26 +202,35 @@ export default function OperatorTenantsPage() {
     }
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!window.confirm(`「${name}」を完全に削除しますか？この操作は取り消せません。`)) return;
-    setDeleteError("");
-    try {
-      await api.deleteOperatorTenant(token, id);
-      setTenants((prev) => prev.filter((t) => t.id !== id));
-    } catch (err: unknown) {
-      setDeleteError(err instanceof Error ? err.message : "削除に失敗しました");
-    }
+  const handleDelete = (id: string, name: string) => {
+    setModal({
+      msg: `「${name}」を完全に削除しますか？この操作は取り消せません。`,
+      action: async () => {
+        setDeleteError("");
+        try {
+          await api.deleteOperatorTenant(token, id);
+          setTenants((prev) => prev.filter((t) => t.id !== id));
+        } catch (err: unknown) {
+          setDeleteError(err instanceof Error ? err.message : "削除に失敗しました");
+        }
+      },
+    });
   };
 
-  const handleSuspend = async (tenant: OperatorTenant) => {
+  const handleSuspend = (tenant: OperatorTenant) => {
     const action = tenant.is_suspended ? "再開" : "停止";
-    if (!confirm(`テナント「${tenant.name}」を${action}しますか？`)) return;
-    try {
-      await api.suspendTenant(token, tenant.id, !tenant.is_suspended);
-      await load(page);
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "操作に失敗しました");
-    }
+    setModal({
+      msg: `テナント「${tenant.name}」を${action}しますか？`,
+      confirmLabel: `${action}する`,
+      action: async () => {
+        try {
+          await api.suspendTenant(token, tenant.id, !tenant.is_suspended);
+          await load(page);
+        } catch (err: unknown) {
+          setActionError(err instanceof Error ? err.message : "操作に失敗しました");
+        }
+      },
+    });
   };
 
   const handlePageChange = (newPage: number) => {
@@ -226,20 +238,20 @@ export default function OperatorTenantsPage() {
     load(newPage);
   };
 
-  const handleProxyLogin = async (tenant: OperatorTenant) => {
-    if (
-      !confirm(
-        `「${tenant.name}」の管理画面に代理ログインします。新しいタブで開きます。続行しますか？`
-      )
-    )
-      return;
-    try {
-      const { access_token, tenant_slug } = await api.proxyLoginAsTenant(token, tenant.id);
-      localStorage.setItem("mk_proxy_access", access_token);
-      window.open(`/${tenant_slug}/admin?proxy=mk_proxy_access`, "_blank");
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "代理ログインに失敗しました");
-    }
+  const handleProxyLogin = (tenant: OperatorTenant) => {
+    setModal({
+      msg: `「${tenant.name}」の管理画面に代理ログインします。新しいタブで開きます。続行しますか？`,
+      confirmLabel: "代理ログイン",
+      action: async () => {
+        try {
+          const { access_token, tenant_slug } = await api.proxyLoginAsTenant(token, tenant.id);
+          localStorage.setItem("mk_proxy_access", access_token);
+          window.open(`/${tenant_slug}/admin?proxy=mk_proxy_access`, "_blank");
+        } catch (err: unknown) {
+          setActionError(err instanceof Error ? err.message : "代理ログインに失敗しました");
+        }
+      },
+    });
   };
 
   const toggleNotes = (id: string, currentNotes: string | null) => {
@@ -270,7 +282,7 @@ export default function OperatorTenantsPage() {
         2000
       );
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "保存に失敗しました");
+      setActionError(err instanceof Error ? err.message : "保存に失敗しました");
     }
   };
 
@@ -316,6 +328,20 @@ export default function OperatorTenantsPage() {
 
   return (
     <div style={{ padding: "28px 32px" }}>
+      {modal && (
+        <ConfirmModal
+          message={modal.msg}
+          confirmLabel={modal.confirmLabel}
+          onConfirm={async () => { const action = modal.action; setModal(null); await action(); }}
+          onCancel={() => setModal(null)}
+        />
+      )}
+      {actionError && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#f6e0dc", border: "1px solid #a84238", color: "#a84238", fontSize: 13, display: "flex", justifyContent: "space-between" }}>
+          {actionError}
+          <button onClick={() => setActionError("")} style={{ background: "none", border: "none", cursor: "pointer", color: "#a84238" }}>×</button>
+        </div>
+      )}
       {/* ── Toolbar ──────────────────────────────────────────────────────── */}
       <div
         style={{

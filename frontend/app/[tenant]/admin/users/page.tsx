@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
+import { ConfirmModal } from "@/components/ConfirmModal";
 import { api, UserListItem } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 
@@ -29,6 +30,7 @@ export default function AdminUsersPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [formSaving, setFormSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [modal, setModal] = useState<{ msg: string; action: () => Promise<void> } | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [pwResetId, setPwResetId] = useState<string | null>(null);
   const [pwResetValue, setPwResetValue] = useState("");
@@ -74,19 +76,23 @@ export default function AdminUsersPage() {
     }
   }
 
-  async function handleDelete(userId: string) {
-    if (!confirm("このユーザーを削除しますか？")) return;
-    const token = getAccessToken();
-    if (!token) return;
-    setDeletingId(userId);
-    try {
-      await api.deleteUser(token, userId);
-      setUsers((prev) => prev.filter((u) => u.id !== userId));
-    } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : "削除に失敗しました");
-    } finally {
-      setDeletingId(null);
-    }
+  function handleDelete(userId: string) {
+    setModal({
+      msg: "このユーザーを削除しますか？",
+      action: async () => {
+        const token = getAccessToken();
+        if (!token) return;
+        setDeletingId(userId);
+        try {
+          await api.deleteUser(token, userId);
+          setUsers((prev) => prev.filter((u) => u.id !== userId));
+        } catch (e: unknown) {
+          setError(e instanceof Error ? e.message : "削除に失敗しました");
+        } finally {
+          setDeletingId(null);
+        }
+      },
+    });
   }
 
   async function handleRoleChange(userId: string, role: string) {
@@ -96,7 +102,7 @@ export default function AdminUsersPage() {
       const updated = await api.updateUserRole(token, userId, role);
       setUsers((prev) => prev.map((u) => u.id === userId ? updated : u));
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : "ロール変更に失敗しました");
+      setError(e instanceof Error ? e.message : "ロール変更に失敗しました");
     }
   }
 
@@ -126,6 +132,14 @@ export default function AdminUsersPage() {
   }
 
   return (
+    <>
+    {modal && (
+      <ConfirmModal
+        message={modal.msg}
+        onConfirm={async () => { const action = modal.action; setModal(null); await action(); }}
+        onCancel={() => setModal(null)}
+      />
+    )}
     <AdminShell
       active="users"
       title="ユーザー管理"
@@ -343,5 +357,6 @@ export default function AdminUsersPage() {
         </MkCard>
       </div>
     </AdminShell>
+    </>
   );
 }

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, OperatorTenant } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { MkCard, MkBtn, MkSectionTitle } from "@/components/AdminShell";
+import { ConfirmModal } from "@/components/ConfirmModal";
 
 const INPUT_STYLE: React.CSSProperties = { height: 34, border: "1px solid #efece5", borderRadius: 6, fontSize: 13, padding: "0 10px", background: "#fffefb", color: "#1d1a15" };
 
@@ -15,6 +16,7 @@ export default function ResellerCustomersPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [q, setQ] = useState("");
+  const [modal, setModal] = useState<{ msg: string; confirmLabel?: string; action: () => Promise<void> } | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const token = getAccessToken() ?? "";
 
@@ -50,23 +52,40 @@ export default function ResellerCustomersPage() {
     }
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`顧客「${name}」を削除しますか？`)) return;
-    await api.deleteResellerCustomer(token, id);
-    await load(q);
+  const handleDelete = (id: string, name: string) => {
+    setModal({
+      msg: `顧客「${name}」を削除しますか？`,
+      action: async () => {
+        await api.deleteResellerCustomer(token, id);
+        await load(q);
+      },
+    });
   };
 
-  const handleProxyLogin = async (customer: OperatorTenant) => {
-    if (!window.confirm(`「${customer.name}」の管理画面に代理ログインします。新しいタブで開きます。続行しますか？`)) return;
-    const result = await api.proxyLoginAsCustomer(token, customer.id);
-    localStorage.setItem("mk_proxy_access", result.access_token);
-    localStorage.setItem("mk_proxy_refresh", result.refresh_token);
-    localStorage.setItem("mk_proxy_tenant", result.tenant_slug);
-    window.open(`/${result.tenant_slug}/admin`, "_blank");
+  const handleProxyLogin = (customer: OperatorTenant) => {
+    setModal({
+      msg: `「${customer.name}」の管理画面に代理ログインします。新しいタブで開きます。続行しますか？`,
+      confirmLabel: "代理ログイン",
+      action: async () => {
+        const result = await api.proxyLoginAsCustomer(token, customer.id);
+        localStorage.setItem("mk_proxy_access", result.access_token);
+        localStorage.setItem("mk_proxy_refresh", result.refresh_token);
+        localStorage.setItem("mk_proxy_tenant", result.tenant_slug);
+        window.open(`/${result.tenant_slug}/admin`, "_blank");
+      },
+    });
   };
 
   return (
     <div style={{ padding: "28px 32px" }}>
+      {modal && (
+        <ConfirmModal
+          message={modal.msg}
+          confirmLabel={modal.confirmLabel}
+          onConfirm={async () => { const action = modal.action; setModal(null); await action(); }}
+          onCancel={() => setModal(null)}
+        />
+      )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <MkSectionTitle title="顧客管理" subtitle={`${customers.length} 顧客テナント`} />
         <MkBtn variant="primary" size="sm" onClick={() => { setShowForm(!showForm); setError(""); }}>＋ 新規顧客テナント追加</MkBtn>

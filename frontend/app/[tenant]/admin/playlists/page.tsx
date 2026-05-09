@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { api, type MediaItem, type Playlist } from "@/lib/api";
 import { clearTokens, getAccessToken } from "@/lib/auth";
 import { AdminShell, MkBtn, MkCard } from "@/components/AdminShell";
+import { ConfirmModal } from "@/components/ConfirmModal";
 
 interface DraftItem {
   media_id: string;
@@ -47,6 +48,7 @@ export default function AdminPlaylistsPage() {
   const [editViewMode, setEditViewMode] = useState<EditViewMode>("list");
   const [pxPerSec, setPxPerSec] = useState(10);
   const [tlDrag, setTlDrag] = useState<TimelineDragState | null>(null);
+  const [modal, setModal] = useState<{ msg: string; action: () => Promise<void> } | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const previewFsVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -287,17 +289,21 @@ export default function AdminPlaylistsPage() {
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm("このプレイリストを削除しますか？")) return;
-    const token = getAccessToken();
-    if (!token) return;
-    try {
-      await api.deletePlaylist(token, id);
-      setPlaylists((c) => c.filter((p) => p.id !== id));
-      if (selectedId === id) { setSelectedId(null); setDraftItems([]); }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "削除に失敗しました");
-    }
+  function handleDelete(id: string) {
+    setModal({
+      msg: "このプレイリストを削除しますか？",
+      action: async () => {
+        const token = getAccessToken();
+        if (!token) return;
+        try {
+          await api.deletePlaylist(token, id);
+          setPlaylists((c) => c.filter((p) => p.id !== id));
+          if (selectedId === id) { setSelectedId(null); setDraftItems([]); }
+        } catch (err: unknown) {
+          setError(err instanceof Error ? err.message : "削除に失敗しました");
+        }
+      },
+    });
   }
 
   const selectedPl = playlists.find((p) => p.id === selectedId) ?? null;
@@ -396,6 +402,14 @@ export default function AdminPlaylistsPage() {
   const previewItem = draftItems[previewIdx] ?? null;
 
   return (
+    <>
+    {modal && (
+      <ConfirmModal
+        message={modal.msg}
+        onConfirm={async () => { const action = modal.action; setModal(null); await action(); }}
+        onCancel={() => setModal(null)}
+      />
+    )}
     <AdminShell
       active="playlist"
       title={selectedPl ? selectedPl.name : "プレイリスト管理"}
@@ -1050,6 +1064,7 @@ export default function AdminPlaylistsPage() {
         </div>
       )}
     </AdminShell>
+    </>
   );
 }
 

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { api, type ReceptionLog } from "@/lib/api";
 import { getAccessToken, clearTokens } from "@/lib/auth";
 import { AdminShell, MkCard } from "@/components/AdminShell";
+import { ConfirmModal } from "@/components/ConfirmModal";
 
 type DateFilter = "today" | "week" | "month" | "all";
 type AgingLevel = "fresh" | "warn" | "alert" | "urgent";
@@ -312,6 +313,7 @@ export default function ReceptionLogsPage() {
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [modal, setModal] = useState<{ msg: string; confirmLabel?: string; action: () => Promise<void> } | null>(null);
   const [methodFilter, setMethodFilter] = useState("");
   const [stateFilter, setStateFilter] = useState("");
 
@@ -347,42 +349,48 @@ export default function ReceptionLogsPage() {
 
   const handleDeleteSingle = (e: React.MouseEvent, logId: string) => {
     e.stopPropagation();
-    if (!window.confirm("この受付ログを削除しますか？")) return;
-    api.deleteReceptionLog(token, logId)
-      .then(() => {
+    setModal({
+      msg: "この受付ログを削除しますか？",
+      action: async () => {
+        await api.deleteReceptionLog(token, logId);
         setLogs((prev) => prev.filter((l) => l.id !== logId));
         setSelectedIds((prev) => { const s = new Set(prev); s.delete(logId); return s; });
-      })
-      .catch(() => {});
+      },
+    });
   };
 
   const handleBulkDelete = () => {
-    if (!window.confirm(`${selectedIds.size}件の受付ログを削除しますか？`)) return;
-    setBulkDeleting(true);
-    api.bulkDeleteReceptionLogs(token, [...selectedIds])
-      .then(({ deleted }) => {
-        if (deleted > 0) {
-          setLogs((prev) => prev.filter((l) => !selectedIds.has(l.id)));
+    setModal({
+      msg: `${selectedIds.size}件の受付ログを削除しますか？`,
+      action: async () => {
+        setBulkDeleting(true);
+        try {
+          const { deleted } = await api.bulkDeleteReceptionLogs(token, [...selectedIds]);
+          if (deleted > 0) setLogs((prev) => prev.filter((l) => !selectedIds.has(l.id)));
+          setSelectedIds(new Set());
+        } finally {
+          setBulkDeleting(false);
         }
-        setSelectedIds(new Set());
-      })
-      .catch(() => {})
-      .finally(() => setBulkDeleting(false));
+      },
+    });
   };
 
-  const handleBulkStateUpdate = async (newState: string) => {
+  const handleBulkStateUpdate = (newState: string) => {
     const label = newState === "notified" ? "通知済み" : "完了";
-    if (!window.confirm(`${selectedIds.size}件を${label}に変更しますか？`)) return;
-    setBulkDeleting(true);
-    const ids = [...selectedIds];
-    await Promise.all(ids.map(id =>
-      api.updateReceptionLog(token, id, { state: newState }).catch(() => {})
-    ));
-    setLogs(prev => prev.map(l =>
-      selectedIds.has(l.id) ? { ...l, state: newState } : l
-    ));
-    setSelectedIds(new Set());
-    setBulkDeleting(false);
+    setModal({
+      msg: `${selectedIds.size}件を${label}に変更しますか？`,
+      confirmLabel: "変更する",
+      action: async () => {
+        setBulkDeleting(true);
+        const ids = [...selectedIds];
+        await Promise.all(ids.map(id =>
+          api.updateReceptionLog(token, id, { state: newState }).catch(() => {})
+        ));
+        setLogs(prev => prev.map(l => selectedIds.has(l.id) ? { ...l, state: newState } : l));
+        setSelectedIds(new Set());
+        setBulkDeleting(false);
+      },
+    });
   };
 
   const filtered = useMemo(() => {
@@ -458,6 +466,15 @@ export default function ReceptionLogsPage() {
   };
 
   return (
+    <>
+    {modal && (
+      <ConfirmModal
+        message={modal.msg}
+        confirmLabel={modal.confirmLabel}
+        onConfirm={async () => { const action = modal.action; setModal(null); await action(); }}
+        onCancel={() => setModal(null)}
+      />
+    )}
     <AdminShell
       active="reception"
       title="受付ログ"
@@ -751,6 +768,7 @@ export default function ReceptionLogsPage() {
         </div>
       )}
     </AdminShell>
+    </>
   );
 }
 

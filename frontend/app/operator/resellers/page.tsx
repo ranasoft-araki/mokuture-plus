@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { api, OperatorTenant } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
+import { ConfirmModal } from "@/components/ConfirmModal";
 
 export default function OperatorResellersPage() {
   const [resellers, setResellers] = useState<OperatorTenant[]>([]);
@@ -13,6 +14,7 @@ export default function OperatorResellersPage() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [deleteError, setDeleteError] = useState("");
+  const [modal, setModal] = useState<{ msg: string; action: () => Promise<void> } | null>(null);
 
   const token = getAccessToken() ?? "";
 
@@ -60,23 +62,30 @@ export default function OperatorResellersPage() {
     }
   };
 
-  const handleDeleteReseller = async (reseller: OperatorTenant) => {
-    if (!window.confirm(`「${reseller.name}」を削除しますか？この操作は取り消せません。`)) return;
-    setDeleteError("");
-    try {
-      await api.deleteReseller(token, reseller.id);
-      setResellers((prev) => prev.filter((r) => r.id !== reseller.id));
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        setDeleteError(err.message || "削除中にエラーが発生しました");
-      } else {
-        setDeleteError("削除中にエラーが発生しました");
-      }
-    }
+  const handleDeleteReseller = (reseller: OperatorTenant) => {
+    setModal({
+      msg: `「${reseller.name}」を削除しますか？この操作は取り消せません。`,
+      action: async () => {
+        setDeleteError("");
+        try {
+          await api.deleteReseller(token, reseller.id);
+          setResellers((prev) => prev.filter((r) => r.id !== reseller.id));
+        } catch (err: unknown) {
+          setDeleteError(err instanceof Error ? (err.message || "削除中にエラーが発生しました") : "削除中にエラーが発生しました");
+        }
+      },
+    });
   };
 
   return (
     <div style={{ padding: "28px 32px" }}>
+      {modal && (
+        <ConfirmModal
+          message={modal.msg}
+          onConfirm={async () => { const action = modal.action; setModal(null); await action(); }}
+          onCancel={() => setModal(null)}
+        />
+      )}
       {/* Delete error banner */}
       {deleteError && (
         <div style={{
