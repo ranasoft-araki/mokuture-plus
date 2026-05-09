@@ -718,11 +718,10 @@ export default function AppointmentsPage() {
     return () => window.removeEventListener("resize", check);
   }, []);
 
-  // Initial load
+  // Initial load (settings + rooms only — list is handled by the filter effect below)
   useEffect(() => {
     const token = getAccessToken();
     if (!token) return;
-    loadList(token);
     api.getTenantSettings(token).then((s: TenantSettings) => {
       if (s.staff_list)   setStaffList(s.staff_list.split(",").map(v => v.trim()).filter(Boolean));
       if (s.purpose_list) setPurposeList(s.purpose_list.split(",").map(v => v.trim()).filter(Boolean));
@@ -730,11 +729,19 @@ export default function AppointmentsPage() {
     api.listMeetingRooms(token).then(setRooms).catch(() => {});
   }, []);
 
-  // List reload on filter change
+  // List reload — cancelled flag prevents stale responses from overwriting newer state
   useEffect(() => {
     const token = getAccessToken();
     if (!token) return;
-    loadList(token);
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    const { from, to } = getDateRange(dateFilter);
+    api.listAppointments(token, { status: statusFilter !== "all" ? statusFilter : undefined, date_from: from, date_to: to })
+      .then(data  => { if (!cancelled) { setAppointments(data); setError(null); } })
+      .catch((e: Error) => { if (!cancelled) setError(e.message); })
+      .finally(()  => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [dateFilter, statusFilter, rangeFrom, rangeTo]);
 
   // Timeline data reload
@@ -754,11 +761,13 @@ export default function AppointmentsPage() {
     if (filter === "today") { return { from: todayStr, to: `${todayStr}T23:59:59` }; }
     if (filter === "week")  {
       const ws = getWeekStart(now);
-      return { from: dateToStr(ws), to: `${todayStr}T23:59:59` };
+      const we = new Date(ws); we.setDate(ws.getDate() + 6); // 月〜日
+      return { from: dateToStr(ws), to: `${dateToStr(we)}T23:59:59` };
     }
     if (filter === "month") {
       const ms = dateToStr(new Date(now.getFullYear(), now.getMonth(), 1));
-      return { from: ms, to: `${todayStr}T23:59:59` };
+      const me = dateToStr(new Date(now.getFullYear(), now.getMonth() + 1, 0)); // 月末
+      return { from: ms, to: `${me}T23:59:59` };
     }
     if (filter === "range") {
       return {
@@ -767,15 +776,6 @@ export default function AppointmentsPage() {
       };
     }
     return {};
-  }
-
-  function loadList(token: string) {
-    setLoading(true);
-    const { from, to } = getDateRange(dateFilter);
-    api.listAppointments(token, { status: statusFilter !== "all" ? statusFilter : undefined, date_from: from, date_to: to })
-      .then(data => { setAppointments(data); setError(null); })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false));
   }
 
   function resetForm() {
