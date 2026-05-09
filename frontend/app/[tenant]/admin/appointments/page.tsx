@@ -63,6 +63,10 @@ function fmtDateJP(d: Date) {
 function shiftDate(d: Date, days: number): Date {
   const r = new Date(d); r.setDate(r.getDate() + days); return r;
 }
+// ローカル時刻をタイムゾーンなしISO文字列に変換（バックエンドはnai ve datetimeを期待するため toISOString() 禁止）
+function localDtStr(d: Date): string {
+  return `${d.getFullYear()}-${padZ(d.getMonth()+1)}-${padZ(d.getDate())}T${padZ(d.getHours())}:${padZ(d.getMinutes())}:00`;
+}
 function getWeekStart(d: Date): Date {
   const r = new Date(d); r.setHours(0, 0, 0, 0);
   const dow = r.getDay();
@@ -796,12 +800,12 @@ export default function AppointmentsPage() {
     const newDt = new Date(timelineDate);
     newDt.setHours(h, m, 0, 0);
     const newRoom = rooms.find(r => r.id === newRoomId) ?? null;
-    const optimistic = { ...appt, scheduled_at: newDt.toISOString(), meeting_room_id: newRoomId, meeting_room: newRoom };
+    const optimistic = { ...appt, scheduled_at: localDtStr(newDt), meeting_room_id: newRoomId, meeting_room: newRoom };
     patchTimeline(apptId, optimistic);
     const token = getAccessToken();
     if (!token) return;
     try {
-      const updated = await api.updateAppointment(token, apptId, { scheduled_at: newDt.toISOString(), meeting_room_id: newRoomId });
+      const updated = await api.updateAppointment(token, apptId, { scheduled_at: localDtStr(newDt), meeting_room_id: newRoomId });
       patchTimeline(apptId, updated); patchList(apptId, updated);
     } catch { patchTimeline(apptId, appt); patchList(apptId, appt); alert("移動に失敗しました"); }
   }
@@ -827,12 +831,12 @@ export default function AppointmentsPage() {
     const orig = new Date(appt.scheduled_at);
     const newDt = new Date(newDay);
     newDt.setHours(orig.getHours(), orig.getMinutes(), 0, 0);
-    const optimistic = { ...appt, scheduled_at: newDt.toISOString() };
+    const optimistic = { ...appt, scheduled_at: localDtStr(newDt) };
     patchTimeline(apptId, optimistic);
     const token = getAccessToken();
     if (!token) return;
     try {
-      const updated = await api.updateAppointment(token, apptId, { scheduled_at: newDt.toISOString() });
+      const updated = await api.updateAppointment(token, apptId, { scheduled_at: localDtStr(newDt) });
       patchTimeline(apptId, updated); patchList(apptId, updated);
     } catch { patchTimeline(apptId, appt); patchList(apptId, appt); alert("移動に失敗しました"); }
   }
@@ -850,7 +854,7 @@ export default function AppointmentsPage() {
     if (!token) return;
     setFormSaving(true); setFormError(null);
     try {
-      const created = await api.createAppointment(token, { ...formData, scheduled_at: new Date(formData.scheduled_at).toISOString() });
+      const created = await api.createAppointment(token, formData);
       setAppointments(prev => [...prev, created].sort((a, b) => +new Date(a.scheduled_at) - +new Date(b.scheduled_at)));
       setTimelineAppts(prev => [...prev, created].sort((a, b) => +new Date(a.scheduled_at) - +new Date(b.scheduled_at)));
       setShowForm(false);
@@ -875,7 +879,7 @@ export default function AppointmentsPage() {
     if (!token || !editAppt) return;
     setEditSaving(true); setEditError(null);
     try {
-      const updated = await api.updateAppointment(token, editAppt.id, { ...editFormData, scheduled_at: new Date(editFormData.scheduled_at).toISOString() });
+      const updated = await api.updateAppointment(token, editAppt.id, editFormData);
       patchList(editAppt.id, updated); patchTimeline(editAppt.id, updated);
       setEditAppt(null);
     } catch (err: unknown) {
