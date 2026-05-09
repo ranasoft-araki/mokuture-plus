@@ -429,3 +429,4 @@ NEXT_PUBLIC_API_URL=http://localhost:8001/api/v1
 
 ## ルール
 - 修正を行ったら自動でデプロイまで行うこと
+- **JavaScriptダイアログ禁止**: `confirm()` / `alert()` / `prompt()` は使用しないこと。確認は独自モーダル、エラーはインライン表示またはトースト通知で実装すること。

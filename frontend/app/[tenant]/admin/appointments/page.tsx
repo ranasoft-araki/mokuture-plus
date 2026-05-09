@@ -697,8 +697,11 @@ export default function AppointmentsPage() {
   const printRef = useRef<HTMLDivElement>(null);
 
   // Edit / delete
-  const [deletingId,    setDeletingId]    = useState<string | null>(null);
-  const [editAppt,      setEditAppt]      = useState<VisitorAppointment | null>(null);
+  const [deletingId,       setDeletingId]       = useState<string | null>(null);
+  const [confirmDeleteId,  setConfirmDeleteId]  = useState<string | null>(null);
+  const [deleteError,      setDeleteError]      = useState<string | null>(null);
+  const [toastMsg,         setToastMsg]         = useState<string | null>(null);
+  const [editAppt,         setEditAppt]         = useState<VisitorAppointment | null>(null);
   const [editFormData,  setEditFormData]  = useState<AppointmentCreate>({ visitor_name: "", scheduled_at: "" });
   const [editSaving,    setEditSaving]    = useState(false);
   const [editError,     setEditError]     = useState<string | null>(null);
@@ -807,7 +810,7 @@ export default function AppointmentsPage() {
     try {
       const updated = await api.updateAppointment(token, apptId, { scheduled_at: localDtStr(newDt), meeting_room_id: newRoomId });
       patchTimeline(apptId, updated); patchList(apptId, updated);
-    } catch { patchTimeline(apptId, appt); patchList(apptId, appt); alert("移動に失敗しました"); }
+    } catch { patchTimeline(apptId, appt); patchList(apptId, appt); showToast("移動に失敗しました"); }
   }
 
   // ── DayView resize ──
@@ -821,7 +824,7 @@ export default function AppointmentsPage() {
     try {
       const updated = await api.updateAppointment(token, apptId, { duration_minutes: durationMin });
       patchTimeline(apptId, updated); patchList(apptId, updated);
-    } catch { patchTimeline(apptId, appt); patchList(apptId, appt); alert("リサイズに失敗しました"); }
+    } catch { patchTimeline(apptId, appt); patchList(apptId, appt); showToast("リサイズに失敗しました"); }
   }
 
   // ── Cross-day move (week / month drag-drop) ──
@@ -838,7 +841,12 @@ export default function AppointmentsPage() {
     try {
       const updated = await api.updateAppointment(token, apptId, { scheduled_at: localDtStr(newDt) });
       patchTimeline(apptId, updated); patchList(apptId, updated);
-    } catch { patchTimeline(apptId, appt); patchList(apptId, appt); alert("移動に失敗しました"); }
+    } catch { patchTimeline(apptId, appt); patchList(apptId, appt); showToast("移動に失敗しました"); }
+  }
+
+  function showToast(msg: string) {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 3000);
   }
 
   function patchTimeline(id: string, next: VisitorAppointment) {
@@ -888,16 +896,18 @@ export default function AppointmentsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("この来社予定を削除しますか？")) return;
     const token = getAccessToken();
     if (!token) return;
     setDeletingId(id);
+    setDeleteError(null);
     try {
       await api.deleteAppointment(token, id);
       setAppointments(prev => prev.filter(a => a.id !== id));
       setTimelineAppts(prev => prev.filter(a => a.id !== id));
-    } catch (err: unknown) { alert(err instanceof Error ? err.message : "削除に失敗しました"); }
-    finally { setDeletingId(null); }
+      setConfirmDeleteId(null);
+    } catch (err: unknown) {
+      setDeleteError(err instanceof Error ? err.message : "削除に失敗しました");
+    } finally { setDeletingId(null); }
   }
 
   function handlePrint() {
@@ -1097,8 +1107,8 @@ export default function AppointmentsPage() {
                       <div style={{ display: "flex", gap: 6 }}>
                         <MkBtn variant="default" size="sm" onClick={() => setQrAppt(appt)}>QR</MkBtn>
                         <MkBtn variant="default" size="sm" onClick={() => openEdit(appt)}>編集</MkBtn>
-                        <MkBtn variant="danger" size="sm" disabled={deletingId === appt.id} onClick={() => handleDelete(appt.id)}>
-                          {deletingId === appt.id ? "削除中..." : "削除"}
+                        <MkBtn variant="danger" size="sm" disabled={deletingId === appt.id} onClick={() => { setDeleteError(null); setConfirmDeleteId(appt.id); }}>
+                          削除
                         </MkBtn>
                       </div>
                     </div>
@@ -1197,6 +1207,37 @@ export default function AppointmentsPage() {
               <MkBtn variant="default" size="sm" onClick={() => setQrAppt(null)}>閉じる</MkBtn>
             </div>
           </div>
+        </div>
+      )}
+      {/* Delete confirm modal */}
+      {confirmDeleteId && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100, padding: 16 }}
+          onClick={() => { if (!deletingId) { setConfirmDeleteId(null); setDeleteError(null); } }}>
+          <div style={{ background: "#fffefb", borderRadius: 20, padding: "32px 36px", maxWidth: 400, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#1d1a15", fontFamily: FONT_JP, marginBottom: 10 }}>来社予定を削除しますか？</div>
+            <div style={{ fontSize: 13.5, color: "#6b6559", fontFamily: FONT_JP, marginBottom: 24, lineHeight: 1.6 }}>
+              削除すると元に戻せません。
+            </div>
+            {deleteError && (
+              <div style={{ fontSize: 13, color: "#a84238", fontFamily: FONT_JP, marginBottom: 16, padding: "8px 12px", background: "#fff5f5", borderRadius: 8, border: "1px solid #f5c6c6" }}>
+                {deleteError}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <MkBtn variant="default" size="sm" disabled={!!deletingId} onClick={() => { setConfirmDeleteId(null); setDeleteError(null); }}>キャンセル</MkBtn>
+              <MkBtn variant="danger" size="sm" disabled={!!deletingId} onClick={() => handleDelete(confirmDeleteId)}>
+                {deletingId ? "削除中..." : "削除する"}
+              </MkBtn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast notification */}
+      {toastMsg && (
+        <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "#1d1a15", color: "#fffefb", fontFamily: FONT_JP, fontSize: 13.5, padding: "12px 24px", borderRadius: 999, boxShadow: "0 8px 24px rgba(0,0,0,0.25)", zIndex: 1200, whiteSpace: "nowrap", pointerEvents: "none" }}>
+          {toastMsg}
         </div>
       )}
     </AdminShell>
