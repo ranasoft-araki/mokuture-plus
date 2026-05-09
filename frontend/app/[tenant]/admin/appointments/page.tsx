@@ -498,7 +498,7 @@ function WeekView({ weekStart, rooms, appts, onCellClick, onBlockEdit, onDayBloc
   appts: VisitorAppointment[];
   onCellClick: (roomId: string, day: Date) => void;
   onBlockEdit: (appt: VisitorAppointment) => void;
-  onDayBlockMove: (apptId: string, newDay: Date) => Promise<void>;
+  onDayBlockMove: (apptId: string, newDay: Date, newRoomId: string) => Promise<void>;
 }) {
   const weekDays = Array.from({ length: 7 }, (_, i) => shiftDate(weekStart, i));
   const dragApptIdRef = useRef<string | null>(null);
@@ -547,7 +547,7 @@ function WeekView({ weekStart, rooms, appts, onCellClick, onBlockEdit, onDayBloc
                   onDrop={async e => {
                     e.preventDefault();
                     if (!dragApptIdRef.current) return;
-                    await onDayBlockMove(dragApptIdRef.current, day);
+                    await onDayBlockMove(dragApptIdRef.current, day, room.id);
                     dragApptIdRef.current = null;
                   }}
                 >
@@ -589,7 +589,7 @@ function MonthView({ date, appts, rooms, onDayClick, onBlockEdit, onDayBlockMove
   rooms: MeetingRoom[];
   onDayClick: (day: Date) => void;
   onBlockEdit: (appt: VisitorAppointment) => void;
-  onDayBlockMove: (apptId: string, newDay: Date) => Promise<void>;
+  onDayBlockMove: (apptId: string, newDay: Date, newRoomId?: string) => Promise<void>;
 }) {
   const year = date.getFullYear(), month = date.getMonth();
   const firstDay = new Date(year, month, 1);
@@ -830,18 +830,20 @@ export default function AppointmentsPage() {
   }
 
   // ── Cross-day move (week / month drag-drop) ──
-  async function handleDayBlockMove(apptId: string, newDay: Date) {
-    const appt = timelineAppts.find(a => a.id === apptId);
+  async function handleDayBlockMove(apptId: string, newDay: Date, newRoomId?: string) {
+    const appt = timelineAppts.find(a => a.id === apptId) ?? appointments.find(a => a.id === apptId);
     if (!appt) return;
     const orig = new Date(appt.scheduled_at);
     const newDt = new Date(newDay);
     newDt.setHours(orig.getHours(), orig.getMinutes(), 0, 0);
-    const optimistic = { ...appt, scheduled_at: localDtStr(newDt) };
+    const roomId = newRoomId ?? appt.meeting_room_id ?? undefined;
+    const newRoom = newRoomId ? (rooms.find(r => r.id === newRoomId) ?? null) : appt.meeting_room;
+    const optimistic = { ...appt, scheduled_at: localDtStr(newDt), meeting_room_id: roomId ?? null, meeting_room: newRoom };
     patchTimeline(apptId, optimistic);
     const token = getAccessToken();
     if (!token) return;
     try {
-      const updated = await api.updateAppointment(token, apptId, { scheduled_at: localDtStr(newDt) });
+      const updated = await api.updateAppointment(token, apptId, { scheduled_at: localDtStr(newDt), meeting_room_id: roomId });
       patchTimeline(apptId, updated); patchList(apptId, updated);
     } catch { patchTimeline(apptId, appt); patchList(apptId, appt); showToast("移動に失敗しました"); }
   }
