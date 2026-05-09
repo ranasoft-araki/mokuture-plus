@@ -74,15 +74,15 @@ function getWeekStart(d: Date): Date {
   return r;
 }
 function getTimelineRange(mode: TimelineMode, date: Date): { from: string; to: string } {
-  if (mode === "day") { const s = dateToStr(date); return { from: s, to: s }; }
+  if (mode === "day") { const s = dateToStr(date); return { from: s, to: `${s}T23:59:59` }; }
   if (mode === "week") {
     const ws = getWeekStart(date);
     const we = new Date(ws); we.setDate(ws.getDate() + 6);
-    return { from: dateToStr(ws), to: dateToStr(we) };
+    return { from: dateToStr(ws), to: `${dateToStr(we)}T23:59:59` };
   }
   const s = new Date(date.getFullYear(), date.getMonth(), 1);
   const e = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-  return { from: dateToStr(s), to: dateToStr(e) };
+  return { from: dateToStr(s), to: `${dateToStr(e)}T23:59:59` };
 }
 function slotToHM(slot: number): [number, number] {
   const total = DAY_START * 60 + slot * SLOT_MIN;
@@ -438,6 +438,7 @@ function DayView({ rooms, appts, onCreateRange, onMoveBlock, onResizeBlock, onEd
               return (
                 <div key={appt.id}
                   onMouseDown={e => startMove(e, appt, ri)}
+                  onDoubleClick={e => { e.stopPropagation(); onEditBlock(appt); }}
                   style={{
                     position: "absolute",
                     left: LABEL_W + startSlot * SLOT_W,
@@ -556,6 +557,7 @@ function WeekView({ weekStart, rooms, appts, onCellClick, onBlockEdit, onDayBloc
                       onDragStart={e => { e.stopPropagation(); dragApptIdRef.current = appt.id; }}
                       onDragEnd={() => { dragApptIdRef.current = null; }}
                       onClick={e => { e.stopPropagation(); onBlockEdit(appt); }}
+                      onDoubleClick={e => { e.stopPropagation(); onBlockEdit(appt); }}
                       style={{
                         padding: "2px 5px 2px 7px", marginBottom: 2,
                         background: rc + "22", borderLeft: `3px solid ${rc}`,
@@ -984,17 +986,6 @@ export default function AppointmentsPage() {
     >
       <div style={{ padding: isMobile ? "16px 12px" : "24px 28px" }}>
 
-        {/* Shared create form */}
-        {showForm && (
-          <MkCard style={{ marginBottom: 20 }}>
-            <MkSectionTitle title="来社予定を追加" />
-            <AppointmentForm data={formData} onChange={setFormData} onSubmit={handleCreate}
-              onCancel={() => { setShowForm(false); setFormError(null); }}
-              saving={formSaving} error={formError} submitLabel="作成"
-              staffList={staffList} purposeList={purposeList} rooms={rooms} />
-          </MkCard>
-        )}
-
         {viewMode === "timeline" ? (
           /* ════════════ TIMELINE ════════════ */
           <div>
@@ -1209,6 +1200,21 @@ export default function AppointmentsPage() {
           </div>
         </div>
       )}
+      {/* Create appointment modal */}
+      {showForm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: isMobile ? 16 : 0 }}
+          onClick={() => { setShowForm(false); setFormError(null); }}>
+          <div style={{ background: "#fffefb", borderRadius: 20, padding: isMobile ? "24px 20px" : "32px 36px", maxWidth: 580, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)", maxHeight: "90vh", overflowY: "auto" }}
+            onClick={e => e.stopPropagation()}>
+            <MkSectionTitle title="来社予定を追加" style={{ marginBottom: 20 }} />
+            <AppointmentForm data={formData} onChange={setFormData} onSubmit={handleCreate}
+              onCancel={() => { setShowForm(false); setFormError(null); }}
+              saving={formSaving} error={formError} submitLabel="作成"
+              staffList={staffList} purposeList={purposeList} rooms={rooms} />
+          </div>
+        </div>
+      )}
+
       {/* Delete confirm modal */}
       {confirmDeleteId && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100, padding: 16 }}
