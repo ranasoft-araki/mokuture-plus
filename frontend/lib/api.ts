@@ -433,6 +433,20 @@ export const api = {
   forceKioskUpdate: (token: string) =>
     request<{ ok: boolean; forced_at: string }>("/settings/kiosk-force-push", { method: "POST" }, token),
 
+  // Meeting rooms (admin)
+  listMeetingRooms: (token: string, params?: { active_only?: boolean }) => {
+    const p = new URLSearchParams();
+    if (params?.active_only) p.set("active_only", "true");
+    const qs = p.toString();
+    return request<MeetingRoom[]>(`/meeting-rooms${qs ? `?${qs}` : ""}`, {}, token);
+  },
+  createMeetingRoom: (token: string, data: MeetingRoomCreate) =>
+    request<MeetingRoom>("/meeting-rooms", { method: "POST", body: JSON.stringify(data) }, token),
+  updateMeetingRoom: (token: string, id: string, data: Partial<MeetingRoomCreate> & { is_active?: boolean }) =>
+    request<MeetingRoom>(`/meeting-rooms/${id}`, { method: "PATCH", body: JSON.stringify(data) }, token),
+  deleteMeetingRoom: (token: string, id: string): Promise<void> =>
+    request(`/meeting-rooms/${id}`, { method: "DELETE" }, token),
+
   // Visitor appointments (admin)
   listAppointments: (token: string, params?: { status?: string; date_from?: string; date_to?: string }) => {
     const p = new URLSearchParams();
@@ -788,6 +802,26 @@ export const localAgent = {
     fetch(`${_LOCAL_AGENT}/health`).then(r => r.json()),
 };
 
+export interface MeetingRoom {
+  id: string;
+  tenant_id: string;
+  name: string;
+  location?: string | null;
+  capacity?: number | null;
+  color?: string | null;
+  description?: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface MeetingRoomCreate {
+  name: string;
+  location?: string;
+  capacity?: number;
+  color?: string;
+  description?: string;
+}
+
 export interface VisitorAppointment {
   id: string;
   visitor_name: string;
@@ -798,6 +832,8 @@ export interface VisitorAppointment {
   token: string;
   status: "pending" | "received" | "expired";
   notes: string | null;
+  meeting_room_id: string | null;
+  meeting_room: MeetingRoom | null;
   created_at: string;
 }
 
@@ -808,6 +844,7 @@ export interface AppointmentCreate {
   staff?: string;
   scheduled_at: string;
   notes?: string;
+  meeting_room_id?: string;
 }
 
 export interface KioskAppointmentResponse {

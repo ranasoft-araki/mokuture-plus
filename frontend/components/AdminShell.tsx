@@ -5,7 +5,7 @@ import { clearTokens, getLogoutUrl } from "@/lib/auth";
 import { useState } from "react";
 import type { ReactNode } from "react";
 
-export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "appointments" | "notify" | "locker" | "kiosk_settings" | "settings" | "users" | "profile";
+export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "appointments" | "meeting_rooms" | "notify" | "locker" | "kiosk_settings" | "settings" | "users" | "profile";
 
 interface Props {
   active: NavId;
@@ -24,7 +24,8 @@ const NAV_OPS: { id: NavId; label: string }[] = [
   { id: "schedule",  label: "スケジュール" },
   { id: "device",       label: "キオスク端末" },
   { id: "reception",    label: "受付ログ" },
-  { id: "appointments", label: "来社予定" },
+  { id: "appointments",  label: "来社予定" },
+  { id: "meeting_rooms", label: "会議室管理" },
 ];
 
 const NAV_SETTINGS: { id: NavId; label: string }[] = [
@@ -44,6 +45,7 @@ const NAV_PATHS: Record<NavId, (t: string) => string> = {
   device:        (t) => `/${t}/admin/kiosk`,
   reception:     (t) => `/${t}/admin/reception`,
   appointments:  (t) => `/${t}/admin/appointments`,
+  meeting_rooms: (t) => `/${t}/admin/meeting-rooms`,
   notify:        (t) => `/${t}/admin/notify`,
   locker:        (t) => `/${t}/admin/locker`,
   kiosk_settings:(t) => `/${t}/admin/kiosk-settings`,
@@ -407,6 +409,10 @@ function NavIcon({ id, active }: { id: NavId; active: boolean }) {
       return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M8 15h4M8 18h2"/>
         <path d="M15 15l1.5 1.5L19 13"/>
+      </svg>;
+    case "meeting_rooms":
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 4v16M16 4v16M3 12h18"/>
       </svg>;
     case "notify":
       return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">

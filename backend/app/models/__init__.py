@@ -4,6 +4,7 @@ from app.models.content import Media, Playlist, PlaylistItem, Schedule
 from app.models.reception import ReceptionLog
 from app.models.device import Device, Locker
 from app.models.notification import NotificationSetting, PushSubscription
+from app.models.room import MeetingRoom
 
 __all__ = [
     "Tenant",
@@ -17,4 +18,5 @@ __all__ = [
     "Locker",
     "NotificationSetting",
     "PushSubscription",
+    "MeetingRoom",
 ]

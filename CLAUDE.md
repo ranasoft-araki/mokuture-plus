@@ -120,7 +120,8 @@ mokuture/
 │   │       │   ├── schedules/page.tsx ← スケジュール管理
 │   │       │   ├── kiosk/page.tsx     ← キオスク端末管理・PIN 発行
 │   │       │   ├── reception/page.tsx ← 受付ログ一覧・フィルター
-│   │       │   ├── appointments/page.tsx ← 来社予定管理・QRコード発行 (qrcode.react)
+│   │       │   ├── appointments/page.tsx ← 来社予定管理・QRコード発行 (qrcode.react) + 日付/ステータスフィルタ + 会議室紐付け
+│   │       │   ├── meeting-rooms/page.tsx ← 会議室管理 (CRUD・カラー・定員・場所)
 │   │       │   ├── kiosk-settings/page.tsx ← 受付設定 (キオスク文言・ロゴ配置ドラッグ)
 │   │       │   ├── settings/page.tsx  ← 基本設定 (ブランディング: ロゴ・カラー・フォント)
 │   │       │   ├── notify/page.tsx    ← 通知設定 (Slack/Chatwork/PWA)
@@ -293,7 +294,8 @@ mokuture/
 - **devices** — キオスク端末 (token, PIN, last_seen_at, force_update_at)
 - **lockers** — ロッカー (gpio_pin, state)
 - **reception_logs** — 受付ログ (visitor_name, company, staff, purpose, method, state, staff_notes, appointment_id)
-- **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired)
+- **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired, meeting_room_id FK nullable)
+- **meeting_rooms** — 会議室 (name, location, capacity, color, description, is_active)
 - **notification_settings** — Slack/Chatwork Webhook URL (Fernet 暗号化)
 - **push_subscriptions** — Web Push 購読情報
 
@@ -324,10 +326,14 @@ mokuture/
 | POST | /kiosk/reception | デバイストークン | 受付フォーム送信 (appointment_id 対応) |
 | GET | /kiosk/appointment/{token} | デバイストークン | QR トークンから来社予定取得 |
 | POST | /kiosk/verify-pin | なし | PIN → デバイストークン交換 |
-| GET | /appointments | JWT | 来社予定一覧 |
-| POST | /appointments | JWT | 来社予定作成 |
-| PATCH | /appointments/{id} | JWT | 来社予定更新 |
+| GET | /appointments | JWT | 来社予定一覧 (status/date_from/date_to フィルタ対応) |
+| POST | /appointments | JWT | 来社予定作成 (meeting_room_id 対応) |
+| PATCH | /appointments/{id} | JWT | 来社予定更新 (meeting_room_id 対応) |
 | DELETE | /appointments/{id} | JWT | 来社予定削除 |
+| GET | /meeting-rooms | JWT | 会議室一覧 (active_only フィルタ) |
+| POST | /meeting-rooms | JWT | 会議室作成 |
+| PATCH | /meeting-rooms/{id} | JWT | 会議室更新 |
+| DELETE | /meeting-rooms/{id} | JWT | 会議室削除 |
 | GET | /reception | JWT | 受付ログ一覧 |
 | GET/PATCH | /notifications | JWT | 通知設定 |
 | GET/POST | /lockers | JWT | ロッカー管理 |

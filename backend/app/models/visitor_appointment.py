@@ -18,6 +18,7 @@ class VisitorAppointment(Base):
     company: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     purpose: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     staff: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    meeting_room_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("meeting_rooms.id", ondelete="SET NULL"), nullable=True, index=True)
     scheduled_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, default=lambda: secrets.token_urlsafe(32))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")  # pending | received | expired
