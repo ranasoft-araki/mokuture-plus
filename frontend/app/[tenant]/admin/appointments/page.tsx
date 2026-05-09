@@ -28,7 +28,7 @@ const ROW_H      = 72;                                   // row height px
 const WEEK_DAY_W = 130;                                  // week view day column px
 
 // ── Types ────────────────────────────────────────────────────────────────────
-type DateFilter   = "today" | "week" | "month" | "all";
+type DateFilter   = "today" | "week" | "month" | "range";
 type StatusFilter = "all" | "pending" | "received" | "expired";
 type ViewMode     = "timeline" | "list";
 type TimelineMode = "day" | "week" | "month";
@@ -671,8 +671,10 @@ export default function AppointmentsPage() {
   const [appointments, setAppointments] = useState<VisitorAppointment[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState<string | null>(null);
-  const [dateFilter,   setDateFilter]   = useState<DateFilter>("all");
+  const [dateFilter,   setDateFilter]   = useState<DateFilter>("today");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [rangeFrom, setRangeFrom] = useState<string>(() => dateToStr(new Date()));
+  const [rangeTo,   setRangeTo]   = useState<string>(() => dateToStr(new Date()));
 
   // View mode
   const [viewMode,     setViewMode]     = useState<ViewMode>("list");
@@ -733,7 +735,7 @@ export default function AppointmentsPage() {
     const token = getAccessToken();
     if (!token) return;
     loadList(token);
-  }, [dateFilter, statusFilter]);
+  }, [dateFilter, statusFilter, rangeFrom, rangeTo]);
 
   // Timeline data reload
   useEffect(() => {
@@ -748,10 +750,22 @@ export default function AppointmentsPage() {
 
   function getDateRange(filter: DateFilter): { from?: string; to?: string } {
     const now = new Date();
-    const fmt = (d: Date) => `${d.getFullYear()}-${padZ(d.getMonth() + 1)}-${padZ(d.getDate())}`;
-    if (filter === "today") { const t = fmt(now); return { from: t, to: t }; }
-    if (filter === "week")  { const s = new Date(now); s.setDate(now.getDate() - now.getDay()); return { from: fmt(s), to: fmt(now) }; }
-    if (filter === "month") { return { from: fmt(new Date(now.getFullYear(), now.getMonth(), 1)), to: fmt(now) }; }
+    const todayStr = dateToStr(now);
+    if (filter === "today") { return { from: todayStr, to: `${todayStr}T23:59:59` }; }
+    if (filter === "week")  {
+      const ws = getWeekStart(now);
+      return { from: dateToStr(ws), to: `${todayStr}T23:59:59` };
+    }
+    if (filter === "month") {
+      const ms = dateToStr(new Date(now.getFullYear(), now.getMonth(), 1));
+      return { from: ms, to: `${todayStr}T23:59:59` };
+    }
+    if (filter === "range") {
+      return {
+        from: rangeFrom || undefined,
+        to:   rangeTo   ? `${rangeTo}T23:59:59` : undefined,
+      };
+    }
     return {};
   }
 
@@ -964,7 +978,7 @@ export default function AppointmentsPage() {
   };
 
   const activeRooms = rooms.filter(r => r.is_active);
-  const DATE_TABS:   { id: DateFilter;   label: string }[] = [{ id: "today", label: "今日" }, { id: "week", label: "今週" }, { id: "month", label: "今月" }, { id: "all", label: "全期間" }];
+  const DATE_TABS:   { id: DateFilter;   label: string }[] = [{ id: "today", label: "今日" }, { id: "week", label: "今週" }, { id: "month", label: "今月" }, { id: "range", label: "期間指定" }];
   const STATUS_TABS: { id: StatusFilter; label: string }[] = [{ id: "all", label: "全て" }, { id: "pending", label: "待機中" }, { id: "received", label: "チェックイン済" }, { id: "expired", label: "期限切れ" }];
 
   return (
@@ -1062,6 +1076,15 @@ export default function AppointmentsPage() {
               <div style={{ display: "flex", gap: 4 }}>
                 {DATE_TABS.map(t => <button key={t.id} style={filterTabStyle(dateFilter === t.id)} onClick={() => setDateFilter(t.id)}>{t.label}</button>)}
               </div>
+              {dateFilter === "range" && (
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <input type="date" value={rangeFrom} onChange={e => setRangeFrom(e.target.value)}
+                    style={{ ...INPUT_STYLE, width: 140, padding: "5px 8px", fontSize: 12.5 }} />
+                  <span style={{ fontSize: 12, color: "#a8a198", fontFamily: FONT_JP }}>〜</span>
+                  <input type="date" value={rangeTo} onChange={e => setRangeTo(e.target.value)}
+                    style={{ ...INPUT_STYLE, width: 140, padding: "5px 8px", fontSize: 12.5 }} />
+                </div>
+              )}
               <div style={{ width: 1, height: 20, background: "#d8d3c7" }} />
               <div style={{ display: "flex", gap: 4 }}>
                 {STATUS_TABS.map(t => <button key={t.id} style={filterTabStyle(statusFilter === t.id)} onClick={() => setStatusFilter(t.id)}>{t.label}</button>)}
@@ -1077,7 +1100,7 @@ export default function AppointmentsPage() {
                 <div style={{ padding: 32, textAlign: "center", fontSize: 13, color: "#a84238", fontFamily: FONT_JP }}>{error}</div>
               ) : appointments.length === 0 ? (
                 <div style={{ padding: 40, textAlign: "center", fontSize: 13, color: "#a8a198", fontFamily: FONT_JP }}>
-                  {dateFilter !== "all" || statusFilter !== "all" ? "条件に一致する来社予定がありません" : "来社予定がありません。「予定を追加」から登録してください。"}
+                  {dateFilter !== "today" || statusFilter !== "all" ? "条件に一致する来社予定がありません" : "本日の来社予定がありません。「予定を追加」から登録してください。"}
                 </div>
               ) : isMobile ? (
                 <div>
