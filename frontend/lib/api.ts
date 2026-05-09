@@ -834,6 +834,7 @@ export interface VisitorAppointment {
   notes: string | null;
   meeting_room_id: string | null;
   meeting_room: MeetingRoom | null;
+  duration_minutes: number | null;
   created_at: string;
 }
 
@@ -845,6 +846,7 @@ export interface AppointmentCreate {
   scheduled_at: string;
   notes?: string;
   meeting_room_id?: string;
+  duration_minutes?: number;
 }
 
 export interface KioskAppointmentResponse {

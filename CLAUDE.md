@@ -426,3 +426,6 @@ STORAGE_PUBLIC_URL=...
 ```
 NEXT_PUBLIC_API_URL=http://localhost:8001/api/v1
 ```
+
+## ルール
+- 修正を行ったら自動でデプロイまで行うこと

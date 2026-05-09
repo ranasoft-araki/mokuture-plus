@@ -24,6 +24,7 @@ class AppointmentCreate(BaseModel):
     meeting_room_id: Optional[str] = None
     scheduled_at: datetime
     notes: Optional[str] = None
+    duration_minutes: Optional[int] = None
 
     @field_validator("visitor_name")
     @classmethod
@@ -43,6 +44,7 @@ class AppointmentUpdate(BaseModel):
     scheduled_at: Optional[datetime] = None
     notes: Optional[str] = None
     status: Optional[str] = None
+    duration_minutes: Optional[int] = None
 
 
 class MeetingRoomResponse(BaseModel):
@@ -69,6 +71,7 @@ class AppointmentResponse(BaseModel):
     notes: Optional[str] = None
     meeting_room_id: Optional[str] = None
     meeting_room: Optional[MeetingRoomResponse] = None
+    duration_minutes: Optional[int] = None
     created_at: Optional[str] = None
 
 
@@ -101,6 +104,7 @@ def _out(appt: VisitorAppointment, room: Optional[MeetingRoom] = None) -> dict:
         "notes": appt.notes,
         "meeting_room_id": appt.meeting_room_id,
         "meeting_room": _room_out(room),
+        "duration_minutes": appt.duration_minutes,
         "created_at": appt.created_at.isoformat() if appt.created_at else None,
     }
 
@@ -178,6 +182,7 @@ async def create_appointment(
         meeting_room_id=body.meeting_room_id,
         scheduled_at=scheduled_at,
         notes=body.notes,
+        duration_minutes=body.duration_minutes,
     )
     db.add(appt)
     await db.commit()
@@ -253,6 +258,8 @@ async def update_appointment(
         appt.notes = body.notes
     if body.status is not None:
         appt.status = body.status
+    if body.duration_minutes is not None:
+        appt.duration_minutes = body.duration_minutes
 
     await db.commit()
     await db.refresh(appt)
