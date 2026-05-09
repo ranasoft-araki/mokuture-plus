@@ -489,9 +489,6 @@ export default function AdminKioskPage() {
                     display: "flex", flexDirection: "column", gap: 8,
                     background: "#f4f1ea", borderRadius: "0 10px 10px 0",
                   }}>
-                    <MkBtn size="sm" variant="default" onClick={() => window.open(kioskUrl, "_blank")}>
-                      画面プレビュー
-                    </MkBtn>
                     <button
                       onClick={() => handleForceRefreshDevice(d.id, d.name)}
                       disabled={refreshingDeviceId === d.id}

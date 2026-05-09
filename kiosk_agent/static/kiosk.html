@@ -44,6 +44,7 @@ let ST = {
   purpose_list: [],
 };
 let ITEMS = [];
+let TRANSITION_TYPE = "fade";
 let CLEANUPS = [];
 let CURRENT_SCREEN = "idle";
 
@@ -339,18 +340,60 @@ function showIdle() {
     const url = `/media/${item.media.id}`;
     const overlay = root.querySelector("[style*='z-index:10']");
 
-    function fadeIn(el) {
-      el.style.opacity = "0";
-      el.style.transition = "opacity 1.8s ease";
-      root.insertBefore(el, overlay);
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        el.style.opacity = "1";
-        if (old) {
-          old.style.transition = "opacity 1.8s ease";
-          old.style.opacity = "0";
-          setTimeout(() => { if (old.parentNode) old.remove(); }, 1900);
-        }
-      }));
+    function applyTransition(newEl, oldEl) {
+      const _types = ["fade", "slide", "zoom", "wipe"];
+      const type = TRANSITION_TYPE === "random"
+        ? _types[Math.floor(Math.random() * _types.length)]
+        : TRANSITION_TYPE;
+      const rAF = (fn) => requestAnimationFrame(() => requestAnimationFrame(fn));
+
+      if (type === "slide") {
+        newEl.style.cssText += ";transform:translateX(100%);transition:transform 1.2s cubic-bezier(.25,.46,.45,.94)";
+        root.insertBefore(newEl, overlay);
+        rAF(() => {
+          newEl.style.transform = "translateX(0)";
+          if (oldEl) {
+            oldEl.style.transition = "transform 1.2s cubic-bezier(.25,.46,.45,.94)";
+            oldEl.style.transform = "translateX(-100%)";
+            setTimeout(() => { if (oldEl.parentNode) oldEl.remove(); }, 1300);
+          }
+        });
+      } else if (type === "zoom") {
+        newEl.style.cssText += ";transform:scale(1.1);opacity:0;transition:transform 1.5s ease,opacity 1.5s ease";
+        root.insertBefore(newEl, overlay);
+        rAF(() => {
+          newEl.style.transform = "scale(1)";
+          newEl.style.opacity = "1";
+          if (oldEl) {
+            oldEl.style.transition = "opacity 1.5s ease";
+            oldEl.style.opacity = "0";
+            setTimeout(() => { if (oldEl.parentNode) oldEl.remove(); }, 1600);
+          }
+        });
+      } else if (type === "wipe") {
+        newEl.style.cssText += ";clip-path:inset(0 100% 0 0);transition:clip-path 1.2s cubic-bezier(.76,0,.24,1)";
+        root.insertBefore(newEl, overlay);
+        rAF(() => {
+          newEl.style.clipPath = "inset(0 0% 0 0)";
+          if (oldEl) {
+            oldEl.style.transition = "opacity 1.2s ease";
+            oldEl.style.opacity = "0";
+            setTimeout(() => { if (oldEl.parentNode) oldEl.remove(); }, 1300);
+          }
+        });
+      } else {
+        // fade (default)
+        newEl.style.cssText += ";opacity:0;transition:opacity 1.8s ease";
+        root.insertBefore(newEl, overlay);
+        rAF(() => {
+          newEl.style.opacity = "1";
+          if (oldEl) {
+            oldEl.style.transition = "opacity 1.8s ease";
+            oldEl.style.opacity = "0";
+            setTimeout(() => { if (oldEl.parentNode) oldEl.remove(); }, 1900);
+          }
+        });
+      }
     }
 
     if (item.media.mime_type === "video/mp4") {
@@ -362,7 +405,7 @@ function showIdle() {
       v.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0";
       v.onended = nextItem;
       v.onerror = nextItem;
-      fadeIn(v);
+      applyTransition(v, old);
       v.play().catch(() => {});
     } else {
       const img = document.createElement("img");
@@ -371,7 +414,7 @@ function showIdle() {
       img.alt = "";
       img.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0";
       img.onerror = nextItem;
-      fadeIn(img);
+      applyTransition(img, old);
       later(item.duration_sec * 1000, nextItem);
     }
   }
@@ -1287,6 +1330,7 @@ async function boot() {
       showSuspended();
     } else {
       ITEMS = sched?.playlist?.items ?? [];
+      TRANSITION_TYPE = sched?.playlist?.transition_type ?? "fade";
       go("idle");
     }
   } catch {
@@ -1302,8 +1346,8 @@ async function boot() {
       if (s?.suspended) {
         if (CURRENT_SCREEN !== "suspended") showSuspended();
       } else {
-        if (CURRENT_SCREEN === "suspended") { ITEMS = s?.playlist?.items ?? []; go("idle"); }
-        else ITEMS = s?.playlist?.items ?? [];
+        if (CURRENT_SCREEN === "suspended") { ITEMS = s?.playlist?.items ?? []; TRANSITION_TYPE = s?.playlist?.transition_type ?? "fade"; go("idle"); }
+        else { ITEMS = s?.playlist?.items ?? []; TRANSITION_TYPE = s?.playlist?.transition_type ?? "fade"; }
       }
     } catch {}
   }, 60000);

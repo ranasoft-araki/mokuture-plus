@@ -179,6 +179,7 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
         "playlist": {
             "id": pl.id,
             "name": pl.name,
+            "transition_type": pl.transition_type,
             "items": [
                 {
                     "id": i.id,

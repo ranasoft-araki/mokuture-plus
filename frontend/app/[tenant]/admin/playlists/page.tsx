@@ -34,6 +34,7 @@ export default function AdminPlaylistsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [transitionType, setTransitionType] = useState<string>("fade");
   // List view drag state
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
@@ -160,6 +161,7 @@ export default function AdminPlaylistsPage() {
     setSelectedId(pl.id);
     setError("");
     setSuccess("");
+    setTransitionType(pl.transition_type ?? "fade");
     const byId = Object.fromEntries(media.map((m) => [m.id, m]));
     setDraftItems(
       pl.items
@@ -271,7 +273,10 @@ export default function AdminPlaylistsPage() {
     setError("");
     setSuccess("");
     try {
-      await api.updatePlaylistItems(token, selectedId, draftItems.map((d, i) => ({ media_id: d.media_id, display_order: i, duration_sec: d.duration_sec })));
+      await Promise.all([
+        api.updatePlaylistItems(token, selectedId, draftItems.map((d, i) => ({ media_id: d.media_id, display_order: i, duration_sec: d.duration_sec }))),
+        api.updatePlaylist(token, selectedId, { transition_type: transitionType }),
+      ]);
       const pls = await api.listPlaylists(token);
       setPlaylists(pls);
       setSuccess("保存しました");
@@ -491,6 +496,38 @@ export default function AdminPlaylistsPage() {
         </div>
       ) : (
         /* ─ EDIT VIEW ─ */
+        <>
+        {/* Transition selector */}
+        <MkCard style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15", marginBottom: 10 }}>切り替えエフェクト</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {([
+              { value: "fade",   label: "フェード", icon: "◎", desc: "クロスフェード" },
+              { value: "slide",  label: "スライド", icon: "→", desc: "右からスライド" },
+              { value: "zoom",   label: "ズーム",   icon: "⊕", desc: "ズームイン" },
+              { value: "wipe",   label: "ワイプ",   icon: "▷", desc: "左から展開" },
+              { value: "random", label: "ランダム", icon: "?", desc: "毎回ランダム" },
+            ] as const).map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setTransitionType(opt.value)}
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+                  padding: "8px 14px", borderRadius: 8, cursor: "pointer",
+                  border: transitionType === opt.value ? "2px solid #1d1a15" : "1px solid #d8d3c7",
+                  background: transitionType === opt.value ? "#1d1a15" : "#fffefb",
+                  color: transitionType === opt.value ? "#fffefb" : "#2d2a24",
+                  transition: "all 0.1s",
+                  minWidth: 72,
+                }}
+              >
+                <span style={{ fontSize: 18 }}>{opt.icon}</span>
+                <span style={{ fontSize: 12, fontWeight: 600 }}>{opt.label}</span>
+                <span style={{ fontSize: 10, color: transitionType === opt.value ? "rgba(255,255,255,0.6)" : "#a8a198" }}>{opt.desc}</span>
+              </button>
+            ))}
+          </div>
+        </MkCard>
         <div className="adm-grid-3" style={{ gap: 20 }}>
           {/* Left: item list */}
           <MkCard padding="0">
@@ -876,6 +913,7 @@ export default function AdminPlaylistsPage() {
             </MkCard>
           </div>
         </div>
+        </>
       )}
 
       {/* ─ FULLSCREEN PREVIEW OVERLAY ─ */}

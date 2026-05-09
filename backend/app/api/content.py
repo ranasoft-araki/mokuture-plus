@@ -18,6 +18,7 @@ from app.config import settings
 router = APIRouter(prefix="/content", tags=["content"])
 
 _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
+_ALLOWED_TRANSITIONS = {"fade", "slide", "zoom", "wipe", "random"}
 
 
 # ─── Media ──────────────────────────────────────────────────────────────────
@@ -174,6 +175,26 @@ def _media_out(m: Media) -> dict:
 
 class PlaylistCreate(BaseModel):
     name: str
+    transition_type: str = "fade"
+
+    @field_validator("transition_type")
+    @classmethod
+    def validate_transition(cls, v: str) -> str:
+        if v not in _ALLOWED_TRANSITIONS:
+            raise ValueError(f"transition_type must be one of {_ALLOWED_TRANSITIONS}")
+        return v
+
+
+class PlaylistUpdate(BaseModel):
+    name: str | None = None
+    transition_type: str | None = None
+
+    @field_validator("transition_type")
+    @classmethod
+    def validate_transition(cls, v: str | None) -> str | None:
+        if v is not None and v not in _ALLOWED_TRANSITIONS:
+            raise ValueError(f"transition_type must be one of {_ALLOWED_TRANSITIONS}")
+        return v
 
 
 class PlaylistItemIn(BaseModel):
@@ -196,11 +217,11 @@ async def create_playlist(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    pl = Playlist(tenant_id=user.tenant_id, name=body.name)
+    pl = Playlist(tenant_id=user.tenant_id, name=body.name, transition_type=body.transition_type)
     db.add(pl)
     await db.commit()
     await db.refresh(pl)
-    return {"id": pl.id, "name": pl.name, "items": []}
+    return {"id": pl.id, "name": pl.name, "transition_type": pl.transition_type, "items": []}
 
 
 @router.get("/playlists", response_model=list[PlaylistOut])
@@ -219,6 +240,7 @@ async def list_playlists(
         {
             "id": pl.id,
             "name": pl.name,
+            "transition_type": pl.transition_type,
             "items": [
                 {
                     "id": i.id,
@@ -231,6 +253,27 @@ async def list_playlists(
         }
         for pl in playlists
     ]
+
+
+@router.patch("/playlists/{playlist_id}", status_code=200)
+async def update_playlist(
+    playlist_id: str,
+    body: PlaylistUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Playlist).where(Playlist.id == playlist_id, Playlist.tenant_id == user.tenant_id)
+    )
+    pl = result.scalar_one_or_none()
+    if pl is None:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    if body.name is not None:
+        pl.name = body.name
+    if body.transition_type is not None:
+        pl.transition_type = body.transition_type
+    await db.commit()
+    return {"id": pl.id, "name": pl.name, "transition_type": pl.transition_type}
 
 
 @router.delete("/playlists/{playlist_id}", status_code=204)

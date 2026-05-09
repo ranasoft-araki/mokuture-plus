@@ -313,6 +313,8 @@ export const api = {
     request<Playlist[]>("/content/playlists", {}, token),
   createPlaylist: (token: string, name: string) =>
     request<Playlist>("/content/playlists", { method: "POST", body: JSON.stringify({ name }) }, token),
+  updatePlaylist: (token: string, playlistId: string, body: { name?: string; transition_type?: string }) =>
+    request<Playlist>("/content/playlists/" + playlistId, { method: "PATCH", body: JSON.stringify(body) }, token),
   updatePlaylistItems: (token: string, playlistId: string, items: { media_id: string; display_order: number; duration_sec: number }[]) =>
     request("/content/playlists/" + playlistId + "/items", { method: "PUT", body: JSON.stringify(items) }, token),
   reorderPlaylistItems: (token: string, playlistId: string, items: { id: string; sort_order: number }[]) =>
@@ -630,6 +632,7 @@ export interface MediaItem {
 export interface Playlist {
   id: string;
   name: string;
+  transition_type: string;
   items: PlaylistItem[];
 }
 
@@ -763,6 +766,7 @@ export interface KioskScheduleResponse {
   playlist: {
     id: string;
     name: string;
+    transition_type: string;
     items: KioskPlaylistItem[];
   } | null;
   suspended?: boolean;

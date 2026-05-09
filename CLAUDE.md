@@ -288,7 +288,7 @@ mokuture/
 ### その他テーブル
 - **users** — email / password_hash / role / tenant_id
 - **media** — アップロードファイル (URL, mime_type, duration_sec)
-- **playlists / playlist_items** — メディアのプレイリスト
+- **playlists / playlist_items** — メディアのプレイリスト（transition_type: fade/slide/zoom/wipe/random）
 - **schedules** — 曜日・時間帯ごとのプレイリスト割当
 - **devices** — キオスク端末 (token, PIN, last_seen_at, force_update_at)
 - **lockers** — ロッカー (gpio_pin, state)
@@ -316,6 +316,7 @@ mokuture/
 | GET | /media | JWT | メディア一覧 |
 | POST | /media/upload-url | JWT | メディア Presigned URL 取得 |
 | GET/POST/DELETE | /playlists | JWT | プレイリスト CRUD |
+| PATCH | /playlists/{id} | JWT | プレイリスト名・transition_type更新 |
 | GET/POST/DELETE | /schedules | JWT | スケジュール CRUD |
 | GET/POST/DELETE | /devices | JWT | デバイス CRUD |
 | POST | /devices/{id}/pin | JWT | PIN 発行 |
