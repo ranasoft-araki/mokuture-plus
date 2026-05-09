@@ -171,7 +171,7 @@ function RoomCard({
             )}
           </div>
           <MkPill tone={room.is_active ? "live" : "off"}>
-            {room.is_active ? "使用中" : "停止中"}
+            {room.is_active ? "利用可能" : "停止中"}
           </MkPill>
         </div>
 
