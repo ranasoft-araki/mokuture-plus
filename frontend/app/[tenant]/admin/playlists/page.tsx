@@ -46,7 +46,7 @@ export default function AdminPlaylistsPage() {
   const [pickerDragging, setPickerDragging] = useState(false);
   const pickerInputRef = useRef<HTMLInputElement>(null);
   // Timeline state (Feature 3)
-  const [editViewMode, setEditViewMode] = useState<EditViewMode>("list");
+  const [editViewMode, setEditViewMode] = useState<EditViewMode>("timeline");
   const [pxPerSec, setPxPerSec] = useState(10);
   const [tlDrag, setTlDrag] = useState<TimelineDragState | null>(null);
   const [modal, setModal] = useState<{ msg: string; action: () => Promise<void> } | null>(null);
@@ -365,7 +365,7 @@ export default function AdminPlaylistsPage() {
     } else {
       vid.pause();
     }
-  }, [previewPlaying, previewFullscreen]);
+  }, [previewPlaying, previewFullscreen, previewIdx]);
 
   // Image timing effect
   useEffect(() => {
@@ -410,6 +410,13 @@ export default function AdminPlaylistsPage() {
 
   return (
     <>
+    <style>{`
+      @keyframes mk-fade  { from{opacity:0}                                          to{opacity:1} }
+      @keyframes mk-slide { from{opacity:0;transform:translateX(40px)}               to{opacity:1;transform:translateX(0)} }
+      @keyframes mk-zoom  { from{opacity:0;transform:scale(1.08)}                    to{opacity:1;transform:scale(1)} }
+      @keyframes mk-wipe  { from{clip-path:inset(0 100% 0 0)}                        to{clip-path:inset(0 0% 0 0)} }
+      @keyframes mk-morph { from{opacity:0;transform:scale(0.92);filter:blur(8px)}   to{opacity:1;transform:scale(1);filter:blur(0)} }
+    `}</style>
     {modal && (
       <ConfirmModal
         message={modal.msg}
@@ -527,6 +534,7 @@ export default function AdminPlaylistsPage() {
               { value: "slide",  label: "スライド", icon: "→", desc: "右からスライド" },
               { value: "zoom",   label: "ズーム",   icon: "⊕", desc: "ズームイン" },
               { value: "wipe",   label: "ワイプ",   icon: "▷", desc: "左から展開" },
+              { value: "morph",  label: "モーフ",   icon: "◉", desc: "ぼかし変形" },
               { value: "random", label: "ランダム", icon: "?", desc: "毎回ランダム" },
             ] as const).map((opt) => (
               <button
@@ -829,29 +837,30 @@ export default function AdminPlaylistsPage() {
                 position: "relative",
                 backgroundImage: "repeating-linear-gradient(45deg, rgba(255,255,255,0.03) 0 10px, transparent 10px 20px)",
               }}>
-                {previewItem ? (
-                  previewItem.media.mime_type.startsWith("image/") ? (
-                    <img src={previewItem.media.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <div key={previewIdx} style={{ position: "absolute", inset: 0, animation: previewItem ? getPreviewAnim(transitionType) : undefined }}>
+                  {previewItem ? (
+                    previewItem.media.mime_type.startsWith("image/") ? (
+                      <img src={previewItem.media.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    ) : (
+                      <video
+                        ref={previewVideoRef}
+                        src={previewItem.media.url}
+                        playsInline
+                        onEnded={advancePreview}
+                        onTimeUpdate={(e) => {
+                          const v = e.currentTarget;
+                          if (v.duration) setPreviewProgress(v.currentTime / v.duration);
+                        }}
+                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                      />
+                    )
                   ) : (
-                    <video
-                      ref={previewVideoRef}
-                      key={previewItem.media_id}
-                      src={previewItem.media.url}
-                      playsInline
-                      onEnded={advancePreview}
-                      onTimeUpdate={(e) => {
-                        const v = e.currentTarget;
-                        if (v.duration) setPreviewProgress(v.currentTime / v.duration);
-                      }}
-                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                    />
-                  )
-                ) : (
-                  <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#fffefb", gap: 8, opacity: 0.4 }}>
-                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fffefb" strokeWidth="1.5" strokeLinecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                    <div style={{ fontSize: 10.5, fontFamily: "monospace" }}>アイテムなし</div>
-                  </div>
-                )}
+                    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#fffefb", gap: 8, opacity: 0.4 }}>
+                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fffefb" strokeWidth="1.5" strokeLinecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                      <div style={{ fontSize: 10.5, fontFamily: "monospace" }}>アイテムなし</div>
+                    </div>
+                  )}
+                </div>
                 {/* Progress bar — shows progress within current item */}
                 {previewItem && (
                   <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 3, background: "rgba(255,255,255,0.15)" }}>
@@ -979,24 +988,25 @@ export default function AdminPlaylistsPage() {
             position: "relative",
             overflow: "hidden",
           }}>
-            {previewItem ? (
-              previewItem.media.mime_type.startsWith("image/") ? (
-                <img src={previewItem.media.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-              ) : (
-                <video
-                  ref={previewFsVideoRef}
-                  key={previewItem.media_id + "-fs"}
-                  src={previewItem.media.url}
-                  playsInline
-                  onEnded={advancePreview}
-                  onTimeUpdate={(e) => {
-                    const v = e.currentTarget;
-                    if (v.duration) setPreviewProgress(v.currentTime / v.duration);
-                  }}
-                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                />
-              )
-            ) : null}
+            <div key={previewIdx} style={{ position: "absolute", inset: 0, animation: previewItem ? getPreviewAnim(transitionType) : undefined }}>
+              {previewItem ? (
+                previewItem.media.mime_type.startsWith("image/") ? (
+                  <img src={previewItem.media.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                ) : (
+                  <video
+                    ref={previewFsVideoRef}
+                    src={previewItem.media.url}
+                    playsInline
+                    onEnded={advancePreview}
+                    onTimeUpdate={(e) => {
+                      const v = e.currentTarget;
+                      if (v.duration) setPreviewProgress(v.currentTime / v.duration);
+                    }}
+                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                  />
+                )
+              ) : null}
+            </div>
 
             {/* Progress bar */}
             {previewItem && (
@@ -1244,6 +1254,20 @@ function PlaylistTimeline({
       )}
     </div>
   );
+}
+
+const _ANIM: Record<string, string> = {
+  fade:  "mk-fade  0.45s ease forwards",
+  slide: "mk-slide 0.35s ease forwards",
+  zoom:  "mk-zoom  0.45s ease forwards",
+  wipe:  "mk-wipe  0.40s ease forwards",
+  morph: "mk-morph 0.55s ease forwards",
+};
+const _ANIM_KEYS = Object.keys(_ANIM);
+
+function getPreviewAnim(type: string): string {
+  if (type === "random") return _ANIM[_ANIM_KEYS[Math.floor(Math.random() * _ANIM_KEYS.length)]];
+  return _ANIM[type] ?? _ANIM.fade;
 }
 
 function fmtDuration(sec: number) {

@@ -18,7 +18,7 @@ from app.config import settings
 router = APIRouter(prefix="/content", tags=["content"])
 
 _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
-_ALLOWED_TRANSITIONS = {"fade", "slide", "zoom", "wipe", "random"}
+_ALLOWED_TRANSITIONS = {"fade", "slide", "zoom", "wipe", "random", "morph"}
 
 
 # ─── Media ──────────────────────────────────────────────────────────────────
