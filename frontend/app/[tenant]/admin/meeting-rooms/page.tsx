@@ -126,23 +126,19 @@ function RoomCard({
   room,
   onEdit,
   onDelete,
-  onToggle,
   deleting,
-  toggling,
 }: {
   room: MeetingRoom;
   onEdit: (room: MeetingRoom) => void;
   onDelete: (id: string) => void;
-  onToggle: (id: string, active: boolean) => void;
   deleting: boolean;
-  toggling: boolean;
 }) {
   const color = room.color ?? "#4a7c4e";
   return (
     <div style={{
       background: "#fffefb", border: "1px solid #efece5", borderRadius: 10,
       boxShadow: "0 1px 0 rgba(29,26,21,0.03), 0 1px 2px rgba(29,26,21,0.04)",
-      overflow: "hidden", opacity: room.is_active ? 1 : 0.55,
+      overflow: "hidden",
       display: "flex", flexDirection: "column",
     }}>
       {/* Color band */}
@@ -171,9 +167,6 @@ function RoomCard({
               </div>
             )}
           </div>
-          <MkPill tone={room.is_active ? "live" : "off"}>
-            {room.is_active ? "利用可能" : "停止中"}
-          </MkPill>
         </div>
 
         <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
@@ -194,12 +187,6 @@ function RoomCard({
 
         <div style={{ display: "flex", gap: 6, borderTop: "1px solid #f4f1ea", paddingTop: 12, flexWrap: "wrap" }}>
           <MkBtn variant="default" size="sm" onClick={() => onEdit(room)}>編集</MkBtn>
-          <MkBtn
-            variant="ghost" size="sm" disabled={toggling}
-            onClick={() => onToggle(room.id, !room.is_active)}
-          >
-            {room.is_active ? "停止" : "有効化"}
-          </MkBtn>
           <div style={{ flex: 1 }} />
           <MkBtn variant="danger" size="sm" disabled={deleting} onClick={() => onDelete(room.id)}>
             {deleting ? "削除中..." : "削除"}
@@ -227,7 +214,6 @@ export default function MeetingRoomsPage() {
   const [editError, setEditError] = useState<string | null>(null);
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [modal, setModal] = useState<{ msg: string; action: () => Promise<void> } | null>(null);
 
   useEffect(() => {
@@ -294,22 +280,6 @@ export default function MeetingRoomsPage() {
     });
   }
 
-  async function handleToggle(id: string, active: boolean) {
-    const token = getAccessToken();
-    if (!token) return;
-    setTogglingId(id);
-    try {
-      const updated = await api.updateMeetingRoom(token, id, { is_active: active });
-      setRooms((prev) => prev.map((r) => r.id === updated.id ? updated : r));
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "更新に失敗しました");
-    } finally {
-      setTogglingId(null);
-    }
-  }
-
-  const activeCount = rooms.filter((r) => r.is_active).length;
-
   return (
     <AdminShell
       active="meeting_rooms"
@@ -331,8 +301,6 @@ export default function MeetingRoomsPage() {
         <div style={{ display: "flex", gap: 12, marginBottom: 24 }}>
           {[
             { label: "登録済み会議室", value: rooms.length, unit: "室", color: "#1d1a15" },
-            { label: "利用可能", value: activeCount, unit: "室", color: "#4a7c4e" },
-            { label: "停止中", value: rooms.length - activeCount, unit: "室", color: "#a8a198" },
           ].map(({ label, value, unit, color }) => (
             <MkCard key={label} style={{ flex: 1 }}>
               <div style={{ fontSize: 11, color: "#a8a198", fontFamily: FONT_JP, marginBottom: 8 }}>{label}</div>
@@ -395,9 +363,7 @@ export default function MeetingRoomsPage() {
                 room={room}
                 onEdit={setEditRoom}
                 onDelete={handleDelete}
-                onToggle={handleToggle}
                 deleting={deletingId === room.id}
-                toggling={togglingId === room.id}
               />
             ))}
           </div>
@@ -429,7 +395,6 @@ export default function MeetingRoomsPage() {
                 capacity: editRoom.capacity ?? undefined,
                 color: editRoom.color ?? "#4a7c4e",
                 description: editRoom.description ?? "",
-                is_active: editRoom.is_active,
               }}
               onSubmit={handleUpdate}
               onCancel={() => setEditRoom(null)}
