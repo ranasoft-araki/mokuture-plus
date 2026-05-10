@@ -41,6 +41,7 @@ export default function AdminPlaylistsPage() {
   const [dragOver, setDragOver] = useState<number | null>(null);
   // Upload state (Feature 2)
   const [uploading, setUploading] = useState(false);
+  const [uploadStatusMsg, setUploadStatusMsg] = useState("");
   const [uploadError, setUploadError] = useState("");
   const [pickerDragging, setPickerDragging] = useState(false);
   const pickerInputRef = useRef<HTMLInputElement>(null);
@@ -229,26 +230,32 @@ export default function AdminPlaylistsPage() {
     setDraftItems(draftItems.map((d, i) => i === index ? { ...d, duration_sec: v } : d));
   }
 
-  async function uploadAndAddToMedia(file: File) {
+  async function uploadAndAddToMedia(input: File | FileList | File[]) {
+    const arr: File[] = input instanceof File ? [input] : Array.from(input);
+    if (arr.length === 0) return;
     const token = getAccessToken();
     if (!token) return;
     setUploading(true);
     setUploadError("");
     try {
-      const newMedia = await api.uploadMedia(token, file);
-      setMedia((cur) => [newMedia, ...cur]);
-      if (selectedId) {
-        setDraftItems((cur) => [...cur, {
-          media_id: newMedia.id,
-          display_order: cur.length,
-          duration_sec: newMedia.mime_type.startsWith("video/") ? Math.round(newMedia.duration_sec ?? 0) : 10,
-          media: newMedia,
-        }]);
+      for (let i = 0; i < arr.length; i++) {
+        if (arr.length > 1) setUploadStatusMsg(`${i + 1} / ${arr.length}`);
+        const newMedia = await api.uploadMedia(token, arr[i]);
+        setMedia((cur) => [newMedia, ...cur]);
+        if (selectedId) {
+          setDraftItems((cur) => [...cur, {
+            media_id: newMedia.id,
+            display_order: cur.length,
+            duration_sec: newMedia.mime_type.startsWith("video/") ? Math.round(newMedia.duration_sec ?? 0) : 10,
+            media: newMedia,
+          }]);
+        }
       }
     } catch (err: unknown) {
       setUploadError(err instanceof Error ? err.message : "アップロードに失敗しました");
     } finally {
       setUploading(false);
+      setUploadStatusMsg("");
     }
   }
 
@@ -690,8 +697,9 @@ export default function AdminPlaylistsPage() {
                 ref={pickerInputRef}
                 type="file"
                 accept="image/*,video/*"
+                multiple
                 className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadAndAddToMedia(f); e.target.value = ""; }}
+                onChange={(e) => { const fs = e.target.files; if (fs && fs.length > 0) void uploadAndAddToMedia(fs); e.target.value = ""; }}
               />
               {/* Picker header */}
               <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15", marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -707,7 +715,7 @@ export default function AdminPlaylistsPage() {
               <div
                 onDragOver={(e) => { e.preventDefault(); setPickerDragging(true); }}
                 onDragLeave={() => setPickerDragging(false)}
-                onDrop={(e) => { e.preventDefault(); setPickerDragging(false); const f = e.dataTransfer.files[0]; if (f) void uploadAndAddToMedia(f); }}
+                onDrop={(e) => { e.preventDefault(); setPickerDragging(false); const fs = e.dataTransfer.files; if (fs && fs.length > 0) void uploadAndAddToMedia(fs); }}
                 onClick={() => pickerInputRef.current?.click()}
                 style={{
                   border: `1.5px dashed ${pickerDragging ? "#4a7c4e" : "#d8d3c7"}`,
@@ -723,7 +731,9 @@ export default function AdminPlaylistsPage() {
                 }}
               >
                 {uploading ? (
-                  <span style={{ fontSize: 11.5, color: "#a8a198" }}>アップロード中…</span>
+                  <span style={{ fontSize: 11.5, color: "#a8a198" }}>
+                    {uploadStatusMsg ? `アップロード中… (${uploadStatusMsg})` : "アップロード中…"}
+                  </span>
                 ) : (
                   <>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#a8a198" strokeWidth="1.8" strokeLinecap="round">

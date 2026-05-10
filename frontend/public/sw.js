@@ -35,7 +35,10 @@ self.addEventListener('fetch', (e) => {
   }
   // Network-first for pages
   e.respondWith(
-    fetch(e.request).catch(() => caches.match(e.request))
+    fetch(e.request).catch(async () => {
+      const cached = await caches.match(e.request);
+      return cached ?? Response.error();
+    })
   );
 });
 

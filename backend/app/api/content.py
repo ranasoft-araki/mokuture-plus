@@ -105,6 +105,8 @@ async def get_upload_url(body: UploadUrlRequest, user: User = Depends(get_curren
         return storage.generate_presigned_upload_url(user.tenant_id, body.filename, body.mime_type)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="ストレージURLの生成に失敗しました")
 
 
 @router.post("/media", response_model=MediaOut, status_code=201)
