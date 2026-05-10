@@ -279,6 +279,8 @@ export default function AdminSchedulesPage() {
       setSuccess("スケジュールを更新しました");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "更新に失敗しました");
+      const t = getAccessToken();
+      if (t) await load(t);
     } finally {
       setSaving(false);
     }
@@ -496,6 +498,7 @@ export default function AdminSchedulesPage() {
                             boxShadow: isDraggingThis ? "0 4px 12px rgba(0,0,0,0.15)" : "none",
                           }}
                           onMouseDown={(e) => {
+                            if (e.button !== 0) return;
                             e.preventDefault();
                             if (!gridRef.current) return;
                             const rect = gridRef.current.getBoundingClientRect();
@@ -540,6 +543,7 @@ export default function AdminSchedulesPage() {
                           <div
                             style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 8, cursor: "ew-resize", background: "rgba(0,0,0,0.12)", borderRadius: "0 5px 5px 0" }}
                             onMouseDown={(e) => {
+                              if (e.button !== 0) return;
                               e.stopPropagation();
                               e.preventDefault();
                               const startMin0 = timeToMinutes(s.start_time);
