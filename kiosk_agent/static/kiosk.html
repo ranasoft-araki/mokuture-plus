@@ -103,43 +103,46 @@ function escHtml(s) {
   return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
 
-// ─── Romaji → Kana ───────────────────────────────────────────────────────────
-const RM = {
-  "a":"あ","i":"い","u":"う","e":"え","o":"お",
-  "ka":"か","ki":"き","ku":"く","ke":"け","ko":"こ","kya":"きゃ","kyu":"きゅ","kyo":"きょ",
-  "sa":"さ","si":"し","su":"す","se":"せ","so":"そ","shi":"し","sha":"しゃ","shu":"しゅ","sho":"しょ","sya":"しゃ","syu":"しゅ","syo":"しょ",
-  "ta":"た","ti":"ち","tu":"つ","te":"て","to":"と","chi":"ち","tsu":"つ","cha":"ちゃ","chu":"ちゅ","cho":"ちょ","tya":"ちゃ","tyu":"ちゅ","tyo":"ちょ",
-  "na":"な","ni":"に","nu":"ぬ","ne":"ね","no":"の","nya":"にゃ","nyu":"にゅ","nyo":"にょ","nn":"ん",
-  "ha":"は","hi":"ひ","hu":"ふ","fu":"ふ","he":"へ","ho":"ほ","hya":"ひゃ","hyu":"ひゅ","hyo":"ひょ",
-  "ma":"ま","mi":"み","mu":"む","me":"め","mo":"も","mya":"みゃ","myu":"みゅ","myo":"みょ",
-  "ya":"や","yu":"ゆ","yo":"よ",
-  "ra":"ら","ri":"り","ru":"る","re":"れ","ro":"ろ","rya":"りゃ","ryu":"りゅ","ryo":"りょ",
-  "wa":"わ","wo":"を",
-  "ga":"が","gi":"ぎ","gu":"ぐ","ge":"げ","go":"ご","gya":"ぎゃ","gyu":"ぎゅ","gyo":"ぎょ",
-  "za":"ざ","zi":"じ","zu":"ず","ze":"ぜ","zo":"ぞ","ji":"じ","ja":"じゃ","ju":"じゅ","jo":"じょ","zya":"じゃ","zyu":"じゅ","zyo":"じょ",
-  "da":"だ","di":"ぢ","du":"づ","de":"で","do":"ど",
-  "ba":"ば","bi":"び","bu":"ぶ","be":"べ","bo":"ぼ","bya":"びゃ","byu":"びゅ","byo":"びょ",
-  "pa":"ぱ","pi":"ぴ","pu":"ぷ","pe":"ぺ","po":"ぽ","pya":"ぴゃ","pyu":"ぴゅ","pyo":"ぴょ",
-  "xa":"ぁ","xi":"ぃ","xu":"ぅ","xe":"ぇ","xo":"ぉ","xya":"ゃ","xyu":"ゅ","xyo":"ょ","xtsu":"っ","xtu":"っ",
-  "-":"ー",
-};
-const RP = new Set(Object.keys(RM).flatMap(k => Array.from({length:k.length}, (_, i) => k.slice(0, i+1))));
-const VOWELS = new Set(["a","i","u","e","o"]);
-
-function cvt(buf, ch) {
-  const c = buf + ch;
-  if (buf === "n" && !VOWELS.has(ch) && ch !== "y" && ch !== "n") {
-    const r = cvt("", ch); return { out: "ん" + r.out, buf: r.buf };
-  }
-  if (buf.length > 0 && ch === buf[buf.length-1] && !VOWELS.has(ch) && ch !== "n") {
-    const r = cvt("", ch); return { out: "っ" + r.out, buf: r.buf };
-  }
-  if (RM[c] !== undefined) return { out: RM[c], buf: "" };
-  if (RP.has(c))           return { out: "",    buf: c  };
-  if (RP.has(ch))          return { out: buf,   buf: ch };
-  if (RM[ch] !== undefined) return { out: buf + RM[ch], buf: "" };
-  return { out: c, buf: "" };
+// ─── 50音 keyboard data ───────────────────────────────────────────────────────
+const GOJUUON = [
+  ["あ","か","さ","た","な","は","ま","や","ら","わ"],
+  ["い","き","し","ち","に","ひ","み",null,"り",null],
+  ["う","く","す","つ","ぬ","ふ","む","ゆ","る",null],
+  ["え","け","せ","て","ね","へ","め",null,"れ",null],
+  ["お","こ","そ","と","の","ほ","も","よ","ろ","を"],
+];
+function hiraToKata(s) {
+  return s.replace(/[ぁ-ゖ]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60));
 }
+// Dakuten toggle (voiced ↔ unvoiced; handles both hiragana and katakana)
+const DAKUTEN_MAP = {
+  か:"が",き:"ぎ",く:"ぐ",け:"げ",こ:"ご",さ:"ざ",し:"じ",す:"ず",せ:"ぜ",そ:"ぞ",
+  た:"だ",ち:"ぢ",つ:"づ",て:"で",と:"ど",は:"ば",ひ:"び",ふ:"ぶ",へ:"べ",ほ:"ぼ",
+  が:"か",ぎ:"き",ぐ:"く",げ:"け",ご:"こ",ざ:"さ",じ:"し",ず:"す",ぜ:"せ",ぞ:"そ",
+  だ:"た",ぢ:"ち",づ:"つ",で:"て",ど:"と",ば:"は",び:"ひ",ぶ:"ふ",べ:"へ",ぼ:"ほ",
+  ぱ:"ば",ぴ:"び",ぷ:"ぶ",ぺ:"べ",ぽ:"ぼ",
+  カ:"ガ",キ:"ギ",ク:"グ",ケ:"ゲ",コ:"ゴ",サ:"ザ",シ:"ジ",ス:"ズ",セ:"ゼ",ソ:"ゾ",
+  タ:"ダ",チ:"ヂ",ツ:"ヅ",テ:"デ",ト:"ド",ハ:"バ",ヒ:"ビ",フ:"ブ",ヘ:"ベ",ホ:"ボ",
+  ガ:"カ",ギ:"キ",グ:"ク",ゲ:"ケ",ゴ:"コ",ザ:"サ",ジ:"シ",ズ:"ス",ゼ:"セ",ゾ:"ソ",
+  ダ:"タ",ヂ:"チ",ヅ:"ツ",デ:"テ",ド:"ト",バ:"ハ",ビ:"ヒ",ブ:"フ",ベ:"ヘ",ボ:"ホ",
+  パ:"バ",ピ:"ビ",プ:"ブ",ペ:"ベ",ポ:"ボ",
+};
+// Handakuten toggle (は行↔ぱ行; ば行→ぱ行 も対応)
+const HANDAKUTEN_MAP = {
+  は:"ぱ",ひ:"ぴ",ふ:"ぷ",へ:"ぺ",ほ:"ぽ",
+  ぱ:"は",ぴ:"ひ",ぷ:"ふ",ぺ:"へ",ぽ:"ほ",
+  ば:"ぱ",び:"ぴ",ぶ:"ぷ",べ:"ぺ",ぼ:"ぽ",
+  ハ:"パ",ヒ:"ピ",フ:"プ",ヘ:"ペ",ホ:"ポ",
+  パ:"ハ",ピ:"ヒ",プ:"フ",ペ:"ヘ",ポ:"ホ",
+  バ:"パ",ビ:"ピ",ブ:"プ",ベ:"ペ",ボ:"ポ",
+};
+// Small kana toggle (大↔小)
+const SMALL_MAP = {
+  あ:"ぁ",い:"ぃ",う:"ぅ",え:"ぇ",お:"ぉ",つ:"っ",や:"ゃ",ゆ:"ゅ",よ:"ょ",わ:"ゎ",
+  ぁ:"あ",ぃ:"い",ぅ:"う",ぇ:"え",ぉ:"お",っ:"つ",ゃ:"や",ゅ:"ゆ",ょ:"よ",ゎ:"わ",
+  ア:"ァ",イ:"ィ",ウ:"ゥ",エ:"ェ",オ:"ォ",ツ:"ッ",ヤ:"ャ",ユ:"ュ",ヨ:"ョ",ワ:"ヮ",
+  ァ:"ア",ィ:"イ",ゥ:"ウ",ェ:"エ",ォ:"オ",ッ:"ツ",ャ:"ヤ",ュ:"ユ",ョ:"ヨ",ヮ:"ワ",
+};
 
 // ─── SVG icons ───────────────────────────────────────────────────────────────
 const ICO = {
@@ -588,12 +591,6 @@ function showReception(initPurpose) {
     { key: "staff",        label: "担当者名", placeholder: "担当者のお名前" },
     { key: "purpose",      label: "ご用件",     placeholder: "お打ち合わせ など" },
   ];
-  const KB_ROWS = [
-    ["1","2","3","4","5","6","7","8","9","0"],
-    ["q","w","e","r","t","y","u","i","o","p"],
-    ["a","s","d","f","g","h","j","k","l"],
-    ["shift","z","x","c","v","b","n","m","⌫"],
-  ];
 
   let form = { visitor_name: "", company: "", staff: "", purpose: initPurpose ?? "" };
   let focus = "visitor_name";
@@ -605,7 +602,7 @@ function showReception(initPurpose) {
   if (USE_PURPOSE_DROPDOWN && initPurpose && !PURPOSE_LIST.includes(initPurpose) && initPurpose !== "その他（自由入力）") {
     purposeMode = "freetext";
   }
-  let shifted = false, isKana = false, rbuf = "", submitting = false, errMsg = "";
+  let isKatakana = false, submitting = false, errMsg = "";
   let idleId, isFirstRender = true;
 
   function resetIdle() {
@@ -637,7 +634,7 @@ function showReception(initPurpose) {
       }
       // Free-text mode (or no staff list)
       const focused = focus === f.key;
-      const disp = form[f.key] + (focused && isKana ? rbuf : "");
+      const disp = form[f.key];
       return `<div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
           <span style="font-size:15px;font-weight:600;color:${th.text}">${escHtml(f.label)}</span>
@@ -669,7 +666,7 @@ function showReception(initPurpose) {
       }
       // Free-text mode (no list, or "その他" selected)
       const focused = focus === f.key;
-      const disp = form[f.key] + (focused && isKana ? rbuf : "");
+      const disp = form[f.key];
       return `<div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
           <span style="font-size:15px;font-weight:600;color:${th.text}">${escHtml(f.label)}</span>
@@ -683,7 +680,7 @@ function showReception(initPurpose) {
 
     const fieldHtml = (f, big) => {
       const focused = focus === f.key;
-      const disp = form[f.key] + (focused && isKana ? rbuf : "");
+      const disp = form[f.key];
       return `<div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
           <span style="font-size:15px;font-weight:600;color:${th.text}">${escHtml(f.label)}</span>
@@ -694,15 +691,13 @@ function showReception(initPurpose) {
         </div>
       </div>`;
     };
-    const kbHtml = KB_ROWS.map((row, ri) => `
-<div style="display:flex;gap:5px;margin-bottom:5px;justify-content:center;padding-left:${ri===2?24:0}px">
-  ${row.map(k => {
-    const isSh = k === "shift", isDel = k === "⌫", wide = isSh || isDel;
-    const bg = (isSh && shifted) ? th.sendBg : th.card;
-    const col = (isSh && shifted) ? "#fff" : th.text;
-    const lbl = k === "shift" ? "⇧" : (shifted && !isSh && !isDel ? k.toUpperCase() : k);
-    return `<button data-key="${escHtml(k)}" style="flex:${wide?1.8:1};height:62px;background:${bg};border:1px solid ${th.kbdBorder};border-radius:9px;font-size:${wide?14:24}px;font-weight:${wide?600:400};color:${col};cursor:pointer;font-family:Inter,system-ui,sans-serif;user-select:none;transition:background .1s">${escHtml(lbl)}</button>`;
-  }).join("")}
+    const kbGrid = isKatakana ? GOJUUON.map(r => r.map(c => c ? hiraToKata(c) : null)) : GOJUUON;
+    const kbHtml = kbGrid.map(row => `
+<div style="display:flex;gap:5px;margin-bottom:5px;justify-content:center">
+  ${row.map(ch => ch
+    ? `<button data-key="${escHtml(ch)}" style="flex:1;height:62px;background:${th.card};border:1px solid ${th.kbdBorder};border-radius:9px;font-size:22px;color:${th.text};cursor:pointer;font-family:'Noto Sans JP','Hiragino Kaku Gothic ProN',sans-serif;user-select:none;transition:background .1s">${escHtml(ch)}</button>`
+    : `<div style="flex:1;height:62px"></div>`
+  ).join("")}
 </div>`).join("");
 
     sc.innerHTML = `
@@ -723,8 +718,14 @@ function showReception(initPurpose) {
       <div style="background:${th.kbd};border-radius:18px;padding:12px;border:1px solid ${th.kbdBorder}">
         ${kbHtml}
         <div style="display:flex;gap:5px;margin-top:5px;justify-content:center">
-          <button id="kana-btn" style="flex:2;height:62px;background:${isKana?th.sendBg:th.card};border:1px solid ${th.kbdBorder};border-radius:9px;font-size:13px;color:${isKana?"#fff":th.sub};cursor:pointer;user-select:none;transition:background .1s,color .1s">かな / ABC</button>
-          <button data-key="space" style="flex:5;height:62px;background:${th.card};border:1px solid ${th.kbdBorder};border-radius:9px;cursor:pointer;user-select:none"></button>
+          <button data-key="${isKatakana?"ン":"ん"}" style="flex:1;height:62px;background:${th.card};border:1px solid ${th.kbdBorder};border-radius:9px;font-size:22px;color:${th.text};cursor:pointer;font-family:'Noto Sans JP','Hiragino Kaku Gothic ProN',sans-serif;user-select:none;transition:background .1s">${isKatakana?"ン":"ん"}</button>
+          <button data-key="__dakuten__" style="flex:1;height:62px;background:${th.card};border:1px solid ${th.kbdBorder};border-radius:9px;font-size:22px;color:${th.text};cursor:pointer;user-select:none;transition:background .1s">゛</button>
+          <button data-key="__handakuten__" style="flex:1;height:62px;background:${th.card};border:1px solid ${th.kbdBorder};border-radius:9px;font-size:22px;color:${th.text};cursor:pointer;user-select:none;transition:background .1s">゜</button>
+          <button data-key="__small__" style="flex:1;height:62px;background:${th.card};border:1px solid ${th.kbdBorder};border-radius:9px;font-size:16px;font-weight:600;color:${th.sub};cursor:pointer;user-select:none;transition:background .1s">小</button>
+          <button data-key="ー" style="flex:1;height:62px;background:${th.card};border:1px solid ${th.kbdBorder};border-radius:9px;font-size:22px;color:${th.text};cursor:pointer;font-family:'Noto Sans JP','Hiragino Kaku Gothic ProN',sans-serif;user-select:none;transition:background .1s">ー</button>
+          <button data-key="space" style="flex:2.5;height:62px;background:${th.card};border:1px solid ${th.kbdBorder};border-radius:9px;font-size:13px;color:${th.sub};cursor:pointer;user-select:none">スペース</button>
+          <button id="kana-btn" style="flex:1.5;height:62px;background:${isKatakana?th.sendBg:th.card};border:1px solid ${th.kbdBorder};border-radius:9px;font-size:13px;color:${isKatakana?"#fff":th.sub};cursor:pointer;user-select:none;transition:background .1s,color .1s">${isKatakana?"ひら":"カナ"}</button>
+          <button data-key="⌫" style="flex:1.8;height:62px;background:${th.card};border:1px solid ${th.kbdBorder};border-radius:9px;font-size:14px;color:${th.sub};cursor:pointer;user-select:none;transition:background .1s">⌫ 削除</button>
           <button id="send-btn" style="flex:2;height:62px;background:${submitting?th.sendActive:th.sendBg};border-radius:9px;border:none;display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff;font-weight:600;cursor:${submitting?"not-allowed":"pointer"};user-select:none">
             ${submitting ? `<div style="width:22px;height:22px;border-radius:50%;border:2.5px solid rgba(255,255,255,.3);border-top-color:#fff;animation:spin .7s linear infinite"></div>` : "送信 →"}
           </button>
@@ -798,7 +799,6 @@ function showReception(initPurpose) {
     sc.querySelectorAll("[data-field]").forEach(el => {
       el.addEventListener("click", () => {
         resetIdle();
-        if (isKana && rbuf) { form[focus] += rbuf === "n" ? "ん" : rbuf; rbuf = ""; }
         focus = el.dataset.field;
         fullRender();
       });
@@ -812,13 +812,11 @@ function showReception(initPurpose) {
 
     document.getElementById("kana-btn").addEventListener("mousedown", e => {
       e.preventDefault(); resetIdle();
-      if (isKana && rbuf) { form[focus] += rbuf === "n" ? "ん" : rbuf; rbuf = ""; }
-      isKana = !isKana; shifted = false; fullRender();
+      isKatakana = !isKatakana; fullRender();
     });
     document.getElementById("kana-btn").addEventListener("touchstart", e => {
       e.preventDefault(); resetIdle();
-      if (isKana && rbuf) { form[focus] += rbuf === "n" ? "ん" : rbuf; rbuf = ""; }
-      isKana = !isKana; shifted = false; fullRender();
+      isKatakana = !isKatakana; fullRender();
     }, { passive: false });
 
     document.getElementById("send-btn").addEventListener("click", handleSubmit);
@@ -853,31 +851,33 @@ function showReception(initPurpose) {
   }
 
   function handleKey(key) {
-    // If focus is on purpose and we are in dropdown mode, redirect input to visitor_name
+    // If focus is on purpose in dropdown mode, redirect to visitor_name
     if (focus === "purpose" && USE_PURPOSE_DROPDOWN && purposeMode === "dropdown") focus = "visitor_name";
+    const cur = form[focus];
     if (key === "⌫") {
-      if (isKana && rbuf.length > 0) rbuf = rbuf.slice(0, -1);
-      else form[focus] = form[focus].slice(0, -1);
-    } else if (key === "shift") {
-      shifted = !shifted;
+      form[focus] = cur.slice(0, -1);
     } else if (key === "space") {
-      if (isKana && rbuf) { form[focus] += rbuf === "n" ? "ん" : rbuf; rbuf = ""; }
-      form[focus] += " ";
-    } else if (isKana && /^[a-z-]$/i.test(key)) {
-      const r = cvt(rbuf, key.toLowerCase());
-      if (r.out) form[focus] += r.out;
-      rbuf = r.buf;
+      form[focus] += "　";
+    } else if (key === "__dakuten__") {
+      if (cur && DAKUTEN_MAP[cur[cur.length-1]] !== undefined) {
+        form[focus] = cur.slice(0,-1) + DAKUTEN_MAP[cur[cur.length-1]];
+      }
+    } else if (key === "__handakuten__") {
+      if (cur && HANDAKUTEN_MAP[cur[cur.length-1]] !== undefined) {
+        form[focus] = cur.slice(0,-1) + HANDAKUTEN_MAP[cur[cur.length-1]];
+      }
+    } else if (key === "__small__") {
+      if (cur && SMALL_MAP[cur[cur.length-1]] !== undefined) {
+        form[focus] = cur.slice(0,-1) + SMALL_MAP[cur[cur.length-1]];
+      }
     } else {
-      if (isKana && rbuf) { form[focus] += rbuf === "n" ? "ん" : rbuf; rbuf = ""; }
-      form[focus] += shifted ? key.toUpperCase() : key;
-      if (shifted) shifted = false;
+      form[focus] += key;
     }
     fullRender();
   }
 
   async function handleSubmit() {
     if (submitting) return;
-    if (isKana && rbuf) { form[focus] += rbuf === "n" ? "ん" : rbuf; rbuf = ""; }
     if (!form.visitor_name.trim()) { errMsg = "お名前を入力してください"; fullRender(); return; }
     const token = localStorage.getItem(TOKEN_KEY);
     if (!token) { cleanup(); showSetup(); return; }

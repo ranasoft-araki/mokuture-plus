@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, type PublicTenantSettings, getCachedKioskSettings, setCachedKioskSettings } from "@/lib/api";
+import { JapaneseKeyboard } from "@/components/JapaneseKeyboard";
 
 type KioskScreen = "loading" | "suspended" | "ready";
 
@@ -155,6 +156,13 @@ const shakeVariants = {
   },
 };
 
+// ─── Active field type for Japanese keyboard ─────────────────────────────────
+
+type ActiveField = "visitorName" | "company" | "staff" | "purpose";
+
+// Keyboard height used as paddingBottom when open (matches JapaneseKeyboard layout)
+const KEYBOARD_HEIGHT = 390;
+
 // ─── Reception Form ───────────────────────────────────────────────────────────
 
 function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSettings; kioskToken: string }) {
@@ -172,10 +180,26 @@ function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSetting
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
 
+  // Japanese keyboard state
+  const [activeField, setActiveField] = useState<ActiveField | null>(null);
+
   const bc = settings.brand_color;
+
+  // Map field name → getter/setter
+  const fieldValues: Record<ActiveField, string> = { visitorName, company, staff, purpose };
+  const fieldSetters: Record<ActiveField, (v: string) => void> = {
+    visitorName: setVisitorName,
+    company: setCompany,
+    staff: setStaff,
+    purpose: setPurpose,
+  };
+
+  const openKeyboard = (field: ActiveField) => setActiveField(field);
+  const closeKeyboard = () => setActiveField(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    closeKeyboard();
     if (!visitorName.trim()) {
       setError("お名前を入力してください");
       return;
@@ -197,6 +221,27 @@ function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSetting
       setSubmitting(false);
     }
   };
+
+  // Shared props to prevent system keyboard from opening on readOnly inputs
+  const inputTapProps = (field: ActiveField) => ({
+    readOnly: true,
+    onMouseDown: (e: React.MouseEvent<HTMLInputElement>) => {
+      e.preventDefault();
+      openKeyboard(field);
+    },
+    onTouchStart: (e: React.TouchEvent<HTMLInputElement>) => {
+      e.preventDefault();
+      openKeyboard(field);
+    },
+  });
+
+  const activeInputStyle = (field: ActiveField): React.CSSProperties => ({
+    ...inputStyle,
+    borderColor: activeField === field ? bc : "#d8d3c7",
+    boxShadow: activeField === field ? `0 0 0 2px ${bc}33` : undefined,
+    cursor: "pointer",
+    caretColor: "transparent",
+  });
 
   return (
     <AnimatePresence mode="wait">
@@ -224,9 +269,11 @@ function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSetting
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
-            justifyContent: "center",
-            padding: "40px 24px",
+            justifyContent: activeField ? "flex-start" : "center",
+            padding: `40px 24px`,
+            paddingBottom: activeField ? KEYBOARD_HEIGHT + 24 : 40,
             fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif",
+            transition: "padding-bottom 0.2s ease, justify-content 0.1s",
           }}
         >
           <div style={{ width: "100%", maxWidth: 560 }}>
@@ -266,9 +313,9 @@ function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSetting
                 <FormField label="お名前" required>
                   <input
                     value={visitorName}
-                    onChange={(e) => setVisitorName(e.target.value)}
+                    {...inputTapProps("visitorName")}
                     placeholder="山田 太郎"
-                    style={inputStyle}
+                    style={activeInputStyle("visitorName")}
                   />
                 </FormField>
               </motion.div>
@@ -278,9 +325,9 @@ function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSetting
                 <FormField label="会社名">
                   <input
                     value={company}
-                    onChange={(e) => setCompany(e.target.value)}
+                    {...inputTapProps("company")}
                     placeholder="株式会社 〇〇"
-                    style={inputStyle}
+                    style={activeInputStyle("company")}
                   />
                 </FormField>
               </motion.div>
@@ -320,7 +367,7 @@ function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSetting
                         ))}
                         <motion.button
                           type="button"
-                          onClick={() => { setStaff(""); setStaffMode("freetext"); }}
+                          onClick={() => { setStaff(""); setStaffMode("freetext"); openKeyboard("staff"); }}
                           variants={fieldVariants}
                           whileTap={{ scale: 0.96 }}
                           style={{
@@ -346,15 +393,14 @@ function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSetting
                     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                       <input
                         value={staff}
-                        onChange={(e) => setStaff(e.target.value)}
+                        {...inputTapProps("staff")}
                         placeholder="担当者のお名前"
-                        style={inputStyle}
-                        autoFocus={useDropdown}
+                        style={activeInputStyle("staff")}
                       />
                       {useDropdown && (
                         <button
                           type="button"
-                          onClick={() => { setStaff(""); setStaffMode("dropdown"); }}
+                          onClick={() => { setStaff(""); setStaffMode("dropdown"); closeKeyboard(); }}
                           style={{
                             alignSelf: "flex-start",
                             fontSize: 12,
@@ -379,9 +425,9 @@ function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSetting
                 <FormField label="ご用件">
                   <input
                     value={purpose}
-                    onChange={(e) => setPurpose(e.target.value)}
+                    {...inputTapProps("purpose")}
                     placeholder="お打ち合わせ など"
-                    style={inputStyle}
+                    style={activeInputStyle("purpose")}
                   />
                 </FormField>
               </motion.div>
@@ -413,6 +459,16 @@ function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSetting
             </motion.form>
           </div>
         </motion.div>
+      )}
+
+      {/* Japanese 50-on keyboard — shown when a text field is active */}
+      {!submitted && activeField && (
+        <JapaneseKeyboard
+          key="jp-keyboard"
+          value={fieldValues[activeField]}
+          onChange={fieldSetters[activeField]}
+          onClose={closeKeyboard}
+        />
       )}
     </AnimatePresence>
   );
