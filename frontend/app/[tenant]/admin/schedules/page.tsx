@@ -93,6 +93,9 @@ export default function AdminSchedulesPage() {
 
   const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
 
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; schedule: Schedule } | null>(null);
+
   // Edit modal state
   const [editTarget, setEditTarget] = useState<Schedule | null>(null);
   const [editPlaylistId, setEditPlaylistId] = useState("");
@@ -130,6 +133,19 @@ export default function AdminSchedulesPage() {
   }, []);
 
   useEffect(() => { schedulesRef.current = schedules; }, [schedules]);
+
+  // Close context menu on click/Escape anywhere
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [contextMenu]);
 
   // Drag event handlers
   useEffect(() => {
@@ -463,7 +479,7 @@ export default function AdminSchedulesPage() {
                       return (
                         <div
                           key={s.id}
-                          title="ダブルクリックで編集"
+                          title="右クリックで編集・削除"
                           style={{
                             position: "absolute", left, width,
                             top: 0, bottom: 0,
@@ -505,13 +521,10 @@ export default function AdminSchedulesPage() {
                               tempDay: di,
                             });
                           }}
-                          onDoubleClick={(e) => {
+                          onContextMenu={(e) => {
+                            e.preventDefault();
                             e.stopPropagation();
-                            if (dragJustEndedRef.current) {
-                              dragJustEndedRef.current = false;
-                              return;
-                            }
-                            openEdit(s);
+                            setContextMenu({ x: e.clientX, y: e.clientY, schedule: s });
                           }}
                         >
                           <div style={{ display: "flex", alignItems: "center", gap: 4, overflow: "hidden" }}>
@@ -560,7 +573,49 @@ export default function AdminSchedulesPage() {
 
       {schedules.length === 0 && !loading && (
         <div style={{ marginTop: 16, padding: "12px 16px", background: "#f4f1ea", borderRadius: 7, borderLeft: "2px solid #4a7c4e", fontSize: 11.5, color: "#6b6559", fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}>
-          「+ 新規ブロック」からスケジュールを追加すると、キオスクが自動的に指定時間帯のプレイリストを再生します。ブロックはドラッグで移動・右端でリサイズ・ダブルクリックで編集できます。
+          「+ 新規ブロック」からスケジュールを追加すると、キオスクが自動的に指定時間帯のプレイリストを再生します。ブロックはドラッグで移動・右端でリサイズ・右クリックで編集・削除できます。
+        </div>
+      )}
+
+      {/* Context menu */}
+      {contextMenu && (
+        <div
+          style={{
+            position: "fixed",
+            top: contextMenu.y,
+            left: contextMenu.x,
+            zIndex: 200,
+            background: "#fffefb",
+            border: "1px solid #d8d3c7",
+            borderRadius: 8,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+            overflow: "hidden",
+            minWidth: 140,
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {[
+            { label: "編集", icon: "✎", danger: false, action: () => { openEdit(contextMenu.schedule); setContextMenu(null); } },
+            { label: "削除", icon: "✕", danger: true,  action: () => { setConfirmTarget(contextMenu.schedule.id); setContextMenu(null); } },
+          ].map(({ label, icon, danger, action }) => (
+            <button
+              key={label}
+              onClick={action}
+              style={{
+                display: "flex", alignItems: "center", gap: 10,
+                width: "100%", padding: "10px 16px",
+                background: "transparent", border: "none",
+                fontSize: 13, fontFamily: '"Noto Sans JP", system-ui, sans-serif',
+                color: danger ? "#a84238" : "#2d2a24",
+                cursor: "pointer", textAlign: "left",
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = danger ? "#fdf0ef" : "#f4f1ea"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+            >
+              <span style={{ fontSize: 11, opacity: 0.6 }}>{icon}</span>
+              {label}
+            </button>
+          ))}
         </div>
       )}
 
