@@ -178,6 +178,7 @@ def _media_out(m: Media) -> dict:
 class PlaylistCreate(BaseModel):
     name: str
     transition_type: str = "fade"
+    transition_duration_sec: float = 0.4
 
     @field_validator("transition_type")
     @classmethod
@@ -186,10 +187,18 @@ class PlaylistCreate(BaseModel):
             raise ValueError(f"transition_type must be one of {_ALLOWED_TRANSITIONS}")
         return v
 
+    @field_validator("transition_duration_sec")
+    @classmethod
+    def validate_duration(cls, v: float) -> float:
+        if not 0.05 <= v <= 3.0:
+            raise ValueError("transition_duration_sec must be between 0.05 and 3.0")
+        return round(v, 2)
+
 
 class PlaylistUpdate(BaseModel):
     name: str | None = None
     transition_type: str | None = None
+    transition_duration_sec: float | None = None
 
     @field_validator("transition_type")
     @classmethod
@@ -197,6 +206,13 @@ class PlaylistUpdate(BaseModel):
         if v is not None and v not in _ALLOWED_TRANSITIONS:
             raise ValueError(f"transition_type must be one of {_ALLOWED_TRANSITIONS}")
         return v
+
+    @field_validator("transition_duration_sec")
+    @classmethod
+    def validate_duration(cls, v: float | None) -> float | None:
+        if v is not None and not 0.05 <= v <= 3.0:
+            raise ValueError("transition_duration_sec must be between 0.05 and 3.0")
+        return round(v, 2) if v is not None else None
 
 
 class PlaylistItemIn(BaseModel):
@@ -208,6 +224,8 @@ class PlaylistItemIn(BaseModel):
 class PlaylistOut(BaseModel):
     id: str
     name: str
+    transition_type: str
+    transition_duration_sec: float
     items: list[dict]
 
     model_config = {"from_attributes": True}
@@ -219,11 +237,22 @@ async def create_playlist(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    pl = Playlist(tenant_id=user.tenant_id, name=body.name, transition_type=body.transition_type)
+    pl = Playlist(
+        tenant_id=user.tenant_id,
+        name=body.name,
+        transition_type=body.transition_type,
+        transition_duration_sec=body.transition_duration_sec,
+    )
     db.add(pl)
     await db.commit()
     await db.refresh(pl)
-    return {"id": pl.id, "name": pl.name, "transition_type": pl.transition_type, "items": []}
+    return {
+        "id": pl.id,
+        "name": pl.name,
+        "transition_type": pl.transition_type,
+        "transition_duration_sec": pl.transition_duration_sec,
+        "items": [],
+    }
 
 
 @router.get("/playlists", response_model=list[PlaylistOut])
@@ -243,6 +272,7 @@ async def list_playlists(
             "id": pl.id,
             "name": pl.name,
             "transition_type": pl.transition_type,
+            "transition_duration_sec": pl.transition_duration_sec,
             "items": [
                 {
                     "id": i.id,
@@ -274,8 +304,15 @@ async def update_playlist(
         pl.name = body.name
     if body.transition_type is not None:
         pl.transition_type = body.transition_type
+    if body.transition_duration_sec is not None:
+        pl.transition_duration_sec = body.transition_duration_sec
     await db.commit()
-    return {"id": pl.id, "name": pl.name, "transition_type": pl.transition_type}
+    return {
+        "id": pl.id,
+        "name": pl.name,
+        "transition_type": pl.transition_type,
+        "transition_duration_sec": pl.transition_duration_sec,
+    }
 
 
 @router.delete("/playlists/{playlist_id}", status_code=204)

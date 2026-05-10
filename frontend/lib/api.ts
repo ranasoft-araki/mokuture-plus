@@ -313,7 +313,7 @@ export const api = {
     request<Playlist[]>("/content/playlists", {}, token),
   createPlaylist: (token: string, name: string) =>
     request<Playlist>("/content/playlists", { method: "POST", body: JSON.stringify({ name }) }, token),
-  updatePlaylist: (token: string, playlistId: string, body: { name?: string; transition_type?: string }) =>
+  updatePlaylist: (token: string, playlistId: string, body: { name?: string; transition_type?: string; transition_duration_sec?: number }) =>
     request<Playlist>("/content/playlists/" + playlistId, { method: "PATCH", body: JSON.stringify(body) }, token),
   updatePlaylistItems: (token: string, playlistId: string, items: { media_id: string; display_order: number; duration_sec: number }[]) =>
     request("/content/playlists/" + playlistId + "/items", { method: "PUT", body: JSON.stringify(items) }, token),
@@ -647,6 +647,7 @@ export interface Playlist {
   id: string;
   name: string;
   transition_type: string;
+  transition_duration_sec: number;
   items: PlaylistItem[];
 }
 

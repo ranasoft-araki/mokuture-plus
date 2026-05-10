@@ -36,6 +36,7 @@ export default function AdminPlaylistsPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [transitionType, setTransitionType] = useState<string>("fade");
+  const [transitionDuration, setTransitionDuration] = useState<number>(0.4);
   // List view drag state
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
@@ -53,8 +54,8 @@ export default function AdminPlaylistsPage() {
   const timelineRef = useRef<HTMLDivElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const previewFsVideoRef = useRef<HTMLVideoElement | null>(null);
-  // Cache animation per previewIdx — prevents random from re-rolling on every re-render
-  const _animIdxRef = useRef<number | null>(null);
+  // Cache animation — prevents random from re-rolling on every re-render (timer fires 20×/s)
+  const _animKeyRef = useRef<string>("");
   const _animValRef = useRef<string>("");
 
   const load = useCallback(async (token: string) => {
@@ -168,6 +169,7 @@ export default function AdminPlaylistsPage() {
     setError("");
     setSuccess("");
     setTransitionType(pl.transition_type ?? "fade");
+    setTransitionDuration(pl.transition_duration_sec ?? 0.4);
     const byId = Object.fromEntries(media.map((m) => [m.id, m]));
     setDraftItems(
       pl.items
@@ -287,7 +289,7 @@ export default function AdminPlaylistsPage() {
     try {
       await Promise.all([
         api.updatePlaylistItems(token, selectedId, draftItems.map((d, i) => ({ media_id: d.media_id, display_order: i, duration_sec: d.duration_sec }))),
-        api.updatePlaylist(token, selectedId, { transition_type: transitionType }),
+        api.updatePlaylist(token, selectedId, { transition_type: transitionType, transition_duration_sec: transitionDuration }),
       ]);
       const pls = await api.listPlaylists(token);
       setPlaylists(pls);
@@ -411,10 +413,11 @@ export default function AdminPlaylistsPage() {
   // Preview: current item
   const previewItem = draftItems[previewIdx] ?? null;
 
-  // Compute animation once per item change — Math.random() must NOT run on every re-render
-  if (_animIdxRef.current !== previewIdx) {
-    _animIdxRef.current = previewIdx;
-    _animValRef.current = getPreviewAnim(transitionType);
+  // Compute animation once per item/type/duration change — Math.random() must NOT run on every re-render
+  const _animCacheKey = `${previewIdx}|${transitionType}|${transitionDuration}`;
+  if (_animKeyRef.current !== _animCacheKey) {
+    _animKeyRef.current = _animCacheKey;
+    _animValRef.current = getPreviewAnim(transitionType, transitionDuration);
   }
   const currentPreviewAnim = _animValRef.current;
 
@@ -566,6 +569,22 @@ export default function AdminPlaylistsPage() {
                 <span style={{ fontSize: 10, color: transitionType === opt.value ? "rgba(255,255,255,0.6)" : "#a8a198" }}>{opt.desc}</span>
               </button>
             ))}
+          </div>
+          {/* Duration slider */}
+          <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ fontSize: 12, color: "#6b6559", whiteSpace: "nowrap" }}>エフェクト時間</div>
+            <input
+              type="range"
+              min={0.1}
+              max={3.0}
+              step={0.1}
+              value={transitionDuration}
+              onChange={(e) => setTransitionDuration(parseFloat(e.target.value))}
+              style={{ flex: 1, accentColor: "#1d1a15" }}
+            />
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#1d1a15", minWidth: 36, textAlign: "right" }}>
+              {transitionDuration.toFixed(1)}秒
+            </div>
           </div>
         </MkCard>
         <div className="adm-grid-3" style={{ gap: 20 }}>
@@ -1277,18 +1296,19 @@ function PlaylistTimeline({
   );
 }
 
-const _ANIM: Record<string, string> = {
-  fade:  "mk-fade  0.45s ease forwards",
-  slide: "mk-slide 0.35s ease forwards",
-  zoom:  "mk-zoom  0.45s ease forwards",
-  wipe:  "mk-wipe  0.40s ease forwards",
-  morph: "mk-morph 0.55s ease forwards",
-};
-const _ANIM_KEYS = Object.keys(_ANIM);
+const _ANIM_NAMES = ["fade", "slide", "zoom", "wipe", "morph"];
 
-function getPreviewAnim(type: string): string {
-  if (type === "random") return _ANIM[_ANIM_KEYS[Math.floor(Math.random() * _ANIM_KEYS.length)]];
-  return _ANIM[type] ?? _ANIM.fade;
+function getPreviewAnim(type: string, durationSec: number): string {
+  const dur = `${durationSec.toFixed(2)}s`;
+  const anims: Record<string, string> = {
+    fade:  `mk-fade  ${dur} ease forwards`,
+    slide: `mk-slide ${dur} ease forwards`,
+    zoom:  `mk-zoom  ${dur} ease forwards`,
+    wipe:  `mk-wipe  ${dur} ease forwards`,
+    morph: `mk-morph ${dur} ease forwards`,
+  };
+  if (type === "random") return anims[_ANIM_NAMES[Math.floor(Math.random() * _ANIM_NAMES.length)]];
+  return anims[type] ?? anims.fade;
 }
 
 function fmtDuration(sec: number) {
