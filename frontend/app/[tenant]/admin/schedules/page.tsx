@@ -134,17 +134,12 @@ export default function AdminSchedulesPage() {
 
   useEffect(() => { schedulesRef.current = schedules; }, [schedules]);
 
-  // Close context menu on click/Escape anywhere
+  // Close context menu on Escape
   useEffect(() => {
     if (!contextMenu) return;
-    const close = () => setContextMenu(null);
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
-    document.addEventListener("mousedown", close);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setContextMenu(null); };
     document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      document.removeEventListener("keydown", onKey);
-    };
+    return () => document.removeEventListener("keydown", onKey);
   }, [contextMenu]);
 
   // Drag event handlers
@@ -584,42 +579,48 @@ export default function AdminSchedulesPage() {
       {/* Context menu */}
       {contextMenu && (
         <div
-          style={{
-            position: "fixed",
-            top: contextMenu.y,
-            left: contextMenu.x,
-            zIndex: 200,
-            background: "#fffefb",
-            border: "1px solid #d8d3c7",
-            borderRadius: 8,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
-            overflow: "hidden",
-            minWidth: 140,
-          }}
-          onMouseDown={(e) => e.stopPropagation()}
+          style={{ position: "fixed", inset: 0, zIndex: 199 }}
+          onClick={() => setContextMenu(null)}
+          onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}
         >
-          {[
-            { label: "編集", icon: "✎", danger: false, action: () => { openEdit(contextMenu.schedule); setContextMenu(null); } },
-            { label: "削除", icon: "✕", danger: true,  action: () => { setConfirmTarget(contextMenu.schedule.id); setContextMenu(null); } },
-          ].map(({ label, icon, danger, action }) => (
-            <button
-              key={label}
-              onClick={action}
-              style={{
-                display: "flex", alignItems: "center", gap: 10,
-                width: "100%", padding: "10px 16px",
-                background: "transparent", border: "none",
-                fontSize: 13, fontFamily: '"Noto Sans JP", system-ui, sans-serif',
-                color: danger ? "#a84238" : "#2d2a24",
-                cursor: "pointer", textAlign: "left",
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = danger ? "#fdf0ef" : "#f4f1ea"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
-            >
-              <span style={{ fontSize: 11, opacity: 0.6 }}>{icon}</span>
-              {label}
-            </button>
-          ))}
+          <div
+            style={{
+              position: "fixed",
+              top: contextMenu.y,
+              left: contextMenu.x,
+              zIndex: 200,
+              background: "#fffefb",
+              border: "1px solid #d8d3c7",
+              borderRadius: 8,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+              overflow: "hidden",
+              minWidth: 140,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {([
+              { label: "編集", icon: "✎", danger: false, action: () => { openEdit(contextMenu.schedule); setContextMenu(null); } },
+              { label: "削除", icon: "✕", danger: true,  action: () => { setConfirmTarget(contextMenu.schedule.id); setContextMenu(null); } },
+            ] as const).map(({ label, icon, danger, action }) => (
+              <button
+                key={label}
+                onClick={action}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  width: "100%", padding: "10px 16px",
+                  background: "transparent", border: "none",
+                  fontSize: 13, fontFamily: '"Noto Sans JP", system-ui, sans-serif',
+                  color: danger ? "#a84238" : "#2d2a24",
+                  cursor: "pointer", textAlign: "left",
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = danger ? "#fdf0ef" : "#f4f1ea"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+              >
+                <span style={{ fontSize: 11, opacity: 0.6 }}>{icon}</span>
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
