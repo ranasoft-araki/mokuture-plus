@@ -53,6 +53,9 @@ export default function AdminPlaylistsPage() {
   const timelineRef = useRef<HTMLDivElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const previewFsVideoRef = useRef<HTMLVideoElement | null>(null);
+  // Cache animation per previewIdx — prevents random from re-rolling on every re-render
+  const _animIdxRef = useRef<number | null>(null);
+  const _animValRef = useRef<string>("");
 
   const load = useCallback(async (token: string) => {
     setLoading(true);
@@ -408,6 +411,13 @@ export default function AdminPlaylistsPage() {
   // Preview: current item
   const previewItem = draftItems[previewIdx] ?? null;
 
+  // Compute animation once per item change — Math.random() must NOT run on every re-render
+  if (_animIdxRef.current !== previewIdx) {
+    _animIdxRef.current = previewIdx;
+    _animValRef.current = getPreviewAnim(transitionType);
+  }
+  const currentPreviewAnim = _animValRef.current;
+
   return (
     <>
     <style>{`
@@ -417,6 +427,7 @@ export default function AdminPlaylistsPage() {
       @keyframes mk-wipe  { from{clip-path:inset(0 100% 0 0)}                        to{clip-path:inset(0 0% 0 0)} }
       @keyframes mk-morph { from{opacity:0;transform:scale(0.92);filter:blur(8px)}   to{opacity:1;transform:scale(1);filter:blur(0)} }
     `}</style>
+    {tlDrag && <style>{`* { cursor: grabbing !important; user-select: none !important; }`}</style>}
     {modal && (
       <ConfirmModal
         message={modal.msg}
@@ -764,6 +775,7 @@ export default function AdminPlaylistsPage() {
                 <div className="adm-grid-4" style={{ gap: 8 }}>
                   {media.map((m) => {
                     const inPl = draftItems.some((d) => d.media_id === m.id);
+                    const isBeingDragged = tlDrag?.kind === "insert" && tlDrag.sourceMediaId === m.id;
                     return (
                       <button
                         key={m.id}
@@ -774,8 +786,13 @@ export default function AdminPlaylistsPage() {
                           setTlDrag({ kind: "insert", sourceMediaId: m.id, startClientX: e.clientX, currentTargetIndex: draftItems.length });
                         }}
                         style={{
-                          position: "relative", padding: 0, border: `2px solid ${inPl ? "#4a7c4e" : "transparent"}`,
+                          position: "relative", padding: 0,
+                          border: `2px solid ${isBeingDragged ? "#c8a96e" : inPl ? "#4a7c4e" : "transparent"}`,
                           borderRadius: 7, overflow: "hidden", cursor: editViewMode === "timeline" ? "grab" : "pointer", background: "none",
+                          opacity: isBeingDragged ? 0.45 : 1,
+                          transform: isBeingDragged ? "scale(0.93)" : undefined,
+                          transition: tlDrag ? undefined : "opacity 0.1s, transform 0.1s",
+                          boxShadow: isBeingDragged ? "0 4px 12px rgba(0,0,0,0.25)" : undefined,
                         }}
                         title={editViewMode === "timeline" ? "ドラッグしてタイムラインに配置" : undefined}
                       >
@@ -837,7 +854,7 @@ export default function AdminPlaylistsPage() {
                 position: "relative",
                 backgroundImage: "repeating-linear-gradient(45deg, rgba(255,255,255,0.03) 0 10px, transparent 10px 20px)",
               }}>
-                <div key={previewIdx} style={{ position: "absolute", inset: 0, animation: previewItem ? getPreviewAnim(transitionType) : undefined }}>
+                <div key={previewIdx} style={{ position: "absolute", inset: 0, animation: previewItem ? currentPreviewAnim : undefined }}>
                   {previewItem ? (
                     previewItem.media.mime_type.startsWith("image/") ? (
                       <img src={previewItem.media.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -988,7 +1005,7 @@ export default function AdminPlaylistsPage() {
             position: "relative",
             overflow: "hidden",
           }}>
-            <div key={previewIdx} style={{ position: "absolute", inset: 0, animation: previewItem ? getPreviewAnim(transitionType) : undefined }}>
+            <div key={previewIdx} style={{ position: "absolute", inset: 0, animation: previewItem ? currentPreviewAnim : undefined }}>
               {previewItem ? (
                 previewItem.media.mime_type.startsWith("image/") ? (
                   <img src={previewItem.media.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
@@ -1162,6 +1179,7 @@ function PlaylistTimeline({
               const dur = effectiveDur(item);
               const blockWidth = Math.max(MIN_BLOCK_WIDTH, Math.round(dur * pxPerSec));
               const isDragging = draggingMediaId === item.media_id;
+              const isResizing = tlDrag?.kind === "resize" && tlDrag.mediaId === item.media_id;
 
               return (
                 <div key={item.media_id} style={{ display: "flex", alignItems: "stretch" }}>
@@ -1176,15 +1194,18 @@ function PlaylistTimeline({
                       width: blockWidth,
                       flexShrink: 0,
                       background: isVideo ? "#2d2a24" : "#eaf0e8",
-                      border: `1px solid ${isVideo ? "#3d3a34" : "#c6ddc8"}`,
-                      borderLeft: i === 0 ? undefined : "none",
+                      border: isResizing
+                        ? "2px solid #4a7c4e"
+                        : `1px solid ${isVideo ? "#3d3a34" : "#c6ddc8"}`,
+                      borderLeft: i === 0 && !isResizing ? undefined : isResizing ? undefined : "none",
                       position: "relative",
                       cursor: isDragging ? "grabbing" : "grab",
-                      opacity: isDragging ? 0.5 : 1,
+                      opacity: isDragging ? 0.45 : 1,
                       overflow: "hidden",
                       display: "flex",
                       alignItems: "center",
                       transition: "opacity 0.1s",
+                      boxShadow: isResizing ? "0 0 0 1px #4a7c4e" : undefined,
                     }}
                   >
                     {/* Thumbnail */}
