@@ -6,18 +6,6 @@ import { api, type Playlist, type Schedule } from "@/lib/api";
 import { clearTokens, getAccessToken } from "@/lib/auth";
 import { AdminShell, MkBtn, MkCard } from "@/components/AdminShell";
 
-// ── Timeline view constants ────────────────────────────────────────────────
-const HOUR_HEIGHT = 40; // px per hour in vertical timeline
-const TIMELINE_COLORS = [
-  "#4f9cf0", "#f0914f", "#4ff09c", "#f04f4f",
-  "#9c4ff0", "#f0e14f", "#4ff0e1", "#f04fb0",
-];
-
-function timeToPercent(timeStr: string): number {
-  const [h, m] = timeStr.split(":").map(Number);
-  return ((h * 60 + (m ?? 0)) / (24 * 60)) * 100;
-}
-
 const DAYS = ["月", "火", "水", "木", "金", "土", "日"] as const;
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
@@ -85,206 +73,6 @@ type DraggingState = {
   tempDay: number;
 };
 
-// ── Vertical Timeline component ───────────────────────────────────────────
-interface VerticalTimelineProps {
-  schedules: Schedule[];
-  playlists: Playlist[];
-  plColorMap: Record<string, number>;
-  conflictIds: Set<string>;
-  onDelete: (id: string) => void;
-}
-
-function VerticalTimeline({ schedules, playlists, plColorMap, conflictIds, onDelete }: VerticalTimelineProps) {
-  const playlistById = Object.fromEntries(playlists.map((p) => [p.id, p]));
-  const totalHeight = HOUR_HEIGHT * 24;
-
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
-
-  function getBlocksForDay(dayIndex: number) {
-    return schedules.filter((s) => s.day_of_week === dayIndex || s.day_of_week === -1);
-  }
-
-  return (
-    <MkCard padding="0">
-      <div style={{ overflowX: "auto" }}>
-        {/* Header row: time gutter + day columns */}
-        <div style={{ display: "flex", minWidth: 680 }}>
-          {/* Time gutter header */}
-          <div style={{ width: 52, flexShrink: 0, borderRight: "1px solid #efece5", background: "#f4f1ea" }} />
-          {/* Day headers */}
-          {DAYS.map((day, di) => {
-            const isWeekend = di >= 5;
-            return (
-              <div
-                key={day}
-                style={{
-                  flex: 1,
-                  textAlign: "center",
-                  padding: "10px 4px",
-                  fontSize: 12.5,
-                  fontWeight: 700,
-                  color: isWeekend ? "#a84238" : "#2d2a24",
-                  fontFamily: '"Noto Sans JP", system-ui, sans-serif',
-                  borderLeft: di > 0 ? "1px solid #efece5" : undefined,
-                  background: isWeekend ? "#fdf5f4" : "#f4f1ea",
-                  borderBottom: "1px solid #efece5",
-                }}
-              >
-                {day}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Grid body */}
-        <div style={{ display: "flex", position: "relative", minWidth: 680 }}>
-          {/* Time gutter */}
-          <div style={{ width: 52, flexShrink: 0, borderRight: "1px solid #efece5", background: "#fafaf8", position: "relative", height: totalHeight }}>
-            {HOURS.map((h) => (
-              <div
-                key={h}
-                style={{
-                  position: "absolute",
-                  top: h * HOUR_HEIGHT - 7,
-                  right: 6,
-                  fontSize: 9.5,
-                  color: "#a8a198",
-                  fontFamily: "monospace",
-                  lineHeight: 1,
-                  userSelect: "none",
-                }}
-              >
-                {String(h).padStart(2, "0")}:00
-              </div>
-            ))}
-            {/* 24:00 label */}
-            <div style={{ position: "absolute", top: totalHeight - 7, right: 6, fontSize: 9.5, color: "#a8a198", fontFamily: "monospace", lineHeight: 1, userSelect: "none" }}>
-              24:00
-            </div>
-          </div>
-
-          {/* Day columns */}
-          {DAYS.map((day, di) => {
-            const dayBlocks = getBlocksForDay(di);
-            const isWeekend = di >= 5;
-            return (
-              <div
-                key={day}
-                style={{
-                  flex: 1,
-                  position: "relative",
-                  height: totalHeight,
-                  borderLeft: di > 0 ? "1px solid #efece5" : undefined,
-                  background: isWeekend ? "#fdf9f8" : "#fffefb",
-                }}
-              >
-                {/* Hour grid lines */}
-                {HOURS.map((h) => (
-                  <div
-                    key={h}
-                    style={{
-                      position: "absolute",
-                      top: h * HOUR_HEIGHT,
-                      left: 0,
-                      right: 0,
-                      borderTop: h === 0 ? "none" : h % 6 === 0 ? "1px solid #d8d3c7" : "1px solid #efece5",
-                    }}
-                  />
-                ))}
-
-                {/* Schedule blocks */}
-                {dayBlocks.map((s) => {
-                  const topPct = timeToPercent(s.start_time);
-                  const heightPct = timeToPercent(s.end_time) - topPct;
-                  const topPx = (topPct / 100) * totalHeight;
-                  const heightPx = Math.max(16, (heightPct / 100) * totalHeight);
-                  const colorHex = TIMELINE_COLORS[(plColorMap[s.playlist_id] ?? 0) % TIMELINE_COLORS.length];
-                  const plName = playlistById[s.playlist_id]?.name ?? "不明";
-                  const isHovered = hoveredId === s.id;
-                  const isConflict = conflictIds.has(s.id);
-
-                  return (
-                    <div
-                      key={s.id}
-                      style={{
-                        position: "absolute",
-                        top: topPx + 1,
-                        left: 3,
-                        right: 3,
-                        height: heightPx - 2,
-                        background: colorHex + "28",
-                        border: `2px solid ${colorHex}`,
-                        borderRadius: 5,
-                        padding: "3px 5px",
-                        overflow: "hidden",
-                        cursor: "pointer",
-                        fontSize: 9.5,
-                        fontFamily: '"Noto Sans JP", system-ui, sans-serif',
-                        color: "#2d2a24",
-                        transition: "opacity 0.12s, box-shadow 0.12s",
-                        opacity: isHovered ? 1 : 0.88,
-                        boxShadow: isHovered ? `0 4px 16px ${colorHex}55` : "none",
-                        zIndex: isHovered ? 10 : 1,
-                        userSelect: "none",
-                      }}
-                      onMouseEnter={() => setHoveredId(s.id)}
-                      onMouseLeave={() => setHoveredId(null)}
-                      onClick={() => onDelete(s.id)}
-                      title={`${plName}\n${s.start_time} – ${s.end_time}\nクリックで削除`}
-                    >
-                      {/* Color accent bar */}
-                      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: colorHex, borderRadius: "3px 0 0 3px" }} />
-                      <div style={{ marginLeft: 5, overflow: "hidden" }}>
-                        {heightPx >= 20 && (
-                          <div style={{ fontWeight: 700, fontSize: 9, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: colorHex, display: "flex", alignItems: "center", gap: 3 }}>
-                            {plName}
-                            {isConflict && (
-                              <span style={{ fontSize: 8, fontWeight: 700, background: "#fde84e", color: "#7a5f0a", borderRadius: 2, padding: "0 3px", flexShrink: 0 }}>重複</span>
-                            )}
-                          </div>
-                        )}
-                        {heightPx >= 32 && (
-                          <div style={{ fontSize: 8.5, opacity: 0.75, fontFamily: "monospace", marginTop: 1, whiteSpace: "nowrap" }}>
-                            {s.start_time}–{s.end_time}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Hover tooltip overlay */}
-                      {isHovered && (
-                        <div style={{
-                          position: "absolute",
-                          bottom: "calc(100% + 6px)",
-                          left: "50%",
-                          transform: "translateX(-50%)",
-                          background: "#1d1a15",
-                          color: "#fffefb",
-                          borderRadius: 6,
-                          padding: "6px 10px",
-                          fontSize: 10.5,
-                          whiteSpace: "nowrap",
-                          zIndex: 50,
-                          boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
-                          fontFamily: '"Noto Sans JP", system-ui, sans-serif',
-                          pointerEvents: "none",
-                        }}>
-                          <div style={{ fontWeight: 700, marginBottom: 2 }}>{plName}</div>
-                          <div style={{ opacity: 0.8, fontFamily: "monospace" }}>{s.start_time} – {s.end_time}</div>
-                          <div style={{ opacity: 0.6, fontSize: 9.5, marginTop: 3 }}>クリックで削除</div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </MkCard>
-  );
-}
-
 // ── Main Page ─────────────────────────────────────────────────────────────
 export default function AdminSchedulesPage() {
   const params = useParams<{ tenant: string }>();
@@ -303,9 +91,16 @@ export default function AdminSchedulesPage() {
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
 
-  const [viewMode, setViewMode] = useState<"list" | "timeline">("list");
-
   const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
+
+  // Edit modal state
+  const [editTarget, setEditTarget] = useState<Schedule | null>(null);
+  const [editPlaylistId, setEditPlaylistId] = useState("");
+  const [editDow, setEditDow] = useState("-1");
+  const [editStart, setEditStart] = useState("09:00");
+  const [editEnd, setEditEnd] = useState("18:00");
+  const [saving, setSaving] = useState(false);
+
   const [dragging, setDragging] = useState<DraggingState | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const schedulesRef = useRef<Schedule[]>([]);
@@ -340,8 +135,6 @@ export default function AdminSchedulesPage() {
   useEffect(() => {
     if (!dragging) return;
 
-    const ROW_HEIGHT_ESTIMATE = 58;
-
     const onMouseMove = (e: MouseEvent) => {
       if (!gridRef.current) return;
       const rect = gridRef.current.getBoundingClientRect();
@@ -357,15 +150,13 @@ export default function AdminSchedulesPage() {
         newStart = Math.max(0, Math.min(1440 - duration, newStart));
         const newEnd = newStart + duration;
 
-        // Calculate day from Y position
-        const headerHeight = 41; // approx header row height
+        const headerHeight = 41;
         const relY = e.clientY - rect.top - headerHeight;
         const rowHeight = (rect.height - headerHeight) / 7;
         const newDay = Math.max(0, Math.min(6, Math.floor(relY / rowHeight)));
 
         setDragging((d) => d ? { ...d, tempStartMin: newStart, tempEndMin: newEnd, tempDay: newDay } : null);
       } else {
-        // resize
         let newEnd = Math.round(minuteAtCursor / 15) * 15;
         newEnd = Math.max(dragging.origStartMin + 15, Math.min(1440, newEnd));
         setDragging((d) => d ? { ...d, tempEndMin: newEnd } : null);
@@ -381,7 +172,6 @@ export default function AdminSchedulesPage() {
       const { id, tempStartMin, tempEndMin, tempDay, origStartMin, origEndMin, origDay, origDayOfWeek } = dragging;
       setDragging(null);
 
-      // No change — for daily schedules ignore row movement (day_of_week stays -1)
       const dayUnchanged = origDayOfWeek === -1 || tempDay === origDay;
       if (tempStartMin === origStartMin && tempEndMin === origEndMin && dayUnchanged) return;
 
@@ -420,6 +210,14 @@ export default function AdminSchedulesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragging]);
 
+  function openEdit(s: Schedule) {
+    setEditTarget(s);
+    setEditPlaylistId(s.playlist_id);
+    setEditDow(String(s.day_of_week));
+    setEditStart(s.start_time);
+    setEditEnd(s.end_time);
+  }
+
   async function handleCreate() {
     const token = getAccessToken();
     if (!token || !formPlaylistId) return;
@@ -436,6 +234,37 @@ export default function AdminSchedulesPage() {
       setError(err instanceof Error ? err.message : "追加に失敗しました");
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function handleEditSave() {
+    if (!editTarget) return;
+    const token = getAccessToken();
+    if (!token) return;
+    setSaving(true);
+    setError("");
+    try {
+      await api.deleteSchedule(token, editTarget.id);
+      const created = await api.createSchedule(token, {
+        playlist_id: editPlaylistId,
+        day_of_week: Number(editDow),
+        start_time: editStart,
+        end_time: editEnd,
+      });
+      const newSchedule: Schedule = {
+        id: created.id,
+        playlist_id: editPlaylistId,
+        day_of_week: Number(editDow),
+        start_time: editStart,
+        end_time: editEnd,
+      };
+      setSchedules((prev) => [...prev.filter((s) => s.id !== editTarget.id), newSchedule]);
+      setEditTarget(null);
+      setSuccess("スケジュールを更新しました");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "更新に失敗しました");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -481,6 +310,13 @@ export default function AdminSchedulesPage() {
     }
   }
 
+  const inputStyle: React.CSSProperties = {
+    width: "100%", border: "1px solid #d8d3c7", borderRadius: 7,
+    padding: "0 10px", height: 34, fontSize: 12.5, color: "#2d2a24",
+    background: "#fffefb", outline: "none",
+    fontFamily: '"Noto Sans JP", system-ui, sans-serif',
+  };
+
   return (
     <AdminShell
       active="schedule"
@@ -498,30 +334,7 @@ export default function AdminSchedulesPage() {
       )}
 
       {/* Action bar */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 12 }}>
-        {/* View mode toggle */}
-        <div style={{ display: "flex", border: "1px solid #d8d3c7", borderRadius: 8, overflow: "hidden", background: "#f4f1ea" }}>
-          {(["list", "timeline"] as const).map((mode) => (
-            <button
-              key={mode}
-              onClick={() => setViewMode(mode)}
-              style={{
-                padding: "6px 16px",
-                fontSize: 12,
-                fontWeight: viewMode === mode ? 700 : 400,
-                color: viewMode === mode ? "#fffefb" : "#6b6559",
-                background: viewMode === mode ? "#4a7c4e" : "transparent",
-                border: "none",
-                cursor: "pointer",
-                fontFamily: '"Noto Sans JP", system-ui, sans-serif',
-                transition: "background 0.15s",
-              }}
-            >
-              {mode === "list" ? "リスト表示" : "タイムライン表示"}
-            </button>
-          ))}
-        </div>
-
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
         <MkBtn variant="default" size="sm" onClick={() => setShowForm((v) => !v)}>
           {showForm ? "閉じる" : "+ 新規ブロック"}
         </MkBtn>
@@ -542,32 +355,24 @@ export default function AdminSchedulesPage() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: 12, alignItems: "end" }}>
               <div>
                 <label style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 6 }}>プレイリスト</label>
-                <select
-                  value={formPlaylistId}
-                  onChange={(e) => setFormPlaylistId(e.target.value)}
-                  style={{ width: "100%", border: "1px solid #d8d3c7", borderRadius: 7, padding: "0 10px", height: 34, fontSize: 12.5, color: "#2d2a24", background: "#fffefb", outline: "none", fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}
-                >
+                <select value={formPlaylistId} onChange={(e) => setFormPlaylistId(e.target.value)} style={inputStyle}>
                   {playlists.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>
               <div>
                 <label style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 6 }}>曜日</label>
-                <select
-                  value={formDow}
-                  onChange={(e) => setFormDow(e.target.value)}
-                  style={{ width: "100%", border: "1px solid #d8d3c7", borderRadius: 7, padding: "0 10px", height: 34, fontSize: 12.5, color: "#2d2a24", background: "#fffefb", outline: "none", fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}
-                >
+                <select value={formDow} onChange={(e) => setFormDow(e.target.value)} style={inputStyle}>
                   <option value="-1">毎日</option>
                   {DAYS.map((d, i) => <option key={i} value={i}>{d}曜</option>)}
                 </select>
               </div>
               <div>
                 <label style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 6 }}>開始時刻</label>
-                <input type="time" value={formStart} onChange={(e) => setFormStart(e.target.value)} style={{ width: "100%", border: "1px solid #d8d3c7", borderRadius: 7, padding: "0 10px", height: 34, fontSize: 12.5, color: "#2d2a24", outline: "none" }} />
+                <input type="time" value={formStart} onChange={(e) => setFormStart(e.target.value)} style={inputStyle} />
               </div>
               <div>
                 <label style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 6 }}>終了時刻</label>
-                <input type="time" value={formEnd} onChange={(e) => setFormEnd(e.target.value)} style={{ width: "100%", border: "1px solid #d8d3c7", borderRadius: 7, padding: "0 10px", height: 34, fontSize: 12.5, color: "#2d2a24", outline: "none" }} />
+                <input type="time" value={formEnd} onChange={(e) => setFormEnd(e.target.value)} style={inputStyle} />
               </div>
               <MkBtn variant="primary" onClick={handleCreate} disabled={creating}>
                 {creating ? "追加中…" : "追加"}
@@ -598,19 +403,8 @@ export default function AdminSchedulesPage() {
         </div>
       )}
 
-      {/* Vertical timeline view */}
-      {viewMode === "timeline" && (
-        <VerticalTimeline
-          schedules={schedules}
-          playlists={playlists}
-          plColorMap={plColorMap}
-          conflictIds={conflictIds}
-          onDelete={(id) => setConfirmTarget(id)}
-        />
-      )}
-
-      {/* Weekly grid (list view) */}
-      {viewMode === "list" && <MkCard padding="0">
+      {/* Weekly grid */}
+      <MkCard padding="0">
         <div ref={gridRef}>
           {/* Hour header */}
           <div style={{ display: "grid", gridTemplateColumns: "60px 1fr", borderBottom: "1px solid #efece5", background: "#f4f1ea" }}>
@@ -655,9 +449,7 @@ export default function AdminSchedulesPage() {
                   <div style={{ position: "absolute", inset: "6px 0", display: "flex" }}>
                     {dayBlocks.length === 0 ? null : dayBlocks.map((s) => {
                       const isDraggingThis = dragging?.id === s.id;
-                      const isGhostRow = isDraggingThis && dragging?.origDay !== di;
 
-                      // When dragging this block, show in temp day row only
                       if (isDraggingThis && dragging?.tempDay !== di) return null;
 
                       const startMin = isDraggingThis ? dragging!.tempStartMin : timeToMinutes(s.start_time);
@@ -671,6 +463,7 @@ export default function AdminSchedulesPage() {
                       return (
                         <div
                           key={s.id}
+                          title="ダブルクリックで編集"
                           style={{
                             position: "absolute", left, width,
                             top: 0, bottom: 0,
@@ -712,13 +505,13 @@ export default function AdminSchedulesPage() {
                               tempDay: di,
                             });
                           }}
-                          onClick={(e) => {
+                          onDoubleClick={(e) => {
+                            e.stopPropagation();
                             if (dragJustEndedRef.current) {
                               dragJustEndedRef.current = false;
                               return;
                             }
-                            e.stopPropagation();
-                            setConfirmTarget(s.id);
+                            openEdit(s);
                           }}
                         >
                           <div style={{ display: "flex", alignItems: "center", gap: 4, overflow: "hidden" }}>
@@ -763,11 +556,64 @@ export default function AdminSchedulesPage() {
             );
           })}
         </div>
-      </MkCard>}
+      </MkCard>
 
       {schedules.length === 0 && !loading && (
         <div style={{ marginTop: 16, padding: "12px 16px", background: "#f4f1ea", borderRadius: 7, borderLeft: "2px solid #4a7c4e", fontSize: 11.5, color: "#6b6559", fontFamily: '"Noto Sans JP", system-ui, sans-serif' }}>
-          「+ 新規ブロック」からスケジュールを追加すると、キオスクが自動的に指定時間帯のプレイリストを再生します。ブロックはドラッグで移動・右端でリサイズできます。
+          「+ 新規ブロック」からスケジュールを追加すると、キオスクが自動的に指定時間帯のプレイリストを再生します。ブロックはドラッグで移動・右端でリサイズ・ダブルクリックで編集できます。
+        </div>
+      )}
+
+      {/* Edit modal */}
+      {editTarget && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={() => setEditTarget(null)}
+        >
+          <div
+            style={{ background: "#fffefb", borderRadius: 12, padding: 28, width: 480, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15", marginBottom: 20 }}>スケジュール編集</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 6 }}>プレイリスト</label>
+                <select value={editPlaylistId} onChange={(e) => setEditPlaylistId(e.target.value)} style={inputStyle}>
+                  {playlists.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 6 }}>曜日</label>
+                <select value={editDow} onChange={(e) => setEditDow(e.target.value)} style={inputStyle}>
+                  <option value="-1">毎日</option>
+                  {DAYS.map((d, i) => <option key={i} value={i}>{d}曜</option>)}
+                </select>
+              </div>
+              <div />
+              <div>
+                <label style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 6 }}>開始時刻</label>
+                <input type="time" value={editStart} onChange={(e) => setEditStart(e.target.value)} style={inputStyle} />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 6 }}>終了時刻</label>
+                <input type="time" value={editEnd} onChange={(e) => setEditEnd(e.target.value)} style={inputStyle} />
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <MkBtn variant="danger" size="sm" onClick={() => { setConfirmTarget(editTarget.id); setEditTarget(null); }}>削除</MkBtn>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => setEditTarget(null)}
+                  style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #d8d3c7", background: "#fffefb", fontSize: 12.5, cursor: "pointer", color: "#6b6559" }}
+                >
+                  キャンセル
+                </button>
+                <MkBtn variant="primary" size="sm" onClick={handleEditSave} disabled={saving}>
+                  {saving ? "保存中…" : "保存"}
+                </MkBtn>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
