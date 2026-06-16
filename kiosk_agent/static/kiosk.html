@@ -1361,54 +1361,372 @@ function showKioskSettings() {
   CURRENT_SCREEN = "kiosk-settings";
   cleanup();
 
+  const C = {
+    canvas:"#fffefb", paper:"#f5f3ee", chalk:"#e8e4dc", ash:"#d4cfc7",
+    stone:"#8a8276", graphite:"#5a5249", ink:"#2e2b26", sumi:"#1d1a15",
+    moss:"#4a7c4e", mossDk:"#2e5c32", mossSoft:"rgba(74,124,78,0.10)",
+    amber:"#b87c2e", amberSoft:"#fef6e6",
+  };
+
+  const SVG = {
+    vol: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`,
+    wifi: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M10.54 16.1a6 6 0 0 1 2.91-.01"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>`,
+    lock: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
+    lockSm: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
+    chevron: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>`,
+    check: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg>`,
+    play: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>`,
+  };
+
+  let vol = 70;
+  let sounds = {
+    tap:   localStorage.getItem("kiosk_snd_tap")   !== "off",
+    chime: localStorage.getItem("kiosk_snd_chime") !== "off",
+    voice: localStorage.getItem("kiosk_snd_voice") === "on",
+  };
+  let wifiOn = true;
+  let networks = [];
+  let wifiLoading = false;
+  let devTaps = 0, devTimer = null;
+  let volDebounce = null;
+
   const devName = escHtml(localStorage.getItem(NAME_KEY) ?? "—");
-  const tenant  = escHtml(CFG.tenant_slug ?? "—");
-  const style   = escHtml(ST.kiosk_style ?? "default");
 
-  sc.innerHTML = `
-<div style="width:1920px;height:1080px;background:#0a0806;display:flex;align-items:center;justify-content:center;font-family:Inter,'Noto Sans JP',system-ui,sans-serif">
-  <div style="background:#1d1a15;border-radius:20px;padding:52px 64px;width:580px;box-shadow:0 24px 64px rgba(0,0,0,.5)">
-    <div style="font-size:11px;letter-spacing:4px;color:#6b6559;text-transform:uppercase;margin-bottom:8px">KIOSK SETTINGS</div>
-    <div style="font-size:28px;font-weight:600;color:#fffefb;margin-bottom:36px">キオスク設定</div>
+  function bars(level, color) {
+    color = color || C.ink;
+    return [7,11,15,20].map((h,i) =>
+      `<div style="width:5px;height:${h}px;border-radius:2px;background:${i<level?color:C.ash}"></div>`
+    ).join('');
+  }
+  function barsWrap(level, color) {
+    return `<div style="display:flex;align-items:flex-end;gap:3px;height:20px;flex-shrink:0">${bars(level, color)}</div>`;
+  }
+  function toggleEl(on) {
+    return `<div style="width:68px;height:38px;border-radius:999px;flex-shrink:0;background:${on?C.moss:C.ash};position:relative"><div style="position:absolute;top:4px;left:${on?'34px':'4px'};width:30px;height:30px;border-radius:50%;background:${C.canvas};box-shadow:0 1px 3px rgba(29,26,21,.25)"></div></div>`;
+  }
+  function soundRow(id, jp, en, on) {
+    return `<div data-sound="${id}" style="display:flex;align-items:center;gap:16px;padding:17px 0;border-top:1px solid ${C.chalk};cursor:pointer">
+      <div style="flex:1"><div style="font-size:20px;font-weight:500;color:${C.ink}">${jp}</div><div style="font-size:11px;color:${C.stone};letter-spacing:2px;margin-top:3px;font-family:ui-monospace,monospace">${en}</div></div>
+      <span style="font-size:13px;font-weight:600;font-family:ui-monospace,monospace;color:${on?C.mossDk:C.stone}">${on?'ON':'OFF'}</span>
+      ${toggleEl(on)}
+    </div>`;
+  }
 
-    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:32px">
-      <div style="padding:18px 20px;background:#2d2a24;border-radius:12px;display:flex;justify-content:space-between;align-items:center">
-        <div style="font-size:12px;color:#6b6559;letter-spacing:1px">DEVICE</div>
-        <div style="font-size:16px;color:#fffefb;font-family:'JetBrains Mono',monospace">${devName}</div>
+  function render() {
+    sc.innerHTML = `
+<div id="ks-root" style="width:1920px;height:1080px;background:${C.canvas};display:flex;flex-direction:column;font-family:Inter,'Noto Sans JP',system-ui,sans-serif;user-select:none">
+
+  <div style="padding:36px 80px 0;display:flex;align-items:center;gap:20px">
+    <div>
+      <div style="font-size:14px;color:${C.stone};letter-spacing:4px;text-transform:uppercase;margin-bottom:8px">KIOSK SETTINGS</div>
+      <div style="font-size:54px;font-weight:600;color:${C.sumi};letter-spacing:-1.6px;line-height:1.05">キオスク設定</div>
+    </div>
+    <span style="flex:1"></span>
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 18px;border-radius:999px;background:${C.amberSoft};color:${C.amber};font-size:13px;font-weight:600;letter-spacing:1.5px;font-family:ui-monospace,monospace">
+      ${SVG.lockSm} STAFF ONLY
+    </div>
+    <button id="ks-back" style="display:flex;align-items:center;gap:10px;padding:14px 26px;background:${C.sumi};color:${C.canvas};border:2px solid ${C.sumi};border-radius:999px;font-size:16px;font-weight:600;font-family:Inter,'Noto Sans JP',system-ui,sans-serif;cursor:pointer">受付画面に戻る →</button>
+  </div>
+
+  <div style="flex:1;padding:30px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:28px;min-height:0">
+
+    <div style="background:${C.canvas};border:1px solid ${C.chalk};border-radius:22px;padding:36px 40px;display:flex;flex-direction:column;box-shadow:0 4px 24px rgba(29,26,21,.08);min-height:0">
+      <div style="display:flex;align-items:center;gap:18px;margin-bottom:28px">
+        <div style="width:56px;height:56px;border-radius:14px;background:${C.mossSoft};color:${C.mossDk};display:flex;align-items:center;justify-content:center">${SVG.vol}</div>
+        <div><div style="font-size:28px;font-weight:600;color:${C.sumi};letter-spacing:-0.6px">音量設定</div><div style="font-size:12px;color:${C.stone};letter-spacing:2.5px;margin-top:3px;font-family:ui-monospace,monospace">SOUND / VOLUME</div></div>
       </div>
-      <div style="padding:18px 20px;background:#2d2a24;border-radius:12px;display:flex;justify-content:space-between;align-items:center">
-        <div style="font-size:12px;color:#6b6559;letter-spacing:1px">TENANT</div>
-        <div style="font-size:16px;color:#fffefb;font-family:'JetBrains Mono',monospace">${tenant}</div>
+      <div style="display:flex;align-items:baseline;margin-bottom:14px">
+        <div style="font-size:19px;font-weight:600;color:${C.ink}">全体音量<span style="font-size:12px;color:${C.stone};letter-spacing:2px;margin-left:10px;font-family:ui-monospace,monospace;font-weight:500">MASTER VOLUME</span></div>
+        <span style="flex:1"></span>
+        <div id="ks-vol-pct" style="font-family:ui-monospace,monospace;font-size:26px;font-weight:600;color:${C.mossDk}">${vol}%</div>
       </div>
-      <div style="padding:18px 20px;background:#2d2a24;border-radius:12px;display:flex;justify-content:space-between;align-items:center">
-        <div style="font-size:12px;color:#6b6559;letter-spacing:1px">STYLE</div>
-        <div style="font-size:16px;color:#fffefb;font-family:'JetBrains Mono',monospace">${style}</div>
+      <div style="display:flex;align-items:center;gap:18px;margin-bottom:26px">
+        <button id="ks-vol-minus" style="width:56px;height:56px;border-radius:50%;background:${C.canvas};border:2px solid ${C.ash};font-size:26px;color:${C.ink};flex-shrink:0;display:flex;align-items:center;justify-content:center;cursor:pointer">−</button>
+        <div id="ks-vol-track" style="flex:1;height:16px;border-radius:999px;background:${C.chalk};position:relative;cursor:pointer">
+          <div id="ks-vol-fill" style="width:${vol}%;height:100%;border-radius:999px;background:${C.moss}"></div>
+          <div id="ks-vol-thumb" style="position:absolute;left:${vol}%;top:50%;transform:translate(-50%,-50%);width:40px;height:40px;border-radius:50%;background:${C.canvas};border:3px solid ${C.moss};box-shadow:0 2px 8px rgba(29,26,21,.18)"></div>
+        </div>
+        <button id="ks-vol-plus" style="width:56px;height:56px;border-radius:50%;background:${C.canvas};border:2px solid ${C.ash};font-size:26px;color:${C.ink};flex-shrink:0;display:flex;align-items:center;justify-content:center;cursor:pointer">＋</button>
+      </div>
+      ${soundRow('tap', 'タップ操作音', 'TAP SOUND', sounds.tap)}
+      ${soundRow('chime', '呼び出しチャイム', 'CALL CHIME', sounds.chime)}
+      ${soundRow('voice', '音声ガイダンス', 'VOICE GUIDANCE', sounds.voice)}
+      <div style="margin-top:auto;display:flex;gap:14px;padding-top:20px">
+        <button id="ks-test" style="flex:1.4;padding:18px;border-radius:14px;border:2px solid ${C.ash};background:${C.canvas};font-size:17px;font-weight:600;color:${C.ink};display:flex;align-items:center;justify-content:center;gap:10px;font-family:Inter,'Noto Sans JP',system-ui,sans-serif;cursor:pointer">${SVG.play} テスト音を再生</button>
+        <button id="ks-mute" style="flex:1;padding:18px;border-radius:14px;border:2px solid ${C.ash};background:${C.paper};font-size:17px;font-weight:600;color:${C.graphite};font-family:Inter,'Noto Sans JP',system-ui,sans-serif;cursor:pointer">ミュート</button>
       </div>
     </div>
 
-    <div style="display:flex;flex-direction:column;gap:12px">
-      <button id="ks-setup" style="width:100%;padding:18px;border-radius:12px;border:none;background:#4a7c4e;color:#fffefb;font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">
-        デバイス再登録 / Re-register Device
-      </button>
-      <button id="ks-close" style="width:100%;padding:18px;border-radius:12px;border:1px solid #3a3631;background:transparent;color:#6b6559;font-size:16px;cursor:pointer;font-family:inherit">
-        閉じる / Close
-      </button>
+    <div style="background:${C.canvas};border:1px solid ${C.chalk};border-radius:22px;padding:36px 40px;display:flex;flex-direction:column;box-shadow:0 4px 24px rgba(29,26,21,.08);min-height:0">
+      <div style="display:flex;align-items:center;gap:18px;margin-bottom:28px">
+        <div style="width:56px;height:56px;border-radius:14px;background:${C.mossSoft};color:${C.mossDk};display:flex;align-items:center;justify-content:center">${SVG.wifi}</div>
+        <div style="flex:1"><div style="font-size:28px;font-weight:600;color:${C.sumi};letter-spacing:-0.6px">Wi-Fi設定</div><div style="font-size:12px;color:${C.stone};letter-spacing:2.5px;margin-top:3px;font-family:ui-monospace,monospace">NETWORK / WI-FI</div></div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span id="ks-wifi-label" style="font-size:13px;font-weight:600;color:${wifiOn?C.mossDk:C.stone};font-family:ui-monospace,monospace">${wifiOn?'ON':'OFF'}</span>
+          <div id="ks-wifi-toggle" style="cursor:pointer">${toggleEl(wifiOn)}</div>
+        </div>
+      </div>
+      ${(()=>{
+        const connected = networks.find(n => n.connected);
+        if (wifiLoading) return `<div style="padding:20px;text-align:center;color:${C.stone};font-size:16px">スキャン中…</div>`;
+        if (connected) return `<div style="background:${C.mossSoft};border:1.5px solid ${C.moss};border-radius:16px;padding:20px 24px;display:flex;align-items:center;gap:18px;margin-bottom:20px">
+          ${barsWrap(connected.level, C.mossDk)}
+          <div style="flex:1">
+            <div style="font-size:22px;font-weight:600;color:${C.sumi};font-family:ui-monospace,monospace">${escHtml(connected.ssid)}</div>
+            <div style="font-size:13px;color:${C.graphite};margin-top:4px">接続済み</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:999px;background:${C.canvas};color:${C.mossDk};font-size:13px;font-weight:600">
+            ${SVG.check} 接続中
+          </div>
+        </div>`;
+        return `<div style="background:${C.paper};border:1.5px solid ${C.chalk};border-radius:16px;padding:20px 24px;color:${C.stone};font-size:16px;margin-bottom:20px">未接続</div>`;
+      })()}
+      <div style="font-size:12px;color:${C.stone};letter-spacing:2px;margin:0 0 6px;font-family:ui-monospace,monospace">その他のネットワーク · OTHER NETWORKS</div>
+      <div style="flex:1;overflow-y:auto;min-height:0">
+        ${networks.filter(n=>!n.connected).map((n,i) => `<div data-net="${i}" style="display:flex;align-items:center;gap:18px;padding:15px 4px;border-bottom:1px solid ${C.chalk};cursor:pointer">
+          ${barsWrap(n.level)}
+          <div style="flex:1;font-size:19px;font-weight:500;color:${C.ink};font-family:ui-monospace,monospace">${escHtml(n.ssid)}</div>
+          ${n.lock?`<span style="color:${C.stone}">${SVG.lock}</span>`:''}
+          <span style="color:${C.stone}">${SVG.chevron}</span>
+        </div>`).join('')}
+        ${networks.length===0&&!wifiLoading?`<div style="padding:20px;color:${C.stone};font-size:16px">ネットワークが見つかりません</div>`:''}
+      </div>
+      <div style="padding-top:20px">
+        <button id="ks-rescan" style="width:100%;padding:18px;border-radius:14px;border:2px solid ${C.ash};background:${C.canvas};font-size:17px;font-weight:600;color:${C.ink};font-family:Inter,'Noto Sans JP',system-ui,sans-serif;cursor:pointer">
+          ネットワークを再検索 · RESCAN
+        </button>
+      </div>
     </div>
+
+  </div>
+
+  <div style="display:flex;align-items:center;padding:20px 80px 28px;font-size:14px;color:${C.stone}">
+    設定の変更はスタッフのみ操作できます
+    <span style="flex:1"></span>
+    <span id="ks-dev" style="font-family:ui-monospace,monospace;cursor:default" title="">${devName} · FW v2.4.1</span>
   </div>
 </div>`;
+    rescale();
+    bindEvents();
+  }
 
-  rescale();
+  function updateVol() {
+    const pct   = document.getElementById("ks-vol-pct");
+    const fill  = document.getElementById("ks-vol-fill");
+    const thumb = document.getElementById("ks-vol-thumb");
+    if (pct)   pct.textContent = vol + "%";
+    if (fill)  fill.style.width = vol + "%";
+    if (thumb) thumb.style.left = vol + "%";
+    clearTimeout(volDebounce);
+    volDebounce = setTimeout(postVolume, 400);
+  }
 
-  document.getElementById("ks-setup").addEventListener("click", () => {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(NAME_KEY);
-    cleanup();
-    showSetup();
-  });
-  document.getElementById("ks-close").addEventListener("click", () => {
-    cleanup();
-    go("idle");
-  });
+  async function postVolume() {
+    try {
+      const resp = await fetch("/device/volume", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({level: vol}),
+      });
+      if (!resp.ok) {
+        const d = await resp.json().catch(() => ({}));
+        console.warn("[kiosk] volume set failed:", d.detail);
+      }
+    } catch(e) { console.warn("[kiosk] volume set error:", e); }
+  }
+
+  function showWifiPasswordDialog(net) {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = `position:absolute;inset:0;background:rgba(29,26,21,.6);display:flex;align-items:center;justify-content:center;z-index:99`;
+    overlay.innerHTML = `<div style="background:#fffefb;border-radius:20px;padding:48px 56px;width:640px;box-shadow:0 24px 64px rgba(0,0,0,.3)">
+      <div style="font-size:24px;font-weight:600;color:#1d1a15;margin-bottom:6px">${escHtml(net.ssid)}</div>
+      <div style="font-size:14px;color:#8a8276;margin-bottom:28px">パスワードを入力してください</div>
+      <input id="ks-pw-input" type="password" placeholder="Wi-Fiパスワード"
+        style="width:100%;padding:16px 18px;border-radius:12px;border:2px solid #d4cfc7;background:#f5f3ee;font-size:20px;font-family:ui-monospace,monospace;outline:none;margin-bottom:8px;box-sizing:border-box">
+      <div id="ks-pw-err" style="font-size:13px;color:#c0392b;min-height:20px;margin-bottom:16px"></div>
+      <div style="display:flex;gap:14px">
+        <button id="ks-pw-cancel" style="flex:1;padding:16px;border-radius:12px;border:2px solid #d4cfc7;background:transparent;font-size:16px;color:#5a5249;cursor:pointer;font-family:inherit">キャンセル</button>
+        <button id="ks-pw-ok" style="flex:1;padding:16px;border-radius:12px;border:none;background:#4a7c4e;color:#fffefb;font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">接続する</button>
+      </div>
+    </div>`;
+    document.getElementById("ks-root").appendChild(overlay);
+    const input  = document.getElementById("ks-pw-input");
+    const errDiv = document.getElementById("ks-pw-err");
+    const okBtn  = document.getElementById("ks-pw-ok");
+    input.focus();
+    document.getElementById("ks-pw-cancel").addEventListener("click", () => overlay.remove());
+    async function doConnect() {
+      okBtn.disabled = true; okBtn.textContent = "接続中…";
+      errDiv.textContent = "";
+      try {
+        const resp = await fetch("/device/wifi/connect", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ssid: net.ssid, password: input.value}),
+        });
+        if (!resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          errDiv.textContent = data.detail ?? "接続に失敗しました";
+          okBtn.disabled = false; okBtn.textContent = "接続する";
+        } else {
+          overlay.remove();
+          await loadNetworks();
+        }
+      } catch(e) {
+        errDiv.textContent = "通信エラーが発生しました";
+        okBtn.disabled = false; okBtn.textContent = "接続する";
+      }
+    }
+    okBtn.addEventListener("click", doConnect);
+    input.addEventListener("keydown", e => { if (e.key === "Enter") doConnect(); });
+  }
+
+  async function loadNetworks() {
+    wifiLoading = true; render();
+    try {
+      const data = await fetch("/device/wifi/networks").then(r => r.json());
+      networks = data.networks ?? [];
+    } catch(e) { networks = []; }
+    wifiLoading = false; render();
+  }
+
+  function bindEvents() {
+    document.getElementById("ks-back").addEventListener("click", () => go("idle"));
+
+    document.getElementById("ks-vol-minus").addEventListener("click", () => {
+      vol = Math.max(0, vol - 5); updateVol();
+    });
+    document.getElementById("ks-vol-plus").addEventListener("click", () => {
+      vol = Math.min(100, vol + 5); updateVol();
+    });
+
+    const track = document.getElementById("ks-vol-track");
+    function volFromPointer(clientX) {
+      const r = track.getBoundingClientRect();
+      vol = Math.round(Math.max(0, Math.min(100, (clientX - r.left) / r.width * 100)));
+      updateVol();
+    }
+    track.addEventListener("mousedown", e => {
+      volFromPointer(e.clientX);
+      function mm(e2) { volFromPointer(e2.clientX); }
+      document.addEventListener("mousemove", mm);
+      document.addEventListener("mouseup", () => document.removeEventListener("mousemove", mm), { once:true });
+    });
+    track.addEventListener("touchstart", e => volFromPointer(e.touches[0].clientX), { passive:true });
+    track.addEventListener("touchmove",  e => volFromPointer(e.touches[0].clientX), { passive:true });
+
+    document.querySelectorAll("[data-sound]").forEach(row => {
+      row.addEventListener("click", () => {
+        const k = row.getAttribute("data-sound");
+        sounds[k] = !sounds[k];
+        localStorage.setItem("kiosk_snd_" + k, sounds[k] ? "on" : "off");
+        render();
+      });
+    });
+
+    document.getElementById("ks-test").addEventListener("click", () => {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator(), gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.type = "sine"; osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.3 * vol / 100, ctx.currentTime + 0.05);
+        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.6);
+        osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.65);
+      } catch(e) {}
+    });
+
+    document.getElementById("ks-mute").addEventListener("click", () => {
+      vol = vol > 0 ? 0 : 70; updateVol();
+    });
+
+    document.getElementById("ks-wifi-toggle").addEventListener("click", async () => {
+      wifiOn = !wifiOn;
+      render();
+      try {
+        await fetch("/device/wifi/toggle", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({on: wifiOn}),
+        });
+        if (wifiOn) await loadNetworks();
+      } catch(e) {}
+    });
+
+    document.getElementById("ks-rescan").addEventListener("click", () => loadNetworks());
+
+    // Network row clicks
+    const otherNets = networks.filter(n => !n.connected);
+    document.querySelectorAll("[data-net]").forEach(row => {
+      row.addEventListener("click", async () => {
+        const idx = parseInt(row.getAttribute("data-net"));
+        const net = otherNets[idx];
+        if (!net) return;
+        if (net.lock) {
+          showWifiPasswordDialog(net);
+        } else {
+          row.style.opacity = "0.5";
+          try {
+            await fetch("/device/wifi/connect", {
+              method: "POST",
+              headers: {"Content-Type":"application/json"},
+              body: JSON.stringify({ssid: net.ssid, password: ""}),
+            });
+            await loadNetworks();
+          } catch(e) { row.style.opacity = "1"; }
+        }
+      });
+    });
+
+    // 5 taps on device info → re-register
+    document.getElementById("ks-dev").addEventListener("click", () => {
+      devTaps++;
+      clearTimeout(devTimer);
+      if (devTaps >= 5) {
+        devTaps = 0;
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `position:absolute;inset:0;background:rgba(29,26,21,.6);display:flex;align-items:center;justify-content:center;z-index:99`;
+        overlay.innerHTML = `<div style="background:#fffefb;border-radius:20px;padding:48px 56px;width:520px;text-align:center;box-shadow:0 24px 64px rgba(0,0,0,.3)">
+          <div style="font-size:28px;font-weight:600;color:#1d1a15;margin-bottom:12px">デバイスを再登録しますか？</div>
+          <div style="font-size:16px;color:#8a8276;margin-bottom:36px">現在のセッションがリセットされます</div>
+          <div style="display:flex;gap:14px">
+            <button id="ks-rereg-cancel" style="flex:1;padding:16px;border-radius:12px;border:2px solid #d4cfc7;background:transparent;font-size:16px;color:#5a5249;cursor:pointer;font-family:inherit">キャンセル</button>
+            <button id="ks-rereg-ok" style="flex:1;padding:16px;border-radius:12px;border:none;background:#4a7c4e;color:#fffefb;font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">再登録する</button>
+          </div>
+        </div>`;
+        document.getElementById("ks-root").appendChild(overlay);
+        document.getElementById("ks-rereg-cancel").addEventListener("click", () => overlay.remove());
+        document.getElementById("ks-rereg-ok").addEventListener("click", () => {
+          localStorage.removeItem(TOKEN_KEY);
+          localStorage.removeItem(NAME_KEY);
+          cleanup();
+          showSetup();
+        });
+      } else {
+        devTimer = setTimeout(() => { devTaps = 0; }, 3000);
+      }
+    });
+  }
+
+  // Initial load: fetch volume + wifi from backend, then render
+  async function init() {
+    const [volRes, wifiRes] = await Promise.allSettled([
+      fetch("/device/volume").then(r => r.json()),
+      fetch("/device/wifi/networks").then(r => r.json()),
+    ]);
+    if (volRes.status === "fulfilled") {
+      vol = volRes.value.level ?? 70;
+      if (volRes.value.error) console.warn("[kiosk] volume:", volRes.value.error);
+    }
+    if (wifiRes.status === "fulfilled") {
+      networks = wifiRes.value.networks ?? [];
+      if (wifiRes.value.error) console.warn("[kiosk] wifi:", wifiRes.value.error);
+    }
+    render();
+  }
+
+  init();
 }
 
 // ─── Corner gesture: simultaneous top-left + top-right touch → kiosk settings ─
