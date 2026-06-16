@@ -1430,6 +1430,13 @@ function showKioskSettings() {
   }, { passive: true });
 })();
 
+// Ctrl+Shift+M → kiosk settings
+document.addEventListener("keydown", function(e) {
+  if (e.ctrlKey && e.shiftKey && e.key === "M" && CURRENT_SCREEN !== "kiosk-settings") {
+    showKioskSettings();
+  }
+});
+
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 async function boot() {
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:#0a0806;display:flex;align-items:center;justify-content:center"><div style="color:rgba(255,255,255,.3);font-size:18px">読み込み中…</div></div>`;
