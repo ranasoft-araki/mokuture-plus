@@ -376,6 +376,47 @@ async def kiosk_reception(
     }
 
 
+# ── Staff call (delivery) ──────────────────────────────────────────────────────
+
+class CallStaffBody(BaseModel):
+    message: str | None = None
+
+
+@router.post("/call-staff")
+async def kiosk_call_staff(
+    body: CallStaffBody,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """Notify staff that delivery is waiting (配達の呼び出し) over all configured channels.
+
+    Best-effort across Slack / Web Push / Webhook / Chatwork — a failing channel
+    must not fail the request.
+    """
+    tenant, _ = ctx
+    message = (body.message or "").strip() or None
+
+    title = "配達の呼び出し"
+    text = f"🔔 配達の呼び出し\n受付端末から担当者が呼ばれています。{message or ''}"
+
+    await _notify_slack_text(tenant.id, text, db)
+    await _notify_push_text(tenant.id, title, text, tenant.id, db)
+    await _notify_webhook_event(
+        tenant.id,
+        {
+            "event": "call_staff",
+            "tenant_id": tenant.id,
+            "kind": "delivery",
+            "message": message,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+        db,
+    )
+    await _notify_chatwork_text(tenant.id, text, db)
+
+    return {"ok": True}
+
+
 # ── Lockers (device token auth) ────────────────────────────────────────────────
 
 class LockerPinBody(BaseModel):
@@ -434,6 +475,24 @@ async def kiosk_occupy_locker(
     if locker.occupied:
         raise HTTPException(status_code=409, detail="already occupied")
     locker.pin_hash = hash_password(body.pin)
+    locker.occupied = True
+    locker.occupied_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/lockers/{locker_id}/occupy-delivery")
+async def kiosk_occupy_locker_delivery(
+    locker_id: str,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """Hold a locker for delivery drop-off (置き配) with NO PIN — auto-lock without passcode."""
+    tenant, _ = ctx
+    locker = await _get_kiosk_locker(locker_id, tenant.id, db)
+    if locker.occupied:
+        raise HTTPException(status_code=409, detail="already occupied")
+    locker.pin_hash = None
     locker.occupied = True
     locker.occupied_at = datetime.now(timezone.utc)
     await db.commit()
@@ -570,6 +629,124 @@ async def _notify_webhook(tenant_id: str, log: ReceptionLog, db: AsyncSession) -
                 "created_at": log.created_at.isoformat() if log.created_at else None,
             }
             await _send_webhook(webhook_url, payload)
+    except Exception:
+        pass
+
+
+# ── Generic-message notify helpers (staff call etc.) ───────────────────────────
+
+async def _notify_slack_text(tenant_id: str, text: str, db: AsyncSession) -> None:
+    """Send a plain text message to the tenant's Slack webhook. Best-effort."""
+    result = await db.execute(
+        select(NotificationSetting).where(
+            NotificationSetting.tenant_id == tenant_id,
+            NotificationSetting.type == "slack",
+        )
+    )
+    setting = result.scalar_one_or_none()
+    if setting is None or not setting.config_json or setting.config_json == "{}":
+        return
+    try:
+        config = decrypt_dict(setting.config_json)
+        webhook_url = config.get("webhook_url", "")
+        if webhook_url:
+            await send_slack_notification(webhook_url, text)
+    except Exception:
+        pass
+
+
+async def _notify_push_text(
+    tenant_id: str, title: str, body: str, url_tenant_id: str, db: AsyncSession
+) -> None:
+    """Fire Web Push with a plain title/body to all subscriptions. Best-effort."""
+    try:
+        vapid_result = await db.execute(
+            select(NotificationSetting).where(
+                NotificationSetting.tenant_id == tenant_id,
+                NotificationSetting.type == "vapid",
+            )
+        )
+        vapid_setting = vapid_result.scalar_one_or_none()
+        private_key = ""
+        if vapid_setting and vapid_setting.config_json and vapid_setting.config_json != "{}":
+            try:
+                vapid_config = decrypt_dict(vapid_setting.config_json)
+                private_key = vapid_config.get("private_key", "")
+            except Exception:
+                pass
+        if not private_key:
+            private_key = settings.vapid_private_key
+        if not private_key:
+            return
+
+        subs_result = await db.execute(
+            select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
+        )
+        subs = subs_result.scalars().all()
+        if not subs:
+            return
+
+        for sub in subs:
+            try:
+                await send_push(
+                    endpoint=sub.endpoint,
+                    p256dh=sub.p256dh,
+                    auth=sub.auth_key,
+                    title=title,
+                    body=body,
+                    url=f"/{url_tenant_id}/admin/reception",
+                    private_key=private_key,
+                    subject=settings.vapid_subject,
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+async def _notify_webhook_event(tenant_id: str, payload: dict, db: AsyncSession) -> None:
+    """POST an arbitrary event payload to the tenant's webhook. Best-effort."""
+    result = await db.execute(
+        select(NotificationSetting).where(
+            NotificationSetting.tenant_id == tenant_id,
+            NotificationSetting.type == "webhook",
+        )
+    )
+    setting = result.scalar_one_or_none()
+    if setting is None or not setting.config_json or setting.config_json == "{}":
+        return
+    try:
+        config = decrypt_dict(setting.config_json)
+        webhook_url = config.get("webhook_url", "")
+        if webhook_url:
+            await _send_webhook(webhook_url, payload)
+    except Exception:
+        pass
+
+
+async def _notify_chatwork_text(tenant_id: str, text: str, db: AsyncSession) -> None:
+    """Post a message to the tenant's Chatwork room. Best-effort."""
+    result = await db.execute(
+        select(NotificationSetting).where(
+            NotificationSetting.tenant_id == tenant_id,
+            NotificationSetting.type == "chatwork",
+        )
+    )
+    setting = result.scalar_one_or_none()
+    if setting is None or not setting.config_json or setting.config_json == "{}":
+        return
+    try:
+        config = decrypt_dict(setting.config_json)
+        api_token = config.get("api_token", "")
+        room_id = config.get("room_id", "")
+        if not api_token or not room_id:
+            return
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                f"https://api.chatwork.com/v2/rooms/{room_id}/messages",
+                headers={"X-ChatWorkToken": api_token},
+                data={"body": text},
+            )
     except Exception:
         pass
 

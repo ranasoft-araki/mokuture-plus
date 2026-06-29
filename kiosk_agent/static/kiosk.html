@@ -130,6 +130,15 @@ async function mockFetch(method, path, body) {
     const door = l.door_number; l.occupied = false; l._pin = null;
     return { ok: true, door_number: door };
   }
+  m = path.match(/^\/proxy\/lockers\/([^/]+)\/occupy-delivery$/);
+  if (m) {
+    const l = MOCK_LOCKERS.find(x => x.id === m[1]);
+    if (!l) throw new Error("ロッカーが見つかりません");
+    if (l.occupied) throw new Error("already occupied");
+    l.occupied = true; l._pin = null;   // 置き配: 暗証番号なし
+    return { ok: true };
+  }
+  if (path === "/proxy/call-staff") return { ok: true };
   return {};
 }
 // ロッカーのGPIO開錠(ローカルエージェント)。MOCK時はダミー。
@@ -200,7 +209,7 @@ function go(screen, data = {}) {
     else if (screen === "reception")      showReception(data.purpose ?? "");
     else if (screen === "qr")             showQr();
     else if (screen === "locker")         showLocker();
-    else if (screen === "delivery")       showComingSoon("delivery");
+    else if (screen === "delivery")       showDelivery();
     else if (screen === "calling")        showCalling(data);
     else if (screen === "complete")       showComplete(data);
     else if (screen === "kiosk-settings") showKioskSettings();
@@ -544,34 +553,6 @@ function showTop() {
   });
 }
 
-// ─── COMING SOON (ロッカー / 荷物の配達 — Phase 2/3 で実装) ────────────────────
-function showComingSoon(kind) {
-  const bc = ST.brand_color;
-  const map = {
-    locker:   { ja: "ロッカー",   en: "Lockers",         icon: ICO.locker },
-    delivery: { ja: "荷物の配達", en: "Parcel delivery", icon: ICO.truck },
-  };
-  const m = map[kind] || { ja: "準備中", en: "Coming soon", icon: ICO.more };
-  sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0"><button id="cs-back" style="display:inline-flex;align-items:center;gap:8px;padding:12px 24px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:999px;font-size:18px;color:${T.sub};cursor:pointer">← 戻る</button></div>
-  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:30px;min-height:0">
-    <div style="width:170px;height:170px;border-radius:38px;background:${bc}1a;color:${bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.4)">${m.icon}</div></div>
-    <div style="text-align:center">
-      <div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">${m.ja}</div>
-      <div style="font-size:22px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:8px">${m.en}</div>
-    </div>
-    <div style="font-size:28px;color:${T.sub}">ただいま準備中です</div>
-  </div>
-</div>`;
-  rescale();
-  let idleId;
-  function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
-  CLEANUPS.push(() => clearTimeout(idleId));
-  resetIdle();
-  onSc("click", resetIdle);
-  document.getElementById("cs-back").addEventListener("click", () => { cleanup(); go("top"); });
-}
-
 // ─── LOCKER (Phase 2) ─────────────────────────────────────────────────────────
 // 3段縦並び(上段A/中段B/下段C)。空き=緑/利用中=アンバー。
 //  空き  : タッチ→自動開錠(GPIO)→荷物投入→扉を閉める→4桁PIN設定→お預け完了
@@ -611,13 +592,18 @@ function showLocker() {
   </div>
   <div id="lk-doors" style="flex:1;display:flex;flex-direction:column;gap:18px;padding:24px 80px 40px;min-height:0">
     ${lockers.map((l, i) => {
-      const used = l.occupied, accent = used ? LOCKER_AMBER : bc;
-      return `<button data-li="${i}" style="position:relative;display:flex;align-items:center;gap:40px;width:100%;flex:1;min-height:0;background:${used ? "#faf2e6" : "#eef4ee"};border:3px solid ${accent};border-radius:24px;padding:0 56px;cursor:pointer;text-align:left">
+      const used = l.occupied;
+      const delivery = used && !l.has_pin;   // 置き配(PIN無し): 利用者は解錠不可・スタッフ対応
+      const accent = used ? LOCKER_AMBER : bc;
+      const stateJa = delivery ? "配達保管中" : (used ? "利用中" : "空き");
+      const stateEn = delivery ? "Held for pickup" : (used ? "In use" : "Available");
+      const cta = delivery ? "スタッフが対応します" : (used ? "暗証番号で解錠 →" : "タッチして開ける →");
+      return `<button data-li="${i}" ${delivery ? "disabled" : ""} style="position:relative;display:flex;align-items:center;gap:40px;width:100%;flex:1;min-height:0;background:${used ? "#faf2e6" : "#eef4ee"};border:3px solid ${accent};border-radius:24px;padding:0 56px;cursor:${delivery ? "not-allowed" : "pointer"};opacity:${delivery ? .6 : 1};text-align:left">
         <div style="width:116px;height:152px;border-radius:12px;background:${T.canvas};border:3px solid ${accent};position:relative;flex-shrink:0"><div style="position:absolute;top:50%;right:16px;transform:translateY(-50%);width:9px;height:50px;border-radius:5px;background:${accent}"></div></div>
         <div style="flex:1"><div style="font-size:60px;font-weight:700;color:${T.ink};letter-spacing:-1px">${escHtml(l.name)}</div>
-          <div style="margin-top:12px;display:inline-flex;align-items:center;gap:10px;padding:8px 22px;border-radius:999px;background:${accent};color:#fff;font-size:28px;font-weight:600">${used ? "利用中" : "空き"}<span style="font-size:17px;font-weight:500;opacity:.85;font-family:Inter,system-ui,sans-serif">${used ? "In use" : "Available"}</span></div>
+          <div style="margin-top:12px;display:inline-flex;align-items:center;gap:10px;padding:8px 22px;border-radius:999px;background:${accent};color:#fff;font-size:28px;font-weight:600">${stateJa}<span style="font-size:17px;font-weight:500;opacity:.85;font-family:Inter,system-ui,sans-serif">${stateEn}</span></div>
         </div>
-        <div style="font-size:24px;color:${accent};font-weight:600;flex-shrink:0">${used ? "暗証番号で解錠 →" : "タッチして開ける →"}</div>
+        <div style="font-size:24px;color:${accent};font-weight:600;flex-shrink:0">${cta}</div>
       </button>`;
     }).join("")}
   </div>`);
@@ -657,10 +643,10 @@ function showLocker() {
 
     if (view === "grid") {
       document.getElementById("lk-doors").addEventListener("click", e => {
-        const btn = e.target.closest("[data-li]"); if (!btn) return;
+        const btn = e.target.closest("[data-li]"); if (!btn || btn.disabled) return;  // 配達保管中(disabled)は無視
         resetIdle();
         sel = lockers[+btn.dataset.li];
-        if (sel.occupied) { pin = ""; err = ""; view = "pininput"; render(); }
+        if (sel.occupied) { pin = ""; err = ""; view = "pininput"; render(); }  // 利用中(PIN有)のみ
         else { openEmpty(); }
       });
     } else if (view === "openwait") {
@@ -723,6 +709,144 @@ function showLocker() {
 
   resetIdle();
   onSc("click", resetIdle);   // 永続要素 sc に一度だけ登録(画面操作でアイドルタイマー延長)
+  render();   // loading
+  load();
+}
+
+// ─── DELIVERY (Phase 3: 荷物の配達) ───────────────────────────────────────────
+// 配達方法を選択: 置き配(空きロッカーへPIN不要で自動施錠/空き無しは選択不可) または 呼び出し(担当者へ通知)。
+function showDelivery() {
+  const bc = ST.brand_color;
+  const token = localStorage.getItem(TOKEN_KEY);
+  let lockers = [], available = 0;
+  let view = "loading";  // loading | choose | pick | openwait | sending | result | error
+  let sel = null, err = "", resultTitle = "", resultSub = "";
+  let idleId, resultTimer = null;
+  function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
+  CLEANUPS.push(() => { clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); });
+
+  const shell = (inner) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
+  <div style="padding:28px 80px 0;flex-shrink:0"><button id="dl-back" style="display:inline-flex;align-items:center;gap:8px;padding:12px 24px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:999px;font-size:18px;color:${T.sub};cursor:pointer">← 戻る</button></div>
+  ${inner}
+</div>`;
+
+  function render() {
+    resetIdle();
+    if (view === "loading" || view === "sending") {
+      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px"><div style="width:56px;height:56px;border-radius:50%;border:4px solid ${T.border};border-top-color:${bc};animation:spin .8s linear infinite"></div>${view === "sending" ? `<div style="font-size:26px;color:${T.sub}">担当者に通知しています…</div>` : ""}</div>`);
+    } else if (view === "error") {
+      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px"><div style="font-size:40px;font-weight:600;color:${T.ink}">処理できませんでした</div><div style="font-size:22px;color:${T.sub}">${escHtml(err || "受付スタッフへお声がけください")}</div></div>`);
+    } else if (view === "choose") {
+      const noLocker = available <= 0;
+      sc.innerHTML = shell(`
+  <div style="padding:14px 80px 0;flex-shrink:0"><div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">配達方法をお選びください</div><div style="font-size:24px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Please choose a delivery method</div></div>
+  <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:44px;padding:0 80px;min-height:0">
+    <button id="dl-locker" ${noLocker ? "disabled" : ""} style="width:620px;height:520px;border-radius:32px;border:3px solid ${noLocker ? T.border : bc};background:${noLocker ? T.panel : "#eef4ee"};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;cursor:${noLocker ? "not-allowed" : "pointer"};opacity:${noLocker ? .55 : 1};text-align:center;padding:0 40px">
+      <div style="width:150px;height:150px;border-radius:34px;background:${noLocker ? T.border : bc + "22"};color:${noLocker ? T.muted : bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.3)">${ICO.locker}</div></div>
+      <div><div style="font-size:54px;font-weight:700;color:${T.ink}">置き配</div><div style="font-size:20px;color:${T.sub};font-family:Inter,system-ui,sans-serif;margin-top:6px">Drop-off in a locker</div></div>
+      <div style="font-size:24px;color:${T.sub}">空きロッカーに保管（暗証番号不要）</div>
+      ${noLocker ? `<div style="font-size:20px;color:${T.urgent};font-weight:600">空きロッカーがありません</div>` : `<div style="font-size:22px;color:${bc};font-weight:600">空き ${available} 台</div>`}
+    </button>
+    <button id="dl-call" style="width:620px;height:520px;border-radius:32px;border:none;background:${T.dark};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;cursor:pointer;text-align:center;padding:0 40px">
+      <div style="width:150px;height:150px;border-radius:34px;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center"><div style="transform:scale(1.5)">${ICO.bell_lg}</div></div>
+      <div><div style="font-size:54px;font-weight:700;color:#fff">呼び出し</div><div style="font-size:20px;color:rgba(255,255,255,.7);font-family:Inter,system-ui,sans-serif;margin-top:6px">Call a staff member</div></div>
+      <div style="font-size:24px;color:rgba(255,255,255,.75)">担当者を呼び出します</div>
+      <div style="font-size:18px;color:rgba(255,255,255,.5)">Slack・Chatwork・スマートフォンへ通知</div>
+    </button>
+  </div>`);
+    } else if (view === "pick") {
+      sc.innerHTML = shell(`
+  <div style="padding:14px 80px 0;flex-shrink:0"><div style="font-size:52px;font-weight:600;color:${T.ink};letter-spacing:-1.2px">ロッカーをお選びください</div><div style="font-size:22px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:4px">空いているロッカーに保管します</div></div>
+  <div id="dl-doors" style="flex:1;display:flex;flex-direction:column;gap:16px;padding:20px 80px 36px;min-height:0">
+    ${lockers.map((l, i) => {
+      const used = l.occupied, accent = used ? LOCKER_AMBER : bc;
+      return `<button data-li="${i}" ${used ? "disabled" : ""} style="position:relative;display:flex;align-items:center;gap:40px;width:100%;flex:1;min-height:0;background:${used ? "#f4f1ea" : "#eef4ee"};border:3px solid ${accent};border-radius:22px;padding:0 52px;cursor:${used ? "not-allowed" : "pointer"};opacity:${used ? .55 : 1};text-align:left">
+        <div style="width:104px;height:140px;border-radius:12px;background:${T.canvas};border:3px solid ${accent};position:relative;flex-shrink:0"><div style="position:absolute;top:50%;right:14px;transform:translateY(-50%);width:9px;height:46px;border-radius:5px;background:${accent}"></div></div>
+        <div style="flex:1"><div style="font-size:54px;font-weight:700;color:${T.ink}">${escHtml(l.name)}</div>
+          <div style="margin-top:10px;display:inline-block;padding:6px 18px;border-radius:999px;background:${accent};color:#fff;font-size:24px;font-weight:600">${used ? "利用中" : "空き"}</div></div>
+        <div style="font-size:24px;color:${accent};font-weight:600;flex-shrink:0">${used ? "—" : "このロッカーに入れる →"}</div>
+      </button>`;
+    }).join("")}
+  </div>`);
+    } else if (view === "openwait") {
+      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;text-align:center;padding:0 120px">
+        <div style="width:120px;height:120px;border-radius:30px;background:${bc}1a;color:${bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.4)">${ICO.locker}</div></div>
+        <div style="font-size:60px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">扉が開きました</div>
+        <div style="font-size:30px;color:${T.sub};line-height:1.5"><b>${escHtml(sel.name)}</b> に荷物を入れ、扉を閉めてください<br><span style="font-size:24px;color:${T.muted}">暗証番号の設定は不要です</span></div>
+        <button id="dl-lock" style="margin-top:12px;padding:22px 56px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:28px;font-weight:600;cursor:pointer">扉を閉めました（施錠する）</button>
+      </div>`);
+    } else { // result
+      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;text-align:center;padding:0 120px">
+        <div style="width:110px;height:110px;border-radius:50%;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
+        <div style="font-size:64px;font-weight:600;color:${T.ink};letter-spacing:-2px">${escHtml(resultTitle)}</div>
+        <div style="font-size:30px;color:${T.sub};line-height:1.5">${escHtml(resultSub)}</div>
+        <button id="dl-done" style="margin-top:10px;padding:18px 52px;border:1px solid ${T.borderStrong};border-radius:14px;background:${T.canvas};color:${T.sub};font-size:22px;cursor:pointer">完了</button>
+      </div>`);
+    }
+    rescale();
+
+    const back = document.getElementById("dl-back");
+    if (back) back.addEventListener("click", () => {
+      if (view === "pick" || view === "openwait") { view = "choose"; render(); }
+      else { cleanup(); go("top"); }
+    });
+
+    if (view === "choose") {
+      const lk = document.getElementById("dl-locker");
+      if (lk && available > 0) lk.addEventListener("click", () => { resetIdle(); view = "pick"; render(); });
+      document.getElementById("dl-call").addEventListener("click", () => { resetIdle(); callStaff(); });
+    } else if (view === "pick") {
+      document.getElementById("dl-doors").addEventListener("click", e => {
+        const btn = e.target.closest("[data-li]"); if (!btn || btn.disabled) return;
+        resetIdle(); sel = lockers[+btn.dataset.li]; openForDelivery();
+      });
+    } else if (view === "openwait") {
+      document.getElementById("dl-lock").addEventListener("click", () => { resetIdle(); lockDelivery(); });
+    } else if (view === "result") {
+      document.getElementById("dl-done").addEventListener("click", () => { cleanup(); go("idle"); });
+      resultTimer = setTimeout(() => { cleanup(); go("idle"); }, Math.max(6, ST.kiosk_complete_timeout_sec) * 1000);
+    }
+  }
+
+  async function openForDelivery() {
+    await pulseLocker(sel.door_number);
+    view = "openwait"; render();
+  }
+  async function lockDelivery() {
+    view = "sending"; render();
+    try {
+      await apiPost(`/proxy/lockers/${encodeURIComponent(sel.id)}/occupy-delivery`, {}, token);
+      resultTitle = "お預け完了"; resultSub = "施錠しました。担当者がお受け取りします（暗証番号は不要です）。";
+      view = "result"; render();
+    } catch (e) {
+      err = (e && e.message) || ""; view = "error"; render();
+    }
+  }
+  async function callStaff() {
+    view = "sending"; render();
+    try {
+      await apiPost("/proxy/call-staff", { message: "" }, token);
+      resultTitle = "担当者に通知しました"; resultSub = "少々お待ちください。担当者がまいります。";
+      view = "result"; render();
+    } catch (e) {
+      resultTitle = "通知に失敗しました"; resultSub = "恐れ入りますが、受付スタッフへお声がけください。";
+      view = "result"; render();
+    }
+  }
+
+  async function load() {
+    try {
+      const r = await apiGet("/proxy/lockers", token);
+      lockers = r.lockers || [];
+      available = r.available_count ?? lockers.filter(l => !l.occupied).length;
+      view = "choose"; render();
+    } catch (e) {
+      err = (e && e.message) || ""; view = "error"; render();
+    }
+  }
+
+  resetIdle();
+  onSc("click", resetIdle);
   render();   // loading
   load();
 }

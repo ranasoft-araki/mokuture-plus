@@ -341,6 +341,8 @@ mokuture/
 | GET | /kiosk/lockers | デバイストークン | ロッカー一覧 `{lockers:[{id,name,door_number,occupied,has_pin}], available_count}` |
 | POST | /kiosk/lockers/{id}/occupy | デバイストークン | 空き→PIN設定 `{pin:4桁}`→`{ok}`。409 already occupied / 422 |
 | POST | /kiosk/lockers/{id}/release | デバイストークン | 利用中→PIN照合 `{pin}`→`{ok,door_number}`。403 invalid pin / 409 not occupied |
+| POST | /kiosk/lockers/{id}/occupy-delivery | デバイストークン | 置き配: 空き→PIN不要で施錠→`{ok}`。409 already occupied (occupied=true, pin_hash=null) |
+| POST | /kiosk/call-staff | デバイストークン | 配達の呼び出し: 担当者へ通知 `{message?}`→`{ok}`。Slack/WebPush/Webhook/Chatwork (best-effort) |
 | POST | /lockers/{id}/open | JWT | ロッカー開錠 |
 
 ---
@@ -366,14 +368,15 @@ mokuture/
 
 ```
 idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 3タイル)
-  top: ご訪問 → welcome,  荷物の配達 → delivery(準備中/Phase3),  ロッカー → locker(Phase2実装済み)
+  top: ご訪問 → welcome,  荷物の配達 → delivery(Phase3実装済み),  ロッカー → locker(Phase2実装済み)
   welcome(QR有無) → qr / reception
   qr(スキャン) / reception(フォーム) → calling → complete(歓迎画面)
   complete ──(60s 等)──▶ idle
 ```
 
 - **idle**: 人感センサー（`GET /device/pir` を 700ms ポーリング）で来訪検知 → `top` へ自動遷移。タッチCTAは非表示（PIR非搭載/開発環境向けに画面タップでも遷移可）。画面は屋号(ロゴ/welcome_message)・タグラインのみ。signage メディアがあれば再生。
-- **top（受付メニュー）**: `ご訪問 / 荷物の配達 / ロッカー` の3タイル（日英併記・大型）。`荷物の配達` は Phase 3 まで `showComingSoon` スタブ。
+- **top（受付メニュー）**: `ご訪問 / 荷物の配達 / ロッカー` の3タイル（日英併記・大型）。3タイルとも実装済み。
+- **delivery（荷物の配達・Phase3実装済み）**: `showDelivery`。配達方法を選択 — **置き配**(空きロッカーへPIN不要で自動施錠。空きが無ければ選択不可。空きロッカー選択→`pulseLocker`でGPIO開錠→「扉を閉めました」→`/proxy/lockers/{id}/occupy-delivery`) / **呼び出し**(`/proxy/call-staff`→担当者へSlack/WebPush/Webhook/Chatwork通知)。置き配で占有したロッカーは pin_hash=null(=`has_pin:false`)で、利用者向けロッカー画面では解錠操作の対象外(スタッフ/管理画面で対応)。
 - **locker（ロッカー・Phase2実装済み）**: 3段縦並び、空き=緑/利用中=アンバー。空き→`pulseLocker(door_number)`でGPIO開錠→「扉を閉めました」→4桁PIN設定(`/proxy/lockers/{id}/occupy`)。利用中→4桁PIN入力(`/proxy/lockers/{id}/release`)→照合OKでGPIO開錠。PINは backend で bcrypt 保存。扉開閉センサーが無いため閉扉は手動ボタン（センサー導入時は自動化可）。
   - **GPIO設定の注意**: kiosk は `POST /device/locker/{door_number}/open` を叩くため、kiosk_agent の `LOCKER_PINS_JSON` は **door_number(=GPIOピン番号)をキー**にすること。例: `{"17":17,"18":18,"19":19}`。
 - **モックモード**: `kiosk.html?mock=1` でエージェント/バックエンドAPIをスタブ化し、Windows等のブラウザで全画面フロー（ロッカー・予約マップ含む）を実機/バックエンド無しで確認できる。起動例: `cd kiosk_agent/static && python -m http.server 8000` → `http://localhost:8000/kiosk.html?mock=1`。MOCKロッカーBは PIN `1234` で解錠可。QR画面の「（MOCK）予約QRを読み取ったことにする」ボタンで歓迎画面＋館内マップを確認可。

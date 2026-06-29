@@ -212,6 +212,10 @@ class LockerPinBody(BaseModel):
     pin: str
 
 
+class CallStaffBody(BaseModel):
+    message: str | None = None
+
+
 @app.get("/", include_in_schema=False)
 async def index():
     return RedirectResponse(url="/kiosk.html")
@@ -425,6 +429,58 @@ async def proxy_release_locker(locker_id: str, request: Request, body: LockerPin
         try:
             resp = await client.post(
                 f"{settings.remote_api_url}/kiosk/lockers/{locker_id}/release",
+                json=body.model_dump(),
+                headers={"X-Kiosk-Token": token},
+                timeout=10,
+            )
+            if resp.status_code == 401:
+                raise HTTPException(status_code=401, detail="Invalid kiosk token")
+            resp.raise_for_status()
+        except HTTPException:
+            raise
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=_proxy_detail(e.response))
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"リモートAPIに接続できません: {e}")
+    return resp.json()
+
+
+@app.post("/proxy/lockers/{locker_id}/occupy-delivery")
+async def proxy_occupy_locker_delivery(locker_id: str, request: Request):
+    """ロッカーを置き配（PINなし）で確保する。"""
+    token = request.headers.get("x-kiosk-token", "")
+    if not token:
+        raise HTTPException(status_code=401, detail="X-Kiosk-Token required")
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                f"{settings.remote_api_url}/kiosk/lockers/{locker_id}/occupy-delivery",
+                json={},
+                headers={"X-Kiosk-Token": token},
+                timeout=10,
+            )
+            if resp.status_code == 401:
+                raise HTTPException(status_code=401, detail="Invalid kiosk token")
+            resp.raise_for_status()
+        except HTTPException:
+            raise
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=_proxy_detail(e.response))
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"リモートAPIに接続できません: {e}")
+    return resp.json()
+
+
+@app.post("/proxy/call-staff")
+async def proxy_call_staff(request: Request, body: CallStaffBody):
+    """配達の呼び出しをリモートAPIに送信する。"""
+    token = request.headers.get("x-kiosk-token", "")
+    if not token:
+        raise HTTPException(status_code=401, detail="X-Kiosk-Token required")
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                f"{settings.remote_api_url}/kiosk/call-staff",
                 json=body.model_dump(),
                 headers={"X-Kiosk-Token": token},
                 timeout=10,
