@@ -242,6 +242,7 @@ async def get_config():
         "remote_api_url": settings.remote_api_url,
         "device_name": get_device_name(),
         "registered": is_registered(),
+        "mock": settings.kiosk_mock,
     }
 
 

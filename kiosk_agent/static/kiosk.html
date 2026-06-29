@@ -80,7 +80,8 @@ function cleanup() { CLEANUPS.forEach(f => f()); CLEANUPS = []; }
 // 全画面フロー(ロッカー含む)を実機・バックエンド無しで確認できる。
 //   起動: cd kiosk_agent/static && python -m http.server 8000
 //   表示: http://localhost:8000/kiosk.html?mock=1
-const MOCK = new URLSearchParams(location.search).has("mock");
+// ?mock=1 で即モック。エージェントの /config が mock:true を返した場合(例:Windows開発機)も boot() で有効化する。
+let MOCK = new URLSearchParams(location.search).has("mock");
 const MOCK_LOCKERS = [
   { id: "A", name: "A（上段）", door_number: 17, occupied: false, _pin: null },
   { id: "B", name: "B（中段）", door_number: 18, occupied: true,  _pin: "1234" },
@@ -1628,27 +1629,35 @@ document.addEventListener("keydown", function(e) {
 });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
+// モック起動: エージェント/バックエンド無しで待機画面から起動(Windows開発機・静的配信での確認用)
+async function bootMock() {
+  if (MOCK && (!CFG || !CFG.device_name)) {
+    try { CFG = await apiGet("/config"); } catch {}
+  }
+  localStorage.setItem(TOKEN_KEY, "mock-token");
+  localStorage.setItem(NAME_KEY, (CFG && CFG.device_name) || "MOCK-KIOSK");
+  Object.assign(ST, await apiGet("/proxy/settings"));
+  ITEMS = [];
+  go("idle");
+}
+
 async function boot() {
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:#0a0806;display:flex;align-items:center;justify-content:center"><div style="color:rgba(255,255,255,.3);font-size:18px">読み込み中…</div></div>`;
   rescale();
 
-  // MOCK モード: エージェント/バックエンド無しで待機画面から起動(Windowsブラウザ確認用)
-  if (MOCK) {
-    CFG = await apiGet("/config");
-    localStorage.setItem(TOKEN_KEY, "mock-token");
-    localStorage.setItem(NAME_KEY, "MOCK-KIOSK");
-    Object.assign(ST, await apiGet("/proxy/settings"));
-    ITEMS = [];
-    go("idle");
-    return;
-  }
+  // ?mock=1: 完全モック(エージェント不要・python -m http.server でも可)
+  if (MOCK) { return bootMock(); }
 
+  // 通常起動: エージェントの /config を取得(mock 判定を含む)
   try {
     CFG = await apiGet("/config");
   } catch (e) {
     sc.innerHTML = `<div style="width:1920px;height:1080px;background:#0a0806;display:flex;align-items:center;justify-content:center"><div style="color:#f88;font-size:16px;text-align:center">エージェントに接続できません<br>${escHtml(e.message)}</div></div>`;
     rescale(); return;
   }
+
+  // エージェントが mock を指示(例: Windows開発機 KIOSK_MOCK) → 以降モックで動作(バックエンド不要)
+  if (CFG && CFG.mock) { MOCK = true; return bootMock(); }
 
   const token = localStorage.getItem(TOKEN_KEY);
   if (!token) { showSetup(); return; }

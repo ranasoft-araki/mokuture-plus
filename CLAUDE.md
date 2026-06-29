@@ -379,7 +379,11 @@ idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 
 - **delivery（荷物の配達・Phase3実装済み）**: `showDelivery`。配達方法を選択 — **置き配**(空きロッカーへPIN不要で自動施錠。空きが無ければ選択不可。空きロッカー選択→`pulseLocker`でGPIO開錠→「扉を閉めました」→`/proxy/lockers/{id}/occupy-delivery`) / **呼び出し**(`/proxy/call-staff`→担当者へSlack/WebPush/Webhook/Chatwork通知)。置き配で占有したロッカーは pin_hash=null(=`has_pin:false`)で、利用者向けロッカー画面では解錠操作の対象外(スタッフ/管理画面で対応)。
 - **locker（ロッカー・Phase2実装済み）**: 3段縦並び、空き=緑/利用中=アンバー。空き→`pulseLocker(door_number)`でGPIO開錠→「扉を閉めました」→4桁PIN設定(`/proxy/lockers/{id}/occupy`)。利用中→4桁PIN入力(`/proxy/lockers/{id}/release`)→照合OKでGPIO開錠。PINは backend で bcrypt 保存。扉開閉センサーが無いため閉扉は手動ボタン（センサー導入時は自動化可）。
   - **GPIO設定の注意**: kiosk は `POST /device/locker/{door_number}/open` を叩くため、kiosk_agent の `LOCKER_PINS_JSON` は **door_number(=GPIOピン番号)をキー**にすること。例: `{"17":17,"18":18,"19":19}`。
-- **モックモード**: `kiosk.html?mock=1` でエージェント/バックエンドAPIをスタブ化し、Windows等のブラウザで全画面フロー（ロッカー・予約マップ含む）を実機/バックエンド無しで確認できる。起動例: `cd kiosk_agent/static && python -m http.server 8000` → `http://localhost:8000/kiosk.html?mock=1`。MOCKロッカーBは PIN `1234` で解錠可。QR画面の「（MOCK）予約QRを読み取ったことにする」ボタンで歓迎画面＋館内マップを確認可。
+- **モックモード**: エージェント/バックエンドAPIをスタブ化し、実機/バックエンド無しで全画面フロー（ロッカー・予約マップ含む）を確認できる。有効化は2通り:
+  1. **自動(推奨)**: `config.py` の `kiosk_mock` が既定で **Windowsなら True**（本番Piは False）。普通に `uvicorn main:app` を起動 → `/config` が `mock:true` を返し、`kiosk.html` の boot が自動でモックに切替（`http://localhost:8080`、`?mock=1` 不要）。`KIOSK_MOCK=true/false` 環境変数で明示上書き可。
+  2. **手動/静的**: `kiosk.html?mock=1`（エージェント不要、`python -m http.server` での確認用）。
+  - MOCKロッカー: A/C=空き、B=利用中(解錠PIN `1234`)。空きはPIN任意4桁で設定成功。QR画面の「（MOCK）予約QRを読み取ったことにする」で歓迎画面＋館内マップを確認可。
+  - 実バックエンドに繋ぐ実機(Pi)では `mock:false` となり通常フロー。
 - **reception（フォーム）**: オンスクリーン50音キーボードは廃止。OS標準ソフトキーボードを使用するため、入力欄は上半分に2列配置＋送信、下半分は空ける（実機OSのソフトキーボード表示領域）。
 - **qr**: カメラ位置を示す画像エリア（`ST.qr_camera_image_url` 未設定時はプレースホルダー）。
 - **complete（歓迎画面「お待ちしておりました」）**: 氏名と「様」を同サイズでインライン表示。予約情報（Googleカレンダー連携）を拡大表示。QR受付で行き先（会議室）が確定し、かつその会議室に `map_image_url` が登録されている場合のみ館内マップを表示（`go("calling"/"complete", { name, staff, room, scheduledAt, method })` でデータを伝搬）。
