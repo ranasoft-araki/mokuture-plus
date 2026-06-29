@@ -276,7 +276,7 @@ mokuture/
 | logo_pos_x | FLOAT | ロゴ X 位置 (0.0–0.9、画面幅比) |
 | logo_pos_y | FLOAT | ロゴ Y 位置 (0.0–0.9、画面高比) |
 | logo_width_pct | FLOAT | ロゴ幅 (2.0–30.0、画面幅に対する %) |
-| kiosk_style | VARCHAR(32) | ようこそ画面デザインパターン ID (default / medical / retail / hotel / startup / school / craft / industrial / restaurant / mono / gym) |
+| kiosk_style | VARCHAR(32) | （廃止予定・常に `default`）旧・業種別テーマID。テーマ機能廃止により UI からは選択不可。`ALLOWED_KIOSK_STYLES = {"default"}` |
 | is_suspended | BOOLEAN | テナント停止フラグ |
 | operator_notes | TEXT | 運営用内部メモ (nullable) |
 
@@ -295,7 +295,7 @@ mokuture/
 - **lockers** — ロッカー (gpio_pin, state)
 - **reception_logs** — 受付ログ (visitor_name, company, staff, purpose, method, state, staff_notes, appointment_id)
 - **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired, meeting_room_id FK nullable)
-- **meeting_rooms** — 会議室 (name, location, capacity, color, description, is_active)
+- **meeting_rooms** — 会議室 (name, location, capacity, color, description, is_active, **map_image_url**=館内マップ画像URL nullable)
 - **notification_settings** — Slack/Chatwork Webhook URL (Fernet 暗号化)
 - **push_subscriptions** — Web Push 購読情報
 
@@ -324,15 +324,16 @@ mokuture/
 | POST | /devices/{id}/pin | JWT | PIN 発行 |
 | GET | /kiosk/schedule | デバイストークン | 現在のプレイリスト取得 |
 | POST | /kiosk/reception | デバイストークン | 受付フォーム送信 (appointment_id 対応) |
-| GET | /kiosk/appointment/{token} | デバイストークン | QR トークンから来社予定取得 |
+| GET | /kiosk/appointment/{token} | デバイストークン | QR トークンから来社予定取得 (scheduled_at + meeting_room{name,location,map_image_url}\|null を含む) |
 | POST | /kiosk/verify-pin | なし | PIN → デバイストークン交換 |
 | GET | /appointments | JWT | 来社予定一覧 (status/date_from/date_to フィルタ対応) |
 | POST | /appointments | JWT | 来社予定作成 (meeting_room_id 対応) |
 | PATCH | /appointments/{id} | JWT | 来社予定更新 (meeting_room_id 対応) |
 | DELETE | /appointments/{id} | JWT | 来社予定削除 |
 | GET | /meeting-rooms | JWT | 会議室一覧 (active_only フィルタ) |
-| POST | /meeting-rooms | JWT | 会議室作成 |
-| PATCH | /meeting-rooms/{id} | JWT | 会議室更新 |
+| POST | /meeting-rooms | JWT | 会議室作成 (map_image_url 対応) |
+| POST | /meeting-rooms/map-upload-url | JWT | 館内マップ画像 Presigned URL 取得 (logo-upload と同形式) |
+| PATCH | /meeting-rooms/{id} | JWT | 会議室更新 (map_image_url 対応) |
 | DELETE | /meeting-rooms/{id} | JWT | 会議室削除 |
 | GET | /reception | JWT | 受付ログ一覧 |
 | GET/PATCH | /notifications | JWT | 通知設定 |
@@ -348,23 +349,33 @@ mokuture/
 - `get_current_user` が JWT から `user.tenant_id` を取得し、各エンドポイントで `WHERE tenant_id = user.tenant_id` を適用。
 - キオスク公開 API (`/kiosk/*`) はデバイストークンで `tenant_id` を解決。
 
-### キオスク デザインパターン追加方法
+### キオスク デザイン（単一デザインに統一）
 
-新しいデザインパターンを追加するには以下の4箇所を更新すること:
+**業種別テーマ機能は廃止済み。** キオスクは磯野木工所の和モダン（moss green アクセント）単一デザインに統一。
+`kiosk.html` 内の各画面は単一のデザイントークン定数 `T`（`bg/canvas/ink/sub/muted/dark/idleBg/urgent` 等）と
+`ST.brand_color`（アクセント）でレンダリングする。テーマビルダー（`buildIdle_XXX` / `*_TEMPLATES` / `FORM_THEMES` / `QR_THEMES` 等）は存在しない。
 
-1. **`frontend/app/[tenant]/admin/kiosk-settings/kioskStyles.ts`** に `KioskStyleDef` エントリを追加
-2. **`backend/app/api/settings.py`** の `ALLOWED_KIOSK_STYLES` セットに ID を追加
-3. **`kiosk_agent/static/kiosk.html`** — 2つの関数を追加し、各レジストリに登録:
-   - `buildIdle_XXX(bc)` → `IDLE_TEMPLATES` に登録（待機画面）
-   - `buildComplete_XXX(vName, staff, bc, count, now, completeMsg)` → `COMPLETE_TEMPLATES` に登録（受付完了画面）
+- `kiosk_style` カラムは DB に残存するが UI からは選択不可（`ALLOWED_KIOSK_STYLES = {"default"}`）。
+- `kioskStyles.ts` は `default`（和モダン）1エントリのみ。
 
-DB マイグレーション不要（`kiosk_style` カラムはフリーテキスト）。
+### キオスク画面（device 版 `kiosk_agent/static/kiosk.html`）
+画面遷移フロー（`go(screen, data)` で管理）:
 
-### キオスク画面
-- `KioskFlow.tsx` が全画面状態 (`idle → top → reception/qr → calling → complete`) を管理。
-- `KioskScaler` が 1920×1080 固定サイズを CSS `transform: scale()` でビューポートにフィット。
-- `PublicTenantSettings` は `localStorage` にキャッシュ（オフライン対応）。
-- TopScreen にはロゴを `position: absolute` で `logo_pos_x/y/width_pct` に従い表示。
+```
+idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 3タイル)
+  top: ご訪問 → welcome,  荷物の配達 → delivery(準備中),  ロッカー → locker(準備中)
+  welcome(QR有無) → qr / reception
+  qr(スキャン) / reception(フォーム) → calling → complete(歓迎画面)
+  complete ──(60s 等)──▶ idle
+```
+
+- **idle**: 人感センサー（`GET /device/pir` を 700ms ポーリング）で来訪検知 → `top` へ自動遷移。タッチCTAは非表示（PIR非搭載/開発環境向けに画面タップでも遷移可）。画面は屋号(ロゴ/welcome_message)・タグラインのみ。signage メディアがあれば再生。
+- **top（受付メニュー）**: `ご訪問 / 荷物の配達 / ロッカー` の3タイル（日英併記・大型）。`荷物の配達`/`ロッカー` は Phase 2/3 まで `showComingSoon` スタブ。
+- **reception（フォーム）**: オンスクリーン50音キーボードは廃止。OS標準ソフトキーボードを使用するため、入力欄は上半分に2列配置＋送信、下半分は空ける（実機OSのソフトキーボード表示領域）。
+- **qr**: カメラ位置を示す画像エリア（`ST.qr_camera_image_url` 未設定時はプレースホルダー）。
+- **complete（歓迎画面「お待ちしておりました」）**: 氏名と「様」を同サイズでインライン表示。予約情報（Googleカレンダー連携）を拡大表示。QR受付で行き先（会議室）が確定し、かつその会議室に `map_image_url` が登録されている場合のみ館内マップを表示（`go("calling"/"complete", { name, staff, room, scheduledAt, method })` でデータを伝搬）。
+- `KioskScaler` 相当の `rescale()` が 1920×1080 固定を `transform: scale()` でフィット。`PublicTenantSettings` は `/proxy/settings` 経由で取得。
+- Web 版キオスク `frontend/app/[tenant]/kiosk/KioskFlow.tsx` は別実装（簡易フォーム）。本仕様変更は device 版 `kiosk.html` を対象とする。
 
 ### 「戻る」ボタンの配置ルール（キオスク・管理画面 共通）
 

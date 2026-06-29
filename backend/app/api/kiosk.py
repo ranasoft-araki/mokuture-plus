@@ -27,6 +27,7 @@ from app.models.content import Media, Playlist, PlaylistItem, Schedule
 from app.models.reception import ReceptionLog
 from app.models.notification import NotificationSetting, PushSubscription
 from app.models.visitor_appointment import VisitorAppointment
+from app.models.room import MeetingRoom
 from app.services.slack import send_slack_notification
 from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
@@ -297,6 +298,23 @@ async def kiosk_get_appointment(
     appt = result.scalar_one_or_none()
     if appt is None:
         raise HTTPException(status_code=404, detail="予約が見つかりません")
+
+    meeting_room = None
+    if appt.meeting_room_id:
+        room_result = await db.execute(
+            select(MeetingRoom).where(
+                MeetingRoom.id == appt.meeting_room_id,
+                MeetingRoom.tenant_id == tenant.id,
+            )
+        )
+        room = room_result.scalar_one_or_none()
+        if room is not None:
+            meeting_room = {
+                "name": room.name,
+                "location": room.location,
+                "map_image_url": room.map_image_url,
+            }
+
     return {
         "id": appt.id,
         "visitor_name": appt.visitor_name,
@@ -305,6 +323,7 @@ async def kiosk_get_appointment(
         "staff": appt.staff,
         "scheduled_at": appt.scheduled_at.isoformat(),
         "status": appt.status,
+        "meeting_room": meeting_room,
     }
 
 

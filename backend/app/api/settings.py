@@ -24,10 +24,7 @@ ALLOWED_FONTS = {
     "Noto Serif JP / Georgia",
     "BIZ UDPGothic / System",
 }
-ALLOWED_KIOSK_STYLES = {
-    "default", "medical", "retail", "hotel", "startup",
-    "school", "craft", "industrial", "restaurant", "mono", "gym",
-}
+ALLOWED_KIOSK_STYLES = {"default"}
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 

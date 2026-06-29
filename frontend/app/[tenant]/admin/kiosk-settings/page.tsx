@@ -5,7 +5,6 @@ import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkSectionTitle } from "@/components/AdminShell";
 import { api, TenantSettings } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
-import { KIOSK_STYLES } from "./kioskStyles";
 
 type PreviewTab = "top" | "calling" | "complete";
 
@@ -25,9 +24,6 @@ export default function KioskSettingsPage() {
   const [kioskComplete, setKioskComplete] = useState("担当者がご案内します");
   const [kioskIdleTimeout, setKioskIdleTimeout] = useState("60");
   const [kioskCompleteTimeout, setKioskCompleteTimeout] = useState("10");
-
-  // Design pattern state
-  const [kioskStyle, setKioskStyle] = useState("default");
 
   // Staff list state — one name per line in the textarea
   const [staffListText, setStaffListText] = useState("");
@@ -62,7 +58,6 @@ export default function KioskSettingsPage() {
       setLogoPosY(s.logo_pos_y);
       setLogoWidthPct(s.logo_width_pct);
       setLogoUrl(s.logo_url);
-      setKioskStyle(s.kiosk_style ?? "default");
       // Populate staff list textarea: stored as CSV, display as one per line
       if (s.staff_list) {
         setStaffListText(
@@ -94,7 +89,6 @@ export default function KioskSettingsPage() {
         logo_pos_x: logoPosX,
         logo_pos_y: logoPosY,
         logo_width_pct: logoWidthPct,
-        kiosk_style: kioskStyle,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -116,7 +110,6 @@ export default function KioskSettingsPage() {
     setLogoPosX(settings.logo_pos_x);
     setLogoPosY(settings.logo_pos_y);
     setLogoWidthPct(settings.logo_width_pct);
-    setKioskStyle(settings.kiosk_style ?? "default");
     if (settings.staff_list) {
       setStaffListText(
         settings.staff_list.split(",").map((n) => n.trim()).filter(Boolean).join("\n")
@@ -200,42 +193,6 @@ export default function KioskSettingsPage() {
           {error}
         </div>
       )}
-
-      {/* Design pattern selector — full width above the two-column grid */}
-      <MkCard style={{ marginBottom: 20 }}>
-        <MkSectionTitle title="デザインパターン" subtitle="キオスクの「ようこそ」画面のテーマを選択" />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 8 }}>
-          {KIOSK_STYLES.map((s) => {
-            const selected = kioskStyle === s.id;
-            return (
-              <div
-                key={s.id}
-                onClick={() => setKioskStyle(s.id)}
-                style={{
-                  border: selected ? "2px solid #2d6a4f" : "2px solid #efece5",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  overflow: "hidden",
-                }}
-              >
-                <div style={{ width: "100%", paddingTop: "70%", position: "relative", background: s.bg, borderRadius: "6px 6px 0 0", overflow: "hidden" }}>
-                  <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "35%", background: s.accentGradient ?? s.accent, opacity: 0.9 }} />
-                  <div style={{ position: "absolute", bottom: "15%", left: "15%", right: "15%", display: "flex", flexDirection: "column", gap: 4 }}>
-                    <div style={{ height: 4, background: s.text, opacity: 0.3, borderRadius: 2 }} />
-                    <div style={{ height: 4, background: s.text, opacity: 0.2, width: "70%", borderRadius: 2 }} />
-                  </div>
-                  {selected && (
-                    <div style={{ position: "absolute", top: 6, right: 6, width: 16, height: 16, background: s.accent === "#000000" ? "#fff" : s.accent, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#fff" }}>✓</div>
-                  )}
-                </div>
-                <div style={{ padding: "6px 8px", fontSize: 11, fontWeight: 600, color: "#1d1a15", background: "#fffefb", borderRadius: "0 0 6px 6px", textAlign: "center" }}>
-                  {s.name}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </MkCard>
 
       <div className="adm-grid-kiosk-settings" style={{ gap: 20 }}>
         {/* Left: Form */}

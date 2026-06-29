@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
 import { ConfirmModal } from "@/components/ConfirmModal";
@@ -38,6 +38,45 @@ function RoomForm({
   submitLabel: string;
 }) {
   const [data, setData] = useState(initial);
+  const mapFileRef = useRef<HTMLInputElement>(null);
+  const [mapPreview, setMapPreview] = useState<string | null>(null);
+  const [mapUploading, setMapUploading] = useState(false);
+  const [mapError, setMapError] = useState<string | null>(null);
+
+  const handleMapPick = () => mapFileRef.current?.click();
+
+  const handleMapChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const token = getAccessToken();
+    if (!token) return;
+    setMapUploading(true);
+    setMapError(null);
+    try {
+      const { upload_url, public_url } = await api.getMeetingRoomMapUploadUrl(token, file.name, file.type);
+      const putRes = await fetch(upload_url, {
+        method: "PUT",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      if (!putRes.ok) throw new Error(`アップロード失敗 (${putRes.status})`);
+      setData((prev) => ({ ...prev, map_image_url: public_url }));
+      setMapPreview(URL.createObjectURL(file));
+    } catch (err: unknown) {
+      setMapError(err instanceof Error ? err.message : "フロアマップのアップロードに失敗しました");
+    } finally {
+      setMapUploading(false);
+      e.target.value = "";
+    }
+  };
+
+  const handleMapClear = () => {
+    setData((prev) => ({ ...prev, map_image_url: null }));
+    setMapPreview(null);
+    setMapError(null);
+  };
+
+  const mapShown = mapPreview ?? data.map_image_url ?? null;
 
   return (
     <form
@@ -94,6 +133,45 @@ function RoomForm({
               />
               <span style={{ fontSize: 11, color: "#a8a198", fontFamily: FONT_MONO }}>{data.color ?? "未設定"}</span>
             </div>
+          </div>
+        </div>
+        <div style={{ gridColumn: "span 2" }}>
+          <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>
+            フロアマップ画像 <span style={{ color: "#a8a198", fontSize: 10.5 }}>（来訪者キオスクに表示・任意）</span>
+          </label>
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <div style={{ width: 72, height: 72, borderRadius: 7, background: "#f4f1ea", border: "1px solid #efece5", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
+              {mapShown ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={mapShown} alt="floor map" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+              ) : (
+                <span style={{ color: "#a8a198", fontFamily: FONT_MONO, fontSize: 9 }}>[ map ]</span>
+              )}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, color: "#2d2a24", fontWeight: 500, fontFamily: FONT_JP }}>
+                {mapShown ? "マップ設定済み" : "マップ未設定"}
+              </div>
+              <div style={{ fontSize: 10.5, color: "#a8a198", fontFamily: FONT_MONO, marginTop: 3 }}>PNG / JPEG / SVG</div>
+              {mapError && (
+                <div style={{ fontSize: 11, color: "#a84238", fontFamily: FONT_JP, marginTop: 4 }}>{mapError}</div>
+              )}
+            </div>
+            <input
+              ref={mapFileRef}
+              type="file"
+              accept="image/png,image/jpeg,image/svg+xml"
+              style={{ display: "none" }}
+              onChange={handleMapChange}
+            />
+            <MkBtn type="button" size="sm" variant="default" onClick={handleMapPick} disabled={mapUploading}>
+              {mapUploading ? "処理中..." : "アップロード"}
+            </MkBtn>
+            {mapShown && (
+              <MkBtn type="button" size="sm" variant="ghost" onClick={handleMapClear} disabled={mapUploading}>
+                削除
+              </MkBtn>
+            )}
           </div>
         </div>
         <div style={{ gridColumn: "span 2" }}>
@@ -394,6 +472,7 @@ export default function MeetingRoomsPage() {
                 location: editRoom.location ?? "",
                 capacity: editRoom.capacity ?? undefined,
                 color: editRoom.color ?? "#4a7c4e",
+                map_image_url: editRoom.map_image_url ?? null,
                 description: editRoom.description ?? "",
               }}
               onSubmit={handleUpdate}

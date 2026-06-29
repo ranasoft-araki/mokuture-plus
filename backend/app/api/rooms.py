@@ -11,6 +11,7 @@ from app.database import get_db
 from app.middleware.tenant import get_current_user
 from app.models.room import MeetingRoom
 from app.models.user import User
+from app.services import storage
 
 router = APIRouter(prefix="/meeting-rooms", tags=["meeting-rooms"])
 
@@ -22,6 +23,7 @@ class MeetingRoomResponse(BaseModel):
     location: Optional[str] = None
     capacity: Optional[int] = None
     color: Optional[str] = None
+    map_image_url: Optional[str] = None
     description: Optional[str] = None
     is_active: bool
     created_at: datetime
@@ -32,6 +34,7 @@ class MeetingRoomCreate(BaseModel):
     location: Optional[str] = None
     capacity: Optional[int] = None
     color: Optional[str] = None
+    map_image_url: Optional[str] = None
     description: Optional[str] = None
 
     @field_validator("name")
@@ -48,8 +51,14 @@ class MeetingRoomUpdate(BaseModel):
     location: Optional[str] = None
     capacity: Optional[int] = None
     color: Optional[str] = None
+    map_image_url: Optional[str] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
+
+
+class MapUploadUrlRequest(BaseModel):
+    filename: str
+    mime_type: str
 
 
 def _out(room: MeetingRoom) -> MeetingRoomResponse:
@@ -60,6 +69,7 @@ def _out(room: MeetingRoom) -> MeetingRoomResponse:
         location=room.location,
         capacity=room.capacity,
         color=room.color,
+        map_image_url=room.map_image_url,
         description=room.description,
         is_active=room.is_active,
         created_at=room.created_at,
@@ -104,6 +114,7 @@ async def create_room(
         location=body.location,
         capacity=body.capacity,
         color=body.color,
+        map_image_url=body.map_image_url,
         description=body.description,
     )
     db.add(room)
@@ -132,6 +143,9 @@ async def update_room(
         room.capacity = body.capacity
     if body.color is not None:
         room.color = body.color
+    if "map_image_url" in body.model_fields_set:
+        # allow clearing by passing null/empty
+        room.map_image_url = body.map_image_url or None
     if body.description is not None:
         room.description = body.description
     if body.is_active is not None:
@@ -151,3 +165,18 @@ async def delete_room(
     room = await _get_room(room_id, user.tenant_id, db)
     await db.delete(room)
     await db.commit()
+
+
+@router.post("/map-upload-url")
+async def map_upload_url(
+    body: MapUploadUrlRequest,
+    user: User = Depends(get_current_user),
+):
+    """Presigned PUT URL for a meeting-room floor-map image (mirrors /settings/logo-upload-url)."""
+    if body.mime_type not in {"image/jpeg", "image/png", "image/svg+xml"}:
+        raise HTTPException(status_code=422, detail="Map image must be JPEG, PNG, or SVG")
+    try:
+        data = storage.generate_presigned_upload_url(user.tenant_id, body.filename, body.mime_type)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Storage unavailable: {exc}")
+    return data

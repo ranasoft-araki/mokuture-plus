@@ -17,6 +17,7 @@ class MeetingRoom(Base):
     location: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     capacity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     color: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    map_image_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

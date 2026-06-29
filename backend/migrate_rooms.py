@@ -44,11 +44,16 @@ def _run_sqlite(database_url: str) -> None:
                 color VARCHAR(32),
                 description TEXT,
                 is_active BOOLEAN NOT NULL DEFAULT 1,
+                map_image_url VARCHAR(512),
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS ix_meeting_rooms_tenant_id ON meeting_rooms (tenant_id)")
+
+        mr_columns = {row[1] for row in conn.execute("PRAGMA table_info(meeting_rooms)").fetchall()}
+        if "map_image_url" not in mr_columns:
+            conn.execute("ALTER TABLE meeting_rooms ADD COLUMN map_image_url VARCHAR(512)")
 
         visitor_table = conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'visitor_appointments'"
@@ -91,11 +96,13 @@ async def _run_postgres(database_url: str) -> None:
                 color VARCHAR(32),
                 description TEXT,
                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                map_image_url VARCHAR(512),
                 created_at TIMESTAMP DEFAULT NOW()
             )
             """
         )
         await conn.execute("CREATE INDEX IF NOT EXISTS ix_meeting_rooms_tenant_id ON meeting_rooms (tenant_id)")
+        await conn.execute("ALTER TABLE meeting_rooms ADD COLUMN IF NOT EXISTS map_image_url VARCHAR(512)")
         await conn.execute(
             """
             ALTER TABLE visitor_appointments

@@ -446,6 +446,8 @@ export const api = {
     request<MeetingRoom>(`/meeting-rooms/${id}`, { method: "PATCH", body: JSON.stringify(data) }, token),
   deleteMeetingRoom: (token: string, id: string): Promise<void> =>
     request(`/meeting-rooms/${id}`, { method: "DELETE" }, token),
+  getMeetingRoomMapUploadUrl: (token: string, filename: string, mime_type: string) =>
+    request<{ upload_url: string; public_url: string }>("/meeting-rooms/map-upload-url", { method: "POST", body: JSON.stringify({ filename, mime_type }) }, token),
 
   // Visitor appointments (admin)
   listAppointments: (token: string, params?: { status?: string; date_from?: string; date_to?: string }) => {
@@ -810,6 +812,7 @@ export interface MeetingRoom {
   location?: string | null;
   capacity?: number | null;
   color?: string | null;
+  map_image_url?: string | null;
   description?: string | null;
   is_active: boolean;
   created_at: string;
@@ -820,6 +823,7 @@ export interface MeetingRoomCreate {
   location?: string;
   capacity?: number;
   color?: string;
+  map_image_url?: string | null;
   description?: string;
 }
 
@@ -850,6 +854,12 @@ export interface AppointmentCreate {
   duration_minutes?: number;
 }
 
+export interface KioskAppointmentMeetingRoom {
+  name: string;
+  location: string | null;
+  map_image_url: string | null;
+}
+
 export interface KioskAppointmentResponse {
   id: string;
   visitor_name: string;
@@ -858,6 +868,7 @@ export interface KioskAppointmentResponse {
   staff: string | null;
   scheduled_at: string;
   status: string;
+  meeting_room: KioskAppointmentMeetingRoom | null;
 }
 
 const _SETTINGS_KEY = "mokuture_kiosk_settings";
