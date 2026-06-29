@@ -75,8 +75,73 @@ function onSc(event, fn) {
 }
 function cleanup() { CLEANUPS.forEach(f => f()); CLEANUPS = []; }
 
+// ─── MOCK MODE ───────────────────────────────────────────────────────────────
+// ?mock=1 を付けるとエージェント/バックエンドAPIをスタブ化し、Windows等のブラウザで
+// 全画面フロー(ロッカー含む)を実機・バックエンド無しで確認できる。
+//   起動: cd kiosk_agent/static && python -m http.server 8000
+//   表示: http://localhost:8000/kiosk.html?mock=1
+const MOCK = new URLSearchParams(location.search).has("mock");
+const MOCK_LOCKERS = [
+  { id: "A", name: "A（上段）", door_number: 17, occupied: false, _pin: null },
+  { id: "B", name: "B（中段）", door_number: 18, occupied: true,  _pin: "1234" },
+  { id: "C", name: "C（下段）", door_number: 19, occupied: false, _pin: null },
+];
+function _mockLockerList() {
+  return {
+    lockers: MOCK_LOCKERS.map(l => ({ id: l.id, name: l.name, door_number: l.door_number, occupied: l.occupied, has_pin: !!l._pin })),
+    available_count: MOCK_LOCKERS.filter(l => !l.occupied).length,
+  };
+}
+async function mockFetch(method, path, body) {
+  await new Promise(r => setTimeout(r, 180)); // 体感の通信遅延
+  if (path === "/config") return { tenant_slug: "mock", remote_api_url: "", device_name: "MOCK-KIOSK", registered: true };
+  if (path === "/setup") return { status: "registered", device_name: "MOCK-KIOSK", device_token: "mock-token" };
+  if (path === "/proxy/settings") return {
+    brand_color: "#2d6a4f", logo_url: "",
+    kiosk_welcome_message: "磯野木工所", kiosk_sub_message: "ご用件をお選びください",
+    kiosk_calling_message: "担当者をお呼びしています", kiosk_complete_message: "担当者がご案内します",
+    kiosk_idle_timeout_sec: 60, kiosk_complete_timeout_sec: 10,
+    staff_list: ["山田 太郎", "佐藤 花子", "鈴木 一郎"], purpose_list: ["お打ち合わせ", "納品", "採用面接"],
+  };
+  if (path === "/proxy/schedule") return { playlist: null, suspended: false };
+  if (path === "/proxy/reception") return { id: "mock", visitor_name: body?.visitor_name ?? "", created_at: "" };
+  if (path.startsWith("/proxy/appointment/")) return {
+    id: "mock-appt", visitor_name: "山田 太郎", company: "株式会社テスト", purpose: "お打ち合わせ",
+    staff: "佐藤 花子", scheduled_at: "2026-06-29T14:30:00", status: "pending",
+    meeting_room: { name: "商談ルーム A", location: "2階", map_image_url:
+      "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='800' height='520' viewBox='0 0 800 520'><rect width='800' height='520' fill='#f4f1ea'/><rect x='40' y='40' width='720' height='440' fill='none' stroke='#d8d3c7' stroke-width='3'/><rect x='80' y='90' width='220' height='150' fill='#fffefb' stroke='#d8d3c7' stroke-width='2'/><text x='190' y='170' font-size='22' fill='#6b6559' text-anchor='middle' font-family='sans-serif'>受付</text><rect x='480' y='250' width='220' height='160' fill='#e7f0e8' stroke='#2d6a4f' stroke-width='3'/><text x='590' y='335' font-size='24' fill='#2d6a4f' text-anchor='middle' font-family='sans-serif'>商談ルームA</text><circle cx='190' cy='300' r='14' fill='#2d6a4f'/><text x='190' y='345' font-size='16' fill='#2d6a4f' text-anchor='middle' font-family='sans-serif'>現在地</text><path d='M190 300 L190 410 L480 330' fill='none' stroke='#a84238' stroke-width='4' stroke-dasharray='10 8'/></svg>`) },
+  };
+  // Lockers
+  if (path === "/proxy/lockers") return _mockLockerList();
+  let m = path.match(/^\/proxy\/lockers\/([^/]+)\/occupy$/);
+  if (m) {
+    const l = MOCK_LOCKERS.find(x => x.id === m[1]);
+    if (!l) throw new Error("ロッカーが見つかりません");
+    if (l.occupied) throw new Error("already occupied");
+    l.occupied = true; l._pin = String(body?.pin ?? "");
+    return { ok: true };
+  }
+  m = path.match(/^\/proxy\/lockers\/([^/]+)\/release$/);
+  if (m) {
+    const l = MOCK_LOCKERS.find(x => x.id === m[1]);
+    if (!l) throw new Error("ロッカーが見つかりません");
+    if (!l.occupied) throw new Error("not occupied");
+    if (String(body?.pin ?? "") !== l._pin) throw new Error("invalid pin");
+    const door = l.door_number; l.occupied = false; l._pin = null;
+    return { ok: true, door_number: door };
+  }
+  return {};
+}
+// ロッカーのGPIO開錠(ローカルエージェント)。MOCK時はダミー。
+async function pulseLocker(door) {
+  if (MOCK) { await new Promise(r => setTimeout(r, 120)); return { ok: true }; }
+  try { return await (await fetch(`/device/locker/${encodeURIComponent(door)}/open`, { method: "POST" })).json(); }
+  catch { return { ok: false }; }
+}
+
 // ─── API helpers ─────────────────────────────────────────────────────────────
 async function apiFetch(method, path, body, token) {
+  if (MOCK) return mockFetch(method, path, body);
   const h = { "Content-Type": "application/json" };
   if (token) h["X-Kiosk-Token"] = token;
   const r = await fetch(path, {
@@ -134,7 +199,7 @@ function go(screen, data = {}) {
     else if (screen === "top")            showTop();
     else if (screen === "reception")      showReception(data.purpose ?? "");
     else if (screen === "qr")             showQr();
-    else if (screen === "locker")         showComingSoon("locker");
+    else if (screen === "locker")         showLocker();
     else if (screen === "delivery")       showComingSoon("delivery");
     else if (screen === "calling")        showCalling(data);
     else if (screen === "complete")       showComplete(data);
@@ -256,7 +321,7 @@ function showIdle() {
   // 人感センサー(PIR)ポーリング: 来訪を検知したら受付メニューへ自動遷移
   every(700, async () => {
     try {
-      const r = await fetch("/device/pir").then(res => res.ok ? res.json() : null);
+      const r = MOCK ? { motion_detected: false } : await fetch("/device/pir").then(res => res.ok ? res.json() : null);
       if (r && r.motion_detected) advance();
     } catch {}
   });
@@ -507,6 +572,161 @@ function showComingSoon(kind) {
   document.getElementById("cs-back").addEventListener("click", () => { cleanup(); go("top"); });
 }
 
+// ─── LOCKER (Phase 2) ─────────────────────────────────────────────────────────
+// 3段縦並び(上段A/中段B/下段C)。空き=緑/利用中=アンバー。
+//  空き  : タッチ→自動開錠(GPIO)→荷物投入→扉を閉める→4桁PIN設定→お預け完了
+//  利用中: タッチ→4桁PIN入力→照合OKで開錠(GPIO)→お受け取り
+// ※実機に扉開閉センサーが無いため「扉を閉めました」ボタンでPIN設定へ進む(センサー導入時は自動化可)。
+const LOCKER_AMBER = "#bd7e2e";
+function showLocker() {
+  const bc = ST.brand_color;
+  const token = localStorage.getItem(TOKEN_KEY);
+  let lockers = [], available = 0;
+  let view = "loading";      // loading | grid | openwait | pinset | pininput | result | error
+  let sel = null, pin = "", err = "", busy = false, resultTitle = "", resultSub = "";
+  let idleId, resultTimer = null;
+
+  function resetIdle() {
+    clearTimeout(idleId);
+    idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
+  }
+  CLEANUPS.push(() => { clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); });
+
+  const shell = (inner, backTo) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
+  <div style="padding:28px 80px 0;flex-shrink:0"><button id="lk-back" style="display:inline-flex;align-items:center;gap:8px;padding:12px 24px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:999px;font-size:18px;color:${T.sub};cursor:pointer">← 戻る</button></div>
+  ${inner}
+</div>`;
+
+  function render() {
+    resetIdle();
+    if (view === "loading") {
+      sc.innerHTML = shell(`<div style="flex:1;display:flex;align-items:center;justify-content:center"><div style="width:54px;height:54px;border-radius:50%;border:4px solid ${T.border};border-top-color:${bc};animation:spin .8s linear infinite"></div></div>`);
+    } else if (view === "error") {
+      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px"><div style="font-size:40px;font-weight:600;color:${T.ink}">ロッカーを利用できません</div><div style="font-size:22px;color:${T.sub}">${escHtml(err || "しばらくしてからお試しください")}</div></div>`);
+    } else if (view === "grid") {
+      sc.innerHTML = shell(`
+  <div style="padding:14px 80px 0;flex-shrink:0;display:flex;align-items:flex-end;justify-content:space-between">
+    <div><div style="font-size:54px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">ロッカー</div><div style="font-size:22px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:4px">Lockers</div></div>
+    <div style="font-size:26px;color:${T.sub}">空き <b style="font-size:34px;color:${bc}">${available}</b> / 全 ${lockers.length}</div>
+  </div>
+  <div id="lk-doors" style="flex:1;display:flex;flex-direction:column;gap:18px;padding:24px 80px 40px;min-height:0">
+    ${lockers.map((l, i) => {
+      const used = l.occupied, accent = used ? LOCKER_AMBER : bc;
+      return `<button data-li="${i}" style="position:relative;display:flex;align-items:center;gap:40px;width:100%;flex:1;min-height:0;background:${used ? "#faf2e6" : "#eef4ee"};border:3px solid ${accent};border-radius:24px;padding:0 56px;cursor:pointer;text-align:left">
+        <div style="width:116px;height:152px;border-radius:12px;background:${T.canvas};border:3px solid ${accent};position:relative;flex-shrink:0"><div style="position:absolute;top:50%;right:16px;transform:translateY(-50%);width:9px;height:50px;border-radius:5px;background:${accent}"></div></div>
+        <div style="flex:1"><div style="font-size:60px;font-weight:700;color:${T.ink};letter-spacing:-1px">${escHtml(l.name)}</div>
+          <div style="margin-top:12px;display:inline-flex;align-items:center;gap:10px;padding:8px 22px;border-radius:999px;background:${accent};color:#fff;font-size:28px;font-weight:600">${used ? "利用中" : "空き"}<span style="font-size:17px;font-weight:500;opacity:.85;font-family:Inter,system-ui,sans-serif">${used ? "In use" : "Available"}</span></div>
+        </div>
+        <div style="font-size:24px;color:${accent};font-weight:600;flex-shrink:0">${used ? "暗証番号で解錠 →" : "タッチして開ける →"}</div>
+      </button>`;
+    }).join("")}
+  </div>`);
+    } else if (view === "openwait") {
+      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;text-align:center;padding:0 120px">
+        <div style="width:120px;height:120px;border-radius:30px;background:${bc}1a;color:${bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.4)">${ICO.locker}</div></div>
+        <div style="font-size:60px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">扉が開きました</div>
+        <div style="font-size:30px;color:${T.sub};line-height:1.5"><b>${escHtml(sel.name)}</b> に荷物を入れ、扉を閉めてください</div>
+        <button id="lk-closed" style="margin-top:12px;padding:22px 56px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:28px;font-weight:600;cursor:pointer">扉を閉めました → 暗証番号を設定</button>
+      </div>`);
+    } else if (view === "result") {
+      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;text-align:center;padding:0 120px">
+        <div style="width:110px;height:110px;border-radius:50%;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
+        <div style="font-size:64px;font-weight:600;color:${T.ink};letter-spacing:-2px">${escHtml(resultTitle)}</div>
+        <div style="font-size:30px;color:${T.sub};line-height:1.5">${escHtml(resultSub)}</div>
+        <button id="lk-done" style="margin-top:10px;padding:18px 52px;border:1px solid ${T.borderStrong};border-radius:14px;background:${T.canvas};color:${T.sub};font-size:22px;cursor:pointer">完了</button>
+      </div>`);
+    } else { // pinset | pininput
+      const isSet = view === "pinset";
+      const dots = Array.from({ length: 4 }, (_, i) => `<div style="width:30px;height:30px;border-radius:50%;border:2px solid ${i < pin.length ? bc : T.borderStrong};background:${i < pin.length ? bc : "transparent"}"></div>`).join("");
+      const PAD = ["1","2","3","4","5","6","7","8","9","⌫","0","→"];
+      const padHtml = PAD.map(k => {
+        const confirm = k === "→", disabled = busy || (confirm && pin.length < 4);
+        return `<button data-pk="${k}" style="height:96px;border-radius:18px;font-size:${confirm ? 24 : 40}px;font-weight:600;cursor:${disabled ? "not-allowed" : "pointer"};border:1px solid ${confirm ? bc : T.borderStrong};background:${confirm ? bc : T.canvas};color:${confirm ? "#fff" : T.ink};opacity:${disabled ? .4 : 1}">${confirm ? (busy ? "…" : "決定") : k}</button>`;
+      }).join("");
+      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px">
+        <div style="text-align:center"><div style="font-size:46px;font-weight:600;color:${T.ink};letter-spacing:-1px">${isSet ? "暗証番号を設定してください" : "暗証番号を入力してください"}</div><div style="font-size:22px;color:${T.muted};margin-top:6px">${escHtml(sel.name)} ・ 4桁 (4 digits)</div></div>
+        <div style="display:flex;gap:22px;margin:6px 0">${dots}</div>
+        ${err ? `<div style="padding:10px 20px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.3);border-radius:10px;color:${T.urgent};font-size:20px">${escHtml(err)}</div>` : ""}
+        <div style="display:grid;grid-template-columns:repeat(3,128px);gap:14px">${padHtml}</div>
+      </div>`);
+    }
+    rescale();
+
+    const back = document.getElementById("lk-back");
+    if (back) back.addEventListener("click", () => { cleanup(); go("top"); });
+
+    if (view === "grid") {
+      document.getElementById("lk-doors").addEventListener("click", e => {
+        const btn = e.target.closest("[data-li]"); if (!btn) return;
+        resetIdle();
+        sel = lockers[+btn.dataset.li];
+        if (sel.occupied) { pin = ""; err = ""; view = "pininput"; render(); }
+        else { openEmpty(); }
+      });
+    } else if (view === "openwait") {
+      document.getElementById("lk-closed").addEventListener("click", () => { resetIdle(); pin = ""; err = ""; view = "pinset"; render(); });
+    } else if (view === "result") {
+      document.getElementById("lk-done").addEventListener("click", () => { cleanup(); go("idle"); });
+      resultTimer = setTimeout(() => { cleanup(); go("idle"); }, Math.max(6, ST.kiosk_complete_timeout_sec) * 1000);
+    } else if (view === "pinset" || view === "pininput") {
+      sc.querySelectorAll("[data-pk]").forEach(b => b.addEventListener("click", () => handleKey(b.dataset.pk)));
+    }
+  }
+
+  function handleKey(k) {
+    if (busy) return;
+    resetIdle();
+    if (k === "⌫") { pin = pin.slice(0, -1); err = ""; render(); }
+    else if (k === "→") { if (pin.length === 4) submitPin(); }
+    else if (pin.length < 4) { pin += k; err = ""; render(); }  // 4桁入力後は「決定」待ち
+  }
+
+  async function openEmpty() {
+    // 空きロッカー: GPIOで開錠 → 荷物投入待ち
+    await pulseLocker(sel.door_number);
+    view = "openwait"; render();
+  }
+
+  async function submitPin() {
+    busy = true; render();
+    try {
+      if (view === "pinset") {
+        await apiPost(`/proxy/lockers/${encodeURIComponent(sel.id)}/occupy`, { pin }, token);
+        resultTitle = "お預け完了"; resultSub = "暗証番号を設定しました。お受け取りの際に入力してください。";
+      } else {
+        const r = await apiPost(`/proxy/lockers/${encodeURIComponent(sel.id)}/release`, { pin }, token);
+        await pulseLocker((r && r.door_number) || sel.door_number);
+        resultTitle = "解錠しました"; resultSub = "扉を開けてお荷物をお受け取りください。";
+      }
+      busy = false; view = "result"; render();
+    } catch (e) {
+      busy = false; pin = "";
+      const msg = e && e.message ? e.message : "";
+      err = msg === "invalid pin" ? "暗証番号が違います。もう一度お試しください。"
+          : msg === "already occupied" ? "このロッカーは使用中です。"
+          : msg === "not occupied" ? "このロッカーは空いています。"
+          : "処理に失敗しました。もう一度お試しください。";
+      render();
+    }
+  }
+
+  async function load() {
+    try {
+      const r = await apiGet("/proxy/lockers", token);
+      lockers = r.lockers || [];
+      available = r.available_count ?? lockers.filter(l => !l.occupied).length;
+      view = "grid"; render();
+    } catch (e) {
+      err = e && e.message ? e.message : ""; view = "error"; render();
+    }
+  }
+
+  resetIdle();
+  onSc("click", resetIdle);   // 永続要素 sc に一度だけ登録(画面操作でアイドルタイマー延長)
+  render();   // loading
+  load();
+}
+
 // ─── RECEPTION FORM (OS標準ソフトキーボードを使用) ────────────────────────────
 // 入力欄は上半分に2列配置＋送信ボタン。画面下半分はOSキーボード領域として空ける。
 function showReception(initPurpose) {
@@ -657,6 +877,7 @@ function showQr() {
         <button id="qr-form1" style="flex:1;padding:22px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:14px;font-size:20px;font-weight:500;color:${T.ink};cursor:pointer">QRを持っていない</button>
         <button id="qr-form2" style="flex:1;padding:22px;background:${T.dark};border:2px solid ${T.dark};border-radius:14px;font-size:20px;font-weight:600;color:#fff;cursor:pointer">フォームで受付する →</button>
       </div>
+      ${MOCK ? `<button id="qr-mock" style="margin-top:14px;padding:16px;background:transparent;border:1.5px dashed ${T.muted};border-radius:12px;font-size:16px;color:${T.muted};cursor:pointer">（MOCK）予約QRを読み取ったことにする</button>` : ""}
     </div>
   </div>
   <div style="padding:16px 80px 28px;display:flex;align-items:center;color:${T.muted};font-size:14px;flex-shrink:0">
@@ -670,6 +891,7 @@ function showQr() {
     document.getElementById("qr-back").addEventListener("click", () => { stopStream(); cleanup(); go("welcome"); });
     document.getElementById("qr-form1").addEventListener("click", () => { stopStream(); cleanup(); go("reception"); });
     document.getElementById("qr-form2").addEventListener("click", () => { stopStream(); cleanup(); go("reception"); });
+    if (MOCK) { const mb = document.getElementById("qr-mock"); if (mb) mb.addEventListener("click", () => { stopStream(); handleQR("appt:mock"); }); }
     onSc("click", resetIdle);
     if (stream) { const vid = document.getElementById("qr-vid"); if (vid) { vid.srcObject = stream; vid.play().catch(() => {}); } }
   }
@@ -1285,6 +1507,17 @@ document.addEventListener("keydown", function(e) {
 async function boot() {
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:#0a0806;display:flex;align-items:center;justify-content:center"><div style="color:rgba(255,255,255,.3);font-size:18px">読み込み中…</div></div>`;
   rescale();
+
+  // MOCK モード: エージェント/バックエンド無しで待機画面から起動(Windowsブラウザ確認用)
+  if (MOCK) {
+    CFG = await apiGet("/config");
+    localStorage.setItem(TOKEN_KEY, "mock-token");
+    localStorage.setItem(NAME_KEY, "MOCK-KIOSK");
+    Object.assign(ST, await apiGet("/proxy/settings"));
+    ITEMS = [];
+    go("idle");
+    return;
+  }
 
   try {
     CFG = await apiGet("/config");

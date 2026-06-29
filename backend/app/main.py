@@ -19,6 +19,12 @@ _ENSURE_COLUMNS = {
     "meeting_rooms": {
         "map_image_url": "VARCHAR(512)",
     },
+    "lockers": {
+        "name": "VARCHAR(255)",
+        "pin_hash": "VARCHAR(255)",
+        "occupied": "BOOLEAN DEFAULT FALSE",
+        "occupied_at": "TIMESTAMP",
+    },
 }
 
 

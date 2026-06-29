@@ -677,10 +677,12 @@ export interface ReceptionLog extends ReceptionCreate {
 
 export interface Locker {
   id: string;
-  name: string;
+  name?: string;
   gpio_pin: number;
   state: string;
   tenant_id: string;
+  occupied?: boolean;
+  has_pin?: boolean;
   // Legacy fields (kept for backward compatibility)
   door_number: number;
   last_unlocked_at: string | null;

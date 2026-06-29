@@ -36,5 +36,9 @@ class Locker(Base):
     state: Mapped[str] = mapped_column(String(32), default="locked")  # locked | unlocked | error
     last_unlocked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     auto_relock_sec: Mapped[int] = mapped_column(Integer, default=60)
+    name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    pin_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    occupied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    occupied_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     tenant = relationship("Tenant", back_populates="lockers")

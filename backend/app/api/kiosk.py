@@ -5,6 +5,7 @@ the X-Kiosk-Token header. It identifies both the device and the tenant.
 """
 import hashlib
 import os
+import re
 import zoneinfo
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
-from app.models.device import Device
+from app.models.device import Device, Locker
 from app.models.tenant import Tenant
 from app.models.content import Media, Playlist, PlaylistItem, Schedule
 from app.models.reception import ReceptionLog
@@ -32,7 +33,10 @@ from app.services.slack import send_slack_notification
 from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
 from app.services.webpush import send_push
+from app.services.auth import hash_password, verify_password
 from app.config import settings
+
+_PIN_RE = re.compile(r"^\d{4}$")
 
 router = APIRouter(prefix="/kiosk", tags=["kiosk"])
 _limiter = Limiter(key_func=get_remote_address)
@@ -370,6 +374,97 @@ async def kiosk_reception(
         "visitor_name": log.visitor_name,
         "created_at": log.created_at.isoformat() if log.created_at else "",
     }
+
+
+# ── Lockers (device token auth) ────────────────────────────────────────────────
+
+class LockerPinBody(BaseModel):
+    pin: str
+
+
+async def _get_kiosk_locker(locker_id: str, tenant_id: str, db: AsyncSession) -> Locker:
+    result = await db.execute(
+        select(Locker).where(Locker.id == locker_id, Locker.tenant_id == tenant_id)
+    )
+    locker = result.scalar_one_or_none()
+    if locker is None:
+        raise HTTPException(status_code=404, detail="Locker not found")
+    return locker
+
+
+@router.get("/lockers")
+async def kiosk_list_lockers(
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """List this tenant's lockers for the kiosk. Never exposes pin_hash."""
+    tenant, _ = ctx
+    result = await db.execute(
+        select(Locker).where(Locker.tenant_id == tenant.id).order_by(Locker.door_number)
+    )
+    lockers = result.scalars().all()
+    available = sum(1 for l in lockers if not l.occupied)
+    return {
+        "lockers": [
+            {
+                "id": l.id,
+                "name": l.name or f"ロッカー {l.door_number}",
+                "door_number": l.door_number,
+                "occupied": bool(l.occupied),
+                "has_pin": l.pin_hash is not None,
+            }
+            for l in lockers
+        ],
+        "available_count": available,
+    }
+
+
+@router.post("/lockers/{locker_id}/occupy")
+async def kiosk_occupy_locker(
+    locker_id: str,
+    body: LockerPinBody,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """Hold a locker with a 4-digit PIN."""
+    tenant, _ = ctx
+    if not _PIN_RE.match(body.pin or ""):
+        raise HTTPException(status_code=422, detail="pin must be exactly 4 digits")
+    locker = await _get_kiosk_locker(locker_id, tenant.id, db)
+    if locker.occupied:
+        raise HTTPException(status_code=409, detail="already occupied")
+    locker.pin_hash = hash_password(body.pin)
+    locker.occupied = True
+    locker.occupied_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/lockers/{locker_id}/release")
+async def kiosk_release_locker(
+    locker_id: str,
+    body: LockerPinBody,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """Release a held locker by verifying its 4-digit PIN."""
+    tenant, _ = ctx
+    locker = await _get_kiosk_locker(locker_id, tenant.id, db)
+    if not locker.occupied:
+        raise HTTPException(status_code=409, detail="not occupied")
+    # No-pin hold (should not happen in Phase 2): allow release.
+    if locker.pin_hash is None:
+        locker.occupied = False
+        locker.occupied_at = None
+        await db.commit()
+        return {"ok": True, "door_number": locker.door_number}
+    if not verify_password(body.pin or "", locker.pin_hash):
+        raise HTTPException(status_code=403, detail="invalid pin")
+    locker.pin_hash = None
+    locker.occupied = False
+    locker.occupied_at = None
+    await db.commit()
+    return {"ok": True, "door_number": locker.door_number}
 
 
 async def _notify_slack(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:

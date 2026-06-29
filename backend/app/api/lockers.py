@@ -45,12 +45,12 @@ async def create_locker(
         door_number=door_number,
         auto_relock_sec=auto_relock_sec,
         state="closed",
+        name=body.name,
     )
     db.add(locker)
     await db.commit()
     await db.refresh(locker)
-    # Store name in a synthesized field for the response
-    return _locker_out(locker, name=body.name)
+    return _locker_out(locker)
 
 
 @router.post("/{locker_id}/open")
@@ -131,10 +131,12 @@ async def _get_locker(locker_id: str, tenant_id: str, db: AsyncSession) -> Locke
 def _locker_out(l: Locker, name: Optional[str] = None) -> dict:
     return {
         "id": l.id,
-        "name": name or f"ロッカー {l.door_number}",
+        "name": name or l.name or f"ロッカー {l.door_number}",
         "gpio_pin": l.door_number,
         "state": l.state if l.state in ("open", "closed") else ("open" if l.state == "unlocked" else "closed"),
         "tenant_id": l.tenant_id,
+        "occupied": bool(l.occupied),
+        "has_pin": l.pin_hash is not None,
         # Legacy fields kept for backwards compatibility
         "door_number": l.door_number,
         "last_unlocked_at": l.last_unlocked_at.isoformat() if l.last_unlocked_at else None,

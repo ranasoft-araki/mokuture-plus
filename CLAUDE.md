@@ -292,7 +292,7 @@ mokuture/
 - **playlists / playlist_items** — メディアのプレイリスト（transition_type: fade/slide/zoom/wipe/random）
 - **schedules** — 曜日・時間帯ごとのプレイリスト割当
 - **devices** — キオスク端末 (token, PIN, last_seen_at, force_update_at)
-- **lockers** — ロッカー (gpio_pin, state)
+- **lockers** — ロッカー (door_number=gpio_pin, state, **name**=表示ラベル, **pin_hash**=bcrypt(4桁PIN) nullable, **occupied**=利用中フラグ, **occupied_at**)
 - **reception_logs** — 受付ログ (visitor_name, company, staff, purpose, method, state, staff_notes, appointment_id)
 - **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired, meeting_room_id FK nullable)
 - **meeting_rooms** — 会議室 (name, location, capacity, color, description, is_active, **map_image_url**=館内マップ画像URL nullable)
@@ -337,7 +337,10 @@ mokuture/
 | DELETE | /meeting-rooms/{id} | JWT | 会議室削除 |
 | GET | /reception | JWT | 受付ログ一覧 |
 | GET/PATCH | /notifications | JWT | 通知設定 |
-| GET/POST | /lockers | JWT | ロッカー管理 |
+| GET/POST | /lockers | JWT | ロッカー管理 (name 永続化, occupied/has_pin 返却) |
+| GET | /kiosk/lockers | デバイストークン | ロッカー一覧 `{lockers:[{id,name,door_number,occupied,has_pin}], available_count}` |
+| POST | /kiosk/lockers/{id}/occupy | デバイストークン | 空き→PIN設定 `{pin:4桁}`→`{ok}`。409 already occupied / 422 |
+| POST | /kiosk/lockers/{id}/release | デバイストークン | 利用中→PIN照合 `{pin}`→`{ok,door_number}`。403 invalid pin / 409 not occupied |
 | POST | /lockers/{id}/open | JWT | ロッカー開錠 |
 
 ---
@@ -363,14 +366,17 @@ mokuture/
 
 ```
 idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 3タイル)
-  top: ご訪問 → welcome,  荷物の配達 → delivery(準備中),  ロッカー → locker(準備中)
+  top: ご訪問 → welcome,  荷物の配達 → delivery(準備中/Phase3),  ロッカー → locker(Phase2実装済み)
   welcome(QR有無) → qr / reception
   qr(スキャン) / reception(フォーム) → calling → complete(歓迎画面)
   complete ──(60s 等)──▶ idle
 ```
 
 - **idle**: 人感センサー（`GET /device/pir` を 700ms ポーリング）で来訪検知 → `top` へ自動遷移。タッチCTAは非表示（PIR非搭載/開発環境向けに画面タップでも遷移可）。画面は屋号(ロゴ/welcome_message)・タグラインのみ。signage メディアがあれば再生。
-- **top（受付メニュー）**: `ご訪問 / 荷物の配達 / ロッカー` の3タイル（日英併記・大型）。`荷物の配達`/`ロッカー` は Phase 2/3 まで `showComingSoon` スタブ。
+- **top（受付メニュー）**: `ご訪問 / 荷物の配達 / ロッカー` の3タイル（日英併記・大型）。`荷物の配達` は Phase 3 まで `showComingSoon` スタブ。
+- **locker（ロッカー・Phase2実装済み）**: 3段縦並び、空き=緑/利用中=アンバー。空き→`pulseLocker(door_number)`でGPIO開錠→「扉を閉めました」→4桁PIN設定(`/proxy/lockers/{id}/occupy`)。利用中→4桁PIN入力(`/proxy/lockers/{id}/release`)→照合OKでGPIO開錠。PINは backend で bcrypt 保存。扉開閉センサーが無いため閉扉は手動ボタン（センサー導入時は自動化可）。
+  - **GPIO設定の注意**: kiosk は `POST /device/locker/{door_number}/open` を叩くため、kiosk_agent の `LOCKER_PINS_JSON` は **door_number(=GPIOピン番号)をキー**にすること。例: `{"17":17,"18":18,"19":19}`。
+- **モックモード**: `kiosk.html?mock=1` でエージェント/バックエンドAPIをスタブ化し、Windows等のブラウザで全画面フロー（ロッカー・予約マップ含む）を実機/バックエンド無しで確認できる。起動例: `cd kiosk_agent/static && python -m http.server 8000` → `http://localhost:8000/kiosk.html?mock=1`。MOCKロッカーBは PIN `1234` で解錠可。QR画面の「（MOCK）予約QRを読み取ったことにする」ボタンで歓迎画面＋館内マップを確認可。
 - **reception（フォーム）**: オンスクリーン50音キーボードは廃止。OS標準ソフトキーボードを使用するため、入力欄は上半分に2列配置＋送信、下半分は空ける（実機OSのソフトキーボード表示領域）。
 - **qr**: カメラ位置を示す画像エリア（`ST.qr_camera_image_url` 未設定時はプレースホルダー）。
 - **complete（歓迎画面「お待ちしておりました」）**: 氏名と「様」を同サイズでインライン表示。予約情報（Googleカレンダー連携）を拡大表示。QR受付で行き先（会議室）が確定し、かつその会議室に `map_image_url` が登録されている場合のみ館内マップを表示（`go("calling"/"complete", { name, staff, room, scheduledAt, method })` でデータを伝搬）。
