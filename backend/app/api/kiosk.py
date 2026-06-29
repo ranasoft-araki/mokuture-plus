@@ -460,6 +460,27 @@ async def kiosk_list_lockers(
     }
 
 
+@router.post("/lockers/open-all")
+async def kiosk_open_all_lockers(
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """全ロッカーを解放(利用状態・PINをリセット)。物理開錠はキオスク側がGPIOで実施するため
+    door_number の一覧を返す。緊急/メンテナンス用(設定画面のスタッフ操作)。"""
+    tenant, _ = ctx
+    result = await db.execute(
+        select(Locker).where(Locker.tenant_id == tenant.id).order_by(Locker.door_number)
+    )
+    lockers = result.scalars().all()
+    doors = [l.door_number for l in lockers]
+    for l in lockers:
+        l.occupied = False
+        l.pin_hash = None
+        l.occupied_at = None
+    await db.commit()
+    return {"ok": True, "door_numbers": doors, "count": len(doors)}
+
+
 @router.post("/lockers/{locker_id}/occupy")
 async def kiosk_occupy_locker(
     locker_id: str,

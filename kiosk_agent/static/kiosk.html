@@ -140,6 +140,11 @@ async function mockFetch(method, path, body) {
     return { ok: true };
   }
   if (path === "/proxy/call-staff") return { ok: true };
+  if (path === "/proxy/lockers/open-all") {
+    const doors = MOCK_LOCKERS.map(l => l.door_number);
+    MOCK_LOCKERS.forEach(l => { l.occupied = false; l._pin = null; });
+    return { ok: true, door_numbers: doors, count: doors.length };
+  }
   return {};
 }
 // ロッカーのGPIO開錠(ローカルエージェント)。MOCK時はダミー。
@@ -325,7 +330,7 @@ function showIdle() {
   const root = document.getElementById("idle-root");
 
   let advanced = false;
-  function advance() { if (advanced) return; advanced = true; cleanup(); go("top"); }
+  function advance() { if (advanced) return; advanced = true; cleanup(); go("welcome"); }
   onSc("click", advance);
 
   // 人感センサー(PIR)ポーリング: 来訪を検知したら受付メニューへ自動遷移
@@ -479,9 +484,9 @@ function showWelcome() {
   CLEANUPS.push(() => clearTimeout(idleId));
   resetIdle();
   onSc("click", resetIdle);
-  document.getElementById("wel-back").addEventListener("click", () => { cleanup(); go("top"); });
+  document.getElementById("wel-back").addEventListener("click", () => { cleanup(); go("idle"); });
   document.getElementById("wel-qr").addEventListener("click", () => { cleanup(); go("qr"); });
-  document.getElementById("wel-form").addEventListener("click", () => { cleanup(); go("reception"); });
+  document.getElementById("wel-form").addEventListener("click", () => { cleanup(); go("top"); });
 }
 
 // ─── RECEPTION MENU (受付メニュー) ────────────────────────────────────────────
@@ -489,7 +494,7 @@ function showWelcome() {
 function showTop() {
   const bc = ST.brand_color;
   const TILES = [
-    { icon: ICO.reception, label: "ご訪問",     en: "Visit",    desc: "ご来訪の受付",     descEn: "Check in for a visit", screen: "welcome",  primary: true },
+    { icon: ICO.reception, label: "ご訪問",     en: "Visit",    desc: "ご来訪の受付",     descEn: "Check in for a visit", screen: "reception",  primary: true },
     { icon: ICO.truck,     label: "荷物の配達", en: "Delivery", desc: "宅配・配送のお届け", descEn: "Parcel delivery",      screen: "delivery" },
     { icon: ICO.locker,    label: "ロッカー",   en: "Locker",   desc: "お預け・お受け取り", descEn: "Lockers",              screen: "locker" },
   ];
@@ -915,7 +920,7 @@ function showReception(initPurpose) {
     g("f-company").value = form.company;
     if (g("f-staff")) g("f-staff").value = form.staff;
     if (g("f-purpose")) g("f-purpose").value = form.purpose;
-    g("rec-back").addEventListener("click", () => { cleanup(); go("welcome"); });
+    g("rec-back").addEventListener("click", () => { cleanup(); go("top"); });
     const KEY = { "f-name": "visitor_name", "f-company": "company", "f-staff": "staff", "f-purpose": "purpose" };
     Object.keys(KEY).forEach(id => {
       const el = g(id); if (!el) return;
@@ -1014,7 +1019,7 @@ function showQr() {
     rescale();
     document.getElementById("qr-clk").textContent = fmtClock();
     document.getElementById("qr-back").addEventListener("click", () => { stopStream(); cleanup(); go("welcome"); });
-    document.getElementById("qr-form1").addEventListener("click", () => { stopStream(); cleanup(); go("reception"); });
+    document.getElementById("qr-form1").addEventListener("click", () => { stopStream(); cleanup(); go("top"); });
     document.getElementById("qr-form2").addEventListener("click", () => { stopStream(); cleanup(); go("reception"); });
     if (MOCK) { const mb = document.getElementById("qr-mock"); if (mb) mb.addEventListener("click", () => { stopStream(); handleQR("appt:mock"); }); }
     onSc("click", resetIdle);
@@ -1373,6 +1378,18 @@ function showKioskSettings() {
 
   </div>
 
+  <div style="padding:0 80px 4px;flex-shrink:0">
+    <div style="background:${C.canvas};border:1px solid ${C.chalk};border-radius:22px;padding:24px 40px;display:flex;align-items:center;gap:20px;box-shadow:0 4px 24px rgba(29,26,21,.08)">
+      <div style="width:54px;height:54px;border-radius:14px;background:${C.amberSoft};color:${C.amber};display:flex;align-items:center;justify-content:center;flex-shrink:0">${SVG.lock}</div>
+      <div style="flex:1">
+        <div style="font-size:24px;font-weight:600;color:${C.sumi}">ロッカーの鍵 全解除</div>
+        <div style="font-size:12px;color:${C.stone};letter-spacing:2.5px;margin-top:3px;font-family:ui-monospace,monospace">UNLOCK ALL LOCKERS</div>
+        <div style="font-size:14px;color:${C.graphite};margin-top:6px">全ロッカーを解錠し、利用状態と暗証番号をリセットします（緊急・メンテナンス用）</div>
+      </div>
+      <button id="ks-locker-all" style="padding:16px 32px;border-radius:14px;border:2px solid ${C.amber};background:${C.canvas};color:${C.amber};font-size:18px;font-weight:600;cursor:pointer;font-family:inherit;flex-shrink:0">全解除</button>
+    </div>
+  </div>
+
   <div style="display:flex;align-items:center;padding:20px 80px 28px;font-size:14px;color:${C.stone}">
     設定の変更はスタッフのみ操作できます
     <span style="flex:1"></span>
@@ -1454,6 +1471,41 @@ function showKioskSettings() {
     input.addEventListener("keydown", e => { if (e.key === "Enter") doConnect(); });
   }
 
+  function showLockerUnlockAllDialog() {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = `position:absolute;inset:0;background:rgba(29,26,21,.6);display:flex;align-items:center;justify-content:center;z-index:99`;
+    overlay.innerHTML = `<div style="background:#fffefb;border-radius:20px;padding:44px 52px;width:700px;box-shadow:0 24px 64px rgba(0,0,0,.3)">
+      <div style="font-size:24px;font-weight:600;color:#1d1a15;margin-bottom:8px">ロッカーの鍵を全解除しますか？</div>
+      <div style="font-size:15px;color:#8a8276;line-height:1.7;margin-bottom:22px">全ロッカーを解錠し、利用状態と暗証番号をリセットします。中のお荷物が取り出せる状態になります。緊急・メンテナンス用です。</div>
+      <div id="ks-la-msg" style="font-size:15px;color:#5a5249;min-height:22px;margin-bottom:16px"></div>
+      <div style="display:flex;gap:14px">
+        <button id="ks-la-cancel" style="flex:1;padding:16px;border-radius:12px;border:2px solid #d4cfc7;background:transparent;font-size:16px;color:#5a5249;cursor:pointer;font-family:inherit">キャンセル</button>
+        <button id="ks-la-ok" style="flex:1;padding:16px;border-radius:12px;border:none;background:#b87c2e;color:#fffefb;font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">全解除する</button>
+      </div>
+    </div>`;
+    document.getElementById("ks-root").appendChild(overlay);
+    const msg = document.getElementById("ks-la-msg");
+    const ok = document.getElementById("ks-la-ok");
+    document.getElementById("ks-la-cancel").addEventListener("click", () => overlay.remove());
+    ok.addEventListener("click", async () => {
+      ok.disabled = true; ok.textContent = "解錠中…"; msg.style.color = "#5a5249"; msg.textContent = "";
+      const token = localStorage.getItem(TOKEN_KEY);
+      try {
+        const r = await apiPost("/proxy/lockers/open-all", {}, token);
+        const doors = (r && r.door_numbers) || [];
+        for (const d of doors) { await pulseLocker(d); }
+        msg.style.color = "#2e5c32";
+        msg.textContent = `全 ${r && r.count != null ? r.count : doors.length} 台を解錠しました。`;
+        ok.textContent = "完了";
+        setTimeout(() => overlay.remove(), 1800);
+      } catch (e) {
+        msg.style.color = "#c0392b";
+        msg.textContent = "失敗しました：" + ((e && e.message) || "もう一度お試しください");
+        ok.disabled = false; ok.textContent = "全解除する";
+      }
+    });
+  }
+
   async function loadNetworks() {
     wifiLoading = true; render();
     try {
@@ -1465,6 +1517,9 @@ function showKioskSettings() {
 
   function bindEvents() {
     document.getElementById("ks-back").addEventListener("click", () => go("idle"));
+
+    const lockerAll = document.getElementById("ks-locker-all");
+    if (lockerAll) lockerAll.addEventListener("click", showLockerUnlockAllDialog);
 
     document.getElementById("ks-vol-minus").addEventListener("click", () => {
       vol = Math.max(0, vol - 5); updateVol();

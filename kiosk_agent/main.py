@@ -394,6 +394,32 @@ async def proxy_list_lockers(request: Request):
     return resp.json()
 
 
+@app.post("/proxy/lockers/open-all")
+async def proxy_open_all_lockers(request: Request):
+    """全ロッカー解放をリモートAPIに転送する(緊急/メンテナンス)。"""
+    token = request.headers.get("x-kiosk-token", "")
+    if not token:
+        raise HTTPException(status_code=401, detail="X-Kiosk-Token required")
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                f"{settings.remote_api_url}/kiosk/lockers/open-all",
+                json={},
+                headers={"X-Kiosk-Token": token},
+                timeout=15,
+            )
+            if resp.status_code == 401:
+                raise HTTPException(status_code=401, detail="Invalid kiosk token")
+            resp.raise_for_status()
+        except HTTPException:
+            raise
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=_proxy_detail(e.response))
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"リモートAPIに接続できません: {e}")
+    return resp.json()
+
+
 @app.post("/proxy/lockers/{locker_id}/occupy")
 async def proxy_occupy_locker(locker_id: str, request: Request, body: LockerPinBody):
     """ロッカーをPINで確保する。"""
