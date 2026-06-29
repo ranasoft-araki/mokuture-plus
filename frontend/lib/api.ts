@@ -423,6 +423,20 @@ export const api = {
   testWebhookNotification: (token: string) =>
     request<{ ok: boolean }>("/notifications/test/webhook", { method: "POST" }, token),
 
+  // Delivery-specific notification destinations (荷物の配達 / 呼び出し)
+  updateSlackDelivery: (token: string, webhook_url: string) =>
+    request("/notifications/settings/slack_delivery", { method: "PUT", body: JSON.stringify({ webhook_url }) }, token),
+  updateChatworkDelivery: (token: string, api_token: string, room_id: string) =>
+    request("/notifications/settings/chatwork_delivery", { method: "PUT", body: JSON.stringify({ api_token, room_id }) }, token),
+  updateWebhookDelivery: (token: string, webhook_url: string) =>
+    request("/notifications/settings/webhook_delivery", { method: "PUT", body: JSON.stringify({ webhook_url }) }, token),
+  testSlackDelivery: (token: string) =>
+    request<{ ok: boolean }>("/notifications/test/slack_delivery", { method: "POST" }, token),
+  testChatworkDelivery: (token: string) =>
+    request<{ ok: boolean }>("/notifications/test/chatwork_delivery", { method: "POST" }, token),
+  testWebhookDelivery: (token: string) =>
+    request<{ ok: boolean }>("/notifications/test/webhook_delivery", { method: "POST" }, token),
+
   // Lockers (extended)
   createLocker: (token: string, data: { name: string; gpio_pin: number }) =>
     request<Locker>("/lockers", { method: "POST", body: JSON.stringify({ name: data.name, gpio_pin: data.gpio_pin }) }, token),

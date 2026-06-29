@@ -370,6 +370,29 @@ export default function AdminNotifyPage() {
   const [customWebhookError, setCustomWebhookError] = useState("");
   const [customWebhookTested, setCustomWebhookTested] = useState(false);
 
+  // ── Delivery (荷物の配達/呼び出し) destinations ──────────────────────────
+  const [dlSlackUrl, setDlSlackUrl] = useState("");
+  const [dlSlackConfigured, setDlSlackConfigured] = useState(false);
+  const [dlSlackSaving, setDlSlackSaving] = useState(false);
+  const [dlSlackTesting, setDlSlackTesting] = useState(false);
+  const [dlSlackError, setDlSlackError] = useState("");
+  const [dlSlackTested, setDlSlackTested] = useState(false);
+
+  const [dlCwApiToken, setDlCwApiToken] = useState("");
+  const [dlCwRoomId, setDlCwRoomId] = useState("");
+  const [dlCwConfigured, setDlCwConfigured] = useState(false);
+  const [dlCwSaving, setDlCwSaving] = useState(false);
+  const [dlCwTesting, setDlCwTesting] = useState(false);
+  const [dlCwError, setDlCwError] = useState("");
+  const [dlCwTested, setDlCwTested] = useState(false);
+
+  const [dlWebhookUrl, setDlWebhookUrl] = useState("");
+  const [dlWebhookConfigured, setDlWebhookConfigured] = useState(false);
+  const [dlWebhookSaving, setDlWebhookSaving] = useState(false);
+  const [dlWebhookTesting, setDlWebhookTesting] = useState(false);
+  const [dlWebhookError, setDlWebhookError] = useState("");
+  const [dlWebhookTested, setDlWebhookTested] = useState(false);
+
   useEffect(() => {
     setAuthToken(getAccessToken() ?? "");
   }, []);
@@ -383,6 +406,13 @@ export default function AdminNotifyPage() {
       if (slack["webhook_url"]) setSlackConfigured(true);
       if (cw["api_token"]) setCwConfigured(true);
       if (wh["webhook_url"]) setCustomWebhookConfigured(true);
+
+      const dlSlack = settings["slack_delivery"] ?? {};
+      const dlCw = settings["chatwork_delivery"] ?? {};
+      const dlWh = settings["webhook_delivery"] ?? {};
+      if (dlSlack["webhook_url"]) setDlSlackConfigured(true);
+      if (dlCw["api_token"]) setDlCwConfigured(true);
+      if (dlWh["webhook_url"]) setDlWebhookConfigured(true);
     }).catch(() => {});
   }, [authToken]);
 
@@ -480,6 +510,104 @@ export default function AdminNotifyPage() {
       setCustomWebhookError(e instanceof Error ? e.message : "送信に失敗しました");
     } finally {
       setCustomWebhookTesting(false);
+    }
+  };
+
+  // ── Delivery destination handlers ──────────────────────────────────────
+  const handleSaveDlSlack = async () => {
+    setDlSlackSaving(true);
+    setDlSlackError("");
+    try {
+      await api.updateSlackDelivery(authToken, dlSlackUrl);
+      setDlSlackConfigured(true);
+      setDlSlackUrl("");
+    } catch (e: unknown) {
+      setDlSlackError(e instanceof Error ? e.message : "保存に失敗しました");
+    } finally {
+      setDlSlackSaving(false);
+    }
+  };
+
+  const handleTestDlSlack = async () => {
+    setDlSlackTesting(true);
+    setDlSlackError("");
+    try {
+      const res = await api.testNotification(authToken, "slack_delivery");
+      if (res.ok) {
+        setDlSlackTested(true);
+        setTimeout(() => setDlSlackTested(false), 3000);
+      } else {
+        setDlSlackError(res.error ?? "送信に失敗しました");
+      }
+    } catch (e: unknown) {
+      setDlSlackError(e instanceof Error ? e.message : "送信に失敗しました");
+    } finally {
+      setDlSlackTesting(false);
+    }
+  };
+
+  const handleSaveDlChatwork = async () => {
+    setDlCwSaving(true);
+    setDlCwError("");
+    try {
+      await api.updateChatworkDelivery(authToken, dlCwApiToken, dlCwRoomId);
+      setDlCwConfigured(true);
+      setDlCwApiToken("");
+      setDlCwRoomId("");
+    } catch (e: unknown) {
+      setDlCwError(e instanceof Error ? e.message : "保存に失敗しました");
+    } finally {
+      setDlCwSaving(false);
+    }
+  };
+
+  const handleTestDlChatwork = async () => {
+    setDlCwTesting(true);
+    setDlCwError("");
+    try {
+      const res = await api.testNotification(authToken, "chatwork_delivery");
+      if (res.ok) {
+        setDlCwTested(true);
+        setTimeout(() => setDlCwTested(false), 3000);
+      } else {
+        setDlCwError(res.error ?? "送信に失敗しました");
+      }
+    } catch (e: unknown) {
+      setDlCwError(e instanceof Error ? e.message : "送信に失敗しました");
+    } finally {
+      setDlCwTesting(false);
+    }
+  };
+
+  const handleSaveDlWebhook = async () => {
+    setDlWebhookSaving(true);
+    setDlWebhookError("");
+    try {
+      await api.updateWebhookDelivery(authToken, dlWebhookUrl);
+      setDlWebhookConfigured(true);
+      setDlWebhookUrl("");
+    } catch (e: unknown) {
+      setDlWebhookError(e instanceof Error ? e.message : "保存に失敗しました");
+    } finally {
+      setDlWebhookSaving(false);
+    }
+  };
+
+  const handleTestDlWebhook = async () => {
+    setDlWebhookTesting(true);
+    setDlWebhookError("");
+    try {
+      const res = await api.testNotification(authToken, "webhook_delivery");
+      if (res.ok) {
+        setDlWebhookTested(true);
+        setTimeout(() => setDlWebhookTested(false), 3000);
+      } else {
+        setDlWebhookError(res.error ?? "送信に失敗しました");
+      }
+    } catch (e: unknown) {
+      setDlWebhookError(e instanceof Error ? e.message : "送信に失敗しました");
+    } finally {
+      setDlWebhookTesting(false);
     }
   };
 
@@ -693,6 +821,152 @@ export default function AdminNotifyPage() {
             {customWebhookTested && (
               <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
             )}
+          </div>
+        </MkCard>
+
+        {/* Delivery call notification target (荷物の配達/呼び出し) */}
+        <MkCard style={{ gridColumn: "span 2" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 8 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 7, background: "#f5ede1", color: "#9a6b2e", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M16 16V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2" />
+                <path d="M14 9h4l4 4v3a1 1 0 0 1-1 1h-2" />
+                <circle cx="7.5" cy="18.5" r="1.5" /><circle cx="17.5" cy="18.5" r="1.5" />
+              </svg>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>荷物の配達（呼び出し）通知先</div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>キオスクの「配達の呼び出し」専用の通知先。受付通知とは別に設定できます。</div>
+            </div>
+          </div>
+          <div style={{ marginBottom: 18, padding: "10px 14px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.25)", borderRadius: 8, fontSize: 12, color: "#7a5c00", lineHeight: 1.55 }}>
+            未設定の場合は通常の受付通知先に送信されます
+          </div>
+
+          <div className="adm-grid-2" style={{ gap: 20 }}>
+            {/* Delivery Slack */}
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15", flex: 1 }}>Slack（配達）</div>
+                <MkPill tone={dlSlackConfigured ? "live" : "off"}>{dlSlackConfigured ? "設定済" : "未設定"}</MkPill>
+              </div>
+              <Field label="Webhook URL">
+                <TextInput
+                  placeholder="https://hooks.slack.com/services/..."
+                  mono
+                  value={dlSlackUrl}
+                  onChange={setDlSlackUrl}
+                />
+              </Field>
+              {dlSlackError && (
+                <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
+                  {dlSlackError}
+                </div>
+              )}
+              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center" }}>
+                <MkBtn variant="primary" size="sm" onClick={handleSaveDlSlack}>
+                  {dlSlackSaving ? "保存中…" : "保存"}
+                </MkBtn>
+                {dlSlackConfigured && (
+                  <button
+                    onClick={handleTestDlSlack}
+                    disabled={dlSlackTesting}
+                    style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: dlSlackTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: dlSlackTesting ? 0.6 : 1 }}
+                  >
+                    {dlSlackTesting ? "送信中..." : "テスト送信"}
+                  </button>
+                )}
+                {dlSlackTested && (
+                  <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
+                )}
+              </div>
+            </div>
+
+            {/* Delivery Chatwork */}
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15", flex: 1 }}>Chatwork（配達）</div>
+                <MkPill tone={dlCwConfigured ? "live" : "off"}>{dlCwConfigured ? "設定済" : "未設定"}</MkPill>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <Field label="API トークン">
+                  <TextInput
+                    placeholder="Chatwork API トークン"
+                    mono
+                    value={dlCwApiToken}
+                    onChange={setDlCwApiToken}
+                  />
+                </Field>
+                <Field label="通知先ルーム ID">
+                  <TextInput
+                    placeholder="例: 312648719"
+                    mono
+                    value={dlCwRoomId}
+                    onChange={setDlCwRoomId}
+                  />
+                </Field>
+              </div>
+              {dlCwError && (
+                <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
+                  {dlCwError}
+                </div>
+              )}
+              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center" }}>
+                <MkBtn variant="primary" size="sm" onClick={handleSaveDlChatwork}>
+                  {dlCwSaving ? "保存中…" : "保存"}
+                </MkBtn>
+                {dlCwConfigured && (
+                  <button
+                    onClick={handleTestDlChatwork}
+                    disabled={dlCwTesting}
+                    style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: dlCwTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: dlCwTesting ? 0.6 : 1 }}
+                  >
+                    {dlCwTesting ? "送信中..." : "テスト送信"}
+                  </button>
+                )}
+                {dlCwTested && (
+                  <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
+                )}
+              </div>
+            </div>
+
+            {/* Delivery Webhook */}
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15", flex: 1 }}>カスタムWebhook（配達）</div>
+                <MkPill tone={dlWebhookConfigured ? "live" : "off"}>{dlWebhookConfigured ? "設定済" : "未設定"}</MkPill>
+              </div>
+              <Field label="Webhook URL">
+                <TextInput
+                  placeholder="https://hooks.example.com/..."
+                  mono
+                  value={dlWebhookUrl}
+                  onChange={setDlWebhookUrl}
+                />
+              </Field>
+              {dlWebhookError && (
+                <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
+                  {dlWebhookError}
+                </div>
+              )}
+              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center" }}>
+                <MkBtn variant="primary" size="sm" onClick={handleSaveDlWebhook}>
+                  {dlWebhookSaving ? "保存中…" : "保存"}
+                </MkBtn>
+                {dlWebhookConfigured && (
+                  <button
+                    onClick={handleTestDlWebhook}
+                    disabled={dlWebhookTesting}
+                    style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: dlWebhookTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: dlWebhookTesting ? 0.6 : 1 }}
+                  >
+                    {dlWebhookTesting ? "送信中..." : "テスト送信"}
+                  </button>
+                )}
+                {dlWebhookTested && (
+                  <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
+                )}
+              </div>
+            </div>
           </div>
         </MkCard>
       </div>

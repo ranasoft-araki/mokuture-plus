@@ -399,7 +399,7 @@ async def kiosk_call_staff(
     title = "配達の呼び出し"
     text = f"🔔 配達の呼び出し\n受付端末から担当者が呼ばれています。{message or ''}"
 
-    await _notify_slack_text(tenant.id, text, db)
+    await _notify_slack_text(tenant.id, text, db, types=("slack_delivery", "slack"))
     await _notify_push_text(tenant.id, title, text, tenant.id, db)
     await _notify_webhook_event(
         tenant.id,
@@ -411,8 +411,9 @@ async def kiosk_call_staff(
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
         db,
+        types=("webhook_delivery", "webhook"),
     )
-    await _notify_chatwork_text(tenant.id, text, db)
+    await _notify_chatwork_text(tenant.id, text, db, types=("chatwork_delivery", "chatwork"))
 
     return {"ok": True}
 
@@ -656,16 +657,33 @@ async def _notify_webhook(tenant_id: str, log: ReceptionLog, db: AsyncSession) -
 
 # ── Generic-message notify helpers (staff call etc.) ───────────────────────────
 
-async def _notify_slack_text(tenant_id: str, text: str, db: AsyncSession) -> None:
-    """Send a plain text message to the tenant's Slack webhook. Best-effort."""
-    result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "slack",
+async def _first_configured_setting(
+    tenant_id: str, types: tuple[str, ...], db: AsyncSession
+) -> NotificationSetting | None:
+    """Return the first NotificationSetting whose type matches (in preference order)
+    and that actually has a config (config_json present and != "{}"). Tenant-scoped."""
+    for type_ in types:
+        result = await db.execute(
+            select(NotificationSetting).where(
+                NotificationSetting.tenant_id == tenant_id,
+                NotificationSetting.type == type_,
+            )
         )
-    )
-    setting = result.scalar_one_or_none()
-    if setting is None or not setting.config_json or setting.config_json == "{}":
+        setting = result.scalar_one_or_none()
+        if setting is not None and setting.config_json and setting.config_json != "{}":
+            return setting
+    return None
+
+
+async def _notify_slack_text(
+    tenant_id: str, text: str, db: AsyncSession, types: tuple[str, ...] = ("slack",)
+) -> None:
+    """Send a plain text message to the first configured Slack webhook among ``types``.
+
+    Best-effort. ``types`` is an ordered preference (e.g. delivery-specific first,
+    then the normal reception destination as fallback)."""
+    setting = await _first_configured_setting(tenant_id, types, db)
+    if setting is None:
         return
     try:
         config = decrypt_dict(setting.config_json)
@@ -725,16 +743,15 @@ async def _notify_push_text(
         pass
 
 
-async def _notify_webhook_event(tenant_id: str, payload: dict, db: AsyncSession) -> None:
-    """POST an arbitrary event payload to the tenant's webhook. Best-effort."""
-    result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "webhook",
-        )
-    )
-    setting = result.scalar_one_or_none()
-    if setting is None or not setting.config_json or setting.config_json == "{}":
+async def _notify_webhook_event(
+    tenant_id: str, payload: dict, db: AsyncSession, types: tuple[str, ...] = ("webhook",)
+) -> None:
+    """POST an arbitrary event payload to the first configured webhook among ``types``.
+
+    Best-effort. ``types`` is an ordered preference (delivery-specific first, then
+    the normal reception destination as fallback)."""
+    setting = await _first_configured_setting(tenant_id, types, db)
+    if setting is None:
         return
     try:
         config = decrypt_dict(setting.config_json)
@@ -745,16 +762,15 @@ async def _notify_webhook_event(tenant_id: str, payload: dict, db: AsyncSession)
         pass
 
 
-async def _notify_chatwork_text(tenant_id: str, text: str, db: AsyncSession) -> None:
-    """Post a message to the tenant's Chatwork room. Best-effort."""
-    result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "chatwork",
-        )
-    )
-    setting = result.scalar_one_or_none()
-    if setting is None or not setting.config_json or setting.config_json == "{}":
+async def _notify_chatwork_text(
+    tenant_id: str, text: str, db: AsyncSession, types: tuple[str, ...] = ("chatwork",)
+) -> None:
+    """Post a message to the first configured Chatwork room among ``types``.
+
+    Best-effort. ``types`` is an ordered preference (delivery-specific first, then
+    the normal reception destination as fallback)."""
+    setting = await _first_configured_setting(tenant_id, types, db)
+    if setting is None:
         return
     try:
         config = decrypt_dict(setting.config_json)
