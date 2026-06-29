@@ -781,6 +781,17 @@ function showDelivery() {
         <div style="font-size:30px;color:${T.sub};line-height:1.5"><b>${escHtml(sel.name)}</b> に荷物を入れ、扉を閉めてください<br><span style="font-size:24px;color:${T.muted}">暗証番号の設定は不要です</span></div>
         <button id="dl-lock" style="margin-top:12px;padding:22px 56px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:28px;font-weight:600;cursor:pointer">扉を閉めました（施錠する）</button>
       </div>`);
+    } else if (view === "wait") {
+      // 呼び出し後の「お待ちください」画面
+      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:34px;text-align:center;padding:0 120px">
+        <div style="position:relative;width:300px;height:300px;flex-shrink:0">
+          ${[1,.7,.4].map((s,i) => `<div style="position:absolute;inset:${(1-s)*40}%;border:2px solid ${bc};border-radius:50%;opacity:${.15+i*.18};animation:ring-expand 2.6s ease-in-out ${i*.25}s infinite"></div>`).join("")}
+          <div style="position:absolute;inset:32%;background:${bc};border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 8px 32px ${bc}72">${ICO.bell_lg}</div>
+        </div>
+        <div style="font-size:88px;font-weight:600;color:${T.ink};letter-spacing:-3px;line-height:1.05">お待ちください</div>
+        <div style="font-size:30px;color:${T.sub};line-height:1.6">担当者に通知しました。<br>担当者がまいりますので、少々お待ちください。</div>
+        <div style="display:inline-flex;align-items:center;gap:10px;padding:10px 22px;border-radius:999px;background:${bc}1a;color:${bc};font-size:18px;font-weight:600">${ICO.check_sm}<span>通知を送信しました</span></div>
+      </div>`);
     } else { // result
       sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;text-align:center;padding:0 120px">
         <div style="width:110px;height:110px;border-radius:50%;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
@@ -808,6 +819,9 @@ function showDelivery() {
       });
     } else if (view === "openwait") {
       document.getElementById("dl-lock").addEventListener("click", () => { resetIdle(); lockDelivery(); });
+    } else if (view === "wait") {
+      // 受動的な待機画面。一定時間後に待機画面へ復帰(担当者は実地で対応)。
+      resultTimer = setTimeout(() => { cleanup(); go("idle"); }, Math.max(30, ST.kiosk_complete_timeout_sec * 3) * 1000);
     } else if (view === "result") {
       document.getElementById("dl-done").addEventListener("click", () => { cleanup(); go("idle"); });
       resultTimer = setTimeout(() => { cleanup(); go("idle"); }, Math.max(6, ST.kiosk_complete_timeout_sec) * 1000);
@@ -832,8 +846,7 @@ function showDelivery() {
     view = "sending"; render();
     try {
       await apiPost("/proxy/call-staff", { message: "" }, token);
-      resultTitle = "担当者に通知しました"; resultSub = "少々お待ちください。担当者がまいります。";
-      view = "result"; render();
+      view = "wait"; render();   // お待ちください画面へ
     } catch (e) {
       resultTitle = "通知に失敗しました"; resultSub = "恐れ入りますが、受付スタッフへお声がけください。";
       view = "result"; render();
