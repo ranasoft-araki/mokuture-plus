@@ -691,7 +691,7 @@ function showLocker() {
       err = msg === "invalid pin" ? "暗証番号が違います。もう一度お試しください。"
           : msg === "already occupied" ? "このロッカーは使用中です。"
           : msg === "not occupied" ? "このロッカーは空いています。"
-          : "処理に失敗しました。もう一度お試しください。";
+          : ("処理に失敗しました：" + (msg || "もう一度お試しください"));
       render();
     }
   }
