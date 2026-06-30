@@ -164,9 +164,85 @@ def _wifi_toggle(on: bool) -> str | None:
     except Exception as e:
         return str(e)
 
+
+def _camera_status() -> dict[str, object]:
+    if _MOCK_DEVICE:
+        return {
+            "device": settings.camera_device,
+            "available": True,
+            "name": "Mock USB Camera",
+            "detail": "mock",
+        }
+
+    device = Path(settings.camera_device)
+    status: dict[str, object] = {
+        "device": settings.camera_device,
+        "available": device.exists(),
+        "name": None,
+        "detail": None,
+    }
+    if not device.exists():
+        status["detail"] = "device not found"
+        return status
+
+    try:
+        r = _run(["v4l2-ctl", "--device", settings.camera_device, "--all"])
+        if r.returncode == 0:
+            match = re.search(r"Card type\s*:\s*(.+)", r.stdout)
+            if match:
+                status["name"] = match.group(1).strip()
+        elif r.stderr.strip():
+            status["detail"] = r.stderr.strip()
+    except FileNotFoundError:
+        status["detail"] = "v4l2-ctl not found"
+    except Exception as e:
+        status["detail"] = str(e)
+    return status
+
+
+def _microphone_status() -> dict[str, object]:
+    if _MOCK_DEVICE:
+        return {
+            "available": True,
+            "name": "Mock USB Microphone",
+            "detail": "mock",
+        }
+
+    status: dict[str, object] = {
+        "available": False,
+        "name": None,
+        "detail": None,
+    }
+
+    try:
+        r = _run(["arecord", "-l"])
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                match = re.search(r"card\s+\d+:\s*([^\[]+)\[([^\]]+)\],\s*device\s+\d+:\s*([^\[]+)", line)
+                if match:
+                    card_name = match.group(2).strip() or match.group(1).strip()
+                    device_name = match.group(3).strip()
+                    status["available"] = True
+                    status["name"] = f"{card_name} / {device_name}"
+                    return status
+            status["detail"] = "capture device not found"
+            return status
+        if r.stderr.strip():
+            status["detail"] = r.stderr.strip()
+    except FileNotFoundError:
+        status["detail"] = "arecord not found"
+    except Exception as e:
+        status["detail"] = str(e)
+
+    return status
+
+
 locker_ctrl = LockerController(settings.locker_pins)
 pir = PirSensor(settings.pir_pin)
-door = DoorSensor(settings.door_pin)
+doors = {
+    door_id: DoorSensor(pin)
+    for door_id, pin in sorted(settings.door_pins.items(), key=lambda item: item[0])
+}
 
 _KIOSK_HTML = Path(__file__).parent / "static" / "kiosk.html"
 _JSQR_JS   = Path(__file__).parent / "static" / "jsqr.min.js"
@@ -185,7 +261,8 @@ async def lifespan(app: FastAPI):
     heartbeat_task.cancel()
     locker_ctrl.close()
     pir.close()
-    door.close()
+    for door in doors.values():
+        door.close()
 
 
 app = FastAPI(title="mokuture+ Kiosk Agent", lifespan=lifespan)
@@ -559,30 +636,51 @@ async def serve_media(media_id: str):
 
 @app.get("/device/status")
 async def device_status():
+    door_items = [
+        {
+            "door_id": door_id,
+            "pin": sensor.pin,
+            "configured": sensor.configured,
+            "is_closed": sensor.is_closed,
+        }
+        for door_id, sensor in doors.items()
+    ]
+    camera = await asyncio.to_thread(_camera_status)
+    microphone = await asyncio.to_thread(_microphone_status)
     return {
         "registered": is_registered(),
         "device_name": get_device_name(),
         "mock_gpio": settings.mock_gpio,
+        "platform": platform.platform(),
         "pir": {
             "pin": settings.pir_pin,
             "motion_detected": pir.motion_detected,
         },
-        "door": {
+        "door": door_items[0] if door_items else {
+            "door_id": "1",
             "pin": settings.door_pin,
-            "configured": door.configured,
-            "is_closed": door.is_closed,
+            "configured": False,
+            "is_closed": None,
         },
+        "doors": door_items,
+        "camera": camera,
+        "microphone": microphone,
+        "relays": locker_ctrl.status(),
         "lockers": locker_ctrl.status(),
     }
 
 
 @app.get("/device/door")
 async def get_door():
-    return {
-        "configured": door.configured,
-        "pin": settings.door_pin,
-        "is_closed": door.is_closed,
-    }
+    return {"doors": [
+        {
+            "door_id": door_id,
+            "configured": sensor.configured,
+            "pin": sensor.pin,
+            "is_closed": sensor.is_closed,
+        }
+        for door_id, sensor in doors.items()
+    ]}
 
 
 @app.get("/device/lockers")

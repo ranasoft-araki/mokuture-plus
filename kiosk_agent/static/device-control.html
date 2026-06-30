@@ -23,12 +23,12 @@
       margin: 0;
       font-family: "Noto Sans JP", system-ui, sans-serif;
       background:
-        radial-gradient(circle at top left, rgba(197,138,31,0.10), transparent 25%),
+        radial-gradient(circle at top left, rgba(197, 138, 31, 0.10), transparent 25%),
         linear-gradient(180deg, #f8f3eb 0%, var(--bg) 100%);
       color: var(--text);
     }
     .wrap {
-      max-width: 1120px;
+      max-width: 1180px;
       margin: 0 auto;
       padding: 24px;
     }
@@ -103,34 +103,35 @@
       border-radius: 50%;
       background: currentColor;
     }
-    .pill.ok { background: rgba(60,122,74,.12); color: var(--ok); }
-    .pill.warn { background: rgba(197,138,31,.14); color: var(--warn); }
-    .pill.off { background: rgba(168,157,144,.16); color: var(--off); }
-    .pill.danger { background: rgba(169,68,60,.12); color: var(--danger); }
+    .pill.ok { background: rgba(60, 122, 74, .12); color: var(--ok); }
+    .pill.warn { background: rgba(197, 138, 31, .14); color: var(--warn); }
+    .pill.off { background: rgba(168, 157, 144, .16); color: var(--off); }
+    .pill.danger { background: rgba(169, 68, 60, .12); color: var(--danger); }
+    .device-list,
     .relay-list {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
       gap: 14px;
       margin-top: 14px;
     }
-    .relay {
+    .card {
       border: 1px solid var(--line);
       border-radius: 16px;
       padding: 16px;
       background: #fff;
     }
-    .relay-head {
+    .card-head {
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 12px;
       margin-bottom: 12px;
     }
-    .relay-name {
+    .card-name {
       font-size: 20px;
       font-weight: 700;
     }
-    .relay-pin {
+    .card-pin {
       font-size: 13px;
       color: var(--muted);
     }
@@ -171,7 +172,7 @@
     <div class="hero">
       <div>
         <h1>Device Control</h1>
-        <div class="sub">GPIO の状態確認とリレー手動操作</div>
+        <div class="sub">GPIO、ドア、USBカメラ、USBマイクの状態確認と電子錠の手動操作</div>
       </div>
       <div class="timestamp" id="updatedAt">読み込み中...</div>
     </div>
@@ -190,24 +191,32 @@
       </section>
 
       <section class="panel">
-        <div class="label">Door Sensor</div>
-        <div class="value" id="doorValue">-</div>
-        <div class="meta" id="doorMeta">-</div>
+        <div class="label">USB Camera</div>
+        <div class="value" id="cameraValue">-</div>
+        <div class="meta" id="cameraMeta">-</div>
+      </section>
+
+      <section class="panel">
+        <div class="label">USB Microphone</div>
+        <div class="value" id="microphoneValue">-</div>
+        <div class="meta" id="microphoneMeta">-</div>
       </section>
     </div>
 
     <section class="panel wide">
-      <div class="label">Relays</div>
+      <div class="label">Door Sensors</div>
+      <div class="device-list" id="doorList"></div>
+    </section>
+
+    <section class="panel wide">
+      <div class="label">Relay Circuits / Electronic Locks</div>
       <div class="relay-list" id="relayList"></div>
       <div class="message" id="message"></div>
     </section>
   </div>
 
   <script>
-    const state = {
-      loading: false,
-      timer: null,
-    };
+    const state = { timer: null };
 
     function setText(id, value) {
       document.getElementById(id).textContent = value;
@@ -238,29 +247,74 @@
       return response.json();
     }
 
-    function renderRelays(lockers) {
-      const root = document.getElementById("relayList");
-      if (!lockers.length) {
-        root.innerHTML = '<div class="meta">LOCKER_PINS_JSON が未設定です。</div>';
+    function renderDoors(doors) {
+      const root = document.getElementById("doorList");
+      if (!doors.length) {
+        root.innerHTML = '<div class="meta">ドアセンサー設定がありません。</div>';
         return;
       }
 
-      root.innerHTML = lockers.map((locker) => `
-        <article class="relay">
-          <div class="relay-head">
-            <div>
-              <div class="relay-name">Relay ${locker.locker_id}</div>
-              <div class="relay-pin">BCM ${locker.pin}</div>
+      root.innerHTML = doors.map((door) => {
+        const stateLabel = !door.configured
+          ? pill("NOT CONFIGURED", "off")
+          : door.is_closed
+            ? pill("CLOSED", "ok")
+            : pill("OPEN", "warn");
+        const meta = !door.configured
+          ? "GPIO未設定"
+          : `BCM ${door.pin}`;
+
+        return `
+          <article class="card">
+            <div class="card-head">
+              <div>
+                <div class="card-name">Door ${door.door_id}</div>
+                <div class="card-pin">${meta}</div>
+              </div>
+              ${stateLabel}
             </div>
-            ${locker.on ? pill("ON", "ok") : pill("OFF", "off")}
+          </article>
+        `;
+      }).join("");
+    }
+
+    function renderRelays(relays) {
+      const root = document.getElementById("relayList");
+      if (!relays.length) {
+        root.innerHTML = '<div class="meta">リレー設定がありません。</div>';
+        return;
+      }
+
+      root.innerHTML = relays.map((relay) => `
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <div class="card-name">Electronic Lock ${relay.locker_id}</div>
+              <div class="card-pin">Relay ${relay.locker_id} / BCM ${relay.pin}</div>
+            </div>
+            ${relay.on ? pill("ON", "ok") : pill("OFF", "off")}
           </div>
           <div class="actions">
-            <button class="primary" data-action="on" data-locker="${locker.locker_id}">ON</button>
-            <button class="ghost" data-action="off" data-locker="${locker.locker_id}">OFF</button>
-            <button class="warn" data-action="pulse" data-locker="${locker.locker_id}">PULSE</button>
+            <button class="primary" data-action="on" data-locker="${relay.locker_id}">ON</button>
+            <button class="ghost" data-action="off" data-locker="${relay.locker_id}">OFF</button>
+            <button class="warn" data-action="pulse" data-locker="${relay.locker_id}">PULSE</button>
           </div>
         </article>
       `).join("");
+    }
+
+    function renderPeripheralStatus(data) {
+      setText("cameraValue", data.camera.available ? "AVAILABLE" : "NOT FOUND");
+      setText(
+        "cameraMeta",
+        [data.camera.device, data.camera.name, data.camera.detail].filter(Boolean).join(" / ") || "-"
+      );
+
+      setText("microphoneValue", data.microphone.available ? "AVAILABLE" : "NOT FOUND");
+      setText(
+        "microphoneMeta",
+        [data.microphone.name, data.microphone.detail].filter(Boolean).join(" / ") || "-"
+      );
     }
 
     async function refreshStatus() {
@@ -269,57 +323,51 @@
         setText("deviceName", data.device_name || "(unregistered)");
         setText(
           "deviceMeta",
-          `registered: ${data.registered ? "yes" : "no"} / mock_gpio: ${data.mock_gpio ? "true" : "false"}`
+          [
+            `registered: ${data.registered ? "yes" : "no"}`,
+            `mock_gpio: ${data.mock_gpio ? "true" : "false"}`,
+            data.platform || null,
+          ].filter(Boolean).join(" / ")
         );
 
         setText("pirValue", data.pir.motion_detected ? "MOTION" : "NO MOTION");
         setText("pirMeta", `BCM ${data.pir.pin}`);
 
-        if (!data.door.configured) {
-          setText("doorValue", "NOT CONFIGURED");
-          setText("doorMeta", "DOOR_PIN を設定してください");
-        } else {
-          setText("doorValue", data.door.is_closed ? "CLOSED" : "OPEN");
-          setText("doorMeta", `BCM ${data.door.pin}`);
-        }
-
-        renderRelays(data.lockers || []);
+        renderPeripheralStatus(data);
+        renderDoors(data.doors || []);
+        renderRelays(data.relays || data.lockers || []);
         setText("updatedAt", `最終更新: ${new Date().toLocaleTimeString("ja-JP")}`);
       } catch (error) {
         showMessage(`状態取得に失敗しました: ${error.message}`, "danger");
       }
     }
 
-    async function handleRelayAction(lockerId, action, button) {
+    async function handleRelayAction(lockerId, action) {
       const buttons = document.querySelectorAll(`button[data-locker="${lockerId}"]`);
-      buttons.forEach((item) => item.disabled = true);
+      buttons.forEach((item) => { item.disabled = true; });
       try {
         if (action === "pulse") {
           await request(`/device/locker/${lockerId}/open`, { method: "POST" });
-          showMessage(`Relay ${lockerId} をパルス出力しました`, "ok");
+          showMessage(`電子錠 ${lockerId} にパルス出力しました。`, "ok");
         } else {
           await request(`/device/locker/${lockerId}/state`, {
             method: "POST",
             body: JSON.stringify({ on: action === "on" }),
           });
-          showMessage(`Relay ${lockerId} を ${action.toUpperCase()} にしました`, "ok");
+          showMessage(`電子錠 ${lockerId} を ${action.toUpperCase()} にしました。`, "ok");
         }
         await refreshStatus();
       } catch (error) {
-        showMessage(`Relay ${lockerId} の操作に失敗しました: ${error.message}`, "danger");
+        showMessage(`電子錠 ${lockerId} の操作に失敗しました: ${error.message}`, "danger");
       } finally {
-        buttons.forEach((item) => item.disabled = false);
+        buttons.forEach((item) => { item.disabled = false; });
       }
     }
 
     document.addEventListener("click", async (event) => {
       const button = event.target.closest("button[data-locker]");
       if (!button) return;
-      await handleRelayAction(
-        button.dataset.locker,
-        button.dataset.action,
-        button
-      );
+      await handleRelayAction(button.dataset.locker, button.dataset.action);
     });
 
     refreshStatus();
