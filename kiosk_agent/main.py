@@ -241,7 +241,10 @@ def _microphone_status() -> dict[str, object]:
     return status
 
 
-locker_ctrl = LockerController(settings.locker_pins)
+locker_ctrl = LockerController(
+    settings.locker_pins,
+    default_pulse_sec=settings.locker_pulse_sec,
+)
 pir = PirSensor(settings.pir_pin)
 doors = {
     door_id: DoorSensor(pin)

@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     port: int = 8080
     sync_interval_sec: int = 60
     mock_gpio: bool = False
+    locker_pulse_sec: float = 1.0
     # フロントを実バックエンド無しのモックで動かす。既定は Windows(開発機)で True。
     # 環境変数 KIOSK_MOCK=true/false で明示的に上書き可能(例: 本番Piでは自動的に False)。
     kiosk_mock: bool = platform.system() == "Windows"

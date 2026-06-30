@@ -25,6 +25,7 @@ MOCK_GPIO=false
 PIR_PIN=4
 DOOR_PINS_JSON={"1": 12, "2": 16, "3": 26}
 LOCKER_PINS_JSON={"1": 14, "2": 15, "3": 18}
+LOCKER_PULSE_SEC=1.0
 CAMERA_DEVICE=/dev/video0
 EOF
     echo "Created $AGENT_DIR/.env"

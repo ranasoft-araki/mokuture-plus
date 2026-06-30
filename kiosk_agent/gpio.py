@@ -16,8 +16,9 @@ else:
 
 
 class LockerController:
-    def __init__(self, pin_map: dict[str, int]):
+    def __init__(self, pin_map: dict[str, int], default_pulse_sec: float = 1.0):
         self._pin_map = {str(locker_id): pin for locker_id, pin in pin_map.items()}
+        self._default_pulse_sec = max(0.0, float(default_pulse_sec))
         self._pins: dict[str, object] = {}
         self._mock_state: dict[str, bool] = {locker_id: False for locker_id in self._pin_map}
         if _HW:
@@ -68,11 +69,12 @@ class LockerController:
             relay.off()  # type: ignore[attr-defined]
         return True
 
-    async def open(self, locker_id: str, pulse_sec: float = 1.0) -> bool:
+    async def open(self, locker_id: str, pulse_sec: float | None = None) -> bool:
         lid = str(locker_id)
         if not self.set_state(lid, True):
             return False
-        await asyncio.sleep(pulse_sec)
+        wait_sec = self._default_pulse_sec if pulse_sec is None else max(0.0, float(pulse_sec))
+        await asyncio.sleep(wait_sec)
         self.set_state(lid, False)
         return True
 
