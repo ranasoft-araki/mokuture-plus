@@ -154,6 +154,19 @@ async function pulseLocker(door) {
   catch { return { ok: false }; }
 }
 
+async function forceLockLocker(door) {
+  if (MOCK) return { ok: true };
+  try {
+    return await (await fetch(`/device/locker/${encodeURIComponent(door)}/state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on: false }),
+    })).json();
+  } catch {
+    return { ok: false };
+  }
+}
+
 // ─── API helpers ─────────────────────────────────────────────────────────────
 async function apiFetch(method, path, body, token) {
   if (MOCK) return mockFetch(method, path, body);
@@ -656,7 +669,14 @@ function showLocker() {
         else { openEmpty(); }
       });
     } else if (view === "openwait") {
-      document.getElementById("lk-closed").addEventListener("click", () => { resetIdle(); pin = ""; err = ""; view = "pinset"; render(); });
+      document.getElementById("lk-closed").addEventListener("click", async () => {
+        resetIdle();
+        await forceLockLocker(sel.door_number);
+        pin = "";
+        err = "";
+        view = "pinset";
+        render();
+      });
     } else if (view === "result") {
       document.getElementById("lk-done").addEventListener("click", () => { cleanup(); go("idle"); });
       resultTimer = setTimeout(() => { cleanup(); go("idle"); }, Math.max(6, ST.kiosk_complete_timeout_sec) * 1000);
@@ -675,7 +695,7 @@ function showLocker() {
 
   async function openEmpty() {
     // 空きロッカー: GPIOで開錠 → 荷物投入待ち
-    await pulseLocker(sel.door_number);
+    pulseLocker(sel.door_number).catch(() => {});
     view = "openwait"; render();
   }
 

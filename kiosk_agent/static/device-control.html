@@ -347,7 +347,7 @@
       buttons.forEach((item) => { item.disabled = true; });
       try {
         if (action === "pulse") {
-          await request(`/device/locker/${lockerId}/open`, { method: "POST" });
+          await request(`/device/locker/${lockerId}/pulse`, { method: "POST" });
           showMessage(`電子錠 ${lockerId} にパルス出力しました。`, "ok");
         } else {
           await request(`/device/locker/${lockerId}/state`, {

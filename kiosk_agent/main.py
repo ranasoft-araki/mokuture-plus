@@ -703,6 +703,14 @@ async def open_locker(locker_id: str):
     return {"locker_id": locker_id, "state": "opened"}
 
 
+@app.post("/device/locker/{locker_id}/pulse")
+async def pulse_locker_default(locker_id: str):
+    ok = await locker_ctrl.open(locker_id, pulse_sec=1.0)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Locker {locker_id} not configured")
+    return {"locker_id": locker_id, "state": "pulsed", "pulse_sec": 1.0}
+
+
 @app.post("/device/locker/{locker_id}/state")
 async def set_locker_state(locker_id: str, body: LockerStateBody):
     ok = locker_ctrl.set_state(locker_id, body.on)
