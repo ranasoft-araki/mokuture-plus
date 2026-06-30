@@ -185,31 +185,31 @@
       </section>
 
       <section class="panel">
-        <div class="label">PIR Sensor</div>
+        <div class="label">人感センサー</div>
         <div class="value" id="pirValue">-</div>
         <div class="meta" id="pirMeta">-</div>
       </section>
 
       <section class="panel">
-        <div class="label">USB Camera</div>
+        <div class="label">USBカメラ</div>
         <div class="value" id="cameraValue">-</div>
         <div class="meta" id="cameraMeta">-</div>
       </section>
 
       <section class="panel">
-        <div class="label">USB Microphone</div>
+        <div class="label">USBマイク</div>
         <div class="value" id="microphoneValue">-</div>
         <div class="meta" id="microphoneMeta">-</div>
       </section>
     </div>
 
     <section class="panel wide">
-      <div class="label">Door Sensors</div>
+      <div class="label">ドアセンサー</div>
       <div class="device-list" id="doorList"></div>
     </section>
 
     <section class="panel wide">
-      <div class="label">Relay Circuits / Electronic Locks</div>
+      <div class="label">リレー回路 / 電子錠</div>
       <div class="relay-list" id="relayList"></div>
       <div class="message" id="message"></div>
     </section>
@@ -268,7 +268,7 @@
           <article class="card">
             <div class="card-head">
               <div>
-                <div class="card-name">Door ${door.door_id}</div>
+                <div class="card-name">ドアセンサー ${door.door_id}</div>
                 <div class="card-pin">${meta}</div>
               </div>
               ${stateLabel}
@@ -289,8 +289,8 @@
         <article class="card">
           <div class="card-head">
             <div>
-              <div class="card-name">Electronic Lock ${relay.locker_id}</div>
-              <div class="card-pin">Relay ${relay.locker_id} / BCM ${relay.pin}</div>
+              <div class="card-name">電子錠 ${relay.locker_id}</div>
+              <div class="card-pin">リレー ${relay.locker_id} / BCM ${relay.pin}</div>
             </div>
             ${relay.on ? pill("ON", "ok") : pill("OFF", "off")}
           </div>

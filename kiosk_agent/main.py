@@ -218,10 +218,14 @@ def _microphone_status() -> dict[str, object]:
         r = _run(["arecord", "-l"])
         if r.returncode == 0:
             for line in r.stdout.splitlines():
-                match = re.search(r"card\s+\d+:\s*([^\[]+)\[([^\]]+)\],\s*device\s+\d+:\s*([^\[]+)", line)
+                # Support both English and Japanese locale outputs from `arecord -l`.
+                bracket_names = re.findall(r"\[([^\]]+)\]", line)
+                if not bracket_names:
+                    continue
+                match = re.search(r"(?:card|カード)\s+\d+.*?(?:device|デバイス)\s+\d+:\s*([^\[]+)", line)
                 if match:
-                    card_name = match.group(2).strip() or match.group(1).strip()
-                    device_name = match.group(3).strip()
+                    card_name = bracket_names[0].strip()
+                    device_name = match.group(1).strip()
                     status["available"] = True
                     status["name"] = f"{card_name} / {device_name}"
                     return status
