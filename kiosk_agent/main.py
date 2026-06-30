@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 from config import settings
-from gpio import LockerController, PirSensor
+from gpio import DoorSensor, LockerController, PirSensor
 from state import get_device_name, get_device_token, is_registered, save_device_state
 from sync import find_media, heartbeat_loop, sync_loop
 from updater import updater, read_version
@@ -166,9 +166,11 @@ def _wifi_toggle(on: bool) -> str | None:
 
 locker_ctrl = LockerController(settings.locker_pins)
 pir = PirSensor(settings.pir_pin)
+door = DoorSensor(settings.door_pin)
 
 _KIOSK_HTML = Path(__file__).parent / "static" / "kiosk.html"
 _JSQR_JS   = Path(__file__).parent / "static" / "jsqr.min.js"
+_CONTROL_PANEL_HTML = Path(__file__).parent / "static" / "device-control.html"
 
 
 @asynccontextmanager
@@ -183,6 +185,7 @@ async def lifespan(app: FastAPI):
     heartbeat_task.cancel()
     locker_ctrl.close()
     pir.close()
+    door.close()
 
 
 app = FastAPI(title="mokuture+ Kiosk Agent", lifespan=lifespan)
@@ -216,6 +219,10 @@ class CallStaffBody(BaseModel):
     message: str | None = None
 
 
+class LockerStateBody(BaseModel):
+    on: bool
+
+
 @app.get("/", include_in_schema=False)
 async def index():
     return RedirectResponse(url="/kiosk.html")
@@ -233,6 +240,13 @@ async def serve_kiosk_html():
     if not _KIOSK_HTML.exists():
         raise HTTPException(status_code=404, detail="kiosk.html not found")
     return FileResponse(_KIOSK_HTML, media_type="text/html")
+
+
+@app.get("/device-control", include_in_schema=False)
+async def serve_device_control():
+    if not _CONTROL_PANEL_HTML.exists():
+        raise HTTPException(status_code=404, detail="device-control.html not found")
+    return FileResponse(_CONTROL_PANEL_HTML, media_type="text/html")
 
 
 @app.get("/config")
@@ -543,12 +557,56 @@ async def serve_media(media_id: str):
     return FileResponse(path)
 
 
+@app.get("/device/status")
+async def device_status():
+    return {
+        "registered": is_registered(),
+        "device_name": get_device_name(),
+        "mock_gpio": settings.mock_gpio,
+        "pir": {
+            "pin": settings.pir_pin,
+            "motion_detected": pir.motion_detected,
+        },
+        "door": {
+            "pin": settings.door_pin,
+            "configured": door.configured,
+            "is_closed": door.is_closed,
+        },
+        "lockers": locker_ctrl.status(),
+    }
+
+
+@app.get("/device/door")
+async def get_door():
+    return {
+        "configured": door.configured,
+        "pin": settings.door_pin,
+        "is_closed": door.is_closed,
+    }
+
+
+@app.get("/device/lockers")
+async def list_device_lockers():
+    return {"lockers": locker_ctrl.status()}
+
+
 @app.post("/device/locker/{locker_id}/open")
 async def open_locker(locker_id: str):
     ok = await locker_ctrl.open(locker_id)
     if not ok:
         raise HTTPException(status_code=404, detail=f"Locker {locker_id} not configured")
     return {"locker_id": locker_id, "state": "opened"}
+
+
+@app.post("/device/locker/{locker_id}/state")
+async def set_locker_state(locker_id: str, body: LockerStateBody):
+    ok = locker_ctrl.set_state(locker_id, body.on)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Locker {locker_id} not configured")
+    return {
+        "locker_id": str(locker_id),
+        "on": locker_ctrl.is_on(locker_id),
+    }
 
 
 @app.get("/device/pir")

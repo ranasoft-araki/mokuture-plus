@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mokuture+ Device Control</title>
+  <style>
+    :root {
+      --bg: #f5f0e8;
+      --panel: #fffdf9;
+      --line: #e6ddd0;
+      --text: #2a241d;
+      --muted: #7b7267;
+      --ok: #3c7a4a;
+      --warn: #c58a1f;
+      --off: #a89d90;
+      --danger: #a9443c;
+      --accent: #1f1d1a;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Noto Sans JP", system-ui, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(197,138,31,0.10), transparent 25%),
+        linear-gradient(180deg, #f8f3eb 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+    .wrap {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .hero {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 32px;
+      line-height: 1.1;
+    }
+    .sub {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .timestamp {
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(26, 20, 12, 0.05);
+    }
+    .panel.wide {
+      grid-column: 1 / -1;
+    }
+    .label {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+    .value {
+      margin-top: 10px;
+      font-size: 30px;
+      font-weight: 700;
+    }
+    .meta {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-top: 10px;
+    }
+    .pill::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .pill.ok { background: rgba(60,122,74,.12); color: var(--ok); }
+    .pill.warn { background: rgba(197,138,31,.14); color: var(--warn); }
+    .pill.off { background: rgba(168,157,144,.16); color: var(--off); }
+    .pill.danger { background: rgba(169,68,60,.12); color: var(--danger); }
+    .relay-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+    .relay {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      background: #fff;
+    }
+    .relay-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .relay-name {
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .relay-pin {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    button {
+      border: none;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform .08s ease, opacity .15s ease;
+    }
+    button:active { transform: translateY(1px); }
+    button.primary { background: var(--accent); color: #fff; }
+    button.ghost { background: #f1ebe1; color: var(--text); }
+    button.warn { background: #a9443c; color: #fff; }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    .message {
+      min-height: 24px;
+      margin-top: 12px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    @media (max-width: 640px) {
+      .wrap { padding: 16px; }
+      h1 { font-size: 26px; }
+      .hero { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <div>
+        <h1>Device Control</h1>
+        <div class="sub">GPIO の状態確認とリレー手動操作</div>
+      </div>
+      <div class="timestamp" id="updatedAt">読み込み中...</div>
+    </div>
+
+    <div class="grid">
+      <section class="panel">
+        <div class="label">Device</div>
+        <div class="value" id="deviceName">-</div>
+        <div class="meta" id="deviceMeta">-</div>
+      </section>
+
+      <section class="panel">
+        <div class="label">PIR Sensor</div>
+        <div class="value" id="pirValue">-</div>
+        <div class="meta" id="pirMeta">-</div>
+      </section>
+
+      <section class="panel">
+        <div class="label">Door Sensor</div>
+        <div class="value" id="doorValue">-</div>
+        <div class="meta" id="doorMeta">-</div>
+      </section>
+    </div>
+
+    <section class="panel wide">
+      <div class="label">Relays</div>
+      <div class="relay-list" id="relayList"></div>
+      <div class="message" id="message"></div>
+    </section>
+  </div>
+
+  <script>
+    const state = {
+      loading: false,
+      timer: null,
+    };
+
+    function setText(id, value) {
+      document.getElementById(id).textContent = value;
+    }
+
+    function pill(label, tone) {
+      return `<span class="pill ${tone}">${label}</span>`;
+    }
+
+    function showMessage(text, tone = "off") {
+      const el = document.getElementById("message");
+      el.textContent = text;
+      el.style.color =
+        tone === "danger" ? "var(--danger)" :
+        tone === "ok" ? "var(--ok)" :
+        "var(--muted)";
+    }
+
+    async function request(path, options = {}) {
+      const response = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || response.statusText);
+      }
+      return response.json();
+    }
+
+    function renderRelays(lockers) {
+      const root = document.getElementById("relayList");
+      if (!lockers.length) {
+        root.innerHTML = '<div class="meta">LOCKER_PINS_JSON が未設定です。</div>';
+        return;
+      }
+
+      root.innerHTML = lockers.map((locker) => `
+        <article class="relay">
+          <div class="relay-head">
+            <div>
+              <div class="relay-name">Relay ${locker.locker_id}</div>
+              <div class="relay-pin">BCM ${locker.pin}</div>
+            </div>
+            ${locker.on ? pill("ON", "ok") : pill("OFF", "off")}
+          </div>
+          <div class="actions">
+            <button class="primary" data-action="on" data-locker="${locker.locker_id}">ON</button>
+            <button class="ghost" data-action="off" data-locker="${locker.locker_id}">OFF</button>
+            <button class="warn" data-action="pulse" data-locker="${locker.locker_id}">PULSE</button>
+          </div>
+        </article>
+      `).join("");
+    }
+
+    async function refreshStatus() {
+      try {
+        const data = await request("/device/status");
+        setText("deviceName", data.device_name || "(unregistered)");
+        setText(
+          "deviceMeta",
+          `registered: ${data.registered ? "yes" : "no"} / mock_gpio: ${data.mock_gpio ? "true" : "false"}`
+        );
+
+        setText("pirValue", data.pir.motion_detected ? "MOTION" : "NO MOTION");
+        setText("pirMeta", `BCM ${data.pir.pin}`);
+
+        if (!data.door.configured) {
+          setText("doorValue", "NOT CONFIGURED");
+          setText("doorMeta", "DOOR_PIN を設定してください");
+        } else {
+          setText("doorValue", data.door.is_closed ? "CLOSED" : "OPEN");
+          setText("doorMeta", `BCM ${data.door.pin}`);
+        }
+
+        renderRelays(data.lockers || []);
+        setText("updatedAt", `最終更新: ${new Date().toLocaleTimeString("ja-JP")}`);
+      } catch (error) {
+        showMessage(`状態取得に失敗しました: ${error.message}`, "danger");
+      }
+    }
+
+    async function handleRelayAction(lockerId, action, button) {
+      const buttons = document.querySelectorAll(`button[data-locker="${lockerId}"]`);
+      buttons.forEach((item) => item.disabled = true);
+      try {
+        if (action === "pulse") {
+          await request(`/device/locker/${lockerId}/open`, { method: "POST" });
+          showMessage(`Relay ${lockerId} をパルス出力しました`, "ok");
+        } else {
+          await request(`/device/locker/${lockerId}/state`, {
+            method: "POST",
+            body: JSON.stringify({ on: action === "on" }),
+          });
+          showMessage(`Relay ${lockerId} を ${action.toUpperCase()} にしました`, "ok");
+        }
+        await refreshStatus();
+      } catch (error) {
+        showMessage(`Relay ${lockerId} の操作に失敗しました: ${error.message}`, "danger");
+      } finally {
+        buttons.forEach((item) => item.disabled = false);
+      }
+    }
+
+    document.addEventListener("click", async (event) => {
+      const button = event.target.closest("button[data-locker]");
+      if (!button) return;
+      await handleRelayAction(
+        button.dataset.locker,
+        button.dataset.action,
+        button
+      );
+    });
+
+    refreshStatus();
+    state.timer = setInterval(refreshStatus, 1000);
+  </script>
+</body>
+</html>

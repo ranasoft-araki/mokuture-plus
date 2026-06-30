@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     # GPIO pin numbers (BCM)
     pir_pin: int = 4
+    door_pin: int | None = None
     # JSON string: {"1": 17, "2": 18}  (locker_id → GPIO pin)
     locker_pins_json: str = "{}"
 
