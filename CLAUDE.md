@@ -323,7 +323,7 @@ mokuture/
 | GET/POST/DELETE | /devices | JWT | デバイス CRUD |
 | PATCH | /devices/{id} | JWT | 端末名・場所の変更 (name 1〜100文字, location nullable) |
 | POST | /devices/{id}/pin | JWT | PIN 発行 |
-| GET | /kiosk/schedule | デバイストークン | 現在のプレイリスト取得 |
+| GET | /kiosk/schedule | デバイストークン | 現在のプレイリスト取得。`device_name`(最新の端末名)も返し、キオスク/エージェントが名前をライブ同期する |
 | POST | /kiosk/reception | デバイストークン | 受付フォーム送信 (appointment_id 対応) |
 | GET | /kiosk/appointment/{token} | デバイストークン | QR トークンから来社予定取得 (scheduled_at + meeting_room{name,location,map_image_url}\|null を含む) |
 | POST | /kiosk/verify-pin | なし | PIN → デバイストークン交換 |

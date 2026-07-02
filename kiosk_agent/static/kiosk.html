@@ -319,6 +319,12 @@ const T = {
   urgent: "#a84238", urgentBg: "#f6e0dc",
 };
 function devName() { return escHtml(localStorage.getItem(NAME_KEY) ?? "kiosk"); }
+// 管理画面での端末名変更をスケジュール応答から反映。変更があり待機画面表示中なら再描画してフッターを更新。
+function syncDeviceName(name) {
+  if (typeof name !== "string" || !name || name === localStorage.getItem(NAME_KEY)) return;
+  localStorage.setItem(NAME_KEY, name);
+  if (CURRENT_SCREEN === "idle") go("idle");
+}
 
 // ─── IDLE ─────────────────────────────────────────────────────────────────────
 // 人感センサー(PIR)で来訪を検知し、受付メニューへ自動遷移する(タッチ操作は不要)。
@@ -1763,6 +1769,7 @@ async function boot() {
     ]);
     if (!localStorage.getItem(TOKEN_KEY)) { showSetup(); return; }
     if (settings) Object.assign(ST, settings);
+    if (sched?.device_name) localStorage.setItem(NAME_KEY, sched.device_name);
     if (sched?.suspended) {
       showSuspended();
     } else {
@@ -1780,6 +1787,7 @@ async function boot() {
     if (!t) return;
     try {
       const s = await apiGet("/proxy/schedule", t);
+      syncDeviceName(s?.device_name);
       if (s?.suspended) {
         if (CURRENT_SCREEN !== "suspended") showSuspended();
       } else {

@@ -139,7 +139,7 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
 
     # Return suspension status immediately — kiosk handles UI
     if tenant.is_suspended:
-        return {"suspended": True, "message": "このテナントは現在停止中です", "playlist": None, "force_update_at": None}
+        return {"suspended": True, "message": "このテナントは現在停止中です", "playlist": None, "force_update_at": None, "device_name": device.name}
 
     now = datetime.now(_JST)
     day = now.weekday()
@@ -157,12 +157,12 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     force_update_at = device.force_update_at.isoformat() if device.force_update_at else None
 
     if schedule is None:
-        return {"playlist": None, "force_update_at": force_update_at}
+        return {"playlist": None, "force_update_at": force_update_at, "device_name": device.name}
 
     pl_result = await db.execute(select(Playlist).where(Playlist.id == schedule.playlist_id))
     pl = pl_result.scalar_one_or_none()
     if pl is None:
-        return {"playlist": None, "force_update_at": force_update_at}
+        return {"playlist": None, "force_update_at": force_update_at, "device_name": device.name}
 
     items_result = await db.execute(
         select(PlaylistItem)
@@ -172,7 +172,7 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     items = items_result.scalars().all()
 
     if not items:
-        return {"playlist": {"id": pl.id, "name": pl.name, "items": []}, "force_update_at": force_update_at}
+        return {"playlist": {"id": pl.id, "name": pl.name, "items": []}, "force_update_at": force_update_at, "device_name": device.name}
 
     media_ids = [i.media_id for i in items]
     media_result = await db.execute(
@@ -213,6 +213,7 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
             ],
         },
         "force_update_at": force_update_at,
+        "device_name": device.name,
     }
 
 

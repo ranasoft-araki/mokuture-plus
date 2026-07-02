@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 
 from config import settings
-from state import get_device_token
+from state import get_device_name, get_device_token, save_device_state
 
 # Last known force_update_at value — used to detect remote force-refresh signals
 _last_force_update_at: str | None = None
@@ -59,6 +59,11 @@ async def check_force_refresh(client: httpx.AsyncClient) -> None:
         )
         resp.raise_for_status()
         data = resp.json()
+        # 管理画面での端末名変更を反映（device_state.json を最新に保つ → /config・/health・再起動時の整合）
+        remote_name = data.get("device_name")
+        if isinstance(remote_name, str) and remote_name and remote_name != get_device_name():
+            save_device_state(token, remote_name)
+            print(f"[sync] 端末名を更新しました → {remote_name}")
         fat = data.get("force_update_at")
         if fat is not None and fat != _last_force_update_at:
             _last_force_update_at = fat
