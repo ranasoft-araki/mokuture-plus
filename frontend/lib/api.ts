@@ -430,6 +430,8 @@ export const api = {
     request("/notifications/settings/chatwork_delivery", { method: "PUT", body: JSON.stringify({ api_token, room_id }) }, token),
   updateWebhookDelivery: (token: string, webhook_url: string) =>
     request("/notifications/settings/webhook_delivery", { method: "PUT", body: JSON.stringify({ webhook_url }) }, token),
+  updatePushDelivery: (token: string, enabled: boolean) =>
+    request("/notifications/settings/push_delivery", { method: "PUT", body: JSON.stringify({ enabled }) }, token),
   testSlackDelivery: (token: string) =>
     request<{ ok: boolean }>("/notifications/test/slack_delivery", { method: "POST" }, token),
   testChatworkDelivery: (token: string) =>

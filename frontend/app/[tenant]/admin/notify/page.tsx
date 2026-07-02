@@ -393,6 +393,13 @@ export default function AdminNotifyPage() {
   const [dlWebhookError, setDlWebhookError] = useState("");
   const [dlWebhookTested, setDlWebhookTested] = useState(false);
 
+  // Delivery push (荷物の配達/呼び出し) — ON by default; targets registered push devices
+  const [dlPushEnabled, setDlPushEnabled] = useState(true);
+  const [dlPushSaving, setDlPushSaving] = useState(false);
+  const [dlPushTesting, setDlPushTesting] = useState(false);
+  const [dlPushError, setDlPushError] = useState("");
+  const [dlPushTested, setDlPushTested] = useState(false);
+
   useEffect(() => {
     setAuthToken(getAccessToken() ?? "");
   }, []);
@@ -413,6 +420,10 @@ export default function AdminNotifyPage() {
       if (dlSlack["webhook_url"]) setDlSlackConfigured(true);
       if (dlCw["api_token"]) setDlCwConfigured(true);
       if (dlWh["webhook_url"]) setDlWebhookConfigured(true);
+
+      // push_delivery stores { enabled: bool }; default ON when unset
+      const dlPush = (settings["push_delivery"] ?? {}) as Record<string, unknown>;
+      setDlPushEnabled(dlPush["enabled"] !== false);
     }).catch(() => {});
   }, [authToken]);
 
@@ -608,6 +619,38 @@ export default function AdminNotifyPage() {
       setDlWebhookError(e instanceof Error ? e.message : "送信に失敗しました");
     } finally {
       setDlWebhookTesting(false);
+    }
+  };
+
+  const handleToggleDlPush = async (next: boolean) => {
+    setDlPushEnabled(next); // optimistic
+    setDlPushSaving(true);
+    setDlPushError("");
+    try {
+      await api.updatePushDelivery(authToken, next);
+    } catch (e: unknown) {
+      setDlPushEnabled(!next); // revert on failure
+      setDlPushError(e instanceof Error ? e.message : "保存に失敗しました");
+    } finally {
+      setDlPushSaving(false);
+    }
+  };
+
+  const handleTestDlPush = async () => {
+    setDlPushTesting(true);
+    setDlPushError("");
+    try {
+      const res = await api.testNotification(authToken, "push_delivery");
+      if (res.ok) {
+        setDlPushTested(true);
+        setTimeout(() => setDlPushTested(false), 3000);
+      } else {
+        setDlPushError(res.error ?? "送信に失敗しました");
+      }
+    } catch (e: unknown) {
+      setDlPushError(e instanceof Error ? e.message : "送信に失敗しました");
+    } finally {
+      setDlPushTesting(false);
     }
   };
 
@@ -963,6 +1006,54 @@ export default function AdminNotifyPage() {
                   </button>
                 )}
                 {dlWebhookTested && (
+                  <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
+                )}
+              </div>
+            </div>
+
+            {/* Delivery Push */}
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15", flex: 1 }}>プッシュ通知（配達）</div>
+                <MkPill tone={dlPushEnabled ? "live" : "off"}>{dlPushEnabled ? "有効" : "無効"}</MkPill>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+                <button
+                  role="switch"
+                  aria-checked={dlPushEnabled}
+                  onClick={() => handleToggleDlPush(!dlPushEnabled)}
+                  disabled={dlPushSaving}
+                  style={{
+                    position: "relative", width: 46, height: 26, borderRadius: 999, flexShrink: 0, padding: 0,
+                    background: dlPushEnabled ? "#4a7c4e" : "#d8d3c7", border: "none",
+                    cursor: dlPushSaving ? "not-allowed" : "pointer", opacity: dlPushSaving ? 0.6 : 1,
+                    transition: "background 0.15s",
+                  }}
+                >
+                  <span style={{
+                    position: "absolute", top: 3, left: dlPushEnabled ? 23 : 3, width: 20, height: 20,
+                    borderRadius: "50%", background: "#fffefb", boxShadow: "0 1px 2px rgba(29,26,21,0.3)",
+                    transition: "left 0.15s",
+                  }} />
+                </button>
+                <div style={{ fontSize: 12, color: "#6b6559", lineHeight: 1.5 }}>
+                  配達の呼び出し時に、上の「プッシュ通知」で登録した端末へ通知します。
+                </div>
+              </div>
+              {dlPushError && (
+                <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
+                  {dlPushError}
+                </div>
+              )}
+              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center" }}>
+                <button
+                  onClick={handleTestDlPush}
+                  disabled={dlPushTesting || !dlPushEnabled}
+                  style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: (dlPushTesting || !dlPushEnabled) ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: (dlPushTesting || !dlPushEnabled) ? 0.6 : 1 }}
+                >
+                  {dlPushTesting ? "送信中..." : "テスト送信"}
+                </button>
+                {dlPushTested && (
                   <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
                 )}
               </div>

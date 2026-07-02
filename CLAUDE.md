@@ -124,7 +124,7 @@ mokuture/
 │   │       │   ├── meeting-rooms/page.tsx ← 会議室管理 (CRUD・カラー・定員・場所)
 │   │       │   ├── kiosk-settings/page.tsx ← 受付設定 (キオスク文言・ロゴ配置ドラッグ)
 │   │       │   ├── settings/page.tsx  ← 基本設定 (ブランディング: ロゴ・カラー・フォント)
-│   │       │   ├── notify/page.tsx    ← 通知設定 (Slack/Chatwork/PWA)
+│   │       │   ├── notify/page.tsx    ← 通知設定 (Slack/Chatwork/PWA/カスタムWebhook + 配達専用通知先: Slack/Chatwork/Webhook/プッシュON-OFF)
 │   │       │   ├── locker/page.tsx    ← ロッカー管理
 │   │       │   ├── users/page.tsx     ← テナント内ユーザー管理
 │   │       │   └── profile/page.tsx   ← 管理者プロフィール（メール変更・パスワード変更）
@@ -296,7 +296,7 @@ mokuture/
 - **reception_logs** — 受付ログ (visitor_name, company, staff, purpose, method, state, staff_notes, appointment_id)
 - **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired, meeting_room_id FK nullable)
 - **meeting_rooms** — 会議室 (name, location, capacity, color, description, is_active, **map_image_url**=館内マップ画像URL nullable)
-- **notification_settings** — Slack/Chatwork Webhook URL (Fernet 暗号化)
+- **notification_settings** — 通知先設定 (Fernet 暗号化, `type` で種別)。受付: `slack`/`chatwork`/`webhook`/`vapid`。配達専用: `slack_delivery`/`chatwork_delivery`/`webhook_delivery`(未設定時は受付用にフォールバック)、`push_delivery`(`{enabled}` プッシュ通知ON/OFF, 既定ON)
 - **push_subscriptions** — Web Push 購読情報
 
 ---
@@ -342,7 +342,7 @@ mokuture/
 | POST | /kiosk/lockers/{id}/occupy | デバイストークン | 空き→PIN設定 `{pin:4桁}`→`{ok}`。409 already occupied / 422 |
 | POST | /kiosk/lockers/{id}/release | デバイストークン | 利用中→PIN照合 `{pin}`→`{ok,door_number}`。403 invalid pin / 409 not occupied |
 | POST | /kiosk/lockers/{id}/occupy-delivery | デバイストークン | 置き配: 空き→PIN不要で施錠→`{ok}`。409 already occupied (occupied=true, pin_hash=null) |
-| POST | /kiosk/call-staff | デバイストークン | 配達の呼び出し: 担当者へ通知 `{message?}`→`{ok}`。Slack/WebPush/Webhook/Chatwork (best-effort) |
+| POST | /kiosk/call-staff | デバイストークン | 配達の呼び出し: 担当者へ通知 `{message?}`→`{ok}`。Slack/WebPush/Webhook/Chatwork (best-effort)。WebPush は `push_delivery` 設定 (`{enabled}`, 既定ON) で ON/OFF 可 |
 | POST | /lockers/{id}/open | JWT | ロッカー開錠 |
 
 ---

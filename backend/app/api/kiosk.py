@@ -400,7 +400,8 @@ async def kiosk_call_staff(
     text = f"🔔 配達の呼び出し\n受付端末から担当者が呼ばれています。{message or ''}"
 
     await _notify_slack_text(tenant.id, text, db, types=("slack_delivery", "slack"))
-    await _notify_push_text(tenant.id, title, text, tenant.id, db)
+    if await _push_delivery_enabled(tenant.id, db):
+        await _notify_push_text(tenant.id, title, text, tenant.id, db)
     await _notify_webhook_event(
         tenant.id,
         {
@@ -692,6 +693,26 @@ async def _notify_slack_text(
             await send_slack_notification(webhook_url, text)
     except Exception:
         pass
+
+
+async def _push_delivery_enabled(tenant_id: str, db: AsyncSession) -> bool:
+    """Whether Web Push should fire for the 配達の呼び出し flow.
+
+    ON by default (backward compatible) — only a stored ``push_delivery`` setting
+    with ``enabled == False`` disables it. Tenant-scoped."""
+    result = await db.execute(
+        select(NotificationSetting).where(
+            NotificationSetting.tenant_id == tenant_id,
+            NotificationSetting.type == "push_delivery",
+        )
+    )
+    setting = result.scalar_one_or_none()
+    if setting is None or not setting.config_json or setting.config_json == "{}":
+        return True
+    try:
+        return decrypt_dict(setting.config_json).get("enabled", True) is not False
+    except Exception:
+        return True
 
 
 async def _notify_push_text(
