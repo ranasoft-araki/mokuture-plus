@@ -341,8 +341,8 @@ mokuture/
 | GET | /kiosk/lockers | デバイストークン | ロッカー一覧 `{lockers:[{id,name,door_number,occupied,has_pin}], available_count}` |
 | POST | /kiosk/lockers/{id}/occupy | デバイストークン | 空き→PIN設定 `{pin:4桁}`→`{ok}`。409 already occupied / 422 |
 | POST | /kiosk/lockers/{id}/release | デバイストークン | 利用中→PIN照合 `{pin}`→`{ok,door_number}`。403 invalid pin / 409 not occupied |
-| POST | /kiosk/lockers/{id}/occupy-delivery | デバイストークン | 置き配: 空き→PIN不要で施錠→`{ok}`。409 already occupied (occupied=true, pin_hash=null) |
-| POST | /kiosk/call-staff | デバイストークン | 配達の呼び出し: 担当者へ通知 `{message?}`→`{ok}`。Slack/WebPush/Webhook/Chatwork (best-effort)。WebPush は `push_delivery` 設定 (`{enabled}`, 既定ON) で ON/OFF 可 |
+| POST | /kiosk/lockers/{id}/occupy-delivery | デバイストークン | 置き配: 空き→**ランダム4桁PINを自動生成**して施錠(occupied=true, pin_hash=bcrypt)→担当者へ「どのロッカーにこのPINで置き配」を通知(Slack/WebPush/Webhook/Chatwork, delivery系優先)→`{ok}`。PINは配達員に非表示・通知経由でスタッフが受取。409 already occupied |
+| POST | /kiosk/call-staff | デバイストークン | 配達の呼び出し: 担当者へ「どの端末(device.name)から呼び出し」を通知 `{message?}`→`{ok}`。Slack/WebPush/Webhook/Chatwork (best-effort)。WebPush は `push_delivery` 設定 (`{enabled}`, 既定ON) で ON/OFF 可 |
 | POST | /lockers/{id}/open | JWT | ロッカー開錠 |
 
 ---
@@ -376,7 +376,7 @@ idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 
 
 - **idle**: 人感センサー（`GET /device/pir` を 700ms ポーリング）で来訪検知 → `top` へ自動遷移。タッチCTAは非表示（PIR非搭載/開発環境向けに画面タップでも遷移可）。画面は屋号(ロゴ/welcome_message)・タグラインのみ。signage メディアがあれば再生。
 - **top（受付メニュー）**: `ご訪問 / 荷物の配達 / ロッカー` の3タイル（日英併記・大型）。3タイルとも実装済み。
-- **delivery（荷物の配達・Phase3実装済み）**: `showDelivery`。配達方法を選択 — **置き配**(空きロッカーへPIN不要で自動施錠。空きが無ければ選択不可。空きロッカー選択→`pulseLocker`でGPIO開錠→「扉を閉めました」→`/proxy/lockers/{id}/occupy-delivery`) / **呼び出し**(`/proxy/call-staff`→担当者へSlack/WebPush/Webhook/Chatwork通知)。置き配で占有したロッカーは pin_hash=null(=`has_pin:false`)で、利用者向けロッカー画面では解錠操作の対象外(スタッフ/管理画面で対応)。
+- **delivery（荷物の配達・Phase3実装済み）**: `showDelivery`。配達方法を選択 — **置き配**(空きロッカーへ施錠。空きが無ければ選択不可。空きロッカー選択→`pulseLocker`でGPIO開錠→「扉を閉めました」→`/proxy/lockers/{id}/occupy-delivery`。**backendがランダム4桁PINを自動生成してbcrypt保存し、「どのロッカーにこのPINで置き配された」を担当者へ通知**。配達員にはPINを表示しない) / **呼び出し**(`/proxy/call-staff`→担当者へ「どの端末から呼び出しか(device.name)」をSlack/WebPush/Webhook/Chatwork通知)。置き配ロッカーはPIN付き(`has_pin:true`)＝通常の「利用中」ロッカーとして扱われ、スタッフが通知で受け取ったPINでロッカー画面から解錠して受取。
 - **locker（ロッカー・Phase2実装済み）**: 3段縦並び、空き=緑/利用中=アンバー。空き→`pulseLocker(door_number)`でGPIO開錠→「扉を閉めました」→4桁PIN設定(`/proxy/lockers/{id}/occupy`)。利用中→4桁PIN入力(`/proxy/lockers/{id}/release`)→照合OKでGPIO開錠。PINは backend で bcrypt 保存。扉開閉センサーが無いため閉扉は手動ボタン（センサー導入時は自動化可）。
   - **GPIO設定の注意**: kiosk は `POST /device/locker/{door_number}/open` を叩くため、kiosk_agent の `LOCKER_PINS_JSON` は **door_number(=GPIOピン番号)をキー**にすること。例: `{"17":17,"18":18,"19":19}`。
 - **モックモード**: エージェント/バックエンドAPIをスタブ化し、実機/バックエンド無しで全画面フロー（ロッカー・予約マップ含む）を確認できる。有効化は2通り:

@@ -6,6 +6,7 @@ the X-Kiosk-Token header. It identifies both the device and the tenant.
 import hashlib
 import os
 import re
+import secrets
 import zoneinfo
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,12 @@ from app.services.auth import hash_password, verify_password
 from app.config import settings
 
 _PIN_RE = re.compile(r"^\d{4}$")
+
+
+def _generate_delivery_pin() -> str:
+    """Cryptographically-random 4-digit PIN for 置き配 (drop-off) lockers."""
+    return f"{secrets.randbelow(10000):04d}"
+
 
 router = APIRouter(prefix="/kiosk", tags=["kiosk"])
 _limiter = Limiter(key_func=get_remote_address)
@@ -393,11 +400,12 @@ async def kiosk_call_staff(
     Best-effort across Slack / Web Push / Webhook / Chatwork — a failing channel
     must not fail the request.
     """
-    tenant, _ = ctx
+    tenant, device = ctx
     message = (body.message or "").strip() or None
+    device_label = device.name or "受付端末"
 
     title = "配達の呼び出し"
-    text = f"🔔 配達の呼び出し\n受付端末から担当者が呼ばれています。{message or ''}"
+    text = f"🔔 配達の呼び出し\n「{device_label}」から呼び出しがあります。{message or ''}"
 
     await _notify_slack_text(tenant.id, text, db, types=("slack_delivery", "slack"))
     if await _push_delivery_enabled(tenant.id, db):
@@ -408,6 +416,7 @@ async def kiosk_call_staff(
             "event": "call_staff",
             "tenant_id": tenant.id,
             "kind": "delivery",
+            "device": device_label,
             "message": message,
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
@@ -510,15 +519,51 @@ async def kiosk_occupy_locker_delivery(
     ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     db: AsyncSession = Depends(get_db),
 ):
-    """Hold a locker for delivery drop-off (置き配) with NO PIN — auto-lock without passcode."""
-    tenant, _ = ctx
+    """置き配: 扉を閉じたタイミングでランダム4桁PINを自動設定して施錠し、
+    「どのロッカーにこのPINで置き配されたか」を担当者へ通知する(best-effort)。
+
+    PINは配達員には表示しない(キオスクUIは暗証番号不要のまま)。担当者は通知で
+    受け取ったPINでロッカー画面から解錠して受け取る。"""
+    tenant, device = ctx
     locker = await _get_kiosk_locker(locker_id, tenant.id, db)
     if locker.occupied:
         raise HTTPException(status_code=409, detail="already occupied")
-    locker.pin_hash = None
+    pin = _generate_delivery_pin()
+    locker.pin_hash = hash_password(pin)
     locker.occupied = True
     locker.occupied_at = datetime.now(timezone.utc)
     await db.commit()
+
+    locker_label = locker.name or f"ロッカー {locker.door_number}"
+    device_label = device.name or "受付端末"
+    title = "置き配のお知らせ"
+    text = (
+        f"📦 置き配がありました\n"
+        f"「{locker_label}」に置き配されました。\n"
+        f"解錠パスワード: {pin}\n"
+        f"(受付端末: {device_label})"
+    )
+
+    await _notify_slack_text(tenant.id, text, db, types=("slack_delivery", "slack"))
+    if await _push_delivery_enabled(tenant.id, db):
+        await _notify_push_text(tenant.id, title, text, tenant.id, db)
+    await _notify_webhook_event(
+        tenant.id,
+        {
+            "event": "delivery_dropoff",
+            "tenant_id": tenant.id,
+            "kind": "delivery",
+            "locker": locker_label,
+            "door_number": locker.door_number,
+            "pin": pin,
+            "device": device_label,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+        db,
+        types=("webhook_delivery", "webhook"),
+    )
+    await _notify_chatwork_text(tenant.id, text, db, types=("chatwork_delivery", "chatwork"))
+
     return {"ok": True}
 
 
