@@ -118,7 +118,7 @@ mokuture/
 │   │       │   ├── media/page.tsx     ← メディア管理 (アップロード・一覧)
 │   │       │   ├── playlists/page.tsx ← プレイリスト管理
 │   │       │   ├── schedules/page.tsx ← スケジュール管理
-│   │       │   ├── kiosk/page.tsx     ← キオスク端末管理・PIN 発行
+│   │       │   ├── kiosk/page.tsx     ← キオスク端末管理・PIN 発行・端末名/場所の変更(鉛筆ボタン or ダブルクリック)
 │   │       │   ├── reception/page.tsx ← 受付ログ一覧・フィルター
 │   │       │   ├── appointments/page.tsx ← 来社予定管理・QRコード発行 (qrcode.react) + 日付/ステータスフィルタ + 会議室紐付け
 │   │       │   ├── meeting-rooms/page.tsx ← 会議室管理 (CRUD・カラー・定員・場所)
@@ -321,6 +321,7 @@ mokuture/
 | PATCH | /playlists/{id} | JWT | プレイリスト名・transition_type更新 |
 | GET/POST/DELETE | /schedules | JWT | スケジュール CRUD |
 | GET/POST/DELETE | /devices | JWT | デバイス CRUD |
+| PATCH | /devices/{id} | JWT | 端末名・場所の変更 (name 1〜100文字, location nullable) |
 | POST | /devices/{id}/pin | JWT | PIN 発行 |
 | GET | /kiosk/schedule | デバイストークン | 現在のプレイリスト取得 |
 | POST | /kiosk/reception | デバイストークン | 受付フォーム送信 (appointment_id 対応) |

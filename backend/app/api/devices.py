@@ -93,16 +93,19 @@ async def update_device(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if body.name is not None and (len(body.name) < 3 or len(body.name) > 100):
-        raise HTTPException(status_code=422, detail="name must be 3-100 characters")
+    new_name: str | None = None
+    if body.name is not None:
+        new_name = body.name.strip()
+        if len(new_name) < 1 or len(new_name) > 100:
+            raise HTTPException(status_code=422, detail="端末名は1〜100文字で入力してください")
     result = await db.execute(
         select(Device).where(Device.id == device_id, Device.tenant_id == user.tenant_id)
     )
     device = result.scalar_one_or_none()
     if device is None:
         raise HTTPException(status_code=404, detail="Device not found")
-    if body.name is not None:
-        device.name = body.name
+    if new_name is not None:
+        device.name = new_name
     if body.location is not None or "location" in body.model_fields_set:
         device.location = body.location
     await db.commit()

@@ -130,14 +130,17 @@ export default function AdminKioskPage() {
   async function handleSaveDeviceName(deviceId: string) {
     const t = getAccessToken();
     if (!t) { router.push("/login"); return; }
+    const name = editingName.trim();
+    if (!name) { setEditingDeviceId(null); setEditingName(""); return; }
     try {
-      const updated = await api.updateDevice(t, deviceId, editingName.trim());
+      const updated = await api.updateDevice(t, deviceId, name);
       setDevices((d) => d.map((dev) => dev.id === deviceId ? { ...dev, name: updated.name } : dev));
+      setError("");
+      setEditingDeviceId(null);
+      setEditingName("");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "名前の更新に失敗しました");
     }
-    setEditingDeviceId(null);
-    setEditingName("");
   }
 
   async function handleSaveDeviceLocation(deviceId: string) {
@@ -411,12 +414,22 @@ export default function AdminKioskPage() {
                           </button>
                         </>
                       ) : (
-                        <div
-                          onDoubleClick={() => { setEditingDeviceId(d.id); setEditingName(d.name); }}
-                          title="ダブルクリックで編集"
-                          style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15", cursor: "text" }}
-                        >
-                          {d.name}
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+                          <span
+                            onDoubleClick={() => { setEditingDeviceId(d.id); setEditingName(d.name); }}
+                            style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15", cursor: "text" }}
+                          >
+                            {d.name}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => { setEditingDeviceId(d.id); setEditingName(d.name); }}
+                            title="端末名を変更"
+                            aria-label="端末名を変更"
+                            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 5, background: "transparent", border: "1px solid #e2ddd2", color: "#8a8478", cursor: "pointer", flexShrink: 0 }}
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                          </button>
                         </div>
                       )}
                       <div style={{ fontSize: 11, color: "#a8a198", fontFamily: "monospace" }}>{d.id}</div>
@@ -445,12 +458,22 @@ export default function AdminKioskPage() {
                           >×</button>
                         </span>
                       ) : (
-                        <span
-                          onDoubleClick={() => { setEditingLocationId(d.id); setEditingLocation(d.location ?? ""); }}
-                          title="ダブルクリックで場所を編集"
-                          style={{ cursor: "text", color: d.location ? "#6b6559" : "#a8a198" }}
-                        >
-                          {d.location ?? "場所未設定"}
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+                          <span
+                            onDoubleClick={() => { setEditingLocationId(d.id); setEditingLocation(d.location ?? ""); }}
+                            style={{ cursor: "text", color: d.location ? "#6b6559" : "#a8a198" }}
+                          >
+                            {d.location ?? "場所未設定"}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => { setEditingLocationId(d.id); setEditingLocation(d.location ?? ""); }}
+                            title="場所を変更"
+                            aria-label="場所を変更"
+                            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: 5, background: "transparent", border: "1px solid #e2ddd2", color: "#a8a198", cursor: "pointer", flexShrink: 0 }}
+                          >
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                          </button>
                         </span>
                       )}
                     </div>
