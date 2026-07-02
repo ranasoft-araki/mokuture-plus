@@ -466,7 +466,7 @@ function showWelcome() {
   const bc = ST.brand_color;
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
   <div style="padding:28px 80px 0;flex-shrink:0">
-    <button id="wel-back" style="display:inline-flex;align-items:center;gap:8px;padding:12px 24px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:999px;font-size:18px;color:${T.sub};cursor:pointer">← 戻る</button>
+    <button id="wel-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button>
   </div>
   <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:64px;min-height:0">
     <div style="text-align:center">
@@ -593,7 +593,7 @@ function showLocker() {
   CLEANUPS.push(() => { clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); });
 
   const shell = (inner, backTo) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0"><button id="lk-back" style="display:inline-flex;align-items:center;gap:8px;padding:12px 24px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:999px;font-size:18px;color:${T.sub};cursor:pointer">← 戻る</button></div>
+  <div style="padding:28px 80px 0;flex-shrink:0"><button id="lk-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button></div>
   ${inner}
 </div>`;
 
@@ -638,7 +638,7 @@ function showLocker() {
         <div style="width:110px;height:110px;border-radius:50%;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
         <div style="font-size:64px;font-weight:600;color:${T.ink};letter-spacing:-2px">${escHtml(resultTitle)}</div>
         <div style="font-size:30px;color:${T.sub};line-height:1.5">${escHtml(resultSub)}</div>
-        <button id="lk-done" style="margin-top:10px;padding:18px 52px;border:1px solid ${T.borderStrong};border-radius:14px;background:${T.canvas};color:${T.sub};font-size:22px;cursor:pointer">完了</button>
+        <button id="lk-done" style="margin-top:10px;padding:24px 68px;border:2px solid ${T.borderStrong};border-radius:16px;background:${T.canvas};color:${T.sub};font-size:28px;font-weight:600;cursor:pointer">完了</button>
       </div>`);
     } else { // pinset | pininput
       const isSet = view === "pinset";
@@ -752,7 +752,7 @@ function showDelivery() {
   CLEANUPS.push(() => { clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); });
 
   const shell = (inner) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0"><button id="dl-back" style="display:inline-flex;align-items:center;gap:8px;padding:12px 24px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:999px;font-size:18px;color:${T.sub};cursor:pointer">← 戻る</button></div>
+  <div style="padding:28px 80px 0;flex-shrink:0"><button id="dl-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button></div>
   ${inner}
 </div>`;
 
@@ -817,7 +817,7 @@ function showDelivery() {
         <div style="width:110px;height:110px;border-radius:50%;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
         <div style="font-size:64px;font-weight:600;color:${T.ink};letter-spacing:-2px">${escHtml(resultTitle)}</div>
         <div style="font-size:30px;color:${T.sub};line-height:1.5">${escHtml(resultSub)}</div>
-        <button id="dl-done" style="margin-top:10px;padding:18px 52px;border:1px solid ${T.borderStrong};border-radius:14px;background:${T.canvas};color:${T.sub};font-size:22px;cursor:pointer">完了</button>
+        <button id="dl-done" style="margin-top:10px;padding:24px 68px;border:2px solid ${T.borderStrong};border-radius:16px;background:${T.canvas};color:${T.sub};font-size:28px;font-weight:600;cursor:pointer">完了</button>
       </div>`);
     }
     rescale();
@@ -924,7 +924,7 @@ function showReception(initPurpose) {
       : `<input id="f-purpose" type="text" placeholder="お打ち合わせ など" style="${inputStyle}">`;
     sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
   <div style="padding:28px 80px 0;flex-shrink:0">
-    <button id="rec-back" style="display:inline-flex;align-items:center;gap:8px;padding:12px 24px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:999px;font-size:18px;color:${T.sub};cursor:pointer">← 戻る</button>
+    <button id="rec-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button>
   </div>
   <div style="padding:18px 80px 0;flex-shrink:0">
     <div style="font-size:52px;font-weight:600;color:${T.ink};letter-spacing:-1.4px;line-height:1.12">ご来訪情報をご記入ください</div>
@@ -1024,7 +1024,7 @@ function showQr() {
 
   function render() {
     sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0"><button id="qr-back" style="display:inline-flex;align-items:center;gap:8px;padding:12px 24px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:999px;font-size:18px;color:${T.sub};cursor:pointer">← 戻る</button></div>
+  <div style="padding:28px 80px 0;flex-shrink:0"><button id="qr-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button></div>
   <div style="flex:1;padding:8px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center;min-height:0">
     <div id="cam-box" style="background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;height:100%;max-height:800px">${camContent()}</div>
     <div style="display:flex;flex-direction:column">
@@ -1037,8 +1037,8 @@ function showQr() {
       </div>
       ${errMsg ? `<div style="padding:16px 20px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.3);border-radius:14px;color:${T.urgent};font-size:17px;line-height:1.6;margin-bottom:22px">${escHtml(errMsg)}</div>` : ""}
       <div style="display:flex;gap:14px">
-        <button id="qr-form1" style="flex:1;padding:22px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:14px;font-size:20px;font-weight:500;color:${T.ink};cursor:pointer">QRを持っていない</button>
-        <button id="qr-form2" style="flex:1;padding:22px;background:${T.dark};border:2px solid ${T.dark};border-radius:14px;font-size:20px;font-weight:600;color:#fff;cursor:pointer">フォームで受付する →</button>
+        <button id="qr-form1" style="flex:1;padding:30px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:16px;font-size:26px;font-weight:600;color:${T.ink};cursor:pointer">QRを持っていない</button>
+        <button id="qr-form2" style="flex:1;padding:30px;background:${T.dark};border:2px solid ${T.dark};border-radius:16px;font-size:26px;font-weight:600;color:#fff;cursor:pointer">フォームで受付する →</button>
       </div>
       ${MOCK ? `<button id="qr-mock" style="margin-top:14px;padding:16px;background:transparent;border:1.5px dashed ${T.muted};border-radius:12px;font-size:16px;color:${T.muted};cursor:pointer">（MOCK）予約QRを読み取ったことにする</button>` : ""}
     </div>
@@ -1336,7 +1336,7 @@ function showKioskSettings() {
     <div style="display:flex;align-items:center;gap:8px;padding:10px 18px;border-radius:999px;background:${C.amberSoft};color:${C.amber};font-size:13px;font-weight:600;letter-spacing:1.5px;font-family:ui-monospace,monospace">
       ${SVG.lockSm} STAFF ONLY
     </div>
-    <button id="ks-back" style="display:flex;align-items:center;gap:10px;padding:14px 26px;background:${C.sumi};color:${C.canvas};border:2px solid ${C.sumi};border-radius:999px;font-size:16px;font-weight:600;font-family:Inter,'Noto Sans JP',system-ui,sans-serif;cursor:pointer">受付画面に戻る →</button>
+    <button id="ks-back" style="display:flex;align-items:center;gap:12px;padding:20px 38px;background:${C.sumi};color:${C.canvas};border:2px solid ${C.sumi};border-radius:999px;font-size:22px;font-weight:600;font-family:Inter,'Noto Sans JP',system-ui,sans-serif;cursor:pointer">受付画面に戻る →</button>
   </div>
 
   <div style="flex:1;padding:30px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:28px;min-height:0">

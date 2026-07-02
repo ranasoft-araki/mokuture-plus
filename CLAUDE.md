@@ -393,15 +393,16 @@ idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 
 ### 「戻る」ボタンの配置ルール（キオスク・管理画面 共通）
 
 **キオスク (`kiosk.html`)**: 「← 戻る」ボタンは **必ずページ最上部・コンテンツグリッドの外側**に配置する。
-- ラッパー: `<div style="padding:20px 80px 0;flex-shrink:0">`
-- ボタンスタイル: `display:inline-flex;align-items:center;gap:8px;padding:10px 20px;background:#fffefb;border:1px solid #d8d3c7;border-radius:999px;font-size:15px;color:#6b6559;cursor:pointer`
+- ラッパー: `<div style="padding:28px 80px 0;flex-shrink:0">`
+- ボタンスタイル（**タッチ操作用に大型化。全画面で統一すること**）: `display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer`
 - **コンテンツグリッド内（左右どちらの列にも）配置しないこと。**
+- キオスクはタッチ操作端末のため、来訪者が押すボタン・文字は指で押しやすい大きさを保つ（戻るボタン=font-size:32px を基準）。
 
 ```html
 <!-- ✅ 正しい配置 -->
 <div style="width:1920px;height:1080px;...display:flex;flex-direction:column">
-  <div style="padding:20px 80px 0;flex-shrink:0">
-    <button id="xxx-back" style="display:inline-flex;align-items:center;gap:8px;padding:10px 20px;background:#fffefb;border:1px solid #d8d3c7;border-radius:999px;font-size:15px;color:#6b6559;cursor:pointer">← 戻る</button>
+  <div style="padding:28px 80px 0;flex-shrink:0">
+    <button id="xxx-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button>
   </div>
   <div style="flex:1;padding:...;display:grid;...">
     <!-- グリッドの中には戻るボタンを入れない -->
