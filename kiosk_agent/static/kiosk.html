@@ -471,21 +471,21 @@ function showWelcome() {
   <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:64px;min-height:0">
     <div style="text-align:center">
       <div style="font-size:64px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.1">QRコードはお持ちですか？</div>
-      <div style="font-size:24px;color:${T.muted};font-family:Inter,system-ui,sans-serif;letter-spacing:1px;margin-top:12px">Do you have a QR code?</div>
+      <div style="font-size:40px;color:${T.muted};font-family:Inter,system-ui,sans-serif;letter-spacing:1px;margin-top:12px">Do you have a QR code?</div>
     </div>
     <div style="display:flex;gap:44px">
       <button id="wel-qr" style="width:560px;height:300px;border-radius:32px;border:2.5px solid ${T.borderStrong};background:${T.canvas};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;cursor:pointer">
         <div style="color:${bc};transform:scale(2.1)">${ICO.qr}</div>
         <div style="text-align:center">
           <div style="font-size:42px;font-weight:600;color:${T.ink}">QRコードがある</div>
-          <div style="font-size:20px;color:${T.sub};font-family:Inter,system-ui,sans-serif;margin-top:6px">I have a QR code</div>
+          <div style="font-size:28px;color:${T.sub};font-family:Inter,system-ui,sans-serif;margin-top:6px">I have a QR code</div>
         </div>
       </button>
       <button id="wel-form" style="width:560px;height:300px;border-radius:32px;border:none;background:${bc};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;cursor:pointer">
         <div style="color:#fff;transform:scale(2.1)">${ICO.reception}</div>
         <div style="text-align:center">
           <div style="font-size:42px;font-weight:600;color:#fff">QRコードがない</div>
-          <div style="font-size:20px;color:rgba(255,255,255,.8);font-family:Inter,system-ui,sans-serif;margin-top:6px">No QR code</div>
+          <div style="font-size:28px;color:rgba(255,255,255,.8);font-family:Inter,system-ui,sans-serif;margin-top:6px">No QR code</div>
         </div>
       </button>
     </div>
@@ -516,7 +516,7 @@ function showTop() {
     ${ST.logo_url ? `<img src="${escHtml(ST.logo_url)}" style="height:72px;object-fit:contain" alt="logo">` : ""}
     <div>
       <div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px;line-height:1.1">ご用件をお選びください</div>
-      <div style="font-size:24px;color:${T.muted};font-family:Inter,system-ui,sans-serif;letter-spacing:1px;margin-top:8px">Please select</div>
+      <div style="font-size:38px;color:${T.muted};font-family:Inter,system-ui,sans-serif;letter-spacing:1px;margin-top:8px">Please select</div>
     </div>
   </div>
   <div id="tiles" style="flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:28px;padding:44px 80px;min-height:0">
@@ -524,9 +524,9 @@ function showTop() {
       <div style="width:150px;height:150px;border-radius:32px;background:${t.primary ? "rgba(255,255,255,.1)" : bc + "1a"};color:${t.primary ? "#fff" : bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.15)">${t.icon}</div></div>
       <div>
         <div style="font-size:58px;font-weight:600;letter-spacing:-1px;line-height:1.1">${t.label}</div>
-        <div style="font-size:20px;font-weight:500;opacity:.55;letter-spacing:1.5px;font-family:Inter,system-ui,sans-serif;margin-top:4px">${t.en}</div>
+        <div style="font-size:36px;font-weight:500;opacity:.55;letter-spacing:1.5px;font-family:Inter,system-ui,sans-serif;margin-top:4px">${t.en}</div>
         <div style="font-size:25px;margin-top:18px;color:${t.primary ? "rgba(255,255,255,.7)" : T.sub}">${t.desc}</div>
-        <div style="font-size:15px;opacity:.5;letter-spacing:.5px;margin-top:4px;font-family:Inter,system-ui,sans-serif">${t.descEn}</div>
+        <div style="font-size:19px;opacity:.5;letter-spacing:.5px;margin-top:4px;font-family:Inter,system-ui,sans-serif">${t.descEn}</div>
       </div>
       <div style="position:absolute;top:44px;right:44px;color:${t.primary ? "rgba(255,255,255,.5)" : T.muted};transform:scale(1.3)">${ICO.arrow}</div>
     </button>`).join("")}
@@ -606,7 +606,7 @@ function showLocker() {
     } else if (view === "grid") {
       sc.innerHTML = shell(`
   <div style="padding:14px 80px 0;flex-shrink:0;display:flex;align-items:flex-end;justify-content:space-between">
-    <div><div style="font-size:54px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">ロッカー</div><div style="font-size:22px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:4px">Lockers</div></div>
+    <div><div style="font-size:54px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">ロッカー</div><div style="font-size:34px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:4px">Lockers</div></div>
     <div style="font-size:26px;color:${T.sub}">空き <b style="font-size:34px;color:${bc}">${available}</b> / 全 ${lockers.length}</div>
   </div>
   <div id="lk-doors" style="flex:1;display:flex;flex-direction:column;gap:18px;padding:24px 80px 40px;min-height:0">
@@ -620,7 +620,7 @@ function showLocker() {
       return `<button data-li="${i}" ${delivery ? "disabled" : ""} style="position:relative;display:flex;align-items:center;gap:40px;width:100%;flex:1;min-height:0;background:${used ? "#faf2e6" : "#eef4ee"};border:3px solid ${accent};border-radius:24px;padding:0 56px;cursor:${delivery ? "not-allowed" : "pointer"};opacity:${delivery ? .6 : 1};text-align:left">
         <div style="width:116px;height:152px;border-radius:12px;background:${T.canvas};border:3px solid ${accent};position:relative;flex-shrink:0"><div style="position:absolute;top:50%;right:16px;transform:translateY(-50%);width:9px;height:50px;border-radius:5px;background:${accent}"></div></div>
         <div style="flex:1"><div style="font-size:60px;font-weight:700;color:${T.ink};letter-spacing:-1px">${escHtml(l.name)}</div>
-          <div style="margin-top:12px;display:inline-flex;align-items:center;gap:10px;padding:8px 22px;border-radius:999px;background:${accent};color:#fff;font-size:28px;font-weight:600">${stateJa}<span style="font-size:17px;font-weight:500;opacity:.85;font-family:Inter,system-ui,sans-serif">${stateEn}</span></div>
+          <div style="margin-top:12px;display:inline-flex;align-items:center;gap:10px;padding:8px 22px;border-radius:999px;background:${accent};color:#fff;font-size:28px;font-weight:600">${stateJa}<span style="font-size:20px;font-weight:500;opacity:.85;font-family:Inter,system-ui,sans-serif">${stateEn}</span></div>
         </div>
         <div style="font-size:24px;color:${accent};font-weight:600;flex-shrink:0">${cta}</div>
       </button>`;
@@ -765,17 +765,17 @@ function showDelivery() {
     } else if (view === "choose") {
       const noLocker = available <= 0;
       sc.innerHTML = shell(`
-  <div style="padding:14px 80px 0;flex-shrink:0"><div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">配達方法をお選びください</div><div style="font-size:24px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Please choose a delivery method</div></div>
+  <div style="padding:14px 80px 0;flex-shrink:0"><div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">配達方法をお選びください</div><div style="font-size:36px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Please choose a delivery method</div></div>
   <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:44px;padding:0 80px;min-height:0">
     <button id="dl-locker" ${noLocker ? "disabled" : ""} style="width:620px;height:520px;border-radius:32px;border:3px solid ${noLocker ? T.border : bc};background:${noLocker ? T.panel : "#eef4ee"};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;cursor:${noLocker ? "not-allowed" : "pointer"};opacity:${noLocker ? .55 : 1};text-align:center;padding:0 40px">
       <div style="width:150px;height:150px;border-radius:34px;background:${noLocker ? T.border : bc + "22"};color:${noLocker ? T.muted : bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.3)">${ICO.locker}</div></div>
-      <div><div style="font-size:54px;font-weight:700;color:${T.ink}">置き配</div><div style="font-size:20px;color:${T.sub};font-family:Inter,system-ui,sans-serif;margin-top:6px">Drop-off in a locker</div></div>
+      <div><div style="font-size:54px;font-weight:700;color:${T.ink}">置き配</div><div style="font-size:34px;color:${T.sub};font-family:Inter,system-ui,sans-serif;margin-top:6px">Drop-off in a locker</div></div>
       <div style="font-size:24px;color:${T.sub}">空きロッカーに保管（暗証番号不要）</div>
       ${noLocker ? `<div style="font-size:20px;color:${T.urgent};font-weight:600">空きロッカーがありません</div>` : `<div style="font-size:22px;color:${bc};font-weight:600">空き ${available} 台</div>`}
     </button>
     <button id="dl-call" style="width:620px;height:520px;border-radius:32px;border:none;background:${T.dark};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;cursor:pointer;text-align:center;padding:0 40px">
       <div style="width:150px;height:150px;border-radius:34px;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center"><div style="transform:scale(1.5)">${ICO.bell_lg}</div></div>
-      <div><div style="font-size:54px;font-weight:700;color:#fff">呼び出し</div><div style="font-size:20px;color:rgba(255,255,255,.7);font-family:Inter,system-ui,sans-serif;margin-top:6px">Call a staff member</div></div>
+      <div><div style="font-size:54px;font-weight:700;color:#fff">呼び出し</div><div style="font-size:34px;color:rgba(255,255,255,.7);font-family:Inter,system-ui,sans-serif;margin-top:6px">Call a staff member</div></div>
       <div style="font-size:24px;color:rgba(255,255,255,.75)">担当者を呼び出します</div>
       <div style="font-size:18px;color:rgba(255,255,255,.5)">Slack・Chatwork・スマートフォンへ通知</div>
     </button>
@@ -909,7 +909,7 @@ function showReception(initPurpose) {
     <div style="display:flex;flex-direction:column;gap:10px">
       <div style="display:flex;align-items:baseline;gap:12px">
         <span style="font-size:24px;font-weight:600;color:${T.ink}">${ja}</span>
-        <span style="font-size:15px;color:${T.muted};font-family:Inter,system-ui,sans-serif">${en}</span>
+        <span style="font-size:18px;color:${T.muted};font-family:Inter,system-ui,sans-serif">${en}</span>
         ${required ? `<span style="font-size:14px;color:${T.urgent};background:${T.urgentBg};padding:2px 10px;border-radius:6px;font-weight:600">必須</span>` : ""}
       </div>
       ${inner}
@@ -928,7 +928,7 @@ function showReception(initPurpose) {
   </div>
   <div style="padding:18px 80px 0;flex-shrink:0">
     <div style="font-size:52px;font-weight:600;color:${T.ink};letter-spacing:-1.4px;line-height:1.12">ご来訪情報をご記入ください</div>
-    <div style="font-size:22px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Please enter your visit details</div>
+    <div style="font-size:34px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Please enter your visit details</div>
     ${errMsg ? `<div style="margin-top:18px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.35);border-radius:12px;padding:14px 18px;color:${T.urgent};font-size:18px">${escHtml(errMsg)}</div>` : ""}
     <div style="margin-top:28px;display:grid;grid-template-columns:1fr 1fr;gap:24px 40px">
       ${fieldWrap("お名前", "Name", true, `<input id="f-name" type="text" autocomplete="name" placeholder="山田 太郎" style="${inputStyle}">`)}
@@ -1029,7 +1029,7 @@ function showQr() {
     <div id="cam-box" style="background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;height:100%;max-height:800px">${camContent()}</div>
     <div style="display:flex;flex-direction:column">
       <div style="font-size:64px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.12;margin-bottom:8px">QRコードをかざしてください</div>
-      <div style="font-size:22px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-bottom:22px">Please hold your QR code over the camera</div>
+      <div style="font-size:40px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-bottom:22px">Please hold your QR code over the camera</div>
       <div style="font-size:22px;color:${T.sub};line-height:1.6;margin-bottom:24px">メールでお送りした招待コードを<br>左の読み取り口へかざしてください</div>
       <div style="display:flex;align-items:center;gap:18px;background:${T.canvas};border:1px solid ${T.border};border-radius:18px;padding:16px 20px;margin-bottom:24px">
         <div style="width:128px;height:96px;border-radius:12px;overflow:hidden;background:${T.panel};border:1px solid ${T.border};display:flex;align-items:center;justify-content:center;flex-shrink:0">${camGuide}</div>
