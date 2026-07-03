@@ -410,7 +410,7 @@ idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 
   - MOCKロッカー: A/C=空き、B=利用中(解錠PIN `1234`)。空きはPIN任意4桁で設定成功。QR画面の「（MOCK）予約QRを読み取ったことにする」で歓迎画面＋館内マップを確認可。
   - 実バックエンドに繋ぐ実機(Pi)では `mock:false` となり通常フロー。
 - **reception（フォーム）**: オンスクリーン50音キーボードは廃止。OS標準ソフトキーボードを使用するため、入力欄は上半分に2列配置＋送信、下半分は空ける（実機OSのソフトキーボード表示領域）。
-- **qr**: カメラ位置を示す画像エリア（`ST.qr_camera_image_url` 未設定時はプレースホルダー）。
+- **qr**: カメラ位置を示す画像エリア（`ST.qr_camera_image_url` 未設定時はプレースホルダー）。読み取ったQRは `parseQR()` で判定し、**対応形式(`appt:<token>` / `name` パラメータ付きURL)のみ受付**。未対応QR(無関係URL・WiFi QR・プレーンテキスト等)は「未対応のQRコードです」を表示し `pauseScan()` で数秒スキャンを停止してから自動再開する（即時再スキャンによるビジーループ＝「無反応＋重い」を防止）。予約取得/受付エラーも同じく `pauseScan()` で表示＋クールダウン。`scanLoop` はデコードを ≈8fps に間引き、`startCamera` の `getUserMedia` は `disposed` フラグで teardown ガード。
 - **complete（歓迎画面「お待ちしておりました」）**: 氏名と「様」を同サイズでインライン表示。予約情報（Googleカレンダー連携）を拡大表示。QR受付で行き先（会議室）が確定し、かつその会議室に `map_image_url` が登録されている場合のみ館内マップを表示（`go("calling"/"complete", { name, staff, room, scheduledAt, method })` でデータを伝搬）。
 - **キオスク設定（スタッフ専用・`showKioskSettings`）**: 画面**左上＋右上の同時タッチ**（または `Ctrl+Shift+M`）で開く。上部の**タブで「設定」/「デバイスチェック」を切替**（統合済み）。
   - **設定タブ**: 音量スライダー＋サウンドON/OFF（タップ音/チャイム/音声ガイダンス, `/device/volume`）、Wi-Fi（`/device/wifi/networks|connect|toggle`）、ロッカーの鍵 全解除（`/proxy/lockers/open-all`）、フッター端末名の**5連タップで再登録**。
