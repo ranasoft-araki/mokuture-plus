@@ -18,9 +18,12 @@ class Device(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     current_playlist_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    pin_code: Mapped[str | None] = mapped_column(String(6), nullable=True, index=True)
-    pin_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    pin_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # 承認フロー: 端末は接続時に自己登録し pending となる。管理画面での承認で active になる。
+    # 既存端末との後方互換のため既定は active（マイグレーションでも DEFAULT 'active'）。
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    # 物理端末の安定ID（agent は machine-id / MAC 由来、Web はローカル保存UUID）。
+    # (tenant_id, hardware_id) で再登録を冪等化し、承認待ちの重複行を防ぐ。
+    hardware_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     force_update_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 

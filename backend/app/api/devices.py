@@ -1,7 +1,6 @@
-"""Admin API for kiosk device token management."""
-import random
+"""Admin API for kiosk device management (承認フロー)."""
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -15,8 +14,6 @@ from app.models.user import User
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
-_PIN_EXPIRY_MINUTES = 15
-
 
 class DeviceCreate(BaseModel):
     name: str
@@ -27,6 +24,7 @@ class DeviceOut(BaseModel):
     id: str
     name: str
     location: str | None
+    status: str
     last_seen_at: str | None
     created_at: str
 
@@ -45,22 +43,41 @@ async def create_device(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """管理者が端末を手動追加する（承認済み active として作成）。
+
+    通常は端末側の自己登録（POST /kiosk/register → 承認）を使う。この経路は
+    トークンを手動プロビジョニングする補助用途で、発行トークンを一度だけ返す。"""
     token = secrets.token_hex(32)  # 64-char hex, cryptographically secure
-    pin = f"{random.SystemRandom().randint(0, 999999):06d}"
-    expires = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=_PIN_EXPIRY_MINUTES)
     device = Device(
         tenant_id=user.tenant_id,
         name=body.name,
         location=body.location,
         token=token,
-        pin_code=pin,
-        pin_expires_at=expires,
-        pin_used=False,
+        status="active",
     )
     db.add(device)
     await db.commit()
     await db.refresh(device)
-    return {**_out(device), "token": token, "pin_code": pin, "pin_expires_minutes": _PIN_EXPIRY_MINUTES}
+    return {**_out(device), "token": token}
+
+
+@router.post("/{device_id}/approve", response_model=DeviceOut)
+async def approve_device(
+    device_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """承認待ち端末を承認して起動可能（active）にする。"""
+    result = await db.execute(
+        select(Device).where(Device.id == device_id, Device.tenant_id == user.tenant_id)
+    )
+    device = result.scalar_one_or_none()
+    if device is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+    device.status = "active"
+    await db.commit()
+    await db.refresh(device)
+    return _out(device)
 
 
 @router.post("/{device_id}/force-refresh")
@@ -113,27 +130,6 @@ async def update_device(
     return _out(device)
 
 
-@router.post("/{device_id}/pin")
-async def regenerate_pin(
-    device_id: str,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(
-        select(Device).where(Device.id == device_id, Device.tenant_id == user.tenant_id)
-    )
-    device = result.scalar_one_or_none()
-    if device is None:
-        raise HTTPException(status_code=404, detail="Device not found")
-    pin = f"{random.SystemRandom().randint(0, 999999):06d}"
-    expires = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=_PIN_EXPIRY_MINUTES)
-    device.pin_code = pin
-    device.pin_expires_at = expires
-    device.pin_used = False
-    await db.commit()
-    return {"pin_code": pin, "expires_minutes": _PIN_EXPIRY_MINUTES}
-
-
 @router.delete("/{device_id}", status_code=204)
 async def delete_device(
     device_id: str,
@@ -155,6 +151,7 @@ def _out(d: Device) -> dict:
         "id": d.id,
         "name": d.name,
         "location": d.location,
+        "status": d.status or "active",
         "last_seen_at": d.last_seen_at.isoformat() + "Z" if d.last_seen_at else None,
         "created_at": d.created_at.isoformat() + "Z" if d.created_at else "",
     }

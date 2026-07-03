@@ -28,6 +28,11 @@ _ENSURE_COLUMNS = {
     "reception_logs": {
         "decided_at": "TIMESTAMP",
     },
+    "devices": {
+        # 承認フロー。既存端末は 'active' で埋めて後方互換を保つ。
+        "status": "VARCHAR(16) DEFAULT 'active'",
+        "hardware_id": "VARCHAR(128)",
+    },
 }
 
 
@@ -44,6 +49,17 @@ def _ensure_schema(sync_conn) -> None:
         for col, ddl_type in cols.items():
             if col not in existing:
                 sync_conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl_type}"))
+
+    # 承認フロー: (tenant_id, hardware_id) の重複登録を防ぐ一意インデックス。
+    # hardware_id が NULL の行(手動作成端末)は Postgres/SQLite とも「相異なる」扱いのため衝突しない。
+    if "devices" in tables:
+        try:
+            sync_conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_devices_tenant_hardware "
+                "ON devices (tenant_id, hardware_id)"
+            ))
+        except Exception:
+            pass  # 既存の重複データ等で作成できなくても致命的ではない
 
 
 @asynccontextmanager

@@ -97,7 +97,8 @@ function _mockLockerList() {
 async function mockFetch(method, path, body) {
   await new Promise(r => setTimeout(r, 180)); // 体感の通信遅延
   if (path === "/config") return { tenant_slug: "mock", remote_api_url: "", device_name: "MOCK-KIOSK", registered: true };
-  if (path === "/setup") return { status: "registered", device_name: "MOCK-KIOSK", device_token: "mock-token" };
+  if (path === "/register") return { status: "active", device_name: "MOCK-KIOSK", device_token: "mock-token" };
+  if (path === "/proxy/status") return { status: "active", device_name: "MOCK-KIOSK" };
   if (path === "/proxy/settings") return {
     brand_color: "#2d6a4f", logo_url: "",
     kiosk_welcome_message: "磯野木工所", kiosk_sub_message: "ご用件をお選びください",
@@ -250,72 +251,71 @@ function go(screen, data = {}) {
   }
 }
 
-// ─── SETUP ───────────────────────────────────────────────────────────────────
-function showSetup() {
-  let pin = "", verifying = false;
+// ─── PENDING (承認待ち) ────────────────────────────────────────────────────────
+// PIN は廃止。端末は起動時に自己登録し、管理画面で承認されると起動する。
+// この画面は承認待ちの間だけ表示し、/proxy/status を数秒間隔でポーリングして
+// active になったら自動でリロードして通常起動する。
+let _pendingPoll = null;
+let _pollsStarted = false;  // boot() のポーリング多重登録を防ぐ
 
-  function render(errMsg) {
-    const dots = Array.from({length: 6}, (_, i) => {
-      const on = i < pin.length;
-      return `<div style="width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;border:1px solid ${on?"#4a7c4e":"#3a3530"};background:${on?"#4a7c4e":"#2a2720"};color:#faf8f4">${on?"●":""}</div>`;
-    }).join("");
+function showPending(deviceName, errMsg) {
+  CURRENT_SCREEN = "pending";
+  const name = deviceName || localStorage.getItem(NAME_KEY) || "この端末";
 
-    const PAD = ["1","2","3","4","5","6","7","8","9","⌫","0","→"];
-    const padHtml = PAD.map(k => {
-      const isConfirm = k === "→";
-      const isDisabled = verifying || (isConfirm && pin.length < 6);
-      return `<button data-pk="${escHtml(k)}" style="height:64px;border-radius:16px;font-size:${k.length>1?14:20}px;font-weight:600;cursor:${isDisabled?"not-allowed":"pointer"};border:1px solid ${isConfirm?"#4a7c4e":"#3a3530"};background:${isConfirm?"#4a7c4e":"#2a2720"};color:${isConfirm?"#faf8f4":"#c8c0b0"};opacity:${isDisabled?.35:1};transition:opacity .15s">${isConfirm?"決定":k}</button>`;
-    }).join("");
-
-    sc.innerHTML = `
-<div style="width:1920px;height:1080px;background:#1d1a15;display:flex;align-items:center;justify-content:center">
-  <div style="display:flex;flex-direction:column;align-items:center;gap:32px;width:320px">
-    <div style="text-align:center">
-      <p style="color:#faf8f4;font-size:24px;font-weight:300;letter-spacing:6px">mokuture+</p>
-      <p style="color:#8a8070;font-size:14px;margin-top:6px">キオスク端末セットアップ</p>
+  sc.innerHTML = `
+<div style="width:1920px;height:1080px;background:#14110d;display:flex;align-items:center;justify-content:center;cursor:none">
+  <div style="display:flex;flex-direction:column;align-items:center;gap:40px;max-width:1100px;text-align:center;padding:0 120px">
+    <p style="color:#f5efe3;font-size:34px;font-weight:300;letter-spacing:8px">mokuture+</p>
+    <div style="width:120px;height:120px;border-radius:50%;border:3px solid rgba(122,180,120,.35);border-top-color:#7ab478;animation:pending-spin 1.1s linear infinite"></div>
+    <div>
+      <p style="color:#faf8f4;font-size:56px;font-weight:600;letter-spacing:2px;line-height:1.3">承認待ちです</p>
+      <p style="color:rgba(245,239,227,.65);font-size:26px;margin-top:24px;line-height:1.7">
+        管理画面の「キオスク端末」でこの端末を承認すると、<br>自動的に受付画面が表示されます。
+      </p>
     </div>
-    <div style="display:flex;gap:12px">${dots}</div>
-    ${errMsg ? `<div style="width:100%;padding:12px 16px;background:rgba(200,60,60,.2);border:1px solid rgba(200,60,60,.4);border-radius:10px;color:#f88;font-size:13px;text-align:center">${escHtml(errMsg)}</div>` : ""}
-    ${verifying ? `<p style="color:#8a8070;font-size:14px;animation:dot-pulse 1.4s ease-in-out infinite">確認中…</p>` : ""}
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;width:100%">${padHtml}</div>
-    <p style="color:#5a5347;font-size:11px;text-align:center">管理画面「キオスク端末」→「端末を追加」でPINを発行</p>
+    <div style="margin-top:8px;padding:18px 40px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:16px">
+      <span style="color:rgba(245,239,227,.5);font-size:20px;letter-spacing:2px">端末名</span>
+      <span style="color:#faf8f4;font-size:26px;font-weight:600;margin-left:18px">${escHtml(name)}</span>
+    </div>
+    ${errMsg ? `<div style="padding:14px 28px;background:rgba(200,60,60,.18);border:1px solid rgba(200,60,60,.4);border-radius:12px;color:#f2a6a6;font-size:20px">${escHtml(errMsg)}</div>` : ""}
   </div>
-</div>`;
-    rescale();
+</div>
+<style>@keyframes pending-spin{to{transform:rotate(360deg)}}</style>`;
+  rescale();
 
-    sc.querySelectorAll("[data-pk]").forEach(btn => {
-      btn.addEventListener("click", () => handleKey(btn.dataset.pk));
-    });
-  }
-
-  async function verifyPin(code) {
-    verifying = true;
-    render("");
+  if (_pendingPoll) clearInterval(_pendingPoll);
+  _pendingPoll = setInterval(async () => {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) return;
     try {
-      const data = await apiPost("/setup", { pin_code: code });
-      localStorage.setItem(TOKEN_KEY, data.device_token);
-      localStorage.setItem(NAME_KEY, data.device_name);
-      cleanup();
-      await boot();
-    } catch (e) {
-      verifying = false;
-      pin = "";
-      render("PINが無効です。管理画面で新しいPINを発行してください。");
-    }
-  }
+      const s = await apiGet("/proxy/status", token);
+      if (s?.device_name) localStorage.setItem(NAME_KEY, s.device_name);
+      if (s && s.status !== "pending") {
+        clearInterval(_pendingPoll); _pendingPoll = null;
+        location.reload();  // active になった → 通常起動へ
+      } else if (s?.device_name && s.device_name !== name) {
+        showPending(s.device_name);  // 承認前に端末名が変わったら反映
+      }
+    } catch {}
+  }, 4000);
+}
 
-  function handleKey(key) {
-    if (verifying) return;
-    if (key === "⌫") { pin = pin.slice(0, -1); render(""); }
-    else if (key === "→") { if (pin.length === 6) verifyPin(pin); }
-    else if (pin.length < 6) {
-      pin += key;
-      render("");
-      if (pin.length === 6) verifyPin(pin);
-    }
+// 起動時の自己登録。トークンが無ければ /register を叩いてトークンを取得・保存する。
+// 戻り値: true=通常起動へ進んでよい / false=承認待ち画面を表示済み(処理を止める)
+async function ensureRegistered() {
+  if (localStorage.getItem(TOKEN_KEY)) return true;
+  try {
+    const reg = await apiPost("/register", {});
+    localStorage.setItem(TOKEN_KEY, reg.device_token);
+    localStorage.setItem(NAME_KEY, reg.device_name || "");
+    if (reg.status === "pending") { showPending(reg.device_name); return false; }
+    return true;
+  } catch (e) {
+    sc.innerHTML = `<div style="width:1920px;height:1080px;background:#14110d;display:flex;align-items:center;justify-content:center"><div style="color:#f2a6a6;font-size:24px;text-align:center;max-width:900px;line-height:1.7">端末の登録に失敗しました<br><span style="font-size:18px;color:rgba(245,239,227,.6)">${escHtml(e.message || "")}</span><br><span style="font-size:16px;color:rgba(245,239,227,.4)">ネットワーク・tenant_slug 設定をご確認ください。数秒後に再試行します。</span></div></div>`;
+    rescale();
+    setTimeout(() => boot(), 6000);
+    return false;
   }
-
-  render("");
 }
 
 // ─── Single design tokens (磯野木工所 和モダン / moss green) ──────────────────
@@ -983,7 +983,7 @@ function showReception(initPurpose) {
     if (submitting) return;
     if (!form.visitor_name.trim()) { errMsg = "お名前を入力してください"; render(); return; }
     const token = localStorage.getItem(TOKEN_KEY);
-    if (!token) { cleanup(); showSetup(); return; }
+    if (!token) { cleanup(); boot(); return; }
     submitting = true; render();
     try {
       const res = await apiPost("/proxy/reception", { visitor_name: form.visitor_name, company: form.company, purpose: form.purpose, staff: form.staff, method: "form" }, token);
@@ -1115,7 +1115,7 @@ function showQr() {
 
   async function handleQR(raw) {
     const token = localStorage.getItem(TOKEN_KEY);
-    if (!token) { stopStream(); cleanup(); showSetup(); return; }
+    if (!token) { stopStream(); cleanup(); boot(); return; }
 
     if (raw.startsWith("appt:")) {
       const apptToken = raw.slice(5).trim();
@@ -1755,7 +1755,7 @@ function showKioskSettings() {
           localStorage.removeItem(TOKEN_KEY);
           localStorage.removeItem(NAME_KEY);
           cleanup();
-          showSetup();
+          boot();
         });
       } else {
         devTimer = setTimeout(() => { devTaps = 0; }, 3000);
@@ -1840,8 +1840,9 @@ async function boot() {
   // エージェントが mock を指示(例: Windows開発機 KIOSK_MOCK) → 以降モックで動作(バックエンド不要)
   if (CFG && CFG.mock) { MOCK = true; return bootMock(); }
 
+  // トークンが無ければ自己登録。承認待ちなら showPending 済みで false が返る。
+  if (!(await ensureRegistered())) return;
   const token = localStorage.getItem(TOKEN_KEY);
-  if (!token) { showSetup(); return; }
 
   // Load settings + schedule in parallel
   try {
@@ -1854,10 +1855,14 @@ async function boot() {
         return null;
       }),
     ]);
-    if (!localStorage.getItem(TOKEN_KEY)) { showSetup(); return; }
+    // トークンが無効化された(承認前に削除された等) → 登録からやり直す
+    if (!localStorage.getItem(TOKEN_KEY)) { return boot(); }
     if (settings) Object.assign(ST, settings);
     if (sched?.device_name) localStorage.setItem(NAME_KEY, sched.device_name);
-    if (sched?.suspended) {
+    if (sched?.pending) {
+      showPending(sched?.device_name);
+      return;
+    } else if (sched?.suspended) {
       showSuspended();
     } else {
       ITEMS = sched?.playlist?.items ?? [];
@@ -1868,6 +1873,10 @@ async function boot() {
     go("idle");
   }
 
+  // boot() は再登録フォールバックから複数回呼ばれ得るため、ポーリングは一度だけ張る。
+  if (_pollsStarted) return;
+  _pollsStarted = true;
+
   // Poll schedule every 60 s
   setInterval(async () => {
     const t = localStorage.getItem(TOKEN_KEY);
@@ -1875,10 +1884,12 @@ async function boot() {
     try {
       const s = await apiGet("/proxy/schedule", t);
       syncDeviceName(s?.device_name);
-      if (s?.suspended) {
+      if (s?.pending) {
+        if (CURRENT_SCREEN !== "pending") showPending(s?.device_name);
+      } else if (s?.suspended) {
         if (CURRENT_SCREEN !== "suspended") showSuspended();
       } else {
-        if (CURRENT_SCREEN === "suspended") { ITEMS = s?.playlist?.items ?? []; TRANSITION_TYPE = s?.playlist?.transition_type ?? "fade"; go("idle"); }
+        if (CURRENT_SCREEN === "suspended" || CURRENT_SCREEN === "pending") { ITEMS = s?.playlist?.items ?? []; TRANSITION_TYPE = s?.playlist?.transition_type ?? "fade"; go("idle"); }
         else { ITEMS = s?.playlist?.items ?? []; TRANSITION_TYPE = s?.playlist?.transition_type ?? "fade"; }
       }
     } catch {}

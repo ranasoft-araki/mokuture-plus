@@ -83,7 +83,7 @@ async def check_force_refresh(client: httpx.AsyncClient) -> None:
 async def sync_once(client: httpx.AsyncClient) -> None:
     token = get_device_token()
     if not token:
-        print("[sync] デバイス未登録 — /setup で PIN を登録してください")
+        print("[sync] デバイス未登録 — 起動時に自己登録し、管理画面で承認されると同期を開始します")
         return
     try:
         resp = await client.get(

@@ -21,6 +21,7 @@ from slowapi.util import get_remote_address
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.database import get_db
 from app.models.device import Device, Locker
@@ -49,7 +50,6 @@ router = APIRouter(prefix="/kiosk", tags=["kiosk"])
 _limiter = Limiter(key_func=get_remote_address)
 
 _ALLOWED_METHODS = {"form", "qr", "appointment"}
-_PIN_FAIL_MSG = "PINが無効または期限切れです"
 
 # ── OTA bundle ────────────────────────────────────────────────────────────────
 # Env var override; default resolves to <repo>/kiosk_agent relative to this file.
@@ -83,27 +83,84 @@ def _bundle_version() -> str:
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
-class PinVerifyRequest(BaseModel):
-    pin_code: str
+class RegisterRequest(BaseModel):
+    tenant_slug: str
+    device_name: str | None = None
+    location: str | None = None
+    hardware_id: str | None = None
 
 
-@router.post("/verify-pin")
-@_limiter.limit("10/minute")
-async def verify_pin(request: Request, body: PinVerifyRequest, db: AsyncSession = Depends(get_db)):
-    """Exchange a one-time PIN for the device token. PIN expires in 15 min and is single-use."""
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    result = await db.execute(select(Device).where(Device.pin_code == body.pin_code))
-    device = result.scalar_one_or_none()
+_DEFAULT_DEVICE_NAME = "新しい端末"
 
-    if device is None or device.pin_used or device.pin_expires_at is None or device.pin_expires_at < now:
-        raise HTTPException(status_code=401, detail=_PIN_FAIL_MSG)
 
-    # Invalidate PIN immediately
-    device.pin_used = True
-    device.pin_code = None
-    await db.commit()
+@router.post("/register")
+@_limiter.limit("20/minute")
+async def register_device(request: Request, body: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    """端末の自己登録（PIN 不要）。承認待ち(status=pending)の Device を作成し、
+    デバイストークンを返す。端末はトークンで status をポーリングし、管理画面で
+    承認(active)されると起動する。
 
-    return {"device_token": device.token, "device_name": device.name}
+    (tenant_slug, hardware_id) が既存端末に一致する場合は再作成せず、その端末の
+    トークンと現在の status を返す（再起動・キャッシュ消去での重複登録を防ぐ）。"""
+    tenant_result = await db.execute(select(Tenant).where(Tenant.slug == body.tenant_slug))
+    tenant = tenant_result.scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="テナントが見つかりません")
+
+    hardware_id = (body.hardware_id or "").strip() or None
+    if hardware_id:
+        existing_result = await db.execute(
+            select(Device).where(
+                Device.tenant_id == tenant.id,
+                Device.hardware_id == hardware_id,
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
+        if existing is not None:
+            existing.last_seen_at = datetime.now(_JST).replace(tzinfo=None)
+            await db.commit()
+            return {
+                "device_token": existing.token,
+                "device_name": existing.name,
+                "status": existing.status or "active",
+            }
+
+    name = (body.device_name or "").strip() or _DEFAULT_DEVICE_NAME
+    if len(name) > 100:
+        name = name[:100]
+    location = (body.location or "").strip() or None
+    device = Device(
+        tenant_id=tenant.id,
+        name=name,
+        location=location,
+        token=secrets.token_hex(32),  # 64-char hex, cryptographically secure
+        status="pending",
+        hardware_id=hardware_id,
+        last_seen_at=datetime.now(_JST).replace(tzinfo=None),
+    )
+    db.add(device)
+    try:
+        await db.commit()
+    except IntegrityError:
+        # 同一 (tenant_id, hardware_id) の並行登録と競合 → 既存端末を返す（冪等）
+        await db.rollback()
+        if hardware_id:
+            existing_result = await db.execute(
+                select(Device).where(
+                    Device.tenant_id == tenant.id,
+                    Device.hardware_id == hardware_id,
+                )
+            )
+            existing = existing_result.scalar_one_or_none()
+            if existing is not None:
+                return {
+                    "device_token": existing.token,
+                    "device_name": existing.name,
+                    "status": existing.status or "active",
+                }
+        raise
+    await db.refresh(device)
+    return {"device_token": device.token, "device_name": device.name, "status": device.status}
 
 
 async def get_kiosk_device(
@@ -132,10 +189,22 @@ async def kiosk_heartbeat(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device)
     return {"ok": True}
 
 
+@router.get("/status")
+async def kiosk_status(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device)):
+    """承認状態の軽量ポーリング用。承認待ち画面がこれを見て active になったら起動する。
+    get_kiosk_device が last_seen_at を更新するので、承認待ち端末も管理画面で「稼働中」に見える。"""
+    tenant, device = ctx
+    return {"status": device.status or "active", "device_name": device.name}
+
+
 @router.get("/schedule")
 async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device), db: AsyncSession = Depends(get_db)):
     """Return the current scheduled playlist with embedded media data."""
     tenant, device = ctx
+
+    # 承認待ち端末はスケジュールを返さない — キオスクは承認待ち画面を表示する
+    if (device.status or "active") == "pending":
+        return {"pending": True, "playlist": None, "force_update_at": None, "device_name": device.name}
 
     # Return suspension status immediately — kiosk handles UI
     if tenant.is_suspended:

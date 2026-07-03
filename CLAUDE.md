@@ -52,10 +52,10 @@ cd kiosk_agent && uv run uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 # 1. インストール & systemd 登録
 cd kiosk_agent && bash install.sh
 
-# 2. デバイス登録 (管理画面で PIN を発行してから)
-curl -X POST http://localhost:8080/setup \
-     -H 'Content-Type: application/json' \
-     -d '{"pin_code":"取得したPIN"}'
+# 2. デバイス登録 (承認フロー・PIN 不要)
+#    キオスク画面(ブラウザ)を開くと TENANT_SLUG で自動自己登録。手動トリガーも可:
+curl -X POST http://localhost:8080/register
+#    → 端末は「承認待ち」になる。管理画面「キオスク端末」で「承認する」を押すと起動。
 
 # 3. サービス管理
 sudo systemctl status mokuture-kiosk
@@ -78,8 +78,8 @@ mokuture/
 │       │   ├── auth.py        ← /auth/login, /auth/refresh, /auth/register
 │       │   ├── settings.py    ← /settings (ブランディング・キオスク文言・ロゴ配置)
 │       │   ├── content.py     ← /media, /playlists, /schedules
-│       │   ├── devices.py     ← /devices (キオスク端末管理・PIN 発行)
-│       │   ├── kiosk.py       ← /kiosk/* (公開API: スケジュール・受付送信・PIN検証)
+│       │   ├── devices.py     ← /devices (キオスク端末管理・承認)
+│       │   ├── kiosk.py       ← /kiosk/* (公開API: スケジュール・受付送信・自己登録/承認状態)
 │       │   ├── reception.py   ← /reception (受付ログ一覧)
 │       │   ├── notifications.py ← /notifications (Slack/Chatwork 設定)
 │       │   ├── lockers.py     ← /lockers (ロッカー制御モック)
@@ -89,7 +89,7 @@ mokuture/
 │       │   ├── tenant.py      ← Tenant (ブランディング・キオスク設定・ロゴ配置)
 │       │   ├── user.py        ← User (email, password_hash, role, tenant_id)
 │       │   ├── content.py     ← Media, Playlist, PlaylistItem, Schedule
-│       │   ├── device.py      ← Device (token, PIN), Locker
+│       │   ├── device.py      ← Device (token, status=承認状態, hardware_id), Locker
 │       │   ├── reception.py   ← ReceptionLog (visitor_name, company, staff, purpose)
 │       │   └── notification.py ← NotificationSetting, PushSubscription
 │       ├── middleware/
@@ -118,7 +118,7 @@ mokuture/
 │   │       │   ├── media/page.tsx     ← メディア管理 (アップロード・一覧)
 │   │       │   ├── playlists/page.tsx ← プレイリスト管理
 │   │       │   ├── schedules/page.tsx ← スケジュール管理
-│   │       │   ├── kiosk/page.tsx     ← キオスク端末管理・PIN 発行・端末名/場所の変更(鉛筆ボタン or ダブルクリック)
+│   │       │   ├── kiosk/page.tsx     ← キオスク端末管理・承認待ち端末の承認・端末名/場所の変更(鉛筆ボタン or ダブルクリック)
 │   │       │   ├── reception/page.tsx ← 受付ログ一覧・フィルター
 │   │       │   ├── appointments/page.tsx ← 来社予定管理・QRコード発行 (qrcode.react) + 日付/ステータスフィルタ + 会議室紐付け
 │   │       │   ├── meeting-rooms/page.tsx ← 会議室管理 (CRUD・カラー・定員・場所)
@@ -139,7 +139,7 @@ mokuture/
 │   │       └── kiosk/         ← キオスク受付画面 (デバイストークン必須)
 │   │           ├── page.tsx           ← KioskFlow マウント
 │   │           ├── KioskFlow.tsx      ← メインキオスクコンポーネント (全画面遷移管理)
-│   │           ├── setup/page.tsx     ← デバイスセットアップ (PIN 入力)
+│   │           ├── setup/page.tsx     ← 旧PIN入力画面(廃止)。/kiosk へリダイレクトするだけ
 │   │           └── top|reception|qr|calling|complete/page.tsx ← 各画面 (KioskFlow へリダイレクト)
 │   ├── components/
 │   │   ├── AdminShell.tsx     ← 管理画面レイアウト・サイドバーナビ・共通 UI コンポーネント
@@ -167,7 +167,7 @@ mokuture/
 | `reseller` | 代理店（自管理テナント群）| `/partner-portal`（隠しURL、代理店ID＋PW）| `/{reseller_slug}/reseller` |
 | `admin` | 利用者・管理者（自テナント）| `/login`（利用者専用ページ）| `/{tenant}/admin` |
 | `staff` | 利用者・スタッフ | `/login`（利用者専用ページ）| `/{tenant}/admin` |
-| `kiosk` | キオスクデバイス | PIN交換 | - |
+| `kiosk` | キオスクデバイス | 自己登録→管理画面で承認 | - |
 
 ### ログインエンドポイント分割
 - `POST /auth/login` — 利用者（admin/staff）
@@ -297,7 +297,7 @@ mokuture/
 - **media** — アップロードファイル (URL, mime_type, duration_sec)
 - **playlists / playlist_items** — メディアのプレイリスト（transition_type: fade/slide/zoom/wipe/random）
 - **schedules** — 曜日・時間帯ごとのプレイリスト割当
-- **devices** — キオスク端末 (token, PIN, last_seen_at, force_update_at)
+- **devices** — キオスク端末 (token, **status**=`pending`承認待ち/`active`承認済み, **hardware_id**=物理端末の安定ID(冪等な再登録用) nullable, last_seen_at, force_update_at)。PIN列は廃止。status/hardware_id は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS`)で追加。既存端末は `active` で埋まる
 - **lockers** — ロッカー (door_number=gpio_pin, state, **name**=表示ラベル, **pin_hash**=bcrypt(4桁PIN) nullable, **occupied**=利用中フラグ, **occupied_at**)
 - **reception_logs** — 受付ログ (visitor_name, company, staff, purpose, method, **state**, staff_notes, appointment_id, **decided_at**)。`state`: `received | notified | accepted(OK=すぐ伺う) | declined(NG=対応不可) | completed | cancelled`。`decided_at`=スタッフがOK/NGを押した時刻(nullable)。state/decided_at は素の型でDB制約なし＝カラム追加は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS`)で対応済み
 - **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired, meeting_room_id FK nullable)
@@ -328,12 +328,13 @@ mokuture/
 | GET/POST/DELETE | /schedules | JWT | スケジュール CRUD |
 | GET/POST/DELETE | /devices | JWT | デバイス CRUD |
 | PATCH | /devices/{id} | JWT | 端末名・場所の変更 (name 1〜100文字, location nullable) |
-| POST | /devices/{id}/pin | JWT | PIN 発行 |
-| GET | /kiosk/schedule | デバイストークン | 現在のプレイリスト取得。`device_name`(最新の端末名)も返し、キオスク/エージェントが名前をライブ同期する |
+| POST | /devices/{id}/approve | JWT | 承認待ち端末を承認(status=active)して起動可能にする |
+| GET | /kiosk/schedule | デバイストークン | 現在のプレイリスト取得。`device_name`(最新の端末名)も返し、キオスク/エージェントが名前をライブ同期する。承認待ち端末には `{pending:true, ...}` を返す(suspended と同様の短絡) |
 | POST | /kiosk/reception | デバイストークン | 受付フォーム送信 (appointment_id 対応)。応答は `{id,...}` を返し、キオスクは id を待機画面のポーリングに使う |
 | GET | /kiosk/reception/{id} | デバイストークン | 受付のスタッフ応答結果 `{id, state}` を返す。待機画面のポーリング用 |
 | GET | /kiosk/appointment/{token} | デバイストークン | QR トークンから来社予定取得 (scheduled_at + meeting_room{name,location,map_image_url}\|null を含む) |
-| POST | /kiosk/verify-pin | なし | PIN → デバイストークン交換 |
+| POST | /kiosk/register | なし | 端末の自己登録。`{tenant_slug, device_name?, location?, hardware_id?}` → 承認待ち(status=pending)の Device を作成し `{device_token, device_name, status}` を返す。(tenant_slug, hardware_id) 一致時は再作成せず既存トークン+statusを返す(冪等)。rate-limit 20/min |
+| GET | /kiosk/status | デバイストークン | 承認状態 `{status, device_name}` を返す。承認待ち画面がポーリングして active になったら起動する |
 | GET | /appointments | JWT | 来社予定一覧 (status/date_from/date_to フィルタ対応) |
 | POST | /appointments | JWT | 来社予定作成 (meeting_room_id 対応) |
 | PATCH | /appointments/{id} | JWT | 来社予定更新 (meeting_room_id 対応) |
@@ -370,6 +371,15 @@ mokuture/
 
 - `kiosk_style` カラムは DB に残存するが UI からは選択不可（`ALLOWED_KIOSK_STYLES = {"default"}`）。
 - `kioskStyles.ts` は `default`（和モダン）1エントリのみ。
+
+### 端末セットアップ（承認フロー・PIN 廃止）
+
+**PIN は廃止。** キオスク端末は接続時に自己登録し、管理画面での承認で起動する。
+
+- **device 版 (`kiosk.html` / agent)**: boot 時にトークンが無ければ agent `POST /register`（backend `POST /kiosk/register` へ `tenant_slug`+ホスト名+`hardware_id` を送信）→ トークンを `device_state.json` と localStorage に保存。status=pending なら `showPending()`（承認待ち画面）を表示し `GET /proxy/status`(→`/kiosk/status`) を **4s間隔でポーリング**、active になったら `location.reload()` で通常起動。agent の `/register` は既にトークンがあれば再登録せず現在の status を返す（冪等）。
+- **Web 版 (`frontend/app/[tenant]/kiosk/page.tsx`)**: トークンが無ければ `api.registerKioskDevice({tenant_slug, hardware_id})`（hardware_id は localStorage に保存する `web-<uuid>`）。pending なら承認待ち画面＋`api.getKioskStatus` を 4s ポーリング、active で `KioskFlow` を描画。`setup/page.tsx`（旧PIN入力）は `/kiosk` へリダイレクトするだけ。
+- **管理画面 (`admin/kiosk/page.tsx`)**: 端末一覧を 15s ごとに自動更新。`status==="pending"` の端末を「承認待ちの端末」セクションに表示し「承認する」(`api.approveDevice`→`POST /devices/{id}/approve`)で active に。不要な端末は「削除」で消す（拒否ボタンは無し）。端末名/場所は承認後に鉛筆ボタンで編集。
+- **仮名**: 自己登録時の端末名はホスト名（Web版は「新しい端末」）。承認後に鉛筆ボタンで正式名称に変更する。
 
 ### キオスク画面（device 版 `kiosk_agent/static/kiosk.html`）
 画面遷移フロー（`go(screen, data)` で管理）:

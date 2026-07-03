@@ -116,8 +116,8 @@
 https://mokuture-plus.netlify.app/{slug}/kiosk
 ```
 
-初回アクセス時にデバイス登録画面 (`/kiosk/setup`) が表示されます。  
-管理画面の「デバイス管理」で発行した PIN を入力してください。
+初回アクセス時に端末が自動で自己登録し、画面に「承認待ちです」と表示されます。  
+管理画面の「キオスク端末」に承認待ちとして表示されるので「承認する」を押すと、端末が自動的に受付画面へ切り替わります（PIN 入力は不要）。
 
 #### Raspberry Pi ローカルエージェント（動画をローカルキャッシュ・GPIO連携）
 
@@ -211,46 +211,33 @@ sudo systemctl status mokuture-kiosk
 journalctl -u mokuture-kiosk -f   # ログ確認
 ```
 
-### デバイス登録（PIN 交換）
+### デバイス登録（承認フロー・PIN 不要）
 
-エージェント起動後、**管理画面で発行した PIN** を使って一度だけ登録を行います。  
-登録後は `device_state.json` にトークンが保存され、再起動しても維持されます。
+エージェントは起動時に `TENANT_SLUG` を使って自動で自己登録します（キオスク画面を開くと `/register` を叩き、承認待ちの端末をバックエンドに作成）。  
+端末画面には「承認待ちです」と表示され、**管理画面「キオスク端末」で「承認する」を押すと自動的に受付画面へ切り替わります**。  
+登録後は `device_state.json` にトークンが保存され、再起動しても維持されます。手動での PIN 入力は不要です。
 
-**Linux / macOS / WSL**
+必要に応じて手動で登録をトリガーすることもできます:
 
 ```bash
-curl -X POST http://<RPiのIPアドレス>:8080/setup \
-     -H "Content-Type: application/json" \
-     -d '{"pin_code":"123456"}'
+curl -X POST http://<RPiのIPアドレス>:8080/register
 ```
 
-**Windows PowerShell**
-
-```powershell
-# 方法1: curl.exe (Windows 10/11 標準搭載)
-curl.exe -X POST "http://<RPiのIPアドレス>:8080/setup" `
-         -H "Content-Type: application/json" `
-         -d '{\"pin_code\":\"123456\"}'
-
-# 方法2: Invoke-RestMethod
-Invoke-RestMethod -Uri "http://<RPiのIPアドレス>:8080/setup" `
-                  -Method POST `
-                  -ContentType "application/json" `
-                  -Body '{"pin_code":"123456"}'
-```
-
-登録成功時のレスポンス:
+登録成功時のレスポンス（承認待ち）:
 
 ```json
-{"status": "registered", "device_name": "受付キオスク"}
+{"status": "pending", "device_name": "raspberrypi", "device_token": "..."}
 ```
+
+`status` が `active` になれば承認済みで、キオスク画面が自動的に起動します。
 
 ### エンドポイント一覧
 
 | メソッド | パス | 説明 |
 |---|---|---|
 | `GET` | `/health` | 動作確認・登録状態確認 |
-| `POST` | `/setup` | PIN でデバイス登録（初回のみ） |
+| `POST` | `/register` | 端末の自己登録（承認待ちを作成、PIN 不要） |
+| `GET` | `/proxy/status` | 承認状態(status)の取得（承認待ち画面のポーリング用） |
 | `GET` | `/media/{media_id}` | ローカルキャッシュからメディア配信 |
 | `POST` | `/device/locker/{id}/open` | ロッカー解錠 (GPIO) |
 | `GET` | `/device/pir` | PIR センサー状態取得 |
@@ -306,8 +293,9 @@ Invoke-RestMethod -Uri "http://<RPiのIPアドレス>:8080/setup" `
 
 | メソッド | パス | 説明 |
 |---|---|---|
-| `POST` | `/kiosk/verify-pin` | PIN → デバイストークン交換 |
-| `GET` | `/kiosk/schedule` | 現在のプレイリスト取得 |
+| `POST` | `/kiosk/register` | 端末の自己登録（承認待ちを作成、PIN 不要）。認証なし |
+| `GET` | `/kiosk/status` | 承認状態(status)取得（承認待ち画面のポーリング用） |
+| `GET` | `/kiosk/schedule` | 現在のプレイリスト取得（承認待ちは `pending:true`） |
 | `GET` | `/kiosk/content-manifest` | 全スケジュールメディア一覧（ローカルキャッシュ用） |
 | `POST` | `/kiosk/reception` | 受付登録 |
 

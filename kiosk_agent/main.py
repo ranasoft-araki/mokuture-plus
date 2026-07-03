@@ -3,7 +3,9 @@ import asyncio
 import os
 import platform
 import re
+import socket
 import subprocess
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,6 +20,25 @@ from gpio import DoorSensor, LockerController, PirSensor
 from state import get_device_name, get_device_token, is_registered, save_device_state
 from sync import find_media, heartbeat_loop, sync_loop
 from updater import updater, read_version
+
+
+def _hardware_id() -> str:
+    """物理端末の安定ID。/etc/machine-id → MAC の順で解決する。
+    (tenant_slug, hardware_id) でバックエンドが再登録を冪等化し、承認待ちの重複を防ぐ。"""
+    try:
+        mid = Path("/etc/machine-id").read_text().strip()
+        if mid:
+            return mid
+    except Exception:
+        pass
+    return f"mac-{uuid.getnode():012x}"
+
+
+def _hostname() -> str:
+    try:
+        return socket.gethostname() or "kiosk"
+    except Exception:
+        return "kiosk"
 
 # Linux以外(Windowsなど開発環境)は自動でモック扱いにする
 _MOCK_DEVICE = (
@@ -282,10 +303,6 @@ app.add_middleware(
 )
 
 
-class PinRequest(BaseModel):
-    pin_code: str
-
-
 class ReceptionBody(BaseModel):
     visitor_name: str
     company: str = ""
@@ -344,29 +361,78 @@ async def get_config():
     }
 
 
-@app.post("/setup")
-async def setup_device(body: PinRequest):
-    """管理画面で発行した PIN を使ってデバイスを登録する。毎回リモートAPIで検証する。"""
+@app.post("/register")
+async def register_device():
+    """端末を自己登録する（PIN 不要）。tenant_slug + ホスト名 + hardware_id を送り、
+    承認待ち(pending)の Device を作成してトークンを取得・保存する。
+
+    既にトークンを保持していれば再登録せず、現在の承認状態をリモートから取得して返す
+    （ブラウザキャッシュ消去や再起動での重複登録を防ぐ）。"""
+    if not settings.tenant_slug:
+        raise HTTPException(status_code=400, detail="tenant_slug が未設定です（.env を確認してください）")
+
+    # 既に登録済み: 保存トークンで現在の status を取得して返す（新規行を作らない）
+    existing_token = get_device_token()
+    if existing_token:
+        status, name = await _fetch_remote_status(existing_token)
+        if status == _STATUS_UNREACHABLE:
+            # バックエンド不達: 既存の承認済み端末を誤って再登録しないよう、ここでは登録せず
+            # 503 を返す。呼び出し側(キオスク)は数秒後に再試行する。
+            raise HTTPException(status_code=503, detail="承認状態の確認に失敗しました（リモートAPIに接続できません）")
+        if status is not None:
+            if name:
+                save_device_state(existing_token, name)
+            return {"status": status, "device_name": name or get_device_name(), "device_token": existing_token}
+        # status is None = トークンが無効(401) → 保存状態を破棄して新規登録に進む
+
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.post(
-                f"{settings.remote_api_url}/kiosk/verify-pin",
-                json={"pin_code": body.pin_code},
+                f"{settings.remote_api_url}/kiosk/register",
+                json={
+                    "tenant_slug": settings.tenant_slug,
+                    "device_name": get_device_name() or _hostname(),
+                    "hardware_id": _hardware_id(),
+                },
                 timeout=15,
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=e.response.status_code, detail="PIN が無効または期限切れです")
+            raise HTTPException(status_code=e.response.status_code, detail=_proxy_detail(e.response))
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"リモートAPIに接続できません: {e}")
 
     data = resp.json()
     save_device_state(data["device_token"], data["device_name"])
     return {
-        "status": "registered",
+        "status": data.get("status", "pending"),
         "device_name": data["device_name"],
         "device_token": data["device_token"],
     }
+
+
+_STATUS_UNREACHABLE = "__unreachable__"
+
+
+async def _fetch_remote_status(token: str) -> tuple[str | None, str | None]:
+    """(status, device_name) を返す。
+    - 承認状態を取得できた場合: (status, name)
+    - トークン無効(401): (None, None) — 呼び出し側は再登録に進む
+    - 接続失敗/その他エラー: (_STATUS_UNREACHABLE, None) — トークンは破棄しない"""
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(
+                f"{settings.remote_api_url}/kiosk/status",
+                headers={"X-Kiosk-Token": token},
+                timeout=10,
+            )
+            if resp.status_code == 401:
+                return None, None
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("status", "active"), data.get("device_name")
+        except Exception:
+            return _STATUS_UNREACHABLE, None
 
 
 @app.get("/health")
@@ -407,6 +473,29 @@ async def proxy_schedule(request: Request):
         try:
             resp = await client.get(
                 f"{settings.remote_api_url}/kiosk/schedule",
+                headers={"X-Kiosk-Token": token},
+                timeout=10,
+            )
+            if resp.status_code == 401:
+                raise HTTPException(status_code=401, detail="Invalid kiosk token")
+            resp.raise_for_status()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"リモートAPIに接続できません: {e}")
+    return resp.json()
+
+
+@app.get("/proxy/status")
+async def proxy_status(request: Request):
+    """承認状態(status)をリモートAPIから取得する。承認待ち画面のポーリング用。"""
+    token = request.headers.get("x-kiosk-token", "")
+    if not token:
+        raise HTTPException(status_code=401, detail="X-Kiosk-Token required")
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(
+                f"{settings.remote_api_url}/kiosk/status",
                 headers={"X-Kiosk-Token": token},
                 timeout=10,
             )

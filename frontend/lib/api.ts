@@ -59,14 +59,17 @@ export const api = {
     request<KioskScheduleResponse>("/kiosk/schedule", { headers: { "X-Kiosk-Token": kioskToken } }),
   createKioskReception: (kioskToken: string, body: ReceptionCreate) =>
     request("/kiosk/reception", { method: "POST", body: JSON.stringify(body), headers: { "X-Kiosk-Token": kioskToken } }),
-  verifyKioskPin: (pinCode: string) =>
-    request<{ device_token: string; device_name: string }>("/kiosk/verify-pin", { method: "POST", body: JSON.stringify({ pin_code: pinCode }) }),
+  // 端末の自己登録（PIN 廃止）。承認待ち(status=pending)の端末を作成しトークンを返す。
+  registerKioskDevice: (body: { tenant_slug: string; device_name?: string; location?: string; hardware_id?: string }) =>
+    request<{ device_token: string; device_name: string; status: string }>("/kiosk/register", { method: "POST", body: JSON.stringify(body) }),
+  getKioskStatus: (kioskToken: string) =>
+    request<{ status: string; device_name: string }>("/kiosk/status", { headers: { "X-Kiosk-Token": kioskToken } }),
 
   // Device management (admin)
   listDevices: (token: string) =>
     request<Device[]>("/devices", {}, token),
-  createDevice: (token: string, name: string) =>
-    request<Device & { token: string; pin_code: string; pin_expires_minutes: number }>("/devices", { method: "POST", body: JSON.stringify({ name }) }, token),
+  approveDevice: (token: string, deviceId: string) =>
+    request<Device>(`/devices/${deviceId}/approve`, { method: "POST" }, token),
   deleteDevice: (token: string, id: string) =>
     request(`/devices/${id}`, { method: "DELETE" }, token),
   forceRefreshDevice: (token: string, deviceId: string): Promise<void> =>
@@ -75,8 +78,6 @@ export const api = {
     request<Device>(`/devices/${deviceId}`, { method: "PATCH", body: JSON.stringify({ name }) }, token),
   updateDeviceLocation: (token: string, deviceId: string, location: string | null) =>
     request<Device>(`/devices/${deviceId}`, { method: "PATCH", body: JSON.stringify({ location }) }, token),
-  regenerateDevicePin: (token: string, deviceId: string) =>
-    request<{ pin_code: string; expires_minutes: number }>(`/devices/${deviceId}/pin`, { method: "POST" }, token),
 
   // Auth
   register: (body: { tenant_name: string; tenant_slug: string; email: string; password: string }) =>
@@ -616,7 +617,7 @@ export interface OperatorDevice {
   reseller_name?: string | null;
   last_seen_at: string | null;
   is_online?: boolean;
-  pin_code?: string | null;
+  status?: string; // "pending" | "active"
 }
 
 export interface OperatorReceptionItem {
@@ -720,6 +721,7 @@ export interface Device {
   id: string;
   name: string;
   location: string | null;
+  status: string; // "pending" | "active"
   last_seen_at: string | null;
   created_at: string;
 }
@@ -808,6 +810,8 @@ export interface KioskScheduleResponse {
     items: KioskPlaylistItem[];
   } | null;
   suspended?: boolean;
+  pending?: boolean;
+  device_name?: string;
 }
 
 // ---- Local Device Agent --------------------------------------------------
