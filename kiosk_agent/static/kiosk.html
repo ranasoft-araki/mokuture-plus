@@ -1370,6 +1370,7 @@ function showKioskSettings() {
     stone:"#8a8276", graphite:"#5a5249", ink:"#2e2b26", sumi:"#1d1a15",
     moss:"#4a7c4e", mossDk:"#2e5c32", mossSoft:"rgba(74,124,78,0.10)",
     amber:"#b87c2e", amberSoft:"#fef6e6",
+    red:"#c0392b", redDk:"#8f2c22", redSoft:"rgba(192,57,43,0.10)",
   };
 
   const SVG = {
@@ -1380,6 +1381,10 @@ function showKioskSettings() {
     chevron: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>`,
     check: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg>`,
     play: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>`,
+    cam: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>`,
+    mic: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>`,
+    motion: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3 8 4-16 3 8h4"/></svg>`,
+    door: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v18"/><path d="M2 22h18"/><circle cx="14" cy="12" r="1"/></svg>`,
   };
 
   let vol = 70;
@@ -1393,6 +1398,14 @@ function showKioskSettings() {
   let wifiLoading = false;
   let devTaps = 0, devTimer = null;
   let volDebounce = null;
+
+  // ─── tab + device-check state ──
+  let activeTab = "settings";              // "settings" | "devices"
+  let dcGen = 0;                           // マウント世代。teardown 後に解決した getUserMedia を無効化する
+  let dcStatus = null, dcPoll = null;      // /device/status ポーリング結果とタイマー
+  let camStream = null, micStream = null;  // getUserMedia ストリーム
+  let camError = null, micError = null;
+  let audioCtx = null, analyser = null, micData = null, micRAF = null, micSegs = null;
 
   const devName = escHtml(localStorage.getItem(NAME_KEY) ?? "—");
 
@@ -1416,14 +1429,274 @@ function showKioskSettings() {
     </div>`;
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // DEVICE CHECK TAB — カメラプレビュー / マイクレベル / 各デバイスの緑赤トグル
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // 緑(ON/正常)・赤(OFF/異常)で状態を示すバッジ
+  function stBadge(on, onText, offText) {
+    return `<span style="display:inline-flex;align-items:center;gap:9px;padding:8px 18px;border-radius:999px;font-size:16px;font-weight:600;background:${on?C.mossSoft:C.redSoft};color:${on?C.mossDk:C.redDk};white-space:nowrap">
+      <span style="width:10px;height:10px;border-radius:50%;background:${on?C.moss:C.red}"></span>${on?onText:offText}
+    </span>`;
+  }
+  // 緑(ON)・赤(OFF)のトグルスイッチ。attrs があれば操作可能(電子錠)。
+  function stToggle(on, attrs) {
+    return `<div ${attrs||''} style="width:66px;height:36px;border-radius:999px;flex-shrink:0;background:${on?C.moss:C.red};position:relative;transition:background .2s;cursor:pointer">
+      <div style="position:absolute;top:4px;left:${on?'34px':'4px'};width:28px;height:28px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(29,26,21,.3);transition:left .2s"></div>
+    </div>`;
+  }
+  function dcCard(inner) {
+    return `<div style="background:${C.canvas};border:1px solid ${C.chalk};border-radius:20px;padding:18px 24px;box-shadow:0 4px 24px rgba(29,26,21,.06)">${inner}</div>`;
+  }
+  function dcHead(icon, jp, en, badgeId, badgeHTML) {
+    return `<div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
+      <div style="width:46px;height:46px;border-radius:12px;background:${C.mossSoft};color:${C.mossDk};display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon}</div>
+      <div style="flex:1;min-width:0"><div style="font-size:23px;font-weight:600;color:${C.sumi};letter-spacing:-0.4px">${jp}</div><div style="font-size:11px;color:${C.stone};letter-spacing:2.5px;margin-top:2px;font-family:ui-monospace,monospace">${en}</div></div>
+      <span id="${badgeId}">${badgeHTML}</span>
+    </div>`;
+  }
+  function micMeterHTML() {
+    let s = '';
+    for (let i = 0; i < 24; i++) s += `<div style="flex:1;border-radius:3px;background:${C.chalk};transition:background .05s"></div>`;
+    return `<div id="dc-mic-meter" style="display:flex;gap:4px;height:46px;align-items:stretch;margin:2px 0 8px">${s}</div>`;
+  }
+
+  function devicesBodyHTML() {
+    return `<div style="flex:1;padding:22px 80px 0;display:grid;grid-template-columns:1.08fr 0.92fr;gap:24px;min-height:0">
+
+      <div style="position:relative;border-radius:22px;overflow:hidden;background:#100f0d;border:1px solid ${C.chalk};box-shadow:0 4px 24px rgba(29,26,21,.10);min-height:0">
+        <div style="position:absolute;top:0;left:0;right:0;z-index:2;padding:20px 24px;display:flex;align-items:center;gap:14px;background:linear-gradient(180deg,rgba(0,0,0,.6),transparent)">
+          <div style="width:46px;height:46px;border-radius:12px;background:rgba(255,255,255,.14);color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0">${SVG.cam}</div>
+          <div style="flex:1"><div style="font-size:23px;font-weight:600;color:#fff">カメラ</div><div style="font-size:11px;color:rgba(255,255,255,.6);letter-spacing:2.5px;margin-top:2px;font-family:ui-monospace,monospace">CAMERA / PREVIEW</div></div>
+          <span id="dc-cam-badge">${stBadge(false, '映像 ON', '未接続')}</span>
+        </div>
+        <video id="dc-cam" autoplay muted playsinline style="width:100%;height:100%;object-fit:cover;background:#100f0d"></video>
+        <div id="dc-cam-msg" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.72);font-size:20px;line-height:1.6;text-align:center;padding:40px">カメラを起動しています…</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:14px;min-height:0;overflow-y:auto">
+        ${dcCard(
+          dcHead(SVG.mic, 'マイク', 'MICROPHONE', 'dc-mic-badge', stBadge(false, 'マイク ON', '未接続')) +
+          micMeterHTML() +
+          `<div style="font-size:13px;color:${C.stone}">マイクに話しかけると音量レベルが反応します</div>`
+        )}
+        ${dcCard(
+          dcHead(SVG.motion, '人感センサー', 'MOTION / PIR', 'dc-pir-badge', stBadge(false, '検知', '待機')) +
+          `<div style="font-size:13px;color:${C.stone}">センサーの前で手を動かすと「検知」に変わります</div>`
+        )}
+        ${dcCard(
+          `<div style="font-size:20px;font-weight:600;color:${C.sumi};margin-bottom:14px">ドアセンサー<span style="font-size:11px;color:${C.stone};letter-spacing:2.5px;margin-left:10px;font-family:ui-monospace,monospace">DOOR</span></div>
+           <div id="dc-doorlist" style="display:flex;flex-direction:column;gap:8px"><div style="color:${C.stone};font-size:15px">読み込み中…</div></div>`
+        )}
+        ${dcCard(
+          `<div style="font-size:20px;font-weight:600;color:${C.sumi};margin-bottom:5px">電子錠 / リレー<span style="font-size:11px;color:${C.stone};letter-spacing:2.5px;margin-left:10px;font-family:ui-monospace,monospace">RELAY / LOCK</span></div>
+           <div style="font-size:13px;color:${C.stone};margin-bottom:14px">トグルでON/OFF、「開錠テスト」で一瞬だけ解錠します</div>
+           <div id="dc-relaylist" style="display:flex;flex-direction:column;gap:10px"><div style="color:${C.stone};font-size:15px">読み込み中…</div></div>`
+        )}
+      </div>
+    </div>`;
+  }
+
+  function doorRowHTML(d) {
+    const configured = d.configured;
+    const closed = !!d.is_closed;
+    const txt = !configured ? '未設定' : (closed ? '閉（施錠）' : '開放中');
+    const col = !configured ? C.stone : (closed ? C.mossDk : C.redDk);
+    const tog = !configured
+      ? `<div style="width:66px;height:36px;border-radius:999px;background:${C.ash};flex-shrink:0;position:relative"><div style="position:absolute;top:4px;left:4px;width:28px;height:28px;border-radius:50%;background:#fff"></div></div>`
+      : stToggle(closed);
+    return `<div style="display:flex;align-items:center;gap:16px;padding:9px 4px">
+      <div style="width:40px;height:40px;border-radius:10px;background:${C.paper};color:${C.graphite};display:flex;align-items:center;justify-content:center;flex-shrink:0">${SVG.door}</div>
+      <div style="flex:1"><div style="font-size:18px;font-weight:600;color:${C.ink}">ドア ${escHtml(d.door_id)}</div><div style="font-size:12px;color:${C.stone};font-family:ui-monospace,monospace">${configured ? `BCM ${d.pin}` : 'GPIO未設定'}</div></div>
+      <span style="font-size:15px;font-weight:600;color:${col}">${txt}</span>
+      ${tog}
+    </div>`;
+  }
+
+  function relayRowHTML(r) {
+    const on = !!r.on;
+    const id = escHtml(r.locker_id);
+    return `<div style="display:flex;align-items:center;gap:16px;padding:9px 4px">
+      <div style="width:40px;height:40px;border-radius:10px;background:${C.paper};color:${C.graphite};display:flex;align-items:center;justify-content:center;flex-shrink:0">${SVG.lock}</div>
+      <div style="flex:1"><div style="font-size:18px;font-weight:600;color:${C.ink}">電子錠 ${id}</div><div style="font-size:12px;color:${C.stone};font-family:ui-monospace,monospace">リレー ${id} / BCM ${r.pin}</div></div>
+      <button data-relay-action="pulse" data-relay-id="${id}" style="padding:11px 20px;border-radius:11px;border:2px solid ${C.ash};background:${C.canvas};font-size:15px;font-weight:600;color:${C.graphite};cursor:pointer;font-family:inherit;flex-shrink:0">開錠テスト</button>
+      <span style="font-size:15px;font-weight:600;color:${on ? C.mossDk : C.redDk};min-width:34px;text-align:right">${on ? 'ON' : 'OFF'}</span>
+      ${stToggle(on, `data-relay-action="toggle" data-relay-id="${id}"`)}
+    </div>`;
+  }
+
+  function updateDevicesUI(status) {
+    const pir = document.getElementById("dc-pir-badge");
+    if (pir) pir.innerHTML = stBadge(!!(status.pir && status.pir.motion_detected), '検知', '待機');
+    const dl = document.getElementById("dc-doorlist");
+    if (dl) {
+      const doors = status.doors || [];
+      dl.innerHTML = doors.length ? doors.map(doorRowHTML).join('') : `<div style="color:${C.stone};font-size:15px">ドアセンサー設定がありません</div>`;
+    }
+    const rl = document.getElementById("dc-relaylist");
+    if (rl) {
+      const relays = status.relays || status.lockers || [];
+      rl.innerHTML = relays.length ? relays.map(relayRowHTML).join('') : `<div style="color:${C.stone};font-size:15px">リレー設定がありません</div>`;
+    }
+  }
+
+  async function pollDeviceStatus() {
+    try {
+      const r = await fetch("/device/status");
+      if (!r.ok) return;
+      const data = await r.json();
+      dcStatus = data;
+      if (activeTab === "devices") updateDevicesUI(data);
+    } catch (e) { /* エージェント未接続 (静的モック等) は無視 */ }
+  }
+
+  function setCamBadge(ok) {
+    const b = document.getElementById("dc-cam-badge");
+    if (b) b.innerHTML = stBadge(ok, '映像 ON', '未接続');
+    const msg = document.getElementById("dc-cam-msg");
+    if (msg) { msg.style.display = ok ? 'none' : 'flex'; if (!ok) msg.textContent = 'カメラを起動できませんでした。接続と許可をご確認ください。'; }
+    const v = document.getElementById("dc-cam");
+    if (v) v.style.opacity = ok ? '1' : '0';
+  }
+  function setMicBadge(ok) {
+    const b = document.getElementById("dc-mic-badge");
+    if (b) b.innerHTML = stBadge(ok, 'マイク ON', '未接続');
+  }
+
+  async function startCamera(gen) {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } } });
+      if (gen !== dcGen) { s.getTracks().forEach(t => t.stop()); return; }  // teardown 済み → 解放
+      camStream = s;
+      const v = document.getElementById("dc-cam");
+      if (v) { v.srcObject = s; v.play().catch(() => {}); }
+      camError = null; setCamBadge(true);
+    } catch (e) { camError = e; setCamBadge(false); }
+  }
+
+  async function startMic(gen) {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (gen !== dcGen) { s.getTracks().forEach(t => t.stop()); return; }  // teardown 済み → 解放
+      micStream = s;
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+      const src = audioCtx.createMediaStreamSource(s);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      src.connect(analyser);
+      micData = new Uint8Array(analyser.fftSize);
+      micError = null; setMicBadge(true);
+      micLoop();
+    } catch (e) { micError = e; setMicBadge(false); }
+  }
+
+  function micLoop() {
+    if (!analyser || !micData) return;
+    analyser.getByteTimeDomainData(micData);
+    let sum = 0;
+    for (let i = 0; i < micData.length; i++) { const v = (micData[i] - 128) / 128; sum += v * v; }
+    const rms = Math.sqrt(sum / micData.length);
+    const level = Math.min(1, rms * 3.2);
+    if (micSegs && micSegs.length) {
+      const n = micSegs.length;
+      const lit = Math.round(level * n);
+      for (let i = 0; i < n; i++) {
+        micSegs[i].style.background = i < lit
+          ? (i < n * 0.6 ? C.moss : i < n * 0.82 ? C.amber : C.red)
+          : C.chalk;
+      }
+    }
+    micRAF = requestAnimationFrame(micLoop);
+  }
+
+  async function handleRelay(id, action) {
+    document.querySelectorAll(`[data-relay-id="${id}"]`).forEach(x => { x.style.pointerEvents = "none"; });
+    try {
+      if (action === "pulse") {
+        await fetch(`/device/locker/${encodeURIComponent(id)}/pulse`, { method: "POST" });
+      } else {
+        const cur = ((dcStatus && (dcStatus.relays || dcStatus.lockers)) || []).find(r => String(r.locker_id) === String(id));
+        const next = !(cur && cur.on);
+        await fetch(`/device/locker/${encodeURIComponent(id)}/state`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on: next }),
+        });
+      }
+      await pollDeviceStatus();
+    } catch (e) { /* 失敗時は次のポーリングで整合 */ }
+    finally {
+      document.querySelectorAll(`[data-relay-id="${id}"]`).forEach(x => { x.style.pointerEvents = ""; });
+    }
+  }
+
+  function mountDeviceCheck() {
+    stopDeviceCheck();
+    const gen = ++dcGen;
+    camError = null; micError = null;
+    const meter = document.getElementById("dc-mic-meter");
+    micSegs = meter ? Array.from(meter.children) : null;
+    startCamera(gen);
+    startMic(gen);
+    pollDeviceStatus();
+    dcPoll = setInterval(pollDeviceStatus, 1200);
+  }
+
+  function stopDeviceCheck() {
+    dcGen++;  // 進行中の getUserMedia を無効化(back/再登録で activeTab が残っても確実に解放)
+    if (dcPoll) { clearInterval(dcPoll); dcPoll = null; }
+    if (micRAF) { cancelAnimationFrame(micRAF); micRAF = null; }
+    if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; }
+    analyser = null; micData = null; micSegs = null;
+    if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  }
+  CLEANUPS.push(stopDeviceCheck);
+
+  // 電子錠トグル/開錠テストは innerHTML 再描画で作り直されるため、sc への委譲で捕捉する
+  onSc("click", (e) => {
+    const el = e.target.closest("[data-relay-action]");
+    if (!el || activeTab !== "devices") return;
+    handleRelay(el.getAttribute("data-relay-id"), el.getAttribute("data-relay-action"));
+  });
+
+  // デバイス情報フッターの 5 連タップで再登録(両タブ共通)
+  function handleDevTap() {
+    devTaps++;
+    clearTimeout(devTimer);
+    if (devTaps >= 5) {
+      devTaps = 0;
+      const overlay = document.createElement("div");
+      overlay.style.cssText = `position:absolute;inset:0;background:rgba(29,26,21,.6);display:flex;align-items:center;justify-content:center;z-index:99`;
+      overlay.innerHTML = `<div style="background:#fffefb;border-radius:20px;padding:48px 56px;width:520px;text-align:center;box-shadow:0 24px 64px rgba(0,0,0,.3)">
+        <div style="font-size:28px;font-weight:600;color:#1d1a15;margin-bottom:12px">デバイスを再登録しますか？</div>
+        <div style="font-size:16px;color:#8a8276;margin-bottom:36px">現在のセッションがリセットされます</div>
+        <div style="display:flex;gap:14px">
+          <button id="ks-rereg-cancel" style="flex:1;padding:16px;border-radius:12px;border:2px solid #d4cfc7;background:transparent;font-size:16px;color:#5a5249;cursor:pointer;font-family:inherit">キャンセル</button>
+          <button id="ks-rereg-ok" style="flex:1;padding:16px;border-radius:12px;border:none;background:#4a7c4e;color:#fffefb;font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">再登録する</button>
+        </div>
+      </div>`;
+      document.getElementById("ks-root").appendChild(overlay);
+      document.getElementById("ks-rereg-cancel").addEventListener("click", () => overlay.remove());
+      document.getElementById("ks-rereg-ok").addEventListener("click", () => {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(NAME_KEY);
+        cleanup();
+        boot();
+      });
+    } else {
+      devTimer = setTimeout(() => { devTaps = 0; }, 3000);
+    }
+  }
+
   function render() {
+    const isDev = activeTab === "devices";
     sc.innerHTML = `
 <div id="ks-root" style="width:1920px;height:1080px;background:${C.canvas};display:flex;flex-direction:column;font-family:Inter,'Noto Sans JP',system-ui,sans-serif;user-select:none">
 
-  <div style="padding:36px 80px 0;display:flex;align-items:center;gap:20px">
+  <div style="padding:32px 80px 0;display:flex;align-items:center;gap:20px">
     <div>
-      <div style="font-size:14px;color:${C.stone};letter-spacing:4px;text-transform:uppercase;margin-bottom:8px">KIOSK SETTINGS</div>
-      <div style="font-size:54px;font-weight:600;color:${C.sumi};letter-spacing:-1.6px;line-height:1.05">キオスク設定</div>
+      <div style="font-size:14px;color:${C.stone};letter-spacing:4px;text-transform:uppercase;margin-bottom:8px">${isDev ? 'DEVICE CHECK' : 'KIOSK SETTINGS'}</div>
+      <div style="font-size:50px;font-weight:600;color:${C.sumi};letter-spacing:-1.6px;line-height:1.05">${isDev ? 'デバイスチェック' : 'キオスク設定'}</div>
     </div>
     <span style="flex:1"></span>
     <div style="display:flex;align-items:center;gap:8px;padding:10px 18px;border-radius:999px;background:${C.amberSoft};color:${C.amber};font-size:13px;font-weight:600;letter-spacing:1.5px;font-family:ui-monospace,monospace">
@@ -1432,10 +1705,37 @@ function showKioskSettings() {
     <button id="ks-back" style="display:flex;align-items:center;gap:12px;padding:20px 38px;background:${C.sumi};color:${C.canvas};border:2px solid ${C.sumi};border-radius:999px;font-size:22px;font-weight:600;font-family:Inter,'Noto Sans JP',system-ui,sans-serif;cursor:pointer">受付画面に戻る →</button>
   </div>
 
-  <div style="flex:1;padding:30px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:28px;min-height:0">
+  <div style="padding:18px 80px 0;flex-shrink:0">
+    <div style="display:inline-flex;background:${C.paper};border:1px solid ${C.chalk};border-radius:16px;padding:6px;gap:6px">
+      ${tabBtn('settings', '設定', !isDev)}
+      ${tabBtn('devices', 'デバイスチェック', isDev)}
+    </div>
+  </div>
 
-    <div style="background:${C.canvas};border:1px solid ${C.chalk};border-radius:22px;padding:36px 40px;display:flex;flex-direction:column;box-shadow:0 4px 24px rgba(29,26,21,.08);min-height:0">
-      <div style="display:flex;align-items:center;gap:18px;margin-bottom:28px">
+  ${isDev ? devicesBodyHTML() : settingsBodyHTML()}
+
+  ${isDev ? '' : lockerCardHTML()}
+
+  <div style="display:flex;align-items:center;padding:16px 80px 24px;font-size:14px;color:${C.stone}">
+    ${isDev ? 'ハードウェアの接続状態をこの画面で確認できます' : '設定の変更はスタッフのみ操作できます'}
+    <span style="flex:1"></span>
+    <span id="ks-dev" style="font-family:ui-monospace,monospace;cursor:default" title="">${devName} · FW v2.4.1</span>
+  </div>
+</div>`;
+    rescale();
+    bindEvents();
+    if (isDev) mountDeviceCheck();
+  }
+
+  function tabBtn(id, label, active) {
+    return `<button data-tab="${id}" style="padding:14px 30px;border-radius:11px;border:none;cursor:pointer;font-family:inherit;font-size:20px;font-weight:600;background:${active ? C.canvas : 'transparent'};color:${active ? C.sumi : C.stone};box-shadow:${active ? '0 2px 8px rgba(29,26,21,.10)' : 'none'}">${label}</button>`;
+  }
+
+  function settingsBodyHTML() {
+    return `<div style="flex:1;padding:20px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:28px;min-height:0">
+
+    <div style="background:${C.canvas};border:1px solid ${C.chalk};border-radius:22px;padding:32px 40px;display:flex;flex-direction:column;box-shadow:0 4px 24px rgba(29,26,21,.08);min-height:0">
+      <div style="display:flex;align-items:center;gap:18px;margin-bottom:24px">
         <div style="width:56px;height:56px;border-radius:14px;background:${C.mossSoft};color:${C.mossDk};display:flex;align-items:center;justify-content:center">${SVG.vol}</div>
         <div><div style="font-size:28px;font-weight:600;color:${C.sumi};letter-spacing:-0.6px">音量設定</div><div style="font-size:12px;color:${C.stone};letter-spacing:2.5px;margin-top:3px;font-family:ui-monospace,monospace">SOUND / VOLUME</div></div>
       </div>
@@ -1444,7 +1744,7 @@ function showKioskSettings() {
         <span style="flex:1"></span>
         <div id="ks-vol-pct" style="font-family:ui-monospace,monospace;font-size:26px;font-weight:600;color:${C.mossDk}">${vol}%</div>
       </div>
-      <div style="display:flex;align-items:center;gap:18px;margin-bottom:26px">
+      <div style="display:flex;align-items:center;gap:18px;margin-bottom:22px">
         <button id="ks-vol-minus" style="width:56px;height:56px;border-radius:50%;background:${C.canvas};border:2px solid ${C.ash};font-size:26px;color:${C.ink};flex-shrink:0;display:flex;align-items:center;justify-content:center;cursor:pointer">−</button>
         <div id="ks-vol-track" style="flex:1;height:16px;border-radius:999px;background:${C.chalk};position:relative;cursor:pointer">
           <div id="ks-vol-fill" style="width:${vol}%;height:100%;border-radius:999px;background:${C.moss}"></div>
@@ -1461,8 +1761,8 @@ function showKioskSettings() {
       </div>
     </div>
 
-    <div style="background:${C.canvas};border:1px solid ${C.chalk};border-radius:22px;padding:36px 40px;display:flex;flex-direction:column;box-shadow:0 4px 24px rgba(29,26,21,.08);min-height:0">
-      <div style="display:flex;align-items:center;gap:18px;margin-bottom:28px">
+    <div style="background:${C.canvas};border:1px solid ${C.chalk};border-radius:22px;padding:32px 40px;display:flex;flex-direction:column;box-shadow:0 4px 24px rgba(29,26,21,.08);min-height:0">
+      <div style="display:flex;align-items:center;gap:18px;margin-bottom:24px">
         <div style="width:56px;height:56px;border-radius:14px;background:${C.mossSoft};color:${C.mossDk};display:flex;align-items:center;justify-content:center">${SVG.wifi}</div>
         <div style="flex:1"><div style="font-size:28px;font-weight:600;color:${C.sumi};letter-spacing:-0.6px">Wi-Fi設定</div><div style="font-size:12px;color:${C.stone};letter-spacing:2.5px;margin-top:3px;font-family:ui-monospace,monospace">NETWORK / WI-FI</div></div>
         <div style="display:flex;align-items:center;gap:12px">
@@ -1502,10 +1802,12 @@ function showKioskSettings() {
       </div>
     </div>
 
-  </div>
+  </div>`;
+  }
 
-  <div style="padding:0 80px 4px;flex-shrink:0">
-    <div style="background:${C.canvas};border:1px solid ${C.chalk};border-radius:22px;padding:24px 40px;display:flex;align-items:center;gap:20px;box-shadow:0 4px 24px rgba(29,26,21,.08)">
+  function lockerCardHTML() {
+    return `<div style="padding:0 80px 4px;flex-shrink:0">
+    <div style="background:${C.canvas};border:1px solid ${C.chalk};border-radius:22px;padding:22px 40px;display:flex;align-items:center;gap:20px;box-shadow:0 4px 24px rgba(29,26,21,.08)">
       <div style="width:54px;height:54px;border-radius:14px;background:${C.amberSoft};color:${C.amber};display:flex;align-items:center;justify-content:center;flex-shrink:0">${SVG.lock}</div>
       <div style="flex:1">
         <div style="font-size:24px;font-weight:600;color:${C.sumi}">ロッカーの鍵 全解除</div>
@@ -1514,16 +1816,7 @@ function showKioskSettings() {
       </div>
       <button id="ks-locker-all" style="padding:16px 32px;border-radius:14px;border:2px solid ${C.amber};background:${C.canvas};color:${C.amber};font-size:18px;font-weight:600;cursor:pointer;font-family:inherit;flex-shrink:0">全解除</button>
     </div>
-  </div>
-
-  <div style="display:flex;align-items:center;padding:20px 80px 28px;font-size:14px;color:${C.stone}">
-    設定の変更はスタッフのみ操作できます
-    <span style="flex:1"></span>
-    <span id="ks-dev" style="font-family:ui-monospace,monospace;cursor:default" title="">${devName} · FW v2.4.1</span>
-  </div>
-</div>`;
-    rescale();
-    bindEvents();
+  </div>`;
   }
 
   function updateVol() {
@@ -1642,7 +1935,25 @@ function showKioskSettings() {
   }
 
   function bindEvents() {
-    document.getElementById("ks-back").addEventListener("click", () => go("idle"));
+    document.getElementById("ks-back").addEventListener("click", () => { stopDeviceCheck(); go("idle"); });
+
+    // タブ切替(両タブ共通)
+    document.querySelectorAll("[data-tab]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const t = btn.getAttribute("data-tab");
+        if (t === activeTab) return;
+        if (activeTab === "devices") stopDeviceCheck();
+        activeTab = t;
+        render();
+      });
+    });
+
+    // デバイス情報フッター 5 連タップで再登録(両タブ共通)
+    const devEl = document.getElementById("ks-dev");
+    if (devEl) devEl.addEventListener("click", handleDevTap);
+
+    // ここから先は設定タブのみのバインド
+    if (activeTab !== "settings") return;
 
     const lockerAll = document.getElementById("ks-locker-all");
     if (lockerAll) lockerAll.addEventListener("click", showLockerUnlockAllDialog);
@@ -1731,35 +2042,6 @@ function showKioskSettings() {
           } catch(e) { row.style.opacity = "1"; }
         }
       });
-    });
-
-    // 5 taps on device info → re-register
-    document.getElementById("ks-dev").addEventListener("click", () => {
-      devTaps++;
-      clearTimeout(devTimer);
-      if (devTaps >= 5) {
-        devTaps = 0;
-        const overlay = document.createElement("div");
-        overlay.style.cssText = `position:absolute;inset:0;background:rgba(29,26,21,.6);display:flex;align-items:center;justify-content:center;z-index:99`;
-        overlay.innerHTML = `<div style="background:#fffefb;border-radius:20px;padding:48px 56px;width:520px;text-align:center;box-shadow:0 24px 64px rgba(0,0,0,.3)">
-          <div style="font-size:28px;font-weight:600;color:#1d1a15;margin-bottom:12px">デバイスを再登録しますか？</div>
-          <div style="font-size:16px;color:#8a8276;margin-bottom:36px">現在のセッションがリセットされます</div>
-          <div style="display:flex;gap:14px">
-            <button id="ks-rereg-cancel" style="flex:1;padding:16px;border-radius:12px;border:2px solid #d4cfc7;background:transparent;font-size:16px;color:#5a5249;cursor:pointer;font-family:inherit">キャンセル</button>
-            <button id="ks-rereg-ok" style="flex:1;padding:16px;border-radius:12px;border:none;background:#4a7c4e;color:#fffefb;font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">再登録する</button>
-          </div>
-        </div>`;
-        document.getElementById("ks-root").appendChild(overlay);
-        document.getElementById("ks-rereg-cancel").addEventListener("click", () => overlay.remove());
-        document.getElementById("ks-rereg-ok").addEventListener("click", () => {
-          localStorage.removeItem(TOKEN_KEY);
-          localStorage.removeItem(NAME_KEY);
-          cleanup();
-          boot();
-        });
-      } else {
-        devTimer = setTimeout(() => { devTaps = 0; }, 3000);
-      }
     });
   }
 
