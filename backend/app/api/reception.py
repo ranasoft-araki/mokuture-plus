@@ -1,8 +1,9 @@
 import csv
 import io
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from jose import JWTError
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
@@ -14,12 +15,58 @@ from app.models.notification import NotificationSetting, PushSubscription
 from app.models.user import User
 from app.services.slack import send_slack_notification
 from app.services.webpush import send_push
+from app.services.auth import create_decision_token, decode_token
 from app.services.crypto import decrypt_dict
 from app.config import settings
 
 router = APIRouter(prefix="/reception", tags=["reception"])
 
 _ALLOWED_METHODS = {"form", "qr", "calendar"}
+
+# 受付 OK/NG 応答（スタッフのプッシュ通知アクション & 管理画面ボタン）
+DECISION_ACCEPT_LABEL = "すぐ伺います"
+DECISION_DECLINE_LABEL = "只今対応できません"
+
+
+def _normalize_decision(value: str) -> str:
+    """'accept'/'accepted' → 'accepted', 'decline'/'declined' → 'declined'. Raises 422 otherwise."""
+    v = (value or "").strip().lower()
+    if v in ("accept", "accepted"):
+        return "accepted"
+    if v in ("decline", "declined"):
+        return "declined"
+    raise HTTPException(status_code=422, detail="decision must be accept(ed) or decline(d)")
+
+
+async def _apply_decision(db: AsyncSession, log: ReceptionLog, decision: str) -> str:
+    """Set accepted/declined on a reception log. Idempotent: a log already decided
+    (via push button AND/OR in-app button, or a double-tap) is left as-is."""
+    if log.state in ("accepted", "declined"):
+        return log.state
+    log.state = _normalize_decision(decision)
+    log.decided_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    await db.commit()
+    await db.refresh(log)
+    return log.state
+
+
+def build_decision_push_extras(tenant_id: str, log: ReceptionLog) -> tuple[dict, list]:
+    """(data, actions) to attach to the reception push so staff can answer OK/NG
+    from the notification itself. The token lets the Service Worker post the decision
+    without a login (see auth.create_decision_token)."""
+    token = create_decision_token(log.id, tenant_id)
+    data = {
+        "kind": "reception_decision",
+        "url": f"/{tenant_id}/admin/reception",
+        "logId": log.id,
+        "decisionToken": token,
+        "decisionEndpoint": f"{settings.public_api_url}/reception/decision",
+    }
+    actions = [
+        {"action": "accept", "title": DECISION_ACCEPT_LABEL},
+        {"action": "decline", "title": DECISION_DECLINE_LABEL},
+    ]
+    return data, actions
 
 
 class ReceptionCreate(BaseModel):
@@ -205,6 +252,58 @@ async def update_reception(
     return _log_out(log)
 
 
+class DecisionRequest(BaseModel):
+    decision: str  # accept(ed) | decline(d)
+
+
+class TokenDecisionRequest(BaseModel):
+    token: str
+    decision: str
+
+
+@router.post("/decision")
+async def decide_reception_by_token(
+    body: TokenDecisionRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public, token-authenticated. Called by the staff PWA Service Worker when a
+    notification action button (すぐ伺います / 只今対応できません) is tapped — the SW has
+    no JWT, so the signed decision token in the push payload is the credential."""
+    try:
+        payload = decode_token(body.token)
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if payload.get("type") != "decision":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    log_id = payload.get("sub")
+    tenant_id = payload.get("tenant_id")
+    result = await db.execute(select(ReceptionLog).where(ReceptionLog.id == log_id))
+    log = result.scalar_one_or_none()
+    if not log or log.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Reception log not found")
+    state = await _apply_decision(db, log, body.decision)
+    return {"ok": True, "id": log.id, "state": state}
+
+
+@router.post("/{log_id}/decision", response_model=ReceptionOut)
+async def decide_reception(
+    log_id: str,
+    body: DecisionRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """JWT-authenticated. In-app OK/NG buttons on the admin reception page — the
+    universal path and the iOS-PWA fallback (iOS does not render notification actions)."""
+    result = await db.execute(select(ReceptionLog).where(ReceptionLog.id == log_id))
+    log = result.scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="Reception log not found")
+    if log.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    await _apply_decision(db, log, body.decision)
+    return _log_out(log)
+
+
 class BulkDeleteRequest(BaseModel):
     ids: list[str]
 
@@ -382,6 +481,7 @@ async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> N
     if log.purpose:
         body += f" 用件：{log.purpose}"
 
+    data, actions = build_decision_push_extras(tenant_id, log)
     for sub in subs:
         await send_push(
             endpoint=sub.endpoint,
@@ -392,6 +492,9 @@ async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> N
             url=f"/{tenant_id}/admin/reception",
             private_key=private_key,
             subject=settings.vapid_subject,
+            tag=f"reception-{log.id}",
+            data=data,
+            actions=actions,
         )
 
 

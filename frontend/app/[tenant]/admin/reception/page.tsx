@@ -68,6 +68,8 @@ const PAGE_SIZE = 10;
 const STATUS_LABEL: Record<string, string> = {
   received: "受付済み",
   notified: "通知済み",
+  accepted: "対応中",
+  declined: "対応不可",
   completed: "完了",
   cancelled: "キャンセル",
 };
@@ -75,6 +77,8 @@ const STATUS_LABEL: Record<string, string> = {
 const STATUS_COLOR: Record<string, string> = {
   received: "#f59e0b",
   notified: "#3b82f6",
+  accepted: "#059669",
+  declined: "#ef4444",
   completed: "#10b981",
   cancelled: "#9ca3af",
 };
@@ -294,9 +298,36 @@ function StatusSelect({ log, token, onUpdate }: { log: ReceptionLog; token: stri
     >
       <option value="received">受付済み</option>
       <option value="notified">通知済み</option>
+      <option value="accepted">対応中</option>
+      <option value="declined">対応不可</option>
       <option value="completed">完了</option>
       <option value="cancelled">キャンセル</option>
     </select>
+  );
+}
+
+// 受付 OK/NG 応答ボタン（アプリ内。iOS PWA では通知アクションが出ないためのフォールバック兼・全端末共通）。
+// 未応答(received/notified)の行にのみ表示する。
+function DecisionButtons({ log, token, onUpdate }: { log: ReceptionLog; token: string; onUpdate: (id: string, state: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const state = log.state ?? "received";
+  if (state !== "received" && state !== "notified") return null;
+
+  const decide = (decision: "accept" | "decline", nextState: string) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setBusy(true);
+    api.decideReception(token, log.id, decision)
+      .then(() => onUpdate(log.id, nextState))
+      .catch(() => {})
+      .finally(() => setBusy(false));
+  };
+
+  const base: React.CSSProperties = { border: "none", borderRadius: 10, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", color: "#fff", opacity: busy ? 0.6 : 1 };
+  return (
+    <div style={{ display: "inline-flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>
+      <button type="button" disabled={busy} onClick={decide("accept", "accepted")} style={{ ...base, backgroundColor: "#059669" }}>すぐ伺います</button>
+      <button type="button" disabled={busy} onClick={decide("decline", "declined")} style={{ ...base, backgroundColor: "#ef4444" }}>只今対応できません</button>
+    </div>
   );
 }
 
@@ -548,6 +579,8 @@ export default function ReceptionLogsPage() {
           <option value="">ステータス: 全て</option>
           <option value="received">受付済み</option>
           <option value="notified">通知済み</option>
+          <option value="accepted">対応中</option>
+          <option value="declined">対応不可</option>
           <option value="completed">完了</option>
           <option value="cancelled">キャンセル</option>
         </select>
@@ -683,7 +716,10 @@ export default function ReceptionLogsPage() {
                       </td>
                       <td style={{ padding: "12px 14px", color: "#6b6559" }}>{r.staff || "—"}</td>
                       <td style={{ padding: "12px 14px" }}>
-                        <StatusSelect log={r} token={token} onUpdate={handleStateUpdate} />
+                        <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
+                          <StatusSelect log={r} token={token} onUpdate={handleStateUpdate} />
+                          <DecisionButtons log={r} token={token} onUpdate={handleStateUpdate} />
+                        </div>
                       </td>
                       <td style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 4 }}>
                         <button

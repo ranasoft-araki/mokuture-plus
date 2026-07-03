@@ -1,6 +1,9 @@
 /* mokuture+ Service Worker — push notifications & offline shell cache */
-const CACHE = 'mokuture-v1';
+const CACHE = 'mokuture-v2';
 const SHELL = ['/', '/icons/icon.svg', '/manifest.json'];
+
+// 受付 OK/NG 応答の送信先フォールバック（プッシュ payload に decisionEndpoint が無い場合）
+const DECISION_ENDPOINT_FALLBACK = 'https://mokuture-plus-api.onrender.com/api/reception/decision';
 
 // Badge count — in-memory; resets on SW restart (acceptable trade-off)
 let badgeCount = 0;
@@ -49,18 +52,30 @@ self.addEventListener('push', (e) => {
     if (e.data) payload = { ...payload, ...e.data.json() };
   } catch (_) {}
 
+  // 受付応答プッシュ(kind==='reception_decision')は OK/NG アクションを出す。
+  // それ以外(テスト通知等)は従来の 確認する/閉じる。
+  const actions = Array.isArray(payload.actions) && payload.actions.length
+    ? payload.actions
+    : [
+        { action: 'open', title: '確認する' },
+        { action: 'dismiss', title: '閉じる' },
+      ];
+
   const options = {
     body: payload.body,
     icon: '/icons/icon.svg',
     badge: '/icons/icon.svg',
     tag: payload.tag,
     renotify: true,
-    data: { url: payload.url },
+    data: {
+      url: payload.url,
+      kind: payload.kind,
+      logId: payload.logId,
+      decisionToken: payload.decisionToken,
+      decisionEndpoint: payload.decisionEndpoint,
+    },
     vibrate: [200, 100, 200, 100, 200],
-    actions: [
-      { action: 'open', title: '確認する' },
-      { action: 'dismiss', title: '閉じる' },
-    ],
+    actions,
   };
 
   badgeCount = typeof payload.badge === 'number' ? payload.badge : badgeCount + 1;
@@ -71,7 +86,7 @@ self.addEventListener('push', (e) => {
   );
 });
 
-// ── Notification click: focus or open window ───────────────────────────
+// ── Notification click: OK/NG decision, or focus/open window ───────────
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
   badgeCount = 0;
@@ -79,7 +94,25 @@ self.addEventListener('notificationclick', (e) => {
 
   if (e.action === 'dismiss') return;
 
-  const targetUrl = e.notification.data?.url ?? '/';
+  const data = e.notification.data || {};
+
+  // 受付応答: 通知ボタンの すぐ伺います / 只今対応できません。
+  // SW は JWT を持てないので payload の署名トークンで直接 POST する（ウィンドウは開かない）。
+  if (e.action === 'accept' || e.action === 'decline') {
+    const endpoint = data.decisionEndpoint || DECISION_ENDPOINT_FALLBACK;
+    if (data.decisionToken) {
+      e.waitUntil(
+        fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: data.decisionToken, decision: e.action }),
+        }).catch(() => {})
+      );
+    }
+    return;
+  }
+
+  const targetUrl = data.url ?? '/';
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       const match = list.find((c) => c.url.includes(targetUrl) && 'focus' in c);

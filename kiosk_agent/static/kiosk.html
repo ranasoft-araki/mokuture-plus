@@ -82,6 +82,7 @@ function cleanup() { CLEANUPS.forEach(f => f()); CLEANUPS = []; }
 //   表示: http://localhost:8000/kiosk.html?mock=1
 // ?mock=1 で即モック。エージェントの /config が mock:true を返した場合(例:Windows開発機)も boot() で有効化する。
 let MOCK = new URLSearchParams(location.search).has("mock");
+let _mockDecisionPolls = 0;  // MOCK: 待機画面ポーリングの回数(数回でaccepted)
 const MOCK_LOCKERS = [
   { id: "A", name: "A（上段）", door_number: 17, occupied: false, _pin: null },
   { id: "B", name: "B（中段）", door_number: 18, occupied: true,  _pin: "1234" },
@@ -105,7 +106,12 @@ async function mockFetch(method, path, body) {
     staff_list: ["山田 太郎", "佐藤 花子", "鈴木 一郎"], purpose_list: ["お打ち合わせ", "納品", "採用面接"],
   };
   if (path === "/proxy/schedule") return { playlist: null, suspended: false };
-  if (path === "/proxy/reception") return { id: "mock", visitor_name: body?.visitor_name ?? "", created_at: "" };
+  if (path === "/proxy/reception") { _mockDecisionPolls = 0; return { id: "mock", visitor_name: body?.visitor_name ?? "", created_at: "" }; }
+  if (path.startsWith("/proxy/reception/")) {
+    // 待機画面のポーリング: 数回で「accepted」を返してOK画面デモへ。
+    _mockDecisionPolls += 1;
+    return { id: "mock", state: _mockDecisionPolls >= 2 ? "accepted" : "received" };
+  }
   if (path.startsWith("/proxy/appointment/")) return {
     id: "mock-appt", visitor_name: "山田 太郎", company: "株式会社テスト", purpose: "お打ち合わせ",
     staff: "佐藤 花子", scheduled_at: "2026-06-29T14:30:00", status: "pending",
@@ -230,6 +236,8 @@ function go(screen, data = {}) {
     else if (screen === "locker")         showLocker();
     else if (screen === "delivery")       showDelivery();
     else if (screen === "calling")        showCalling(data);
+    else if (screen === "resultOk")       showResultOk(data);
+    else if (screen === "resultNg")       showResultNg(data);
     else if (screen === "complete")       showComplete(data);
     else if (screen === "kiosk-settings") showKioskSettings();
   }
@@ -978,9 +986,9 @@ function showReception(initPurpose) {
     if (!token) { cleanup(); showSetup(); return; }
     submitting = true; render();
     try {
-      await apiPost("/proxy/reception", { visitor_name: form.visitor_name, company: form.company, purpose: form.purpose, staff: form.staff, method: "form" }, token);
+      const res = await apiPost("/proxy/reception", { visitor_name: form.visitor_name, company: form.company, purpose: form.purpose, staff: form.staff, method: "form" }, token);
       cleanup();
-      go("calling", { name: form.visitor_name, staff: form.staff, method: "form" });
+      go("calling", { name: form.visitor_name, staff: form.staff, method: "form", receptionId: res?.id });
     } catch (e) {
       errMsg = e.message || "受付に失敗しました";
       submitting = false; render();
@@ -1114,12 +1122,12 @@ function showQr() {
       submitting = true; refreshCam();
       try {
         const appt = await apiGet("/proxy/appointment/" + encodeURIComponent(apptToken), token);
-        await apiPost("/proxy/reception", {
+        const rec = await apiPost("/proxy/reception", {
           visitor_name: appt.visitor_name, company: appt.company || "", purpose: appt.purpose || "",
           staff: appt.staff || "", method: "appointment", appointment_id: appt.id,
         }, token);
         stopStream(); cleanup();
-        go("calling", { name: appt.visitor_name, staff: appt.staff || "", room: appt.meeting_room || null, scheduledAt: appt.scheduled_at || null, method: "appointment" });
+        go("calling", { name: appt.visitor_name, staff: appt.staff || "", room: appt.meeting_room || null, scheduledAt: appt.scheduled_at || null, method: "appointment", receptionId: rec?.id });
       } catch (e) {
         errMsg = e.message || "予約情報の取得に失敗しました"; submitting = false; scanning = true; render(); scanLoop();
       }
@@ -1134,8 +1142,8 @@ function showQr() {
     if (!name) { errMsg = "QRコードから来訪者情報を読み取れませんでした。"; scanning = true; refreshCam(); scanLoop(); return; }
     submitting = true; refreshCam();
     try {
-      await apiPost("/proxy/reception", { visitor_name: name, company, purpose, method: "qr" }, token);
-      stopStream(); cleanup(); go("calling", { name, staff: "", method: "qr" });
+      const rec = await apiPost("/proxy/reception", { visitor_name: name, company, purpose, method: "qr" }, token);
+      stopStream(); cleanup(); go("calling", { name, staff: "", method: "qr", receptionId: rec?.id });
     } catch (e) {
       errMsg = e.message || "受付処理に失敗しました"; submitting = false; scanning = true; render(); scanLoop();
     }
@@ -1163,11 +1171,11 @@ function showCalling(data) {
     </div>
     <div>
       ${logo}
-      <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:18px;font-family:Inter,system-ui,sans-serif">CALLING</div>
-      <div style="font-size:92px;font-weight:600;color:${T.ink};letter-spacing:-3px;line-height:1.04;margin-bottom:24px">${escHtml(callingMsg)}</div>
+      <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:18px;font-family:Inter,system-ui,sans-serif">PLEASE WAIT</div>
+      <div style="font-size:92px;font-weight:600;color:${T.ink};letter-spacing:-3px;line-height:1.04;margin-bottom:24px">お待ちください</div>
       ${vName ? `<div style="font-size:34px;color:${T.sub};margin-bottom:10px">${escHtml(vName)} 様</div>` : ""}
       ${staff ? `<div style="font-size:24px;color:${T.muted};margin-bottom:22px">ご担当：${escHtml(staff)}</div>` : ""}
-      <div style="font-size:24px;color:${T.sub};line-height:1.7;margin-bottom:30px">まもなく担当者がお迎えにあがります</div>
+      <div style="font-size:24px;color:${T.sub};line-height:1.7;margin-bottom:30px">担当者が確認しています。少々お待ちください。</div>
       <div style="display:flex;gap:14px"><div class="cal-dot"></div><div class="cal-dot"></div><div class="cal-dot"></div></div>
     </div>
   </div>
@@ -1182,7 +1190,86 @@ function showCalling(data) {
   rescale();
   const clk = document.getElementById("cal-clk"); if (clk) clk.textContent = fmtClock();
   every(30000, () => { const c = document.getElementById("cal-clk"); if (c) c.textContent = fmtClock(); });
-  later(4000, () => { cleanup(); go("complete", data); });
+
+  // スタッフの OK/NG 応答(state)をポーリングし、結果画面へ切替。
+  const token = localStorage.getItem(TOKEN_KEY);
+  const rid = data.receptionId;
+  if (!rid) {
+    // 受付IDが無い旧経路: 従来どおり数秒で歓迎画面へ。
+    later(4000, () => { cleanup(); go("complete", data); });
+    return;
+  }
+  let done = false;
+  every(2500, async () => {
+    if (done) return;
+    try {
+      const r = await apiGet("/proxy/reception/" + encodeURIComponent(rid), token);
+      if (r && r.state === "accepted")      { done = true; cleanup(); go("resultOk", data); }
+      else if (r && r.state === "declined") { done = true; cleanup(); go("resultNg", data); }
+    } catch (_) { /* 通信不調は無視。下のタイムアウトで必ず離脱する */ }
+  });
+  // 無応答フォールバック: 一定時間で中立の歓迎画面へ→idle復帰(来客を固まらせない)。
+  later(90000, () => { if (done) return; done = true; cleanup(); go("complete", data); });
+}
+
+// ─── RESULT: OK (スタッフが「すぐ伺います」) ─────────────────────────────────
+// 担当者が対応する旨を伝える。予約(QR)で会議室マップがある場合は従来の歓迎画面
+// (マップ付き)で案内し、それ以外は専用のOK画面を表示する。自動でidleへ復帰。
+function showResultOk(data) {
+  data = data || {};
+  if (data.room && data.room.map_image_url) { showComplete(data); return; }
+  const bc = ST.brand_color;
+  const vName = data.name || "";
+  const staff = data.staff || "";
+  const logo = ST.logo_url ? `<img src="${escHtml(ST.logo_url)}" style="height:48px;object-fit:contain;margin-bottom:28px" alt="logo">` : "";
+  const returnSec = Math.max(ST.kiosk_complete_timeout_sec || 10, 10);
+  let count = returnSec;
+  sc.innerHTML = `
+<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;text-align:center;padding:0 160px">
+  <div style="width:150px;height:150px;border-radius:50%;background:${bc};color:#fff;display:flex;align-items:center;justify-content:center;margin-bottom:44px;box-shadow:0 12px 40px ${bc}55;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
+  ${logo}
+  <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:20px;font-family:Inter,system-ui,sans-serif">STAFF IS COMING</div>
+  <div style="font-size:96px;font-weight:600;color:${T.ink};letter-spacing:-3px;line-height:1.05;margin-bottom:26px">担当者がまいります</div>
+  ${vName ? `<div style="font-size:36px;color:${T.sub};margin-bottom:8px">${escHtml(vName)} 様</div>` : ""}
+  <div style="font-size:30px;color:${T.sub};line-height:1.6;margin-bottom:8px">そのままお待ちください。担当者がお迎えにあがります。</div>
+  ${staff ? `<div style="font-size:22px;color:${T.muted};margin-top:6px">ご担当：${escHtml(staff)}</div>` : ""}
+  <div style="margin-top:54px;display:flex;align-items:center;gap:14px;color:${T.muted};font-size:18px">${ICO.clock}<span>待機画面に戻るまで</span><span id="ok-cnt" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${bc}">${count}</span><span>秒</span></div>
+</div>`;
+  rescale();
+  every(1000, () => {
+    count--;
+    if (count <= 0) { cleanup(); go("idle"); return; }
+    const c = document.getElementById("ok-cnt"); if (c) c.textContent = count;
+  });
+}
+
+// ─── RESULT: NG (スタッフが「只今対応できません」) ───────────────────────────
+// 担当者が対応できないため、来客を受付(内線)へ誘導する。自動でidleへ復帰。
+function showResultNg(data) {
+  data = data || {};
+  const accent = T.urgent;         // #a84238 和モダンの朱
+  const accentBg = T.urgentBg;     // #f6e0dc
+  const vName = data.name || "";
+  const logo = ST.logo_url ? `<img src="${escHtml(ST.logo_url)}" style="height:48px;object-fit:contain;margin-bottom:28px" alt="logo">` : "";
+  const returnSec = Math.max((ST.kiosk_complete_timeout_sec || 10) + 5, 15);
+  let count = returnSec;
+  const infoIco = `<svg width="66" height="66" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16.5" x2="12.01" y2="16.5"/></svg>`;
+  sc.innerHTML = `
+<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;text-align:center;padding:0 160px">
+  <div style="width:150px;height:150px;border-radius:50%;background:${accentBg};color:${accent};display:flex;align-items:center;justify-content:center;margin-bottom:44px;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${infoIco}</div>
+  ${logo}
+  <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:20px;font-family:Inter,system-ui,sans-serif">PLEASE ASK AT RECEPTION</div>
+  <div style="font-size:76px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.12;margin-bottom:28px">只今ご対応が難しい状況です</div>
+  ${vName ? `<div style="font-size:34px;color:${T.sub};margin-bottom:14px">${escHtml(vName)} 様</div>` : ""}
+  <div style="font-size:32px;color:${T.sub};line-height:1.6">恐れ入りますが、受付（内線）へ<br>お声がけくださいますようお願いいたします。</div>
+  <div style="margin-top:54px;display:flex;align-items:center;gap:14px;color:${T.muted};font-size:18px">${ICO.clock}<span>待機画面に戻るまで</span><span id="ng-cnt" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${accent}">${count}</span><span>秒</span></div>
+</div>`;
+  rescale();
+  every(1000, () => {
+    count--;
+    if (count <= 0) { cleanup(); go("idle"); return; }
+    const c = document.getElementById("ng-cnt"); if (c) c.textContent = count;
+  });
 }
 
 // ─── COMPLETE (歓迎画面 — お待ちしておりました) ───────────────────────────────

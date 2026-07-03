@@ -337,6 +337,9 @@ export const api = {
     request<ReceptionLog[]>("/reception", {}, token),
   updateReceptionLog: (token: string, logId: string, updates: { state?: string; staff_notes?: string }) =>
     request<ReceptionLog>(`/reception/${logId}`, { method: "PATCH", body: JSON.stringify(updates) }, token),
+  // 受付 OK/NG 応答（アプリ内ボタン。iOS PWA フォールバック兼・全端末共通経路）
+  decideReception: (token: string, logId: string, decision: "accept" | "decline") =>
+    request<ReceptionLog>(`/reception/${logId}/decision`, { method: "POST", body: JSON.stringify({ decision }) }, token),
   exportContactsCsv: async (token: string): Promise<Blob> => {
     const res = await _fetch("/reception/contacts.csv", {}, token);
     if (!res.ok) throw new Error("Export failed");

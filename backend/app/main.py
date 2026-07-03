@@ -25,6 +25,9 @@ _ENSURE_COLUMNS = {
         "occupied": "BOOLEAN DEFAULT FALSE",
         "occupied_at": "TIMESTAMP",
     },
+    "reception_logs": {
+        "decided_at": "TIMESTAMP",
+    },
 }
 
 

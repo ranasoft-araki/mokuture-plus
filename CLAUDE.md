@@ -208,6 +208,10 @@ mokuture/
 - `GET /reseller/reception/export.csv` — 受付ログCSVエクスポート（代理店）
 - `GET /reseller/reception` — 代理店クロステナント受付ログ
 - `PATCH /reception/{id}` — 受付ログのステータス・スタッフメモ更新 (body: `{ state?, staff_notes? }`)
+- `POST /reception/{id}/decision` — 受付OK/NG応答 (JWT)。body `{ decision: accept|decline }` → state を `accepted`/`declined` に更新。管理画面「受付ログ」のアプリ内OK/NGボタン用（iOS PWA は通知アクション非対応のためのフォールバック兼・全端末共通経路）
+- `POST /reception/decision` — 受付OK/NG応答 (**認証なし・署名トークン**)。body `{ token, decision }`。スタッフPWAの Service Worker が通知アクションボタン（すぐ伺います/只今対応できません）から、JWTを持たずに応答するための経路。token は `services/auth.create_decision_token`（JWT HS256, type=decision, 2h）
+- `GET /kiosk/reception/{id}` — 受付のスタッフ応答結果(state) 取得 (デバイストークン)。キオスク「お待ちください」画面が 2.5s 間隔でポーリングして OK/NG 画面へ切替する
+- `_apply_decision` は冪等：既に accepted/declined の受付は上書きしない（通知ボタン＋アプリ内ボタンの二重タップでも安全）
 - `PATCH /users/me/password` — 自分のパスワード変更
 - `POST /users/{id}/reset-password` — 管理者によるパスワードリセット
 - `GET /settings/stats` — テナント統計（受付件数・デバイス数等）
@@ -220,6 +224,8 @@ mokuture/
 
 ### フロントエンド機能
 - 受付ログ自動更新（Auto-refresh）: 管理画面 `/reception` および運営画面 `/operator/reception` に ON/OFF トグル付き自動更新機能（`setInterval` ポーリング）を実装
+- 受付OK/NG応答: 管理画面「受付ログ」の未応答行(received/notified)に「すぐ伺います」「只今対応できません」ボタン(`DecisionButtons`)を表示し `api.decideReception` を呼ぶ。ステータス `accepted`(対応中)/`declined`(対応不可) を `STATUS_LABEL`/`STATUS_COLOR`・フィルタに追加。
+- Web Push: スタッフPWAの Service Worker(`public/sw.js`)は受付プッシュ(`kind==="reception_decision"`)に OK/NG アクションボタンを表示し、通知タップで署名トークン付き `POST /reception/decision` を送る。iOS PWA は通知アクション非対応のため上記アプリ内ボタンがフォールバック。
 
 ---
 
@@ -293,7 +299,7 @@ mokuture/
 - **schedules** — 曜日・時間帯ごとのプレイリスト割当
 - **devices** — キオスク端末 (token, PIN, last_seen_at, force_update_at)
 - **lockers** — ロッカー (door_number=gpio_pin, state, **name**=表示ラベル, **pin_hash**=bcrypt(4桁PIN) nullable, **occupied**=利用中フラグ, **occupied_at**)
-- **reception_logs** — 受付ログ (visitor_name, company, staff, purpose, method, state, staff_notes, appointment_id)
+- **reception_logs** — 受付ログ (visitor_name, company, staff, purpose, method, **state**, staff_notes, appointment_id, **decided_at**)。`state`: `received | notified | accepted(OK=すぐ伺う) | declined(NG=対応不可) | completed | cancelled`。`decided_at`=スタッフがOK/NGを押した時刻(nullable)。state/decided_at は素の型でDB制約なし＝カラム追加は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS`)で対応済み
 - **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired, meeting_room_id FK nullable)
 - **meeting_rooms** — 会議室 (name, location, capacity, color, description, is_active, **map_image_url**=館内マップ画像URL nullable)
 - **notification_settings** — 通知先設定 (Fernet 暗号化, `type` で種別)。受付: `slack`/`chatwork`/`webhook`/`vapid`。配達専用: `slack_delivery`/`chatwork_delivery`/`webhook_delivery`(未設定時は受付用にフォールバック)、`push_delivery`(`{enabled}` プッシュ通知ON/OFF, 既定ON)
@@ -324,7 +330,8 @@ mokuture/
 | PATCH | /devices/{id} | JWT | 端末名・場所の変更 (name 1〜100文字, location nullable) |
 | POST | /devices/{id}/pin | JWT | PIN 発行 |
 | GET | /kiosk/schedule | デバイストークン | 現在のプレイリスト取得。`device_name`(最新の端末名)も返し、キオスク/エージェントが名前をライブ同期する |
-| POST | /kiosk/reception | デバイストークン | 受付フォーム送信 (appointment_id 対応) |
+| POST | /kiosk/reception | デバイストークン | 受付フォーム送信 (appointment_id 対応)。応答は `{id,...}` を返し、キオスクは id を待機画面のポーリングに使う |
+| GET | /kiosk/reception/{id} | デバイストークン | 受付のスタッフ応答結果 `{id, state}` を返す。待機画面のポーリング用 |
 | GET | /kiosk/appointment/{token} | デバイストークン | QR トークンから来社予定取得 (scheduled_at + meeting_room{name,location,map_image_url}\|null を含む) |
 | POST | /kiosk/verify-pin | なし | PIN → デバイストークン交換 |
 | GET | /appointments | JWT | 来社予定一覧 (status/date_from/date_to フィルタ対応) |
@@ -371,9 +378,16 @@ mokuture/
 idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 3タイル)
   top: ご訪問 → welcome,  荷物の配達 → delivery(Phase3実装済み),  ロッカー → locker(Phase2実装済み)
   welcome(QR有無) → qr / reception
-  qr(スキャン) / reception(フォーム) → calling → complete(歓迎画面)
+  qr(スキャン) / reception(フォーム) → calling(お待ちください) → resultOk / resultNg / complete
   complete ──(60s 等)──▶ idle
 ```
+
+**受付OK/NG応答フロー**（`showCalling` @ kiosk.html）:
+- 受付送信で受け取った `receptionId` を `go("calling", {receptionId})` に渡す。`calling`(=「お待ちください」画面)は `GET /proxy/reception/{id}`(→backend `GET /kiosk/reception/{id}`) を **2.5s間隔でポーリング**する。
+- スタッフがプッシュ通知の「すぐ伺います/只今対応できません」or 管理画面「受付ログ」のOK/NGボタンを押す → backend が state を `accepted`/`declined` に更新。
+- ポーリングが検知 → `accepted`→`showResultOk`(「担当者がまいります」)、`declined`→`showResultNg`(「只今ご対応が難しい状況です。受付/内線へ」)。予約(QR)で会議室マップがある accepted は従来の歓迎画面(`showComplete`)で案内。
+- **無応答フォールバック**: 90s で中立の歓迎画面(`showComplete`)→idle に復帰し、来客を固まらせない。受付ID が無い旧経路は従来どおり数秒で `complete`。
+- MOCK: `mockFetch` が `/proxy/reception/{id}` を数回ポーリング後に `accepted` を返し、UIフローを実機/バックエンド無しで確認できる。
 
 - **idle**: 人感センサー（`GET /device/pir` を 700ms ポーリング）で来訪検知 → `top` へ自動遷移。タッチCTAは非表示（PIR非搭載/開発環境向けに画面タップでも遷移可）。画面は屋号(ロゴ/welcome_message)・タグラインのみ。signage メディアがあれば再生。
 - **top（受付メニュー）**: `ご訪問 / 荷物の配達 / ロッカー` の3タイル（日英併記・大型）。3タイルとも実装済み。
@@ -441,6 +455,7 @@ idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 
 DATABASE_URL=postgresql+asyncpg://...
 JWT_SECRET_KEY=...
 ENCRYPTION_KEY=...           # Fernet key (base64)
+PUBLIC_API_URL=https://mokuture-plus-api.onrender.com/api  # プッシュ通知に埋め込む絶対URL(SWがOK/NG応答をPOSTする先)。既定は本番URL
 STORAGE_ENDPOINT=...         # R2/MinIO endpoint
 STORAGE_ACCESS_KEY=...
 STORAGE_SECRET_KEY=...

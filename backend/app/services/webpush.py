@@ -55,8 +55,16 @@ async def send_push(
     url: str = "/",
     private_key: str = "",
     subject: str = "mailto:admin@mokuture.jp",
+    tag: str = "reception",
+    data: dict | None = None,
+    actions: list | None = None,
 ) -> tuple[bool, str]:
-    """Send a single web push notification. Returns (success, error_message)."""
+    """Send a single web push notification. Returns (success, error_message).
+
+    `data` merges extra fields into the payload (read by the Service Worker, e.g.
+    logId / decisionToken / decisionEndpoint). `actions` sets notification action
+    buttons (e.g. OK/NG). Both are optional to keep existing callers unchanged.
+    """
     if not _AVAILABLE:
         return False, "pywebpush not installed"
     if not private_key:
@@ -66,9 +74,13 @@ async def send_push(
         "title": title,
         "body": body,
         "url": url,
-        "tag": "reception",
+        "tag": tag,
         "icon": "/icons/icon.svg",
     }
+    if data:
+        payload.update(data)
+    if actions is not None:
+        payload["actions"] = actions
     loop = asyncio.get_running_loop()
     try:
         await loop.run_in_executor(

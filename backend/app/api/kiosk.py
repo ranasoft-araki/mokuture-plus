@@ -384,6 +384,21 @@ async def kiosk_reception(
     }
 
 
+@router.get("/reception/{log_id}")
+async def kiosk_reception_status(
+    log_id: str,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """キオスクの待機画面がポーリングして、スタッフの OK/NG 応答結果(state)を取得する。"""
+    tenant, _ = ctx
+    result = await db.execute(select(ReceptionLog).where(ReceptionLog.id == log_id))
+    log = result.scalar_one_or_none()
+    if log is None or log.tenant_id != tenant.id:
+        raise HTTPException(status_code=404, detail="Reception log not found")
+    return {"id": log.id, "state": log.state}
+
+
 # ── Staff call (delivery) ──────────────────────────────────────────────────────
 
 class CallStaffBody(BaseModel):
@@ -652,6 +667,8 @@ async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> N
     if log.purpose:
         body += f" 用件：{log.purpose}"
 
+    from app.api.reception import build_decision_push_extras
+    data, actions = build_decision_push_extras(tenant_id, log)
     for sub in subs:
         await send_push(
             endpoint=sub.endpoint,
@@ -662,6 +679,9 @@ async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> N
             url=f"/{tenant_id}/admin/reception",
             private_key=private_key,
             subject=settings.vapid_subject,
+            tag=f"reception-{log.id}",
+            data=data,
+            actions=actions,
         )  # fire-and-forget: ignore (bool, str) return
 
 

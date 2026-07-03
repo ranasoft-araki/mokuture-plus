@@ -444,6 +444,31 @@ async def proxy_reception(request: Request, body: ReceptionBody):
     return resp.json()
 
 
+@app.get("/proxy/reception/{log_id}")
+async def proxy_reception_status(log_id: str, request: Request):
+    """受付のスタッフ応答結果(state)をリモートAPIから取得する。待機画面のポーリング用。"""
+    token = request.headers.get("x-kiosk-token", "")
+    if not token:
+        raise HTTPException(status_code=401, detail="X-Kiosk-Token required")
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(
+                f"{settings.remote_api_url}/kiosk/reception/{log_id}",
+                headers={"X-Kiosk-Token": token},
+                timeout=10,
+            )
+            if resp.status_code == 401:
+                raise HTTPException(status_code=401, detail="Invalid kiosk token")
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail="受付が見つかりません")
+            resp.raise_for_status()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"リモートAPIに接続できません: {e}")
+    return resp.json()
+
+
 @app.get("/proxy/appointment/{token}")
 async def proxy_appointment(token: str, request: Request):
     """QR トークンから来社予定を取得する。"""

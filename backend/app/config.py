@@ -36,5 +36,9 @@ class Settings(BaseSettings):
     vapid_public_key: str = ""
     vapid_subject: str = "mailto:admin@mokuture.jp"
 
+    # Public absolute API base (scheme+host+prefix) used to build URLs embedded in
+    # push payloads that the Service Worker (served cross-origin from Netlify) must call.
+    public_api_url: str = "https://mokuture-plus-api.onrender.com/api"
+
 
 settings = Settings()
