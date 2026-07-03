@@ -1002,7 +1002,11 @@ function showReception(initPurpose) {
 function showQr() {
   const bc = ST.brand_color;
   let stream = null, scanning = false, submitting = false, errMsg = "";
-  let idleId, countId;
+  let idleId, countId, cooldownId = null, paused = false, disposed = false;
+  let lastScanTs = 0;                       // デコード間引き用のタイムスタンプ
+  const QR_SCAN_INTERVAL_MS = 120;          // デコード間隔(≈8fps)。フルフレーム解析の常時負荷を抑える
+  const QR_UNSUPPORTED_COOLDOWN_MS = 3500;  // 未対応QR検出後に読み取りを一時停止する時間
+  const QR_ERROR_COOLDOWN_MS = 2500;        // 予約取得/受付エラー後に読み取りを一時停止する時間
   function resetIdle() {
     clearTimeout(idleId); clearInterval(countId);
     let c = ST.kiosk_idle_timeout_sec;
@@ -1017,7 +1021,7 @@ function showQr() {
     idleId = setTimeout(() => { stopStream(); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
     countId = setInterval(() => { c--; if (c <= 0) { clearInterval(countId); return; } update(); }, 1000);
   }
-  CLEANUPS.push(() => { clearTimeout(idleId); clearInterval(countId); stopStream(); });
+  CLEANUPS.push(() => { disposed = true; clearTimeout(idleId); clearInterval(countId); clearTimeout(cooldownId); stopStream(); });
   function stopStream() { scanning = false; stream?.getTracks().forEach(t => t.stop()); stream = null; }
 
   function camContent() {
@@ -1028,7 +1032,7 @@ function showQr() {
     return `
 <div style="position:absolute;inset:64px;border:3px dashed rgba(255,255,255,.2);border-radius:22px">${corners}${scanning ? `<div style="position:absolute;left:0;right:0;height:3px;background:${bc};box-shadow:0 0 24px ${bc};animation:scan-line 2s linear infinite"></div>` : ""}</div>
 <video id="qr-vid" muted playsinline style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.85"></video>
-<div style="position:absolute;bottom:24px;left:0;right:0;display:flex;justify-content:center"><span style="display:inline-flex;align-items:center;gap:8px;background:rgba(0,0,0,.5);color:#fff;padding:10px 22px;border-radius:999px;font-size:17px"><span style="width:8px;height:8px;border-radius:50%;background:${bc};animation:dot-pulse 1.4s ease-in-out infinite"></span>${scanning ? "読み取り中…" : "カメラ準備中…"}</span></div>`;
+<div style="position:absolute;bottom:24px;left:0;right:0;display:flex;justify-content:center"><span style="display:inline-flex;align-items:center;gap:8px;background:rgba(0,0,0,.5);color:#fff;padding:10px 22px;border-radius:999px;font-size:17px"><span style="width:8px;height:8px;border-radius:50%;background:${bc};animation:dot-pulse 1.4s ease-in-out infinite"></span>${scanning ? "読み取り中…" : paused ? "少々お待ちください…" : "カメラ準備中…"}</span></div>`;
   }
 
   // カメラ位置を示す画像エリア(プレースホルダー)。実機のカメラ位置写真/図を qr_camera_image_url に設定すると差し替わる。
@@ -1082,24 +1086,31 @@ function showQr() {
 
   async function startCamera() {
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } });
+      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } });
+      if (disposed) { s.getTracks().forEach(t => t.stop()); return; }   // 初期化中に画面離脱 → ストリームを解放して打ち切る
+      stream = s;
       const vid = document.getElementById("qr-vid");
       if (vid) { vid.srcObject = stream; await vid.play(); }
+      if (disposed) { stopStream(); return; }                          // play 待ちの間に離脱した場合の保険
       scanning = true; refreshCam(); scanLoop();
     } catch {
-      errMsg = "カメラを起動できませんでした。アクセス許可を確認してください。"; render();
+      if (!disposed) { errMsg = "カメラを起動できませんでした。アクセス許可を確認してください。"; render(); }
     }
   }
 
-  let _qrCanvas = null, _qrCtx = null;
+  let _qrCanvas = null, _qrCtx = null, _barcodeDet = null;
   async function scanLoop() {
     if (!scanning) return;
     const vid = document.getElementById("qr-vid");
     if (!vid || vid.readyState < 2) { if (scanning) requestAnimationFrame(scanLoop); return; }
+    // デコードは QR_SCAN_INTERVAL_MS 間隔に間引く(フルフレーム解析の常時負荷/連続再検出のスパイクを抑える)
+    const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    if (now - lastScanTs < QR_SCAN_INTERVAL_MS) { if (scanning) requestAnimationFrame(scanLoop); return; }
+    lastScanTs = now;
     if (typeof BarcodeDetector !== "undefined") {
       try {
-        const det = new BarcodeDetector({ formats: ["qr_code"] });
-        const codes = await det.detect(vid);
+        if (!_barcodeDet) _barcodeDet = new BarcodeDetector({ formats: ["qr_code"] });   // 毎フレーム生成せず使い回す
+        const codes = await _barcodeDet.detect(vid);
         if (codes.length > 0 && codes[0].rawValue) { scanning = false; await handleQR(codes[0].rawValue); return; }
       } catch {}
     } else if (typeof jsQR !== "undefined") {
@@ -1113,15 +1124,48 @@ function showQr() {
     if (scanning) requestAnimationFrame(scanLoop);
   }
 
+  // 読み取ったQR文字列を判定。対応形式のみ受け付け、それ以外は null(=未対応)。
+  //   appt:<token>            … 来社予約QR
+  //   ...?name=&company=&…    … name パラメータ付きURL(ウォークイン)
+  function parseQR(raw) {
+    const s = (raw || "").trim();
+    if (!s) return null;
+    if (s.startsWith("appt:")) {
+      const token = s.slice(5).trim();
+      return token ? { kind: "appt", token } : null;
+    }
+    try {
+      const u = new URL(s);
+      const name = (u.searchParams.get("name") ?? "").trim();
+      if (name) return { kind: "walkin", name, company: u.searchParams.get("company") ?? "", purpose: u.searchParams.get("purpose") ?? "" };
+    } catch {}
+    return null;
+  }
+
+  // エラー表示 + 一定時間スキャンを停止してから自動再開する。
+  // 同じQRがカメラ前に留まっても即時に再処理してビジーループ化するのを防ぐ。
+  function pauseScan(msg, ms) {
+    submitting = false; scanning = false; paused = true; errMsg = msg;
+    resetIdle();                 // 来訪者は目の前に居るのでアイドル復帰を先送り
+    clearTimeout(cooldownId);
+    render();                    // メッセージを実際に描画(refreshCam だけだと右カラムが更新されない)
+    cooldownId = setTimeout(() => {
+      cooldownId = null; paused = false; errMsg = ""; scanning = true;
+      lastScanTs = 0; render(); scanLoop();
+    }, ms);
+  }
+
   async function handleQR(raw) {
     const token = localStorage.getItem(TOKEN_KEY);
     if (!token) { stopStream(); cleanup(); boot(); return; }
 
-    if (raw.startsWith("appt:")) {
-      const apptToken = raw.slice(5).trim();
+    const parsed = parseQR(raw);
+    if (!parsed) { pauseScan("未対応のQRコードです。ご予約時にお送りしたQRコードをかざしてください。", QR_UNSUPPORTED_COOLDOWN_MS); return; }
+
+    if (parsed.kind === "appt") {
       submitting = true; refreshCam();
       try {
-        const appt = await apiGet("/proxy/appointment/" + encodeURIComponent(apptToken), token);
+        const appt = await apiGet("/proxy/appointment/" + encodeURIComponent(parsed.token), token);
         const rec = await apiPost("/proxy/reception", {
           visitor_name: appt.visitor_name, company: appt.company || "", purpose: appt.purpose || "",
           staff: appt.staff || "", method: "appointment", appointment_id: appt.id,
@@ -1129,23 +1173,18 @@ function showQr() {
         stopStream(); cleanup();
         go("calling", { name: appt.visitor_name, staff: appt.staff || "", room: appt.meeting_room || null, scheduledAt: appt.scheduled_at || null, method: "appointment", receptionId: rec?.id });
       } catch (e) {
-        errMsg = e.message || "予約情報の取得に失敗しました"; submitting = false; scanning = true; render(); scanLoop();
+        pauseScan(e.message || "予約情報の取得に失敗しました", QR_ERROR_COOLDOWN_MS);
       }
       return;
     }
 
-    let name = "", company = "", purpose = "";
-    try {
-      const u = new URL(raw);
-      name = u.searchParams.get("name") ?? ""; company = u.searchParams.get("company") ?? ""; purpose = u.searchParams.get("purpose") ?? "";
-    } catch { name = raw.trim(); }
-    if (!name) { errMsg = "QRコードから来訪者情報を読み取れませんでした。"; scanning = true; refreshCam(); scanLoop(); return; }
+    // walkin: name パラメータ付きURL
     submitting = true; refreshCam();
     try {
-      const rec = await apiPost("/proxy/reception", { visitor_name: name, company, purpose, method: "qr" }, token);
-      stopStream(); cleanup(); go("calling", { name, staff: "", method: "qr", receptionId: rec?.id });
+      const rec = await apiPost("/proxy/reception", { visitor_name: parsed.name, company: parsed.company, purpose: parsed.purpose, method: "qr" }, token);
+      stopStream(); cleanup(); go("calling", { name: parsed.name, staff: "", method: "qr", receptionId: rec?.id });
     } catch (e) {
-      errMsg = e.message || "受付処理に失敗しました"; submitting = false; scanning = true; render(); scanLoop();
+      pauseScan(e.message || "受付処理に失敗しました", QR_ERROR_COOLDOWN_MS);
     }
   }
 
