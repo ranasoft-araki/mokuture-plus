@@ -404,11 +404,14 @@ idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 
 - **delivery（荷物の配達・Phase3実装済み）**: `showDelivery`。配達方法を選択 — **置き配**(空きロッカーへ施錠。空きが無ければ選択不可。空きロッカー選択→`pulseLocker`でGPIO開錠→「扉を閉めました」→`/proxy/lockers/{id}/occupy-delivery`。**backendがランダム4桁PINを自動生成してbcrypt保存し、「どのロッカーにこのPINで置き配された」を担当者へ通知**。配達員にはPINを表示しない) / **呼び出し**(`/proxy/call-staff`→担当者へ「どの端末から呼び出しか(device.name)」をSlack/WebPush/Webhook/Chatwork通知)。置き配ロッカーはPIN付き(`has_pin:true`)＝通常の「利用中」ロッカーとして扱われ、スタッフが通知で受け取ったPINでロッカー画面から解錠して受取。
 - **locker（ロッカー・Phase2実装済み）**: 3段縦並び、空き=緑/利用中=アンバー。空き→`pulseLocker(door_number)`でGPIO開錠→「扉を閉めました」→4桁PIN設定(`/proxy/lockers/{id}/occupy`)。利用中→4桁PIN入力(`/proxy/lockers/{id}/release`)→照合OKでGPIO開錠。PINは backend で bcrypt 保存。扉開閉センサーが無いため閉扉は手動ボタン（センサー導入時は自動化可）。
   - **GPIO設定の注意**: kiosk は `POST /device/locker/{door_number}/open` を叩くため、kiosk_agent の `LOCKER_PINS_JSON` は **door_number(=GPIOピン番号)をキー**にすること。例: `{"17":17,"18":18,"19":19}`。
-- **モックモード**: エージェント/バックエンドAPIをスタブ化し、実機/バックエンド無しで全画面フロー（ロッカー・予約マップ含む）を確認できる。有効化は2通り:
-  1. **自動(推奨)**: `config.py` の `kiosk_mock` が既定で **Windowsなら True**（本番Piは False）。普通に `uvicorn main:app` を起動 → `/config` が `mock:true` を返し、`kiosk.html` の boot が自動でモックに切替（`http://localhost:8080`、`?mock=1` 不要）。`KIOSK_MOCK=true/false` 環境変数で明示上書き可。
-  2. **手動/静的**: `kiosk.html?mock=1`（エージェント不要、`python -m http.server` での確認用）。
-  - MOCKロッカー: A/C=空き、B=利用中(解錠PIN `1234`)。空きはPIN任意4桁で設定成功。QR画面の「（MOCK）予約QRを読み取ったことにする」で歓迎画面＋館内マップを確認可。
-  - 実バックエンドに繋ぐ実機(Pi)では `mock:false` となり通常フロー。
+- **モック方針（実機ハードのみ最小スタブ／バックエンドは常に実経路）**: MOCKは「処理ルートごと本番と分ける」のではなく、**実機でしか動かないハードだけ**を最小限スタブする。バックエンド通信（`/proxy/*`）は開発機でも常に実経路を通す。
+  - **ハードのモック（agent 層）**: GPIO(ロッカーリレー/PIR/ドア)・カメラ/マイク状態・音量・WiFi は agent が自動モックする。`main.py` の `_MOCK_DEVICE`(=**非Linux で自動 True**、`MOCK_GPIO=true` でも)と `gpio.py`(`gpiozero` 不在時 `_MOCK=True`)が担当。→ Windows開発機でも `/device/*` は落ちずモック値を返す。
+  - **ブラウザは常に実経路**: `kiosk.html` は `/proxy/*`=実バックエンド、`/device/*`=agent(ハード or モック)を叩く。`/config` の旧 `mock` フラグ／`config.kiosk_mock` は**廃止**（ブラウザ全スタブの自動有効化はしない）。
+  - **開発機での確認手順**: `kiosk_agent/.env` に `TENANT_SLUG` と到達可能な `REMOTE_API_URL`(既定=本番) を設定 → `uvicorn main:app` → `http://localhost:8080` → 自己登録 → 管理画面で承認。**これで管理画面の実データ(会議室 `map_image_url` 等)がそのまま表示される**。QRはWebカメラがあれば読取（PIRはタップで代替可）。
+  - **完全オフラインプレビュー（`?mock=1` のみ・明示オプトイン）**: `kiosk.html?mock=1` の時だけ `mockFetch` が全APIをスタブし、バックエンド/agent 無しで全画面フロー（ロッカー・予約マップ含む）を確認できる（`python -m http.server` やスクショ生成 `Doc/kiosk-screens` 用）。この時のみ有効:
+    - MOCKロッカー: A/C=空き、B=利用中(解錠PIN `1234`)。QR画面の「（MOCK）予約QRを読み取ったことにする」で歓迎画面＋館内マップを確認可。
+    - **固定ダミーデータ**: `mockFetch` は管理画面設定を参照せず固定値を返す。`/proxy/appointment/*` は常に「（MOCK）商談ルーム A / 2階」＋組み込みSVG地図＝**管理画面の地図とは一致しない**（仕様。実データ確認は上記の実経路手順で）。
+    - **MOCKバッジ**: `showMockBadge()`(`bootMock` で呼ぶ)が上部中央に固定の「MOCK モード…」バッジを常時表示し、ダミー表示だと一目で分かる（`body`直下・`pointer-events:none`で操作を妨げない）。通常起動(実経路)では出ない。
 - **reception（フォーム）**: オンスクリーン50音キーボードは廃止。OS標準ソフトキーボードを使用するため、入力欄は上半分に2列配置＋送信、下半分は空ける（実機OSのソフトキーボード表示領域）。
 - **qr**: カメラ位置を示す画像エリア（`ST.qr_camera_image_url` 未設定時はプレースホルダー）。読み取ったQRは `parseQR()` で判定し、**対応形式(`appt:<token>` / `name` パラメータ付きURL)のみ受付**。未対応QR(無関係URL・WiFi QR・プレーンテキスト等)は「未対応のQRコードです」を表示し `pauseScan()` で数秒スキャンを停止してから自動再開する（即時再スキャンによるビジーループ＝「無反応＋重い」を防止）。予約取得/受付エラーも同じく `pauseScan()` で表示＋クールダウン。`scanLoop` はデコードを ≈8fps に間引き、`startCamera` の `getUserMedia` は `disposed` フラグで teardown ガード。
 - **complete（歓迎画面「お待ちしておりました」）**: 氏名と「様」を同サイズでインライン表示。予約情報（Googleカレンダー連携）を拡大表示。QR受付で行き先（会議室）が確定し、かつその会議室に `map_image_url` が登録されている場合のみ館内マップを表示（`go("calling"/"complete", { name, staff, room, scheduledAt, method })` でデータを伝搬）。

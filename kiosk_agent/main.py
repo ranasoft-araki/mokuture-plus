@@ -352,12 +352,13 @@ async def serve_device_control():
 
 @app.get("/config")
 async def get_config():
+    # 注: ブラウザ全スタブ用の "mock" フラグは廃止。ハードは agent 層(_MOCK_DEVICE / gpio.py)
+    # で自動モックし、ブラウザは常に実経路を通す。完全オフラインは kiosk.html?mock=1 のみ。
     return {
         "tenant_slug": settings.tenant_slug,
         "remote_api_url": settings.remote_api_url,
         "device_name": get_device_name(),
         "registered": is_registered(),
-        "mock": settings.kiosk_mock,
     }
 
 

@@ -116,7 +116,7 @@ async function mockFetch(method, path, body) {
   if (path.startsWith("/proxy/appointment/")) return {
     id: "mock-appt", visitor_name: "山田 太郎", company: "株式会社テスト", purpose: "お打ち合わせ",
     staff: "佐藤 花子", scheduled_at: "2026-06-29T14:30:00", status: "pending",
-    meeting_room: { name: "商談ルーム A", location: "2階", map_image_url:
+    meeting_room: { name: "（MOCK）商談ルーム A", location: "2階", map_image_url:
       "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='800' height='520' viewBox='0 0 800 520'><rect width='800' height='520' fill='#f4f1ea'/><rect x='40' y='40' width='720' height='440' fill='none' stroke='#d8d3c7' stroke-width='3'/><rect x='80' y='90' width='220' height='150' fill='#fffefb' stroke='#d8d3c7' stroke-width='2'/><text x='190' y='170' font-size='22' fill='#6b6559' text-anchor='middle' font-family='sans-serif'>受付</text><rect x='480' y='250' width='220' height='160' fill='#e7f0e8' stroke='#2d6a4f' stroke-width='3'/><text x='590' y='335' font-size='24' fill='#2d6a4f' text-anchor='middle' font-family='sans-serif'>商談ルームA</text><circle cx='190' cy='300' r='14' fill='#2d6a4f'/><text x='190' y='345' font-size='16' fill='#2d6a4f' text-anchor='middle' font-family='sans-serif'>現在地</text><path d='M190 300 L190 410 L480 330' fill='none' stroke='#a84238' stroke-width='4' stroke-dasharray='10 8'/></svg>`) },
   };
   // Lockers
@@ -2131,8 +2131,23 @@ document.addEventListener("keydown", function(e) {
 });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
+// 完全オフラインプレビュー(?mock=1)時は全画面に見える固定バッジを表示。表示データが
+// ダミー(管理画面の設定は反映されない)ことを明示し、「管理画面で設定したのと違う
+// 地図/内容が出る」といった取り違えを防ぐ。※通常起動(開発機含む)は実経路のため出ない。
+// body直下の固定要素なので sc.innerHTML の再描画で消えず、pointer-events:none で
+// 左上/右上同時タッチ(設定)や戻る操作を妨げない。
+function showMockBadge() {
+  if (document.getElementById("mock-badge")) return;
+  const b = document.createElement("div");
+  b.id = "mock-badge";
+  b.textContent = "MOCK モード · 表示はダミーです（管理画面の設定は反映されません）";
+  b.style.cssText = "position:fixed;top:0;left:50%;transform:translateX(-50%);z-index:2147483647;pointer-events:none;background:#a84238;color:#fff;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;font-size:14px;font-weight:700;letter-spacing:.4px;padding:6px 20px;border-radius:0 0 12px 12px;box-shadow:0 2px 8px rgba(0,0,0,.35);white-space:nowrap;opacity:.95";
+  document.body.appendChild(b);
+}
+
 // モック起動: エージェント/バックエンド無しで待機画面から起動(Windows開発機・静的配信での確認用)
 async function bootMock() {
+  showMockBadge();
   if (MOCK && (!CFG || !CFG.device_name)) {
     try { CFG = await apiGet("/config"); } catch {}
   }
@@ -2158,8 +2173,11 @@ async function boot() {
     rescale(); return;
   }
 
-  // エージェントが mock を指示(例: Windows開発機 KIOSK_MOCK) → 以降モックで動作(バックエンド不要)
-  if (CFG && CFG.mock) { MOCK = true; return bootMock(); }
+  // 実機でしか動かないハード(GPIO/PIR/カメラ/音量/WiFi)は agent 側で自動モックされる
+  // (gpio.py の _MOCK / main.py の _MOCK_DEVICE=非Linuxで自動)。ブラウザは開発機でも
+  // 常に実経路を通す: /proxy/* = 実バックエンド, /device/* = agent(ハード or モック)。
+  // → 管理画面で設定した実データ(会議室マップ等)がそのまま表示される。
+  // バックエンド不要の完全オフラインプレビューは URL に ?mock=1 を付けた時のみ(明示オプトイン)。
 
   // トークンが無ければ自己登録。承認待ちなら showPending 済みで false が返る。
   if (!(await ensureRegistered())) return;
