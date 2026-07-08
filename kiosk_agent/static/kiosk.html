@@ -201,8 +201,7 @@ async function forceLockLocker(door) {
 }
 
 // ─── API helpers ─────────────────────────────────────────────────────────────
-async function apiFetch(method, path, body, token) {
-  if (MOCK) return mockFetch(method, path, body);
+async function _realFetch(method, path, body, token) {
   const h = { "Content-Type": "application/json" };
   if (token) h["X-Kiosk-Token"] = token;
   const r = await fetch(path, {
@@ -215,6 +214,42 @@ async function apiFetch(method, path, body, token) {
     throw new Error(e.detail ?? "Request failed");
   }
   return r.status === 204 ? null : r.json();
+}
+
+// 通知を発火する(または通知結果に整合する)バックエンド呼び出し。MOCK でも実経路を優先し、
+// 「通知だけは常に本物を飛ばす」。到達可能な agent と実トークンが無ければ mock にフォールバックし、
+// 完全オフラインのUIプレビューは維持する。関連: mock-hardware-only 原則(バックエンドは実経路)。
+function _isRealNotifyPath(path) {
+  return path === "/proxy/reception"                                   // 受付→スタッフ通知
+      || /^\/proxy\/reception\/[^/]+$/.test(path)                      // OK/NG応答のポーリング(通知と整合)
+      || path === "/proxy/call-staff"                                  // 配達の呼び出し→通知
+      || /^\/proxy\/lockers\/[^/]+\/occupy-delivery$/.test(path);      // 置き配→通知
+}
+// 実通知には実デバイストークンが必要。mock/未設定なら agent 経由で登録して取得を試みる。
+async function _ensureRealToken(token) {
+  if (token && token !== "mock-token") return token;
+  try {
+    const reg = await _realFetch("POST", "/register", {}, null);
+    if (reg && reg.device_token) {
+      localStorage.setItem(TOKEN_KEY, reg.device_token);
+      if (reg.device_name) localStorage.setItem(NAME_KEY, reg.device_name);
+      return reg.device_token;
+    }
+  } catch {}
+  return token;
+}
+async function apiFetch(method, path, body, token) {
+  if (MOCK) {
+    if (_isRealNotifyPath(path)) {
+      // 通知系は実経路を試みる。agent/バックエンド/トークンが無ければ mock にフォールバック。
+      try {
+        const realTok = await _ensureRealToken(token);
+        return await _realFetch(method, path, body, realTok);
+      } catch (e) { return mockFetch(method, path, body); }
+    }
+    return mockFetch(method, path, body);
+  }
+  return _realFetch(method, path, body, token);
 }
 const apiGet  = (p, tok)    => apiFetch("GET",  p, null, tok);
 const apiPost = (p, b, tok) => apiFetch("POST", p, b,    tok);
@@ -2253,7 +2288,7 @@ function showMockBadge() {
   if (document.getElementById("mock-badge")) return;
   const b = document.createElement("div");
   b.id = "mock-badge";
-  b.textContent = "MOCK モード · 表示はダミーです（管理画面の設定は反映されません） · 解除は ?mock=0";
+  b.textContent = "MOCK モード · 表示はダミー（通知のみ実送信） · 解除は ?mock=0";
   b.style.cssText = "position:fixed;top:0;left:50%;transform:translateX(-50%);z-index:2147483647;pointer-events:none;background:#a84238;color:#fff;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;font-size:14px;font-weight:700;letter-spacing:.4px;padding:6px 20px;border-radius:0 0 12px 12px;box-shadow:0 2px 8px rgba(0,0,0,.35);white-space:nowrap;opacity:.95";
   document.body.appendChild(b);
 }
@@ -2264,7 +2299,8 @@ async function bootMock() {
   if (MOCK && (!CFG || !CFG.device_name)) {
     try { CFG = await apiGet("/config"); } catch {}
   }
-  localStorage.setItem(TOKEN_KEY, "mock-token");
+  // 既存の実デバイストークンは温存する（「通知だけ実経路」で使うため）。無ければダミー。
+  if (!localStorage.getItem(TOKEN_KEY)) localStorage.setItem(TOKEN_KEY, "mock-token");
   localStorage.setItem(NAME_KEY, (CFG && CFG.device_name) || "MOCK-KIOSK");
   Object.assign(ST, await apiGet("/proxy/settings"));
   ITEMS = [];
