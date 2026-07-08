@@ -979,7 +979,7 @@ async def emergency_broadcast(
     updated = 0
     for t in tenants:
         t.kiosk_calling_message = body.message
-        t.kiosk_force_update_at = datetime.now(timezone.utc)
+        t.kiosk_force_update_at = datetime.now(timezone.utc).replace(tzinfo=None)
         updated += 1
 
     await db.commit()

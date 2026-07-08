@@ -594,7 +594,7 @@ async def kiosk_occupy_locker(
         raise HTTPException(status_code=409, detail="already occupied")
     locker.pin_hash = hash_password(body.pin)
     locker.occupied = True
-    locker.occupied_at = datetime.now(timezone.utc)
+    locker.occupied_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
     return {"ok": True}
 
@@ -618,7 +618,7 @@ async def kiosk_occupy_locker_delivery(
     pin = _generate_delivery_pin()
     locker.pin_hash = hash_password(pin)
     locker.occupied = True
-    locker.occupied_at = datetime.now(timezone.utc)
+    locker.occupied_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
 
     locker_label = locker.name or f"ロッカー {locker.door_number}"

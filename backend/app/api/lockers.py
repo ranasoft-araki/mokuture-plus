@@ -62,7 +62,7 @@ async def open_locker(
     """Open (unlock) a locker. In production this would trigger GPIO."""
     locker = await _get_locker(locker_id, user.tenant_id, db)
     locker.state = "open"
-    locker.last_unlocked_at = datetime.now(timezone.utc)
+    locker.last_unlocked_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
     return {"id": locker.id, "state": locker.state}
 
@@ -89,7 +89,7 @@ async def unlock_locker(
     """Legacy unlock endpoint – delegates to open."""
     locker = await _get_locker(locker_id, user.tenant_id, db)
     locker.state = "open"
-    locker.last_unlocked_at = datetime.now(timezone.utc)
+    locker.last_unlocked_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
     return {"ok": True, "state": "open", "auto_relock_sec": locker.auto_relock_sec}
 
