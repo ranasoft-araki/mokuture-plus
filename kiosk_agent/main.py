@@ -272,6 +272,36 @@ doors = {
     for door_id, pin in sorted(settings.door_pins.items(), key=lambda item: item[0])
 }
 
+# ── ドアセンサー連動の自動施錠 ──────────────────────────────────────────────────
+# 電気ストライク(通電ON=解錠 / 無通電OFF=施錠位置)向け。解錠通電後、扉が開いたら即無通電に
+# 戻す。以後は閉扉でラッチ(ツノ)が自動施錠されるため、開錠パルス長や「扉を閉めました」操作の
+# タイミングに依存せず確実に施錠できる。ドアセンサーが無いロッカーは従来の固定パルスにフォール
+# バックする。※有効化には DOOR_PINS_JSON のキーを door_number(=LOCKER_PINS_JSON のキー)と
+# 一致させること。
+_OPEN_WINDOW_SEC = float(os.getenv("LOCKER_OPEN_WINDOW_SEC", "12"))
+_bg_tasks: set = set()
+
+
+def _spawn(coro):
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+    return task
+
+
+async def _open_with_autolock(locker_id: str, door: DoorSensor) -> None:
+    locker_ctrl.set_state(locker_id, True)   # 解錠(通電)
+    waited = 0.0
+    try:
+        while waited < _OPEN_WINDOW_SEC:
+            if door.configured and door.is_closed is False:   # 扉が開いた → 施錠位置へ戻す
+                break
+            await asyncio.sleep(0.15)
+            waited += 0.15
+    finally:
+        locker_ctrl.set_state(locker_id, False)  # 無通電=施錠位置(閉扉で自動施錠)
+
+
 _KIOSK_HTML = Path(__file__).parent / "static" / "kiosk.html"
 _JSQR_JS   = Path(__file__).parent / "static" / "jsqr.min.js"
 _CONTROL_PANEL_HTML = Path(__file__).parent / "static" / "device-control.html"
@@ -812,10 +842,19 @@ async def list_device_lockers():
 
 @app.post("/device/locker/{locker_id}/open")
 async def open_locker(locker_id: str):
-    ok = await locker_ctrl.open(locker_id)
+    lid = str(locker_id)
+    if not locker_ctrl.is_configured(lid):
+        raise HTTPException(status_code=404, detail=f"Locker {locker_id} not configured")
+    door = doors.get(lid)
+    if door is not None and door.configured:
+        # ドアセンサー連動: 解錠→扉が開いたら即施錠位置へ→閉扉で自動施錠(パルス長非依存)
+        _spawn(_open_with_autolock(lid, door))
+        return {"locker_id": lid, "state": "opening", "autolock": True}
+    # フォールバック: ドアセンサー未設定なら従来の固定パルス
+    ok = await locker_ctrl.open(lid)
     if not ok:
         raise HTTPException(status_code=404, detail=f"Locker {locker_id} not configured")
-    return {"locker_id": locker_id, "state": "opened"}
+    return {"locker_id": lid, "state": "opened", "autolock": False}
 
 
 @app.post("/device/locker/{locker_id}/pulse")

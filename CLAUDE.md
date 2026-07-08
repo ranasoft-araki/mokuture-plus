@@ -350,8 +350,8 @@ mokuture/
 | GET | /kiosk/lockers | デバイストークン | ロッカー一覧 `{lockers:[{id,name,door_number,occupied,has_pin}], available_count}` |
 | POST | /kiosk/lockers/{id}/occupy | デバイストークン | 空き→PIN設定 `{pin:4桁}`→`{ok}`。409 already occupied / 422 |
 | POST | /kiosk/lockers/{id}/release | デバイストークン | 利用中→PIN照合 `{pin}`→`{ok,door_number}`。403 invalid pin / 409 not occupied |
-| POST | /kiosk/lockers/{id}/occupy-delivery | デバイストークン | 置き配: 空き→**ランダム4桁PINを自動生成**して施錠(occupied=true, pin_hash=bcrypt)→担当者へ「どのロッカーにこのPINで置き配」を通知(Slack/WebPush/Webhook/Chatwork, delivery系優先)→`{ok}`。PINは配達員に非表示・通知経由でスタッフが受取。409 already occupied |
-| POST | /kiosk/call-staff | デバイストークン | 配達の呼び出し: 担当者へ「どの端末(device.name)から呼び出し」を通知 `{message?}`→`{ok}`。Slack/WebPush/Webhook/Chatwork (best-effort)。WebPush は `push_delivery` 設定 (`{enabled}`, 既定ON) で ON/OFF 可 |
+| POST | /kiosk/lockers/{id}/occupy-delivery | デバイストークン | 置き配: 空き→**ランダム4桁PINを自動生成**して施錠(occupied=true, pin_hash=bcrypt)→担当者へ「どのロッカーにこのPINで置き配」を通知(Slack/WebPush/Webhook/Chatwork, delivery系優先)→`{ok}`。PINは配達員に非表示・通知経由でスタッフが受取。409 already occupied。**通知は `BackgroundTasks` でレスポンス送出後に並行送信**(`_fire_delivery_notifications`, 新DBセッション)＝遅い/無効な通知先でも応答をブロックせずエージェントのタイムアウトを防ぐ |
+| POST | /kiosk/call-staff | デバイストークン | 配達の呼び出し: 担当者へ「どの端末(device.name)から呼び出し」を通知 `{message?}`→`{ok}`。Slack/WebPush/Webhook/Chatwork (best-effort)。WebPush は `push_delivery` 設定 (`{enabled}`, 既定ON) で ON/OFF 可。**通知は非ブロック(BackgroundTasks, `_fire_delivery_notifications`)** |
 | POST | /lockers/{id}/open | JWT | ロッカー開錠 |
 
 ---
@@ -404,6 +404,7 @@ idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 
 - **delivery（荷物の配達・Phase3実装済み）**: `showDelivery`。配達方法を選択 — **置き配**(空きロッカーへ施錠。空きが無ければ選択不可。空きロッカー選択→`pulseLocker`でGPIO開錠→「扉を閉めました」→`/proxy/lockers/{id}/occupy-delivery`。**backendがランダム4桁PINを自動生成してbcrypt保存し、「どのロッカーにこのPINで置き配された」を担当者へ通知**。配達員にはPINを表示しない) / **呼び出し**(`/proxy/call-staff`→担当者へ「どの端末から呼び出しか(device.name)」をSlack/WebPush/Webhook/Chatwork通知)。置き配ロッカーはPIN付き(`has_pin:true`)＝通常の「利用中」ロッカーとして扱われ、スタッフが通知で受け取ったPINでロッカー画面から解錠して受取。
 - **locker（ロッカー・Phase2実装済み）**: 3段縦並び、空き=緑/利用中=アンバー。空き→`pulseLocker(door_number)`でGPIO開錠→「扉を閉めました」→4桁PIN設定(`/proxy/lockers/{id}/occupy`)。利用中→4桁PIN入力(`/proxy/lockers/{id}/release`)→照合OKでGPIO開錠。PINは backend で bcrypt 保存。扉開閉センサーが無いため閉扉は手動ボタン（センサー導入時は自動化可）。
   - **GPIO設定の注意**: kiosk は `POST /device/locker/{door_number}/open` を叩くため、kiosk_agent の `LOCKER_PINS_JSON` は **door_number(=GPIOピン番号)をキー**にすること。例: `{"17":17,"18":18,"19":19}`。
+  - **ドアセンサー連動の自動施錠 (`main.py` `_open_with_autolock`)**: 電気ストライク(通電ON=解錠 / 無通電OFF=施錠位置)向け。`/device/locker/{id}/open` は該当ロッカーに**ドアセンサーが設定されていれば**、解錠通電→**扉が開いたら即無通電化**(以後は閉扉でラッチが自動施錠)する経路(`{state:"opening", autolock:true}` を即返す=非ブロック)に入る。開錠パルス長や「扉を閉めました」操作のタイミングに依存せず確実に施錠できる。**有効化には `DOOR_PINS_JSON` のキーを door_number(=`LOCKER_PINS_JSON` のキー)と一致**させること。ドアセンサー未設定のロッカーは従来の固定パルス(`LOCKER_PULSE_SEC`)にフォールバック。開錠通電の保持上限は `LOCKER_OPEN_WINDOW_SEC`(既定12s)。
 - **モック方針（実機ハードのみ最小スタブ／バックエンドは常に実経路）**: MOCKは「処理ルートごと本番と分ける」のではなく、**実機でしか動かないハードだけ**を最小限スタブする。バックエンド通信（`/proxy/*`）は開発機でも常に実経路を通す。
   - **ハードのモック（agent 層）**: GPIO(ロッカーリレー/PIR/ドア)・カメラ/マイク状態・音量・WiFi は agent が自動モックする。`main.py` の `_MOCK_DEVICE`(=**非Linux で自動 True**、`MOCK_GPIO=true` でも)と `gpio.py`(`gpiozero` 不在時 `_MOCK=True`)が担当。→ Windows開発機でも `/device/*` は落ちずモック値を返す。
   - **ブラウザは常に実経路**: `kiosk.html` は `/proxy/*`=実バックエンド、`/device/*`=agent(ハード or モック)を叩く。`/config` の旧 `mock` フラグ／`config.kiosk_mock` は**廃止**（ブラウザ全スタブの自動有効化はしない）。

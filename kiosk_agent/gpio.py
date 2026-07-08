@@ -31,6 +31,9 @@ class LockerController:
             for locker_id, pin in sorted(self._pin_map.items(), key=lambda item: item[0])
         ]
 
+    def is_configured(self, locker_id: str) -> bool:
+        return str(locker_id) in self._pin_map
+
     def status(self) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
         for locker in self.configured_lockers():

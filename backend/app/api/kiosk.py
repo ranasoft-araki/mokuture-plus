@@ -3,6 +3,7 @@
 The device token is stored in the kiosk's localStorage and sent via
 the X-Kiosk-Token header. It identifies both the device and the tenant.
 """
+import asyncio
 import hashlib
 import os
 import re
@@ -14,7 +15,7 @@ from pathlib import Path
 _JST = zoneinfo.ZoneInfo("Asia/Tokyo")
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -23,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.database import get_db
+from app.database import AsyncSessionLocal, get_db
 from app.models.device import Device, Locker
 from app.models.tenant import Tenant
 from app.models.content import Media, Playlist, PlaylistItem, Schedule
@@ -477,13 +478,14 @@ class CallStaffBody(BaseModel):
 @router.post("/call-staff")
 async def kiosk_call_staff(
     body: CallStaffBody,
+    background: BackgroundTasks,
     ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     db: AsyncSession = Depends(get_db),
 ):
     """Notify staff that delivery is waiting (配達の呼び出し) over all configured channels.
 
-    Best-effort across Slack / Web Push / Webhook / Chatwork — a failing channel
-    must not fail the request.
+    通知はレスポンス送出後にバックグラウンドで送る（Slack / Web Push / Webhook / Chatwork,
+    best-effort）。遅い/失敗するチャネルがあってもキオスクの応答をブロックしない。
     """
     tenant, device = ctx
     message = (body.message or "").strip() or None
@@ -492,11 +494,11 @@ async def kiosk_call_staff(
     title = "配達の呼び出し"
     text = f"🔔 配達の呼び出し\n「{device_label}」から呼び出しがあります。{message or ''}"
 
-    await _notify_slack_text(tenant.id, text, db, types=("slack_delivery", "slack"))
-    if await _push_delivery_enabled(tenant.id, db):
-        await _notify_push_text(tenant.id, title, text, tenant.id, db)
-    await _notify_webhook_event(
+    background.add_task(
+        _fire_delivery_notifications,
         tenant.id,
+        title,
+        text,
         {
             "event": "call_staff",
             "tenant_id": tenant.id,
@@ -505,10 +507,7 @@ async def kiosk_call_staff(
             "message": message,
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
-        db,
-        types=("webhook_delivery", "webhook"),
     )
-    await _notify_chatwork_text(tenant.id, text, db, types=("chatwork_delivery", "chatwork"))
 
     return {"ok": True}
 
@@ -601,6 +600,7 @@ async def kiosk_occupy_locker(
 @router.post("/lockers/{locker_id}/occupy-delivery")
 async def kiosk_occupy_locker_delivery(
     locker_id: str,
+    background: BackgroundTasks,
     ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     db: AsyncSession = Depends(get_db),
 ):
@@ -629,11 +629,12 @@ async def kiosk_occupy_locker_delivery(
         f"(受付端末: {device_label})"
     )
 
-    await _notify_slack_text(tenant.id, text, db, types=("slack_delivery", "slack"))
-    if await _push_delivery_enabled(tenant.id, db):
-        await _notify_push_text(tenant.id, title, text, tenant.id, db)
-    await _notify_webhook_event(
+    # 通知はレスポンス送出後にバックグラウンドで送る（遅い/失敗するチャネルで施錠フローを止めない）
+    background.add_task(
+        _fire_delivery_notifications,
         tenant.id,
+        title,
+        text,
         {
             "event": "delivery_dropoff",
             "tenant_id": tenant.id,
@@ -644,10 +645,7 @@ async def kiosk_occupy_locker_delivery(
             "device": device_label,
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
-        db,
-        types=("webhook_delivery", "webhook"),
     )
-    await _notify_chatwork_text(tenant.id, text, db, types=("chatwork_delivery", "chatwork"))
 
     return {"ok": True}
 
@@ -940,6 +938,28 @@ async def _notify_chatwork_text(
                 headers={"X-ChatWorkToken": api_token},
                 data={"body": text},
             )
+    except Exception:
+        pass
+
+
+async def _fire_delivery_notifications(
+    tenant_id: str, title: str, text: str, webhook_payload: dict
+) -> None:
+    """置き配/呼び出しの通知を新しいDBセッションで並行送信する（BackgroundTasks 用）。
+
+    レスポンス送出後に実行されるため、遅い/無効な通知先（例: 死んだ Web Push 購読）が
+    あってもキオスクの受付・施錠をブロックせず、エージェント側の10秒タイムアウト
+    （= キオスクに出る「APIエラー」）を防ぐ。各チャネルは best-effort。"""
+    try:
+        async with AsyncSessionLocal() as db:
+            tasks = [
+                _notify_slack_text(tenant_id, text, db, types=("slack_delivery", "slack")),
+                _notify_webhook_event(tenant_id, webhook_payload, db, types=("webhook_delivery", "webhook")),
+                _notify_chatwork_text(tenant_id, text, db, types=("chatwork_delivery", "chatwork")),
+            ]
+            if await _push_delivery_enabled(tenant_id, db):
+                tasks.append(_notify_push_text(tenant_id, title, text, tenant_id, db))
+            await asyncio.gather(*tasks, return_exceptions=True)
     except Exception:
         pass
 
