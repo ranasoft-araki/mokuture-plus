@@ -530,17 +530,27 @@ function showWelcome() {
 
   function render() {
     sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0"><button id="wel-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button></div>
-  <div style="flex:1;padding:8px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:64px;align-items:center;min-height:0">
-    <div id="cam-box" style="background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;height:100%;max-height:800px">${camContent()}</div>
-    <div style="display:flex;flex-direction:column">
-      <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:14px;font-family:Inter,system-ui,sans-serif">WELCOME</div>
-      <div style="font-size:66px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.1;margin-bottom:10px">${escHtml(ST.kiosk_welcome_message || "ようこそ")}</div>
-      <div style="font-size:30px;color:${T.sub};line-height:1.5;margin-bottom:28px">ご予約QRをお持ちの方は<br>左のカメラへかざしてください</div>
-      <div style="font-size:22px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-bottom:34px">Hold your reservation QR code over the camera</div>
+  <div style="padding:28px 80px 4px;flex-shrink:0;display:flex;align-items:center;gap:40px">
+    <button id="wel-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button>
+    <div>
+      <div style="font-size:16px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;font-family:Inter,system-ui,sans-serif">WELCOME</div>
+      <div style="font-size:56px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.05">${escHtml(ST.kiosk_welcome_message || "ようこそ")}</div>
+    </div>
+  </div>
+  <div style="flex:1;padding:12px 80px 0;display:grid;grid-template-columns:0.82fr 1fr;gap:60px;align-items:center;min-height:0">
+    <div id="cam-box" style="background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;width:100%;height:640px;max-height:100%;align-self:center">${camContent()}</div>
+    <div style="display:flex;flex-direction:column;justify-content:center">
+      <div style="font-size:40px;font-weight:600;color:${T.ink};line-height:1.4;margin-bottom:10px">ご予約QRをお持ちの方は<br>左のカメラへかざしてください</div>
+      <div style="font-size:22px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-bottom:36px">Hold your reservation QR code over the camera</div>
       ${errMsg ? `<div style="padding:16px 20px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.3);border-radius:14px;color:${T.urgent};font-size:19px;line-height:1.6;margin-bottom:26px">${escHtml(errMsg)}</div>` : ""}
-      <button id="wel-form" style="width:100%;padding:36px;background:${T.dark};border:none;border-radius:20px;font-size:36px;font-weight:600;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:18px">ご予約のない方はこちら <span style="display:inline-flex">${ICO.arrow_lg}</span></button>
-      <div style="font-size:22px;color:${T.muted};text-align:center;margin-top:16px">ご訪問・お荷物の配達・ロッカーのご利用</div>
+      <button id="wel-form" style="width:100%;padding:40px 44px;background:${T.dark};border:none;border-radius:26px;cursor:pointer;display:flex;align-items:center;gap:30px;text-align:left">
+        <div style="width:104px;height:104px;border-radius:24px;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0"><div style="transform:scale(2.1)">${ICO.reception}</div></div>
+        <div style="flex:1">
+          <div style="font-size:44px;font-weight:700;color:#fff;line-height:1.15">QRをお持ちでない方はこちら</div>
+          <div style="font-size:24px;color:rgba(255,255,255,.72);margin-top:8px">ご予約の無い方・お荷物の配達、ロッカーのご利用</div>
+        </div>
+        <div style="color:rgba(255,255,255,.6);flex-shrink:0;transform:scale(1.4)">${ICO.arrow_lg}</div>
+      </button>
       ${MOCK ? `<button id="qr-mock" style="margin-top:18px;padding:16px;background:transparent;border:1.5px dashed ${T.muted};border-radius:12px;font-size:16px;color:${T.muted};cursor:pointer">（MOCK）予約QRを読み取ったことにする</button>` : ""}
     </div>
   </div>
