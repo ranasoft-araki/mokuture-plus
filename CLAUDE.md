@@ -430,7 +430,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
   - **ハードのモック（agent 層）**: GPIO(ロッカーリレー/PIR/ドア)・カメラ/マイク状態・音量・WiFi は agent が自動モックする。`main.py` の `_MOCK_DEVICE`(=**非Linux で自動 True**、`MOCK_GPIO=true` でも)と `gpio.py`(`gpiozero` 不在時 `_MOCK=True`)が担当。→ Windows開発機でも `/device/*` は落ちずモック値を返す。
   - **ブラウザは常に実経路**: `kiosk.html` は `/proxy/*`=実バックエンド、`/device/*`=agent(ハード or モック)を叩く。`/config` の旧 `mock` フラグ／`config.kiosk_mock` は**廃止**（ブラウザ全スタブの自動有効化はしない）。
   - **開発機での確認手順**: `kiosk_agent/.env` に `TENANT_SLUG` と到達可能な `REMOTE_API_URL`(既定=本番) を設定 → `uvicorn main:app` → `http://localhost:8080` → 自己登録 → 管理画面で承認。**これで管理画面の実データ(会議室 `map_image_url` 等)がそのまま表示される**。QRはWebカメラがあれば読取（PIRはタップで代替可）。
-  - **完全オフラインプレビュー（`?mock=1` のみ・明示オプトイン）**: `kiosk.html?mock=1` の時だけ `mockFetch` が全APIをスタブし、バックエンド/agent 無しで全画面フロー（ロッカー・予約マップ含む）を確認できる（`python -m http.server` やスクショ生成 `Doc/kiosk-screens` 用）。この時のみ有効:
+  - **完全オフラインプレビュー（`?mock=1`・明示オプトイン＋記憶）**: `kiosk.html?mock=1` で `mockFetch` が全APIをスタブし、バックエンド/agent 無しで全画面フローを確認できる。**一度 `?mock=1` を付けると localStorage(`mokuture_kiosk_mock`) に記憶し、以降はパラメータ無しでもモックのまま起動**（ローカルUIプレビューで毎回付けなくてよい）。解除は `?mock=0`。**環境(ホスト名等)による自動有効化はしない**（＝過去の「mockが実データを握りつぶす」不具合を回避）—あくまで明示オプトインの記憶で、常時表示のMOCKバッジ（`解除は ?mock=0` を明記）で状態が一目で分かる。この時のみ有効:
     - MOCKロッカー: A/C=空き、B=利用中(解錠PIN `1234`)。QR画面の「（MOCK）予約QRを読み取ったことにする」で歓迎画面＋館内マップを確認可。
     - **固定ダミーデータ**: `mockFetch` は管理画面設定を参照せず固定値を返す。`/proxy/appointment/*` は常に「（MOCK）商談ルーム A / 2階」＋組み込みSVG地図＝**管理画面の地図とは一致しない**（仕様。実データ確認は上記の実経路手順で）。
     - **MOCKバッジ**: `showMockBadge()`(`bootMock` で呼ぶ)が上部中央に固定の「MOCK モード…」バッジを常時表示し、ダミー表示だと一目で分かる（`body`直下・`pointer-events:none`で操作を妨げない）。通常起動(実経路)では出ない。

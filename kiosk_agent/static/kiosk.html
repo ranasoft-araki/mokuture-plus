@@ -83,8 +83,21 @@ function cleanup() { CLEANUPS.forEach(f => f()); CLEANUPS = []; }
 // 全画面フロー(ロッカー含む)を実機・バックエンド無しで確認できる。
 //   起動: cd kiosk_agent/static && python -m http.server 8000
 //   表示: http://localhost:8000/kiosk.html?mock=1
-// ?mock=1 で即モック。エージェントの /config が mock:true を返した場合(例:Windows開発機)も boot() で有効化する。
-let MOCK = new URLSearchParams(location.search).has("mock");
+// ?mock=1 で即モック。一度有効にすると localStorage に記憶し、以降はパラメータ無しでも
+// モックのまま起動する(ローカルUIプレビューで毎回付けなくてよい)。解除は ?mock=0。
+// ※これは「明示オプトインを記憶する」だけで、環境(ホスト名等)による自動有効化はしない
+//   (実機は agent が常駐し /proxy/* は常に実経路。全スタブは常時表示のMOCKバッジで明示)。
+const MOCK_KEY = "mokuture_kiosk_mock";
+let MOCK = (() => {
+  const p = new URLSearchParams(location.search);
+  if (p.has("mock")) {
+    const v = p.get("mock");
+    const on = v !== "0" && v !== "false";
+    try { on ? localStorage.setItem(MOCK_KEY, "1") : localStorage.removeItem(MOCK_KEY); } catch {}
+    return on;
+  }
+  try { return localStorage.getItem(MOCK_KEY) === "1"; } catch { return false; }
+})();
 let _mockDecisionPolls = 0;  // MOCK: 待機画面ポーリングの回数(数回で確定)
 let _mockDecisionState = "accepted";  // MOCK: 巡回する確定状態(accepted/phone/declined)
 let _mockCreateCount = 0;    // MOCK: 受付回数(結果画面の巡回に使用)
@@ -2240,7 +2253,7 @@ function showMockBadge() {
   if (document.getElementById("mock-badge")) return;
   const b = document.createElement("div");
   b.id = "mock-badge";
-  b.textContent = "MOCK モード · 表示はダミーです（管理画面の設定は反映されません）";
+  b.textContent = "MOCK モード · 表示はダミーです（管理画面の設定は反映されません） · 解除は ?mock=0";
   b.style.cssText = "position:fixed;top:0;left:50%;transform:translateX(-50%);z-index:2147483647;pointer-events:none;background:#a84238;color:#fff;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;font-size:14px;font-weight:700;letter-spacing:.4px;padding:6px 20px;border-radius:0 0 12px 12px;box-shadow:0 2px 8px rgba(0,0,0,.35);white-space:nowrap;opacity:.95";
   document.body.appendChild(b);
 }
