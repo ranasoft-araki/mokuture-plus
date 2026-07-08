@@ -26,3 +26,10 @@ services:
         sync: false
       - key: STORAGE_PUBLIC_URL
         sync: false
+      # Slack OAuth (「Slackに追加」). Unset = feature disabled. Set in the Render dashboard.
+      - key: SLACK_CLIENT_ID
+        sync: false
+      - key: SLACK_CLIENT_SECRET
+        sync: false
+      - key: SLACK_REDIRECT_URI
+        sync: false

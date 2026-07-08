@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -44,3 +45,35 @@ def create_decision_token(log_id: str, tenant_id: str) -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=_DECISION_TOKEN_EXPIRE_HOURS)
     payload = {"sub": log_id, "tenant_id": tenant_id, "type": "decision", "exp": expire}
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
+# Slack OAuth CSRF `state`. A signed (not encrypted) JWT that binds the OAuth round-trip
+# to a specific tenant without any server-side session store: the token itself carries the
+# tenant_id, so the callback (which arrives with no JWT — Slack redirects the browser)
+# can trust which tenant it is for. A random jti makes each state unique; the short TTL and
+# Slack's single-use `code` prevent replay.
+_SLACK_STATE_EXPIRE_MINUTES = 10
+
+
+def create_slack_state_token(tenant_id: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=_SLACK_STATE_EXPIRE_MINUTES)
+    payload = {
+        "tenant_id": tenant_id,
+        "type": "slack_oauth",
+        "jti": secrets.token_hex(8),
+        "exp": expire,
+    }
+    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
+def verify_slack_state_token(token: str) -> str:
+    """Return the tenant_id embedded in a valid Slack OAuth state token.
+
+    Raises JWTError if the token is invalid, expired, or not a slack_oauth token."""
+    payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+    if payload.get("type") != "slack_oauth":
+        raise JWTError("wrong token type")
+    tenant_id = payload.get("tenant_id")
+    if not tenant_id:
+        raise JWTError("missing tenant_id")
+    return tenant_id

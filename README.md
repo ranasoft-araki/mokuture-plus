@@ -368,7 +368,18 @@ STORAGE_ACCESS_KEY_ID=minioadmin
 STORAGE_SECRET_ACCESS_KEY=minioadmin
 STORAGE_BUCKET_NAME=mokuture
 STORAGE_PUBLIC_URL=http://localhost:9000/mokuture
+
+# Slack OAuth連携 (「Slackに追加」= Bot Token + chat.postMessage)。3つ揃わないと連携機能は無効。
+# Slack App の「OAuth & Permissions」に SLACK_REDIRECT_URI を Redirect URL として登録し、
+# Bot Token Scopes に chat:write / channels:read / groups:read / channels:join を追加すること。
+#   本番 SLACK_REDIRECT_URI 例: https://mokuture-plus-api.onrender.com/api/notifications/slack/callback
+#   開発 SLACK_REDIRECT_URI 例: http://localhost:8001/api/notifications/slack/callback
+SLACK_CLIENT_ID=
+SLACK_CLIENT_SECRET=
+SLACK_REDIRECT_URI=
 ```
+
+> 顧客は管理画面「通知設定」の **[Slackに追加]** を押してワークスペースを認可し、その後 mokuture 側で通知先チャンネルを選んで連携する（Bot Token やトークンの手入力・表示は不要）。取得した Bot Token は Fernet 暗号化して保存し、ログ出力・画面表示は一切しない。受付通知は Slack API `chat.postMessage` で送信する。
 
 ---
 

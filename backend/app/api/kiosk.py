@@ -5,6 +5,7 @@ the X-Kiosk-Token header. It identifies both the device and the tenant.
 """
 import asyncio
 import hashlib
+import logging
 import os
 import re
 import secrets
@@ -13,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _JST = zoneinfo.ZoneInfo("Asia/Tokyo")
+logger = logging.getLogger(__name__)
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
@@ -32,7 +34,7 @@ from app.models.reception import ReceptionLog
 from app.models.notification import NotificationSetting, PushSubscription
 from app.models.visitor_appointment import VisitorAppointment
 from app.models.room import MeetingRoom
-from app.services.slack import send_slack_notification
+from app.services.slack import SlackNotifier
 from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
 from app.services.webpush import send_push
@@ -689,15 +691,23 @@ async def _notify_slack(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> 
         return
     try:
         config = decrypt_dict(setting.config_json)
-        webhook_url = config.get("webhook_url", "")
-        if webhook_url:
-            msg = (
-                f"*新規受付* {log.visitor_name}様（{log.company or '—'}）\n"
-                f"用件: {log.purpose or '—'}　担当: {log.staff or '—'}"
-            )
-            await send_slack_notification(webhook_url, msg)
+        # 送信先が確定していない場合(Bot連携済だがチャンネル未選択 等)はエラーではないので静かに終了。
+        has_dest = bool(config.get("bot_access_token") and config.get("channel_id")) or bool(config.get("webhook_url"))
+        if not has_dest:
+            return
+        msg = SlackNotifier.build_reception_message(
+            visitor_name=log.visitor_name,
+            company=log.company,
+            host_name=log.staff,
+            when=log.created_at,
+        )
+        ok = await SlackNotifier.send_to_config(config, msg)
+        if not ok:
+            # 受付は失敗させない(best-effort)。エラーは残すが Bot Token/Webhook URL は絶対に出さない。
+            logger.warning("Slack reception notification failed (tenant=%s, reception=%s)", tenant_id, log.id)
     except Exception:
-        pass
+        # decrypt/整形エラー等。秘密情報を含めないため exc_info は付けない。
+        logger.warning("Slack reception notification error (tenant=%s, reception=%s)", tenant_id, log.id)
 
 
 async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:
@@ -821,9 +831,8 @@ async def _notify_slack_text(
         return
     try:
         config = decrypt_dict(setting.config_json)
-        webhook_url = config.get("webhook_url", "")
-        if webhook_url:
-            await send_slack_notification(webhook_url, text)
+        # Bot Token(chat.postMessage) と 旧Webhook のどちらの設定でも送れる。
+        await SlackNotifier.send_to_config(config, text)
     except Exception:
         pass
 

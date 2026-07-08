@@ -33,6 +33,22 @@ function TextInput({ placeholder, mono, value, onChange }: { placeholder?: strin
   );
 }
 
+// Official Slack logo mark (4-color hash).
+function SlackMark({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 122.8 122.8" aria-hidden="true">
+      <path d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9z" fill="#E01E5A" />
+      <path d="M32.3 77.6c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z" fill="#E01E5A" />
+      <path d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2z" fill="#36C5F0" />
+      <path d="M45.2 32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z" fill="#36C5F0" />
+      <path d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2z" fill="#2EB67D" />
+      <path d="M90.5 45.2c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z" fill="#2EB67D" />
+      <path d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9z" fill="#ECB22E" />
+      <path d="M77.6 90.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z" fill="#ECB22E" />
+    </svg>
+  );
+}
+
 // ── Push Push Panel ────────────────────────────────────────────────────
 function PushPanel({ authToken }: { authToken: string }) {
   const [vapidKey, setVapidKey] = useState<string | null>(null);
@@ -348,12 +364,22 @@ export default function AdminNotifyPage() {
   const params = useParams<{ tenant: string }>();
   const [authToken, setAuthToken] = useState("");
 
-  const [webhookUrl, setWebhookUrl] = useState("");
-  const [slackConfigured, setSlackConfigured] = useState(false);
-  const [slackSaving, setSlackSaving] = useState(false);
+  // Slack OAuth ("Slackに追加"), Bot Token + chat.postMessage. No manual token input —
+  // after OAuth the admin picks a channel (conversations.list) which we save server-side.
+  const [slackStatus, setSlackStatus] = useState<{ enabled: boolean; connected: boolean; channel_configured: boolean; team_name: string; channel_name: string; channel_id: string } | null>(null);
+  const [slackConnecting, setSlackConnecting] = useState(false);
   const [slackTesting, setSlackTesting] = useState(false);
+  const [slackDisconnecting, setSlackDisconnecting] = useState(false);
+  const [slackConfirmDisconnect, setSlackConfirmDisconnect] = useState(false);
   const [slackError, setSlackError] = useState("");
   const [slackTested, setSlackTested] = useState(false);
+  const [slackNotice, setSlackNotice] = useState<"" | "connected" | "denied" | "error">("");
+  // Channel picker (shown after OAuth or via "チャンネル変更").
+  const [slackChannels, setSlackChannels] = useState<{ id: string; name: string; is_private: boolean; is_member: boolean }[] | null>(null);
+  const [slackChannelId, setSlackChannelId] = useState("");
+  const [slackChannelsLoading, setSlackChannelsLoading] = useState(false);
+  const [slackSavingChannel, setSlackSavingChannel] = useState(false);
+  const [slackShowPicker, setSlackShowPicker] = useState(false);
 
   const [cwApiToken, setCwApiToken] = useState("");
   const [cwRoomId, setCwRoomId] = useState("");
@@ -404,13 +430,55 @@ export default function AdminNotifyPage() {
     setAuthToken(getAccessToken() ?? "");
   }, []);
 
+  const loadSlack = useCallback(async () => {
+    if (!authToken) return;
+    try {
+      setSlackStatus(await api.getSlackStatus(authToken));
+    } catch {
+      /* leave previous status */
+    }
+  }, [authToken]);
+
+  useEffect(() => { loadSlack(); }, [loadSlack]);
+
+  const loadSlackChannels = useCallback(async () => {
+    if (!authToken) return;
+    setSlackChannelsLoading(true);
+    setSlackError("");
+    try {
+      const res = await api.getSlackChannels(authToken);
+      setSlackChannels(res.channels);
+    } catch (e: unknown) {
+      setSlackError(e instanceof Error ? e.message : "チャンネル一覧の取得に失敗しました");
+    } finally {
+      setSlackChannelsLoading(false);
+    }
+  }, [authToken]);
+
+  // Auto-load the channel list once when connected but no channel is chosen yet.
+  useEffect(() => {
+    if (slackStatus?.connected && !slackStatus?.channel_configured && slackChannels === null) {
+      loadSlackChannels();
+    }
+  }, [slackStatus?.connected, slackStatus?.channel_configured, slackChannels, loadSlackChannels]);
+
+  // Read the ?slack=connected|denied|error flag set by the OAuth callback redirect,
+  // then strip it from the URL so a refresh doesn't re-show the banner.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const flag = url.searchParams.get("slack");
+    if (flag === "connected" || flag === "denied" || flag === "error") {
+      setSlackNotice(flag);
+      url.searchParams.delete("slack"); // strip only ?slack, keep any other params
+      window.history.replaceState({}, "", url.pathname + url.search);
+    }
+  }, []);
+
   useEffect(() => {
     if (!authToken) return;
     api.getNotificationSettings(authToken).then((settings) => {
-      const slack = settings["slack"] ?? {};
       const cw = settings["chatwork"] ?? {};
       const wh = settings["webhook"] ?? {};
-      if (slack["webhook_url"]) setSlackConfigured(true);
       if (cw["api_token"]) setCwConfigured(true);
       if (wh["webhook_url"]) setCustomWebhookConfigured(true);
 
@@ -427,18 +495,62 @@ export default function AdminNotifyPage() {
     }).catch(() => {});
   }, [authToken]);
 
-  const handleSaveSlack = async () => {
-    setSlackSaving(true);
+  const handleConnectSlack = async () => {
+    setSlackConnecting(true);
     setSlackError("");
     try {
-      await api.updateSlackSettings(authToken, webhookUrl);
-      setSlackConfigured(true);
-      setWebhookUrl("");
+      const res = await api.getSlackOAuthUrl(authToken);
+      if (!res.enabled || !res.authorize_url) {
+        setSlackError("Slack連携は現在ご利用いただけません。運営にお問い合わせください。");
+        setSlackConnecting(false);
+        return;
+      }
+      // Full-page redirect to Slack's consent screen; we come back to the callback.
+      window.location.href = res.authorize_url;
     } catch (e: unknown) {
-      setSlackError(e instanceof Error ? e.message : "保存に失敗しました");
-    } finally {
-      setSlackSaving(false);
+      setSlackError(e instanceof Error ? e.message : "接続の開始に失敗しました");
+      setSlackConnecting(false);
     }
+  };
+
+  const handleDisconnectSlack = async () => {
+    setSlackDisconnecting(true);
+    setSlackError("");
+    try {
+      await api.disconnectSlack(authToken);
+      setSlackConfirmDisconnect(false);
+      setSlackNotice("");
+      setSlackShowPicker(false);
+      setSlackChannels(null);
+      await loadSlack();
+    } catch (e: unknown) {
+      setSlackError(e instanceof Error ? e.message : "連携解除に失敗しました");
+    } finally {
+      setSlackDisconnecting(false);
+    }
+  };
+
+  const handleSaveSlackChannel = async () => {
+    if (!slackChannelId) return;
+    setSlackSavingChannel(true);
+    setSlackError("");
+    try {
+      await api.setSlackChannel(authToken, slackChannelId);
+      setSlackShowPicker(false);
+      setSlackChannelId("");
+      await loadSlack();
+    } catch (e: unknown) {
+      setSlackError(e instanceof Error ? e.message : "チャンネルの保存に失敗しました");
+    } finally {
+      setSlackSavingChannel(false);
+    }
+  };
+
+  const handleChangeSlackChannel = () => {
+    setSlackError("");
+    setSlackChannelId(slackStatus?.channel_id ?? "");
+    setSlackShowPicker(true);
+    loadSlackChannels();
   };
 
   const handleSaveChatwork = async () => {
@@ -662,57 +774,180 @@ export default function AdminNotifyPage() {
       subtitle="Slack · Chatwork · プッシュ通知の連携と受信者管理"
     >
       <div className="adm-grid-2" style={{ gap: 20 }}>
-        {/* Slack */}
+        {/* Slack (OAuth: Slackに追加) */}
         <MkCard>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 18 }}>
-            <div style={{ width: 40, height: 40, borderRadius: 7, background: "#eaf0e8", color: "#3a6240", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="4" y="10" width="12" height="4" rx="2"/><rect x="10" y="4" width="4" height="12" rx="2"/>
-              </svg>
+            <div style={{ width: 40, height: 40, borderRadius: 7, background: "#f7f4ef", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <SlackMark size={22} />
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>Slack</div>
-              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>Incoming Webhook で指定チャンネルへ通知</div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>来客通知をSlackチャンネルに送信</div>
             </div>
-            <MkPill tone={slackConfigured ? "live" : "off"}>{slackConfigured ? "設定済" : "未設定"}</MkPill>
+            <MkPill tone={slackStatus?.connected ? "live" : "off"}>{slackStatus?.connected ? "連携済" : "未連携"}</MkPill>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <Field label="Webhook URL" required>
-              <TextInput
-                placeholder="https://hooks.slack.com/services/..."
-                mono
-                value={webhookUrl}
-                onChange={setWebhookUrl}
-              />
-            </Field>
-            <Field label="通知テンプレート" hint="{name} {company} {purpose} {time} が利用可能">
-              <div style={{ border: "1px solid #d8d3c7", borderRadius: 7, background: "#fffefb", padding: 10, fontSize: 12, color: "#2d2a24", lineHeight: 1.55 }}>
-                来客があります：<b>{"{company}"}</b> {"{name}"} 様（用件：{"{purpose}"}）{"{time}"}
-              </div>
-            </Field>
-          </div>
-          {slackError && (
-            <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
-              {slackError}
+
+          {slackNotice === "connected" && (
+            <div style={{ marginBottom: 14, padding: "10px 14px", background: "#eaf0e8", border: "1px solid rgba(74,124,78,0.25)", borderRadius: 8, color: "#3a6240", fontSize: 12 }}>
+              Slack連携が完了しました。
             </div>
           )}
-          <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center" }}>
-            <MkBtn variant="primary" size="sm" onClick={handleSaveSlack}>
-              {slackSaving ? "保存中…" : "保存"}
-            </MkBtn>
-            {slackConfigured && (
+          {slackNotice === "denied" && (
+            <div style={{ marginBottom: 14, padding: "10px 14px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.25)", borderRadius: 8, color: "#7a5c00", fontSize: 12 }}>
+              Slack連携がキャンセルされました。
+            </div>
+          )}
+          {slackNotice === "error" && (
+            <div style={{ marginBottom: 14, padding: "10px 14px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 8, color: "#a84238", fontSize: 12 }}>
+              Slack連携に失敗しました。お手数ですが、もう一度お試しください。
+            </div>
+          )}
+
+          {slackStatus?.enabled === false ? (
+            <div style={{ padding: "14px 16px", background: "#f4f1ea", borderRadius: 8, border: "1px solid #efece5", fontSize: 12.5, color: "#6b6559", lineHeight: 1.6 }}>
+              この環境ではSlack連携は現在ご利用いただけません。<br />ご利用をご希望の場合は運営までお問い合わせください。
+            </div>
+          ) : slackStatus?.connected && slackStatus.channel_configured && !slackShowPicker ? (
+            <>
+              {/* Connected + channel chosen */}
+              <div style={{ padding: "14px 16px", background: "#f4f1ea", borderRadius: 8, border: "1px solid #efece5", display: "flex", flexDirection: "column", gap: 10, marginBottom: 4 }}>
+                <div style={{ fontSize: 12.5, color: "#3a6240", fontWeight: 600 }}>連携済みです</div>
+                <div style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
+                  <div style={{ fontSize: 11, color: "#a8a198", width: 82, flexShrink: 0 }}>ワークスペース</div>
+                  <div style={{ fontSize: 13, color: "#1d1a15", fontWeight: 500 }}>{slackStatus.team_name || "—"}</div>
+                </div>
+                <div style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
+                  <div style={{ fontSize: 11, color: "#a8a198", width: 82, flexShrink: 0 }}>通知先</div>
+                  <div style={{ fontSize: 13, color: "#1d1a15", fontWeight: 500 }}>{slackStatus.channel_name || "—"}</div>
+                </div>
+              </div>
+              {slackError && (
+                <div style={{ marginTop: 12, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
+                  {slackError}
+                </div>
+              )}
+              <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  onClick={handleTestSlack}
+                  disabled={slackTesting}
+                  style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: slackTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: slackTesting ? 0.6 : 1 }}
+                >
+                  {slackTesting ? "送信中..." : "通知テスト"}
+                </button>
+                <button
+                  onClick={handleChangeSlackChannel}
+                  style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: "pointer", background: "#fffefb", color: "#6b6559" }}
+                >
+                  チャンネル変更
+                </button>
+                {slackTested && (
+                  <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>テスト通知を送信しました ✓</span>
+                )}
+                <div style={{ flex: 1 }} />
+                {!slackConfirmDisconnect ? (
+                  <button
+                    onClick={() => { setSlackConfirmDisconnect(true); setSlackError(""); }}
+                    style={{ padding: "6px 12px", fontSize: 13, border: "none", borderRadius: 6, cursor: "pointer", background: "transparent", color: "#a84238" }}
+                  >
+                    連携解除
+                  </button>
+                ) : (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span style={{ fontSize: 12, color: "#6b6559" }}>連携を解除しますか？</span>
+                    <button
+                      onClick={handleDisconnectSlack}
+                      disabled={slackDisconnecting}
+                      style={{ padding: "6px 12px", fontSize: 13, border: "1px solid rgba(168,66,56,0.4)", borderRadius: 6, cursor: slackDisconnecting ? "not-allowed" : "pointer", background: "#a84238", color: "#fffefb", opacity: slackDisconnecting ? 0.6 : 1 }}
+                    >
+                      {slackDisconnecting ? "解除中…" : "解除する"}
+                    </button>
+                    <button
+                      onClick={() => setSlackConfirmDisconnect(false)}
+                      disabled={slackDisconnecting}
+                      style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: "pointer", background: "#fffefb", color: "#6b6559" }}
+                    >
+                      キャンセル
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : slackStatus?.connected ? (
+            <>
+              {/* Connected via OAuth — pick the notification channel */}
+              <div style={{ marginBottom: 12, padding: "10px 14px", background: "#eaf0e8", border: "1px solid rgba(74,124,78,0.2)", borderRadius: 8, fontSize: 12, color: "#3a6240", lineHeight: 1.55 }}>
+                {slackStatus.team_name ? `「${slackStatus.team_name}」と連携しました。` : "Slackと連携しました。"}通知を送るチャンネルを選択してください。
+              </div>
+              {slackChannelsLoading ? (
+                <div style={{ padding: "10px 0", fontSize: 12.5, color: "#a8a198" }}>チャンネルを読み込み中…</div>
+              ) : (
+                <>
+                  <select
+                    value={slackChannelId}
+                    onChange={(e) => setSlackChannelId(e.target.value)}
+                    style={{ width: "100%", padding: "9px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, background: "#fffefb", color: "#2d2a24" }}
+                  >
+                    <option value="">チャンネルを選択…</option>
+                    {(slackChannels ?? []).map((c) => (
+                      <option key={c.id} value={c.id}>{c.is_private ? "🔒 " : "# "}{c.name}</option>
+                    ))}
+                  </select>
+                  <div style={{ fontSize: 11, color: "#a8a198", marginTop: 6, lineHeight: 1.55 }}>
+                    🔒 非公開チャンネルは、事前に Slack でこの App（Bot）をチャンネルに招待してください。
+                  </div>
+                </>
+              )}
+              {slackError && (
+                <div style={{ marginTop: 12, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
+                  {slackError}
+                </div>
+              )}
+              <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  onClick={handleSaveSlackChannel}
+                  disabled={!slackChannelId || slackSavingChannel}
+                  style={{ padding: "8px 16px", fontSize: 13, fontWeight: 600, border: "none", borderRadius: 7, cursor: (!slackChannelId || slackSavingChannel) ? "not-allowed" : "pointer", background: "#1d1a15", color: "#fffefb", opacity: (!slackChannelId || slackSavingChannel) ? 0.5 : 1 }}
+                >
+                  {slackSavingChannel ? "保存中…" : "このチャンネルに設定"}
+                </button>
+                <button
+                  onClick={loadSlackChannels}
+                  disabled={slackChannelsLoading}
+                  style={{ padding: "8px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: "pointer", background: "#fffefb", color: "#6b6559" }}
+                >
+                  再読み込み
+                </button>
+                {slackShowPicker && (
+                  <button
+                    onClick={() => { setSlackShowPicker(false); setSlackError(""); }}
+                    style={{ padding: "8px 12px", fontSize: 13, border: "none", borderRadius: 6, cursor: "pointer", background: "transparent", color: "#6b6559" }}
+                  >
+                    キャンセル
+                  </button>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Not connected */}
+              <div style={{ fontSize: 12.5, color: "#6b6559", lineHeight: 1.65, marginBottom: 16 }}>
+                「Slackに追加」を押してワークスペースを認可すると、通知先チャンネルを選んで連携できます。<br />Webhook URL やトークンの入力は不要です。
+              </div>
+              {slackError && (
+                <div style={{ marginBottom: 14, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
+                  {slackError}
+                </div>
+              )}
               <button
-                onClick={handleTestSlack}
-                disabled={slackTesting}
-                style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: slackTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: slackTesting ? 0.6 : 1 }}
+                onClick={handleConnectSlack}
+                disabled={slackConnecting}
+                style={{ display: "inline-flex", alignItems: "center", gap: 10, padding: "10px 16px", fontSize: 14, fontWeight: 600, border: "1px solid #d8d3c7", borderRadius: 8, cursor: slackConnecting ? "not-allowed" : "pointer", background: "#fffefb", color: "#1d1a15", opacity: slackConnecting ? 0.6 : 1 }}
               >
-                {slackTesting ? "送信中..." : "テスト送信"}
+                <SlackMark size={20} />
+                {slackConnecting ? "Slackへ移動中…" : "Slackに追加"}
               </button>
-            )}
-            {slackTested && (
-              <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
-            )}
-          </div>
+            </>
+          )}
         </MkCard>
 
         {/* Chatwork */}

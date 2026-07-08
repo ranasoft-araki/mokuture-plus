@@ -44,5 +44,19 @@ class Settings(BaseSettings):
     # (/{slug}/inquiry) shown as a QR on the kiosk お断り screen when no external form URL is set.
     public_web_url: str = "https://mokuture-plus.netlify.app"
 
+    # Slack OAuth (Bot Token + chat.postMessage). Lets a tenant admin connect Slack from
+    # the admin panel ("Slackに追加") instead of pasting a token by hand; the channel is
+    # chosen afterward in the UI. Bot Token Scopes: chat:write, channels:read, groups:read,
+    # channels:join. Feature is DISABLED unless all three are set (see slack_oauth_enabled).
+    # SLACK_REDIRECT_URI must exactly match a Redirect URL registered on the Slack App,
+    # e.g. https://mokuture-plus-api.onrender.com/api/notifications/slack/callback
+    slack_client_id: str = ""
+    slack_client_secret: str = ""
+    slack_redirect_uri: str = ""
+
+    @property
+    def slack_oauth_enabled(self) -> bool:
+        return bool(self.slack_client_id and self.slack_client_secret and self.slack_redirect_uri)
+
 
 settings = Settings()

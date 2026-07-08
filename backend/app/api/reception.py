@@ -1,5 +1,6 @@
 import csv
 import io
+import logging
 from datetime import date, datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -13,13 +14,14 @@ from app.middleware.tenant import get_current_user
 from app.models.reception import ReceptionLog
 from app.models.notification import NotificationSetting, PushSubscription
 from app.models.user import User
-from app.services.slack import send_slack_notification
+from app.services.slack import SlackNotifier
 from app.services.webpush import send_push
 from app.services.auth import create_decision_token, decode_token
 from app.services.crypto import decrypt_dict
 from app.config import settings
 
 router = APIRouter(prefix="/reception", tags=["reception"])
+logger = logging.getLogger(__name__)
 
 _ALLOWED_METHODS = {"form", "qr", "calendar"}
 
@@ -526,12 +528,22 @@ async def _notify_slack(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> 
         return
     try:
         config = decrypt_dict(setting.config_json)
-        webhook_url = config.get("webhook_url", "")
-        if webhook_url:
-            msg = f"*新規受付* {log.visitor_name}様（{log.company or '—'}）\n用件: {log.purpose or '—'}　担当: {log.staff or '—'}"
-            await send_slack_notification(webhook_url, msg)
+        # 送信先未確定(Bot連携済だがチャンネル未選択 等)はエラーではないので静かに終了。
+        has_dest = bool(config.get("bot_access_token") and config.get("channel_id")) or bool(config.get("webhook_url"))
+        if not has_dest:
+            return
+        msg = SlackNotifier.build_reception_message(
+            visitor_name=log.visitor_name,
+            company=log.company,
+            host_name=log.staff,
+            when=log.created_at,
+        )
+        ok = await SlackNotifier.send_to_config(config, msg)
+        if not ok:
+            # 受付は失敗させない(best-effort)。秘密情報(Bot Token/Webhook URL)はログに出さない。
+            logger.warning("Slack reception notification failed (tenant=%s, reception=%s)", tenant_id, log.id)
     except Exception:
-        pass  # notification failure must not affect reception
+        logger.warning("Slack reception notification error (tenant=%s, reception=%s)", tenant_id, log.id)
 
 
 def _log_out(r: ReceptionLog) -> dict:

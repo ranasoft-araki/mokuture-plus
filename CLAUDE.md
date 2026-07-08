@@ -100,7 +100,7 @@ mokuture/
 │           ├── auth.py        ← JWT 生成・検証
 │           ├── crypto.py      ← Fernet 暗号化 (Slack URL 等の秘密情報)
 │           ├── storage.py     ← R2/MinIO Presigned URL 生成
-│           ├── slack.py       ← Slack Webhook 通知
+│           ├── slack.py       ← SlackNotifier(OAuth認可URL/code交換→Bot Token/chat.postMessage送信/チャンネル列挙・参加/受付文面生成)。旧Webhook送信も後方互換で残置
 │           └── webpush.py     ← Web Push 送信
 │
 ├── frontend/                  ← Next.js フロントエンド
@@ -127,7 +127,7 @@ mokuture/
 │   │       │   ├── meeting-rooms/page.tsx ← 会議室管理 (CRUD・カラー・定員・場所)
 │   │       │   ├── kiosk-settings/page.tsx ← 受付設定 (キオスク文言・ロゴ配置ドラッグ)
 │   │       │   ├── settings/page.tsx  ← 基本設定 (ブランディング: ロゴ・カラー・フォント)
-│   │       │   ├── notify/page.tsx    ← 通知設定 (Slack/Chatwork/PWA/カスタムWebhook + 配達専用通知先: Slack/Chatwork/Webhook/プッシュON-OFF)
+│   │       │   ├── notify/page.tsx    ← 通知設定 (Slack=OAuth「Slackに追加」/Chatwork/PWA/カスタムWebhook + 配達専用通知先: Slack/Chatwork/Webhook/プッシュON-OFF)
 │   │       │   ├── locker/page.tsx    ← ロッカー管理
 │   │       │   ├── users/page.tsx     ← テナント内ユーザー管理
 │   │       │   └── profile/page.tsx   ← 管理者プロフィール（メール変更・パスワード変更）
@@ -316,7 +316,7 @@ mokuture/
 - **inquiries** — mokuture 共通問い合わせフォーム受信 (tenant_id, name, company, email, phone, message, **state**=`new|read|archived`, created_at)。公開送信 `POST /inquiries/public/{slug}`、管理閲覧 `GET /inquiries`。キオスク「営業お断り」画面が案内する共通フォーム(`/{slug}/inquiry`)の受け皿。テーブルは起動時 `create_all` で自動作成
 - **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired, meeting_room_id FK nullable)
 - **meeting_rooms** — 会議室 (name, location, capacity, color, description, is_active, **map_image_url**=館内マップ画像URL nullable)
-- **notification_settings** — 通知先設定 (Fernet 暗号化, `type` で種別)。受付: `slack`/`chatwork`/`webhook`/`vapid`。配達専用: `slack_delivery`/`chatwork_delivery`/`webhook_delivery`(未設定時は受付用にフォールバック)、`push_delivery`(`{enabled}` プッシュ通知ON/OFF, 既定ON)
+- **notification_settings** — 通知先設定 (Fernet 暗号化, `type` で種別)。受付: `slack`/`chatwork`/`webhook`/`vapid`。配達専用: `slack_delivery`/`chatwork_delivery`/`webhook_delivery`(未設定時は受付用にフォールバック)、`push_delivery`(`{enabled}` プッシュ通知ON/OFF, 既定ON)。**`slack`(受付)は OAuth 連携で `{team_id, team_name, bot_access_token, bot_user_id, channel_id, channel_name, auth_method:"bot", created_at, updated_at}` を暗号化保存**(専用テーブルは作らず既存 row を拡張＝マイグレーション不要)。`bot_access_token` は API レスポンス・ログに一切出さない。旧・手入力 `{webhook_url}` の row も送信は後方互換で動く(`SlackNotifier.send_to_config` が bot/webhook を自動判別)
 - **push_subscriptions** — Web Push 購読情報
 
 ---
@@ -362,6 +362,12 @@ mokuture/
 | POST | /inquiries/public/{slug} | なし | 共通問い合わせフォーム送信 (rate-limit 10/min) |
 | GET/PATCH/DELETE | /inquiries | JWT | 問い合わせ閲覧・状態更新・削除 |
 | GET/PATCH | /notifications | JWT | 通知設定 |
+| GET | /notifications/slack | JWT | Slack連携状態 `{enabled, connected, channel_configured, team_name, channel_name, channel_id, auth_method, connected_at}`。**bot_access_token は返さない** |
+| GET | /notifications/slack/oauth/url | JWT | Slack認可URLを返す `{enabled, authorize_url?}`。SPAが `window.location` で遷移。署名state(tenant紐付, TTL10分)を埋め込む。env未設定時 `{enabled:false}` |
+| GET | /notifications/slack/callback | なし | Slackのリダイレクト受け口(SLACK_REDIRECT_URI)。**未認証＝tenantは署名stateで特定**。code交換→**Bot Token**を暗号化保存(チャンネルは未確定)→`{web}/{slug}/admin/notify?slack=connected\|denied\|error` へ302リダイレクト |
+| GET | /notifications/slack/channels | JWT | 通知先候補チャンネル一覧 `{channels:[{id,name,is_private,is_member}]}`(`conversations.list`, 公開=channels:read/非公開=groups:read)。管理画面のチャンネル選択用 |
+| POST | /notifications/slack/channel | JWT | 通知先チャンネル確定 `{channel_id}`。`conversations.info`で名称取得＋公開ch未参加なら`conversations.join`→`{channel_id, channel_name}`保存→`{ok, channel_name}` |
+| POST | /notifications/slack/disconnect | JWT | Slack連携解除(type=slack の row 削除。Bot Token 破棄) |
 | GET/POST | /lockers | JWT | ロッカー管理 (name 永続化, occupied/has_pin 返却) |
 | GET | /kiosk/lockers | デバイストークン | ロッカー一覧 `{lockers:[{id,name,door_number,occupied,has_pin}], available_count}` |
 | POST | /kiosk/lockers/{id}/occupy | デバイストークン | 空き→PIN設定 `{pin:4桁}`→`{ok}`。409 already occupied / 422 |
@@ -488,6 +494,19 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - Slack/Chatwork Webhook URL は `services/crypto.py` (Fernet) で暗号化して DB 保存。
 - `ENCRYPTION_KEY` 環境変数が必須。
 
+### Slack OAuth 連携（「Slackに追加」= Bot Token + chat.postMessage）
+顧客が Bot Token を手入力せず、Slack を認可して mokuture 側で通知先チャンネルを選ぶだけで連携できる方式。SPA(Netlify)+API(Render) 分離構成に合わせ、仕様書の `/admin/slack/*` を `/api/notifications/slack/*` に読み替えて実装。**Incoming Webhook ではなく Bot Token で `chat.postMessage` 送信する**（チャンネルは認可画面ではなく連携後に mokuture 側で選ぶ）。
+
+- **フロー**: 管理画面「通知設定」の **[Slackに追加]** → `GET /notifications/slack/oauth/url`(JWT) が署名state付き認可URLを返す(scope=`chat:write,channels:read,groups:read,channels:join`) → SPA が `window.location` で Slack へ遷移 → 顧客が許可 → Slack が `GET /notifications/slack/callback`(未認証) へリダイレクト → `SlackNotifier.exchange_code`(`oauth.v2.access`) で **Bot Token(`bot_access_token`,`bot_user_id`,`team`)** を取得・暗号化保存(チャンネル未確定) → `{web}/{slug}/admin/notify?slack=connected` へ302で戻す。管理画面はマウント時に `?slack=` を読んでバナー表示＋`GET /notifications/slack` で状態再取得。
+- **チャンネル選択(連携後)**: `connected && !channel_configured` なら管理画面がチャンネル選択UIを表示 → `GET /notifications/slack/channels`(`conversations.list`) → 選択 → `POST /notifications/slack/channel {channel_id}`(公開ch未参加なら`conversations.join`)→ `channel_id/channel_name` 保存。「チャンネル変更」で再選択可。
+- **state = 署名JWT(`services/auth.create_slack_state_token`, type=`slack_oauth`, TTL10分, tenant_id + 乱数jti)**。サーバ側セッション保存は不要（state自体がtenant紐付を担保）。callback は未認証だが `verify_slack_state_token` で tenant を特定するためテナント越境不可。無効/期限切れstateは何も更新せず error リダイレクト。
+- **保存先は既存 `notification_settings`(type=`slack`) を拡張**（専用テーブルは作らない＝マイグレーション不要）。再連携は上書き（`_upsert_setting`）。旧・手入力 `{webhook_url}` の row も送信は後方互換で動く。
+- **送信は `SlackNotifier.send_to_config(config, text)` に集約** — `{bot_access_token, channel_id}` があれば `chat.postMessage`(未参加の公開chは`not_in_channel`時にjoinして1回リトライ)、無ければ旧 `{webhook_url}` にフォールバック。受付(`kiosk._notify_slack`)・配達(`_notify_slack_text`)・テストの全経路が同関数を通る。将来の DM・複数チャンネル・テンプレート・Teams/LINE WORKS 拡張の継ぎ目。
+- **セキュリティ**: `bot_access_token` / Client Secret / Webhook URL は**ログ出力・画面表示・APIレスポンス一切なし**。`GET /notifications/slack` は team_name/channel_name 等の非機密のみ返す。**env(SLACK_CLIENT_ID/SECRET/REDIRECT_URI)未設定時は機能無効**(`slack_oauth_enabled`)＝ oauth/url は `{enabled:false}`、callback/channels/channel は 404/400。
+- **エラー**: Slack送信失敗でも受付は止めない(best-effort)。失敗は `logger.warning` で残すが**秘密情報は出さない**(exc_infoも付けない)。Bot連携済だがチャンネル未選択の受付は「エラー」ではなく静かにスキップ。テスト通知(`POST /notifications/test/slack`)はチャンネル未選択なら 400 で促す。
+- **受付通知文面**(`SlackNotifier.build_reception_message`): `:bell: 来客がありました` + 会社名/お名前 様/訪問先/時刻(JST)。会社名・訪問先は空なら行を省略（最低=お名前+時刻）。
+- **Slack App設定**: OAuth&Permissions に `SLACK_REDIRECT_URI` を Redirect URL 登録、Bot Token Scopes に `chat:write`/`channels:read`/`groups:read`/`channels:join`。非公開チャンネルへ通知するには事前に Slack で Bot をそのチャンネルへ招待。連携解除(`POST /notifications/slack/disconnect`)は自テナントの設定削除のみ（Slack側App削除まではPhase1では必須にしない）。
+
 ### DB マイグレーション
 - Alembic 未導入のため、カラム追加は Neon Console または `mcp__Neon__run_sql` で手動 `ALTER TABLE`。
 - SQLAlchemy モデルと DB スキーマを常に同期すること。
@@ -507,6 +526,12 @@ STORAGE_ACCESS_KEY=...
 STORAGE_SECRET_KEY=...
 STORAGE_BUCKET=...
 STORAGE_PUBLIC_URL=...
+
+# Slack OAuth（「Slackに追加」= Bot Token + chat.postMessage）。3つ揃わないと機能無効（settings.slack_oauth_enabled）。
+# Bot Token Scopes: chat:write / channels:read / groups:read / channels:join
+SLACK_CLIENT_ID=...
+SLACK_CLIENT_SECRET=...
+SLACK_REDIRECT_URI=https://mokuture-plus-api.onrender.com/api/notifications/slack/callback
 ```
 
 ### Frontend (.env.local)

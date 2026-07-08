@@ -422,12 +422,24 @@ export const api = {
   // Notification settings
   getNotificationSettings: (token: string) =>
     request<Record<string, Record<string, string>>>("/notifications/settings", {}, token),
-  updateSlackSettings: (token: string, webhook_url: string) =>
-    request("/notifications/settings/slack", { method: "PUT", body: JSON.stringify({ webhook_url }) }, token),
+
+  // Slack OAuth (Bot Token + chat.postMessage) — "Slackに追加" flow. The customer never
+  // types/sees a bot token; it is stored server-side and never returned (only status).
+  // After OAuth the admin picks a channel (getSlackChannels → setSlackChannel).
+  getSlackStatus: (token: string) =>
+    request<{ enabled: boolean; connected: boolean; channel_configured: boolean; team_name: string; channel_name: string; channel_id: string; auth_method: string; connected_at: string }>(
+      "/notifications/slack", {}, token),
+  getSlackOAuthUrl: (token: string) =>
+    request<{ enabled: boolean; authorize_url?: string }>("/notifications/slack/oauth/url", {}, token),
+  getSlackChannels: (token: string) =>
+    request<{ channels: { id: string; name: string; is_private: boolean; is_member: boolean }[] }>(
+      "/notifications/slack/channels", {}, token),
+  setSlackChannel: (token: string, channel_id: string) =>
+    request<{ ok: boolean; channel_name: string }>("/notifications/slack/channel", { method: "POST", body: JSON.stringify({ channel_id }) }, token),
+  disconnectSlack: (token: string) =>
+    request<{ ok: boolean }>("/notifications/slack/disconnect", { method: "POST" }, token),
   updateChatworkSettings: (token: string, api_token: string, room_id: string) =>
     request("/notifications/settings/chatwork", { method: "PUT", body: JSON.stringify({ api_token, room_id }) }, token),
-  testSlackNotification: (token: string) =>
-    request<{ ok: boolean }>("/notifications/test/slack", { method: "POST" }, token),
   testChatworkNotification: (token: string) =>
     request<{ ok: boolean }>("/notifications/test/chatwork", { method: "POST" }, token),
   testNotification: (token: string, type: string): Promise<{ ok: boolean; error?: string; sent?: number }> => {
