@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
+import locker_store
 from config import settings
 from gpio import DoorSensor, LockerController, PirSensor
 from state import get_device_name, get_device_token, is_registered, save_device_state
@@ -874,6 +875,141 @@ async def set_locker_state(locker_id: str, body: LockerStateBody):
         "locker_id": str(locker_id),
         "on": locker_ctrl.is_on(locker_id),
     }
+
+
+# ── ローカルファースト・ロッカー状態（占有/PINは端末が権威／解錠はオフライン可） ──────
+# 状態系(list/occupy/occupy-delivery/release/open-all)はここ(agent)で完結し、backend へは
+# best-effort でミラー＋置き配通知の中継のみ行う。GPIO 開閉は従来どおり kiosk が
+# /device/locker/{door}/open・/state を叩く（この層は状態のみ扱う）。関連: locker_store.py
+
+_ROSTER_TTL_SEC = 60
+
+
+async def _sync_locker_roster() -> None:
+    """台帳(id→name/door_number)を backend から best-effort 同期。占有/PIN は触らない。"""
+    token = get_device_token()
+    if not token:
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{settings.remote_api_url}/kiosk/lockers",
+                headers={"X-Kiosk-Token": token}, timeout=8,
+            )
+            resp.raise_for_status()
+            locker_store.sync_roster(resp.json().get("lockers", []))
+    except Exception:
+        pass  # オフライン等: 前回の台帳をそのまま使う
+
+
+async def _mirror_locker_state() -> None:
+    """管理画面可視化用に occupied/has_pin を backend へ best-effort ミラー（PINは送らない）。"""
+    token = get_device_token()
+    if not token:
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{settings.remote_api_url}/kiosk/lockers/mirror",
+                headers={"X-Kiosk-Token": token},
+                json=locker_store.mirror_payload(), timeout=8,
+            )
+    except Exception:
+        pass  # ミラーは best-effort（失敗しても解錠フローに影響なし）
+
+
+async def _relay_delivery_notify(item: dict) -> bool:
+    """置き配通知を backend 経由で発火（平文PIN＋ラベル）。item={id,pin,label,device}。"""
+    token = get_device_token()
+    if not token:
+        return False
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{settings.remote_api_url}/kiosk/lockers/{item['id']}/notify-delivery",
+                headers={"X-Kiosk-Token": token},
+                json={
+                    "pin": item.get("pin"),
+                    "locker_label": item.get("label"),
+                    "device_name": item.get("device"),
+                },
+                timeout=10,
+            )
+            return resp.status_code < 400
+    except Exception:
+        return False
+
+
+async def _flush_pending_notify() -> None:
+    """オフライン中に貯めた置き配通知を再送する。"""
+    pending = locker_store.take_pending_notify()
+    if not pending:
+        return
+    failed = [item for item in pending if not await _relay_delivery_notify(item)]
+    if failed:
+        locker_store.requeue_notify(failed)
+
+
+@app.get("/device/locker-list")
+async def device_locker_list():
+    """kiosk グリッド用: 台帳＋ローカル状態。オンライン時のみ台帳を throttle 同期し、
+    保留中の置き配通知も flush する。オフラインでも前回台帳＋ローカル状態を返す。"""
+    age = locker_store.roster_age_sec()
+    if age is None or age > _ROSTER_TTL_SEC:
+        await _sync_locker_roster()
+    await _flush_pending_notify()
+    return locker_store.snapshot()
+
+
+@app.post("/device/locker/{locker_id}/occupy")
+async def device_locker_occupy(locker_id: str, body: LockerPinBody):
+    """手荷物一時保管: 端末ローカルに PIN(ハッシュ)を保存して施錠状態にする。"""
+    if not re.fullmatch(r"\d{4}", body.pin or ""):
+        raise HTTPException(status_code=422, detail="pin must be exactly 4 digits")
+    try:
+        result = locker_store.occupy(locker_id, body.pin, kind="store")
+    except locker_store.LockerError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    _spawn(_mirror_locker_state())
+    return result
+
+
+@app.post("/device/locker/{locker_id}/occupy-delivery")
+async def device_locker_occupy_delivery(locker_id: str):
+    """置き配: ローカルでランダム4桁PINを生成・保存し、通知は backend 経由で発火する
+    （平文PINは通知にのみ使用）。オフライン時は通知をキューして再接続時に送る。"""
+    try:
+        result = locker_store.occupy_delivery(locker_id)
+    except locker_store.LockerError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    item = {"id": str(locker_id), "pin": result["pin"], "label": result["name"], "device": get_device_name()}
+
+    async def _notify():
+        if not await _relay_delivery_notify(item):
+            locker_store.enqueue_notify(item)
+        await _mirror_locker_state()
+
+    _spawn(_notify())
+    return {"ok": True, "door_number": result["door_number"]}
+
+
+@app.post("/device/locker/{locker_id}/release")
+async def device_locker_release(locker_id: str, body: LockerPinBody):
+    """受け取り: 端末ローカルで PIN 照合して解錠状態にする（クラウド往復なし・オフライン可）。"""
+    try:
+        result = locker_store.release(locker_id, body.pin)
+    except locker_store.LockerError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    _spawn(_mirror_locker_state())
+    return result
+
+
+@app.post("/device/lockers/open-all")
+async def device_lockers_open_all():
+    """全ロッカーのローカル状態をリセット（緊急・メンテ用）。GPIO 解錠は kiosk が実施。"""
+    result = locker_store.release_all()
+    _spawn(_mirror_locker_state())
+    return result
 
 
 @app.get("/device/pir")

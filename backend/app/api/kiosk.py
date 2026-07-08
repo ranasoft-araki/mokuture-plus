@@ -49,6 +49,18 @@ def _generate_delivery_pin() -> str:
     return f"{secrets.randbelow(10000):04d}"
 
 
+# ローカルファースト構成では PIN を端末(agent)が保持する。管理画面の has_pin 表示のためだけに、
+# backend 側には「照合不能な実bcryptハッシュ」を1つだけ使い回す(誰のPINにも一致しない)。
+_mirror_sentinel_cache: str | None = None
+
+
+def _mirror_pin_sentinel() -> str:
+    global _mirror_sentinel_cache
+    if _mirror_sentinel_cache is None:
+        _mirror_sentinel_cache = hash_password(secrets.token_hex(16))
+    return _mirror_sentinel_cache
+
+
 router = APIRouter(prefix="/kiosk", tags=["kiosk"])
 _limiter = Limiter(key_func=get_remote_address)
 
@@ -677,6 +689,105 @@ async def kiosk_release_locker(
     locker.occupied_at = None
     await db.commit()
     return {"ok": True, "door_number": locker.door_number}
+
+
+class DeliveryNotifyBody(BaseModel):
+    """ローカルファースト構成の agent から受ける置き配通知リクエスト。
+    PINは端末が生成・保持し、ここへは通知目的で平文が渡る。状態は変更しない。"""
+    pin: str | None = None
+    locker_label: str | None = None
+    device_name: str | None = None
+
+
+@router.post("/lockers/{locker_id}/notify-delivery")
+async def kiosk_notify_delivery(
+    locker_id: str,
+    body: DeliveryNotifyBody,
+    background: BackgroundTasks,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """ローカルファースト置き配の通知だけを担当者へ発火する(best-effort)。
+
+    施錠・PIN生成・照合は agent がローカルで行う(端末が権威)。ここでは占有状態を変更せず、
+    「どのロッカーにこのPINで置き配されたか」を通知するのみ。可視化は /lockers/mirror が担う。
+    旧経路 /lockers/{id}/occupy-delivery はサーバ側PIN生成のまま後方互換で残置。"""
+    tenant, device = ctx
+    locker = await _get_kiosk_locker(locker_id, tenant.id, db)  # 存在＋テナント越境チェック
+    pin = (body.pin or "").strip()
+    locker_label = (body.locker_label or "").strip() or locker.name or f"ロッカー {locker.door_number}"
+    device_label = (body.device_name or "").strip() or device.name or "受付端末"
+    title = "置き配のお知らせ"
+    text = (
+        f"📦 置き配がありました\n"
+        f"「{locker_label}」に置き配されました。\n"
+        f"解錠パスワード: {pin}\n"
+        f"(受付端末: {device_label})"
+    )
+    background.add_task(
+        _fire_delivery_notifications,
+        tenant.id,
+        title,
+        text,
+        {
+            "event": "delivery_dropoff",
+            "tenant_id": tenant.id,
+            "kind": "delivery",
+            "locker": locker_label,
+            "door_number": locker.door_number,
+            "pin": pin,
+            "device": device_label,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return {"ok": True}
+
+
+class LockerMirrorItem(BaseModel):
+    id: str
+    occupied: bool = False
+    has_pin: bool = False
+
+
+class LockerMirrorBody(BaseModel):
+    lockers: list[LockerMirrorItem] = []
+
+
+@router.post("/lockers/mirror")
+async def kiosk_mirror_lockers(
+    body: LockerMirrorBody,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """ローカルファースト構成の agent から占有状態を best-effort ミラーする(管理画面表示用)。
+
+    PIN 本体は受け取らない。occupied を反映し、has_pin は照合不能な表示専用センチネルで表す
+    (置き配で実PINハッシュを既に持つ行は上書きしない)。agent が権威なので全件スナップショット
+    を冪等に適用する。"""
+    tenant, _ = ctx
+    if not body.lockers:
+        return {"ok": True, "updated": 0}
+    ids = [str(it.id) for it in body.lockers]
+    result = await db.execute(
+        select(Locker).where(Locker.tenant_id == tenant.id, Locker.id.in_(ids))
+    )
+    by_id = {l.id: l for l in result.scalars().all()}
+    updated = 0
+    for it in body.lockers:
+        locker = by_id.get(str(it.id))
+        if locker is None:
+            continue
+        if it.occupied:
+            locker.occupied = True
+            if it.has_pin and not locker.pin_hash:
+                locker.pin_hash = _mirror_pin_sentinel()
+        else:
+            locker.occupied = False
+            locker.pin_hash = None
+            locker.occupied_at = None
+        updated += 1
+    await db.commit()
+    return {"ok": True, "updated": updated}
 
 
 async def _notify_slack(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:

@@ -27,6 +27,9 @@ frontend/.netlify/
 *.db-shm
 *.db-wal
 
+# Kiosk agent local-first locker state (per-device, must not be committed)
+kiosk_agent/locker_state.json
+
 # Misc
 .DS_Store
 *.log

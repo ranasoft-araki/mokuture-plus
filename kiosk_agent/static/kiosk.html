@@ -112,6 +112,12 @@ function _mockLockerList() {
     available_count: MOCK_LOCKERS.filter(l => !l.occupied).length,
   };
 }
+// ロッカー操作のMOCK実装(実状態は MOCK_LOCKERS)。/proxy(旧)と /device(ローカルファースト)で共用。
+function _mockFindLocker(id) { const l = MOCK_LOCKERS.find(x => x.id === id); if (!l) throw new Error("ロッカーが見つかりません"); return l; }
+function _mockOccupy(id, pin) { const l = _mockFindLocker(id); if (l.occupied) throw new Error("already occupied"); l.occupied = true; l._pin = String(pin ?? ""); return { ok: true, door_number: l.door_number }; }
+function _mockRelease(id, pin) { const l = _mockFindLocker(id); if (!l.occupied) throw new Error("not occupied"); if (String(pin ?? "") !== l._pin) throw new Error("invalid pin"); const door = l.door_number; l.occupied = false; l._pin = null; return { ok: true, door_number: door }; }
+function _mockOccupyDelivery(id) { const l = _mockFindLocker(id); if (l.occupied) throw new Error("already occupied"); l.occupied = true; l._pin = String(Math.floor(Math.random() * 10000)).padStart(4, "0"); return { ok: true, door_number: l.door_number }; }
+function _mockOpenAll() { const doors = MOCK_LOCKERS.map(l => l.door_number); MOCK_LOCKERS.forEach(l => { l.occupied = false; l._pin = null; }); return { ok: true, door_numbers: doors, count: doors.length }; }
 async function mockFetch(method, path, body) {
   await new Promise(r => setTimeout(r, 180)); // 体感の通信遅延
   if (path === "/config") return { tenant_slug: "mock", remote_api_url: "", device_name: "MOCK-KIOSK", registered: true };
@@ -145,41 +151,46 @@ async function mockFetch(method, path, body) {
     meeting_room: { name: "（MOCK）商談ルーム A", location: "2階", map_image_url:
       "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='800' height='520' viewBox='0 0 800 520'><rect width='800' height='520' fill='#f4f1ea'/><rect x='40' y='40' width='720' height='440' fill='none' stroke='#d8d3c7' stroke-width='3'/><rect x='80' y='90' width='220' height='150' fill='#fffefb' stroke='#d8d3c7' stroke-width='2'/><text x='190' y='170' font-size='22' fill='#6b6559' text-anchor='middle' font-family='sans-serif'>受付</text><rect x='480' y='250' width='220' height='160' fill='#e7f0e8' stroke='#2d6a4f' stroke-width='3'/><text x='590' y='335' font-size='24' fill='#2d6a4f' text-anchor='middle' font-family='sans-serif'>商談ルームA</text><circle cx='190' cy='300' r='14' fill='#2d6a4f'/><text x='190' y='345' font-size='16' fill='#2d6a4f' text-anchor='middle' font-family='sans-serif'>現在地</text><path d='M190 300 L190 410 L480 330' fill='none' stroke='#a84238' stroke-width='4' stroke-dasharray='10 8'/></svg>`) },
   };
-  // Lockers
+  // Lockers（旧 /proxy 経路。ローカルファースト化後は /device が主経路だが後方互換で残す）
   if (path === "/proxy/lockers") return _mockLockerList();
   let m = path.match(/^\/proxy\/lockers\/([^/]+)\/occupy$/);
-  if (m) {
-    const l = MOCK_LOCKERS.find(x => x.id === m[1]);
-    if (!l) throw new Error("ロッカーが見つかりません");
-    if (l.occupied) throw new Error("already occupied");
-    l.occupied = true; l._pin = String(body?.pin ?? "");
-    return { ok: true };
-  }
+  if (m) return _mockOccupy(m[1], body?.pin);
   m = path.match(/^\/proxy\/lockers\/([^/]+)\/release$/);
-  if (m) {
-    const l = MOCK_LOCKERS.find(x => x.id === m[1]);
-    if (!l) throw new Error("ロッカーが見つかりません");
-    if (!l.occupied) throw new Error("not occupied");
-    if (String(body?.pin ?? "") !== l._pin) throw new Error("invalid pin");
-    const door = l.door_number; l.occupied = false; l._pin = null;
-    return { ok: true, door_number: door };
-  }
+  if (m) return _mockRelease(m[1], body?.pin);
   m = path.match(/^\/proxy\/lockers\/([^/]+)\/occupy-delivery$/);
-  if (m) {
-    const l = MOCK_LOCKERS.find(x => x.id === m[1]);
-    if (!l) throw new Error("ロッカーが見つかりません");
-    if (l.occupied) throw new Error("already occupied");
-    l.occupied = true; l._pin = null;   // 置き配: 暗証番号なし
-    return { ok: true };
-  }
+  if (m) return _mockOccupyDelivery(m[1]);
   if (path === "/proxy/call-staff") return { ok: true };
-  if (path === "/proxy/lockers/open-all") {
-    const doors = MOCK_LOCKERS.map(l => l.door_number);
-    MOCK_LOCKERS.forEach(l => { l.occupied = false; l._pin = null; });
-    return { ok: true, door_numbers: doors, count: doors.length };
-  }
+  if (path === "/proxy/lockers/open-all") return _mockOpenAll();
   return {};
 }
+// ローカルエージェント(/device/*)を叩く。MOCK時はローカルロッカー状態をスタブ。
+async function mockDeviceFetch(method, path, body) {
+  await new Promise(r => setTimeout(r, 100));
+  if (path === "/device/locker-list") return _mockLockerList();
+  let m = path.match(/^\/device\/locker\/([^/]+)\/occupy$/);
+  if (m) return _mockOccupy(m[1], body?.pin);
+  m = path.match(/^\/device\/locker\/([^/]+)\/occupy-delivery$/);
+  if (m) return _mockOccupyDelivery(m[1]);
+  m = path.match(/^\/device\/locker\/([^/]+)\/release$/);
+  if (m) return _mockRelease(m[1], body?.pin);
+  if (path === "/device/lockers/open-all") return _mockOpenAll();
+  return {};
+}
+async function deviceFetch(method, path, body) {
+  if (MOCK) return mockDeviceFetch(method, path, body);
+  const r = await fetch(path, {
+    method,
+    headers: body != null ? { "Content-Type": "application/json" } : undefined,
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({ detail: r.statusText }));
+    throw new Error(e.detail ?? "Request failed");
+  }
+  return r.status === 204 ? null : r.json();
+}
+const deviceGet  = (p)    => deviceFetch("GET",  p, null);
+const devicePost = (p, b) => deviceFetch("POST", p, b || null);
 // ロッカーのGPIO開錠(ローカルエージェント)。MOCK時はダミー。
 async function pulseLocker(door) {
   if (MOCK) { await new Promise(r => setTimeout(r, 120)); return { ok: true }; }
@@ -222,8 +233,8 @@ async function _realFetch(method, path, body, token) {
 function _isRealNotifyPath(path) {
   return path === "/proxy/reception"                                   // 受付→スタッフ通知
       || /^\/proxy\/reception\/[^/]+$/.test(path)                      // OK/NG応答のポーリング(通知と整合)
-      || path === "/proxy/call-staff"                                  // 配達の呼び出し→通知
-      || /^\/proxy\/lockers\/[^/]+\/occupy-delivery$/.test(path);      // 置き配→通知
+      || path === "/proxy/call-staff";                                 // 配達の呼び出し→通知
+  // 注: 置き配通知はローカルファースト化に伴い /device 経路(agent→backend notify-delivery)へ移行。
 }
 // 実通知には実デバイストークンが必要。mock/未設定なら agent 経由で登録して取得を試みる。
 async function _ensureRealToken(token) {
@@ -985,10 +996,10 @@ function showLocker(mode) {
     busy = true; render();
     try {
       if (view === "pinset") {
-        await apiPost(`/proxy/lockers/${encodeURIComponent(sel.id)}/occupy`, { pin }, token);
+        await devicePost(`/device/locker/${encodeURIComponent(sel.id)}/occupy`, { pin });
         resultTitle = "お預け完了"; resultSub = "暗証番号を設定しました。お受け取りの際に入力してください。";
       } else {
-        const r = await apiPost(`/proxy/lockers/${encodeURIComponent(sel.id)}/release`, { pin }, token);
+        const r = await devicePost(`/device/locker/${encodeURIComponent(sel.id)}/release`, { pin });
         await pulseLocker((r && r.door_number) || sel.door_number);
         resultTitle = "解錠しました"; resultSub = "扉を開けてお荷物をお受け取りください。";
       }
@@ -1006,7 +1017,7 @@ function showLocker(mode) {
 
   async function load() {
     try {
-      const r = await apiGet("/proxy/lockers", token);
+      const r = await deviceGet("/device/locker-list");
       lockers = r.lockers || [];
       available = r.available_count ?? lockers.filter(l => !l.occupied).length;
       view = "grid"; render();
@@ -1140,7 +1151,7 @@ function showDelivery() {
     view = "sending"; render();
     await forceLockLocker(sel.door_number);   // 物理施錠(通常ロッカーの「扉を閉めました」と同経路)
     try {
-      await apiPost(`/proxy/lockers/${encodeURIComponent(sel.id)}/occupy-delivery`, {}, token);
+      await devicePost(`/device/locker/${encodeURIComponent(sel.id)}/occupy-delivery`);
       resultTitle = "お預け完了"; resultSub = "施錠しました。担当者がお受け取りします（暗証番号は不要です）。";
       view = "result"; render();
     } catch (e) {
@@ -1160,7 +1171,7 @@ function showDelivery() {
 
   async function load() {
     try {
-      const r = await apiGet("/proxy/lockers", token);
+      const r = await deviceGet("/device/locker-list");
       lockers = r.lockers || [];
       available = r.available_count ?? lockers.filter(l => !l.occupied).length;
       view = "choose"; render();
@@ -2097,7 +2108,7 @@ function showKioskSettings() {
       ok.disabled = true; ok.textContent = "解錠中…"; msg.style.color = "#5a5249"; msg.textContent = "";
       const token = localStorage.getItem(TOKEN_KEY);
       try {
-        const r = await apiPost("/proxy/lockers/open-all", {}, token);
+        const r = await devicePost("/device/lockers/open-all");
         const doors = (r && r.door_numbers) || [];
         for (const d of doors) { await pulseLocker(d); }
         msg.style.color = "#2e5c32";
