@@ -69,7 +69,8 @@ const STATUS_LABEL: Record<string, string> = {
   received: "受付済み",
   notified: "通知済み",
   accepted: "対応中",
-  declined: "対応不可",
+  phone: "電話案内",
+  declined: "お断り",
   completed: "完了",
   cancelled: "キャンセル",
 };
@@ -78,6 +79,7 @@ const STATUS_COLOR: Record<string, string> = {
   received: "#f59e0b",
   notified: "#3b82f6",
   accepted: "#059669",
+  phone: "#0ea5e9",
   declined: "#ef4444",
   completed: "#10b981",
   cancelled: "#9ca3af",
@@ -299,21 +301,24 @@ function StatusSelect({ log, token, onUpdate }: { log: ReceptionLog; token: stri
       <option value="received">受付済み</option>
       <option value="notified">通知済み</option>
       <option value="accepted">対応中</option>
-      <option value="declined">対応不可</option>
+      <option value="phone">電話案内</option>
+      <option value="declined">お断り</option>
       <option value="completed">完了</option>
       <option value="cancelled">キャンセル</option>
     </select>
   );
 }
 
-// 受付 OK/NG 応答ボタン（アプリ内。iOS PWA では通知アクションが出ないためのフォールバック兼・全端末共通）。
-// 未応答(received/notified)の行にのみ表示する。
+// 受付応答ボタン（受付/電話/お断り。アプリ内。iOS PWA では通知アクションが出ないためのフォールバック兼・全端末共通）。
+// 応答結果はキオスクの待機画面に反映される（受付=参ります / 電話=電話番号表示 / お断り=営業お断り+問い合わせフォーム）。
+// 未応答(received/notified)の行にのみ表示する。QR予約(appointment)は お断り を出さず 受付/電話 の2択。
 function DecisionButtons({ log, token, onUpdate }: { log: ReceptionLog; token: string; onUpdate: (id: string, state: string) => void }) {
   const [busy, setBusy] = useState(false);
   const state = log.state ?? "received";
   if (state !== "received" && state !== "notified") return null;
+  const isAppointment = log.method === "appointment";
 
-  const decide = (decision: "accept" | "decline", nextState: string) => (e: React.MouseEvent) => {
+  const decide = (decision: "accept" | "phone" | "decline", nextState: string) => (e: React.MouseEvent) => {
     e.stopPropagation();
     setBusy(true);
     api.decideReception(token, log.id, decision)
@@ -325,8 +330,11 @@ function DecisionButtons({ log, token, onUpdate }: { log: ReceptionLog; token: s
   const base: React.CSSProperties = { border: "none", borderRadius: 10, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", color: "#fff", opacity: busy ? 0.6 : 1 };
   return (
     <div style={{ display: "inline-flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>
-      <button type="button" disabled={busy} onClick={decide("accept", "accepted")} style={{ ...base, backgroundColor: "#059669" }}>すぐ伺います</button>
-      <button type="button" disabled={busy} onClick={decide("decline", "declined")} style={{ ...base, backgroundColor: "#ef4444" }}>只今対応できません</button>
+      <button type="button" disabled={busy} onClick={decide("accept", "accepted")} style={{ ...base, backgroundColor: "#059669" }}>受付</button>
+      <button type="button" disabled={busy} onClick={decide("phone", "phone")} style={{ ...base, backgroundColor: "#0ea5e9" }}>電話</button>
+      {!isAppointment && (
+        <button type="button" disabled={busy} onClick={decide("decline", "declined")} style={{ ...base, backgroundColor: "#ef4444" }}>お断り</button>
+      )}
     </div>
   );
 }
@@ -580,7 +588,8 @@ export default function ReceptionLogsPage() {
           <option value="received">受付済み</option>
           <option value="notified">通知済み</option>
           <option value="accepted">対応中</option>
-          <option value="declined">対応不可</option>
+          <option value="phone">電話案内</option>
+          <option value="declined">お断り</option>
           <option value="completed">完了</option>
           <option value="cancelled">キャンセル</option>
         </select>

@@ -5,7 +5,7 @@ import { clearTokens, getLogoutUrl } from "@/lib/auth";
 import { useState } from "react";
 import type { ReactNode } from "react";
 
-export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "appointments" | "meeting_rooms" | "notify" | "locker" | "kiosk_settings" | "settings" | "users" | "profile";
+export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "inquiries" | "appointments" | "meeting_rooms" | "notify" | "locker" | "kiosk_settings" | "settings" | "users" | "profile";
 
 interface Props {
   active: NavId;
@@ -24,6 +24,7 @@ const NAV_OPS: { id: NavId; label: string }[] = [
   { id: "schedule",  label: "スケジュール" },
   { id: "device",       label: "キオスク端末" },
   { id: "reception",    label: "受付ログ" },
+  { id: "inquiries",     label: "問い合わせ" },
   { id: "appointments",  label: "来社予定" },
   { id: "meeting_rooms", label: "会議室管理" },
 ];
@@ -44,6 +45,7 @@ const NAV_PATHS: Record<NavId, (t: string) => string> = {
   schedule:      (t) => `/${t}/admin/schedules`,
   device:        (t) => `/${t}/admin/kiosk`,
   reception:     (t) => `/${t}/admin/reception`,
+  inquiries:     (t) => `/${t}/admin/inquiries`,
   appointments:  (t) => `/${t}/admin/appointments`,
   meeting_rooms: (t) => `/${t}/admin/meeting-rooms`,
   notify:        (t) => `/${t}/admin/notify`,
@@ -404,6 +406,10 @@ function NavIcon({ id, active }: { id: NavId; active: boolean }) {
     case "reception":
       return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
         <path d="M4 21v-2a4 4 0 014-4h8a4 4 0 014 4v2"/><circle cx="12" cy="8" r="4"/>
+      </svg>;
+    case "inquiries":
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 4h16a1 1 0 011 1v11a1 1 0 01-1 1H8l-4 4V5a1 1 0 011-1z"/><path d="M8 9h8M8 13h5"/>
       </svg>;
     case "appointments":
       return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">

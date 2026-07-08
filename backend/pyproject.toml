@@ -22,6 +22,7 @@ dependencies = [
     "greenlet>=3.0.0",
     "bcrypt>=5.0.0",
     "pywebpush>=2.0.0",
+    "segno>=1.6.0",
 ]
 
 [project.optional-dependencies]

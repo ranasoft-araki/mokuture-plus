@@ -25,6 +25,10 @@ export default function KioskSettingsPage() {
   const [kioskIdleTimeout, setKioskIdleTimeout] = useState("60");
   const [kioskCompleteTimeout, setKioskCompleteTimeout] = useState("10");
 
+  // 受付応答「電話(対応不可)」でキオスクに表示する電話番号 / 「お断り」で案内する外部フォームURL
+  const [kioskPhone, setKioskPhone] = useState("");
+  const [inquiryFormUrl, setInquiryFormUrl] = useState("");
+
   // Staff list state — one name per line in the textarea
   const [staffListText, setStaffListText] = useState("");
   const [staffSaving, setStaffSaving] = useState(false);
@@ -54,6 +58,8 @@ export default function KioskSettingsPage() {
       setKioskComplete(s.kiosk_complete_message);
       setKioskIdleTimeout(String(s.kiosk_idle_timeout_sec));
       setKioskCompleteTimeout(String(s.kiosk_complete_timeout_sec));
+      setKioskPhone(s.kiosk_phone_number ?? "");
+      setInquiryFormUrl(s.inquiry_form_url ?? "");
       setLogoPosX(s.logo_pos_x);
       setLogoPosY(s.logo_pos_y);
       setLogoWidthPct(s.logo_width_pct);
@@ -86,6 +92,8 @@ export default function KioskSettingsPage() {
         kiosk_complete_message: kioskComplete,
         kiosk_idle_timeout_sec: Number(kioskIdleTimeout) || 60,
         kiosk_complete_timeout_sec: Number(kioskCompleteTimeout) || 10,
+        kiosk_phone_number: kioskPhone.trim() || null,
+        inquiry_form_url: inquiryFormUrl.trim() || null,
         logo_pos_x: logoPosX,
         logo_pos_y: logoPosY,
         logo_width_pct: logoWidthPct,
@@ -107,6 +115,8 @@ export default function KioskSettingsPage() {
     setKioskComplete(settings.kiosk_complete_message);
     setKioskIdleTimeout(String(settings.kiosk_idle_timeout_sec));
     setKioskCompleteTimeout(String(settings.kiosk_complete_timeout_sec));
+    setKioskPhone(settings.kiosk_phone_number ?? "");
+    setInquiryFormUrl(settings.inquiry_form_url ?? "");
     setLogoPosX(settings.logo_pos_x);
     setLogoPosY(settings.logo_pos_y);
     setLogoWidthPct(settings.logo_width_pct);
@@ -229,6 +239,18 @@ export default function KioskSettingsPage() {
               </Field>
               <Field label="完了画面の表示時間" hint="5〜60 秒">
                 <TextInputNumber value={kioskCompleteTimeout} onChange={setKioskCompleteTimeout} suffix="秒" />
+              </Field>
+            </div>
+          </MkCard>
+
+          <MkCard>
+            <MkSectionTitle title="受付応答（電話・お断り）" subtitle="通知を受けたスタッフが「電話」「お断り」で応答したときにキオスクへ表示する内容" />
+            <div style={{ display: "grid", gap: 16 }}>
+              <Field label="受付電話番号" hint="スタッフが「電話（対応不可）」で応答したとき、来訪者にこの番号を表示します">
+                <TextInput value={kioskPhone} onChange={setKioskPhone} placeholder="03-1234-5678" />
+              </Field>
+              <Field label="問い合わせフォームURL（任意）" hint="スタッフが「お断り」で応答したとき、このURLのQRを表示します。空欄の場合は mokuture 共通フォーム（送信内容は「問い合わせ」ページで確認）を表示します">
+                <TextInput value={inquiryFormUrl} onChange={setInquiryFormUrl} placeholder="https://example.com/contact" />
               </Field>
             </div>
           </MkCard>

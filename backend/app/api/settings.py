@@ -26,6 +26,28 @@ ALLOWED_FONTS = {
 }
 ALLOWED_KIOSK_STYLES = {"default"}
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+_PHONE_RE = re.compile(r"^[0-9+\-() ]{1,32}$")
+
+
+def _resolve_inquiry_url(tenant: Tenant) -> str:
+    """Return the effective inquiry-form URL: the tenant's external URL if set,
+    otherwise the mokuture common form at /{slug}/inquiry."""
+    external = (getattr(tenant, "inquiry_form_url", None) or "").strip()
+    if external:
+        return external
+    base = app_settings.public_web_url.rstrip("/")
+    return f"{base}/{tenant.slug}/inquiry"
+
+
+def _inquiry_qr_data_uri(url: str) -> str | None:
+    """Generate a QR (SVG data URI) for the inquiry URL. Best-effort: returns None
+    if the QR library is unavailable so the settings endpoint never breaks."""
+    try:
+        import segno  # pure-python, no external deps
+
+        return segno.make(url, error="m").svg_data_uri(scale=4, border=2)
+    except Exception:
+        return None
 
 
 class TenantSettingsOut(BaseModel):
@@ -46,6 +68,8 @@ class TenantSettingsOut(BaseModel):
     kiosk_style: str
     staff_list: str | None
     purpose_list: str | None
+    kiosk_phone_number: str | None
+    inquiry_form_url: str | None
 
 
 class PublicTenantSettingsOut(BaseModel):
@@ -65,6 +89,10 @@ class PublicTenantSettingsOut(BaseModel):
     is_suspended: bool
     staff_list: list[str]
     purpose_list: list[str]
+    kiosk_phone_number: str | None
+    # 営業お断り画面で案内する問い合わせフォールの解決済みURL(外部設定 or 共通フォーム)と、その QR(data URI)。
+    inquiry_url: str
+    inquiry_qr: str | None
 
 
 class TenantSettingsPatch(BaseModel):
@@ -83,6 +111,8 @@ class TenantSettingsPatch(BaseModel):
     kiosk_style: str | None = None
     staff_list: str | None = None
     purpose_list: str | None = None
+    kiosk_phone_number: str | None = None
+    inquiry_form_url: str | None = None
 
 
 class LogoUploadUrlRequest(BaseModel):
@@ -135,6 +165,8 @@ def _out(tenant: Tenant) -> TenantSettingsOut:
         kiosk_style=getattr(tenant, "kiosk_style", "default"),
         staff_list=getattr(tenant, "staff_list", None),
         purpose_list=getattr(tenant, "purpose_list", None),
+        kiosk_phone_number=getattr(tenant, "kiosk_phone_number", None),
+        inquiry_form_url=getattr(tenant, "inquiry_form_url", None),
     )
 
 
@@ -143,6 +175,7 @@ def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
     staff_list = [n.strip() for n in raw_staff.split(",") if n.strip()]
     raw_purpose = getattr(tenant, "purpose_list", None) or ""
     purpose_list = [p.strip() for p in raw_purpose.split(",") if p.strip()]
+    inquiry_url = _resolve_inquiry_url(tenant)
     return PublicTenantSettingsOut(
         brand_color=tenant.brand_color,
         logo_url=tenant.logo_url,
@@ -160,6 +193,9 @@ def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
         is_suspended=getattr(tenant, "is_suspended", False),
         staff_list=staff_list,
         purpose_list=purpose_list,
+        kiosk_phone_number=getattr(tenant, "kiosk_phone_number", None),
+        inquiry_url=inquiry_url,
+        inquiry_qr=_inquiry_qr_data_uri(inquiry_url),
     )
 
 
@@ -284,6 +320,16 @@ async def patch_settings(
         tenant.staff_list = body.staff_list
     if "purpose_list" in body.model_fields_set:
         tenant.purpose_list = body.purpose_list
+    if "kiosk_phone_number" in body.model_fields_set:
+        phone = (body.kiosk_phone_number or "").strip()
+        if phone and not _PHONE_RE.match(phone):
+            raise HTTPException(status_code=422, detail="電話番号の形式が正しくありません")
+        tenant.kiosk_phone_number = phone or None
+    if "inquiry_form_url" in body.model_fields_set:
+        url = (body.inquiry_form_url or "").strip()
+        if url and not (url.startswith("http://") or url.startswith("https://")):
+            raise HTTPException(status_code=422, detail="URLは http(s):// で始めてください")
+        tenant.inquiry_form_url = url[:512] or None
     await db.commit()
     return _out(tenant)
 

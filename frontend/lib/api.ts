@@ -264,6 +264,7 @@ export const api = {
     kiosk_idle_timeout_sec?: number; kiosk_complete_timeout_sec?: number;
     logo_pos_x?: number; logo_pos_y?: number; logo_width_pct?: number;
     kiosk_style?: string; staff_list?: string | null; purpose_list?: string | null;
+    kiosk_phone_number?: string | null; inquiry_form_url?: string | null;
   }) =>
     request<TenantSettings>("/settings", { method: "PATCH", body: JSON.stringify(body) }, token),
   getPublicTenantSettings: (tenantSlug: string) =>
@@ -338,8 +339,8 @@ export const api = {
     request<ReceptionLog[]>("/reception", {}, token),
   updateReceptionLog: (token: string, logId: string, updates: { state?: string; staff_notes?: string }) =>
     request<ReceptionLog>(`/reception/${logId}`, { method: "PATCH", body: JSON.stringify(updates) }, token),
-  // 受付 OK/NG 応答（アプリ内ボタン。iOS PWA フォールバック兼・全端末共通経路）
-  decideReception: (token: string, logId: string, decision: "accept" | "decline") =>
+  // 受付応答（受付/電話/お断り。アプリ内ボタン。iOS PWA フォールバック兼・全端末共通経路）
+  decideReception: (token: string, logId: string, decision: "accept" | "phone" | "decline") =>
     request<ReceptionLog>(`/reception/${logId}/decision`, { method: "POST", body: JSON.stringify({ decision }) }, token),
   exportContactsCsv: async (token: string): Promise<Blob> => {
     const res = await _fetch("/reception/contacts.csv", {}, token);
@@ -373,6 +374,22 @@ export const api = {
     request<DailyStatsResponse>(`/reseller/reception/daily-stats?days=${days}`, {}, token),
   getResellerDailyStats: (token: string) =>
     request<ReceptionDailyStats>("/reseller/reception/daily-stats", {}, token),
+
+  // Inquiries (mokuture 共通問い合わせフォーム)
+  submitInquiry: (tenantSlug: string, body: { name: string; company?: string; email?: string; phone?: string; message: string }) =>
+    request<{ ok: boolean }>(`/inquiries/public/${encodeURIComponent(tenantSlug)}`, { method: "POST", body: JSON.stringify(body) }),
+  listInquiries: (token: string, params?: { state?: string; date_from?: string; date_to?: string }) => {
+    const p = new URLSearchParams();
+    if (params?.state) p.set("state", params.state);
+    if (params?.date_from) p.set("date_from", params.date_from);
+    if (params?.date_to) p.set("date_to", params.date_to);
+    const qs = p.toString();
+    return request<Inquiry[]>(`/inquiries${qs ? `?${qs}` : ""}`, {}, token);
+  },
+  updateInquiry: (token: string, id: string, state: "new" | "read" | "archived") =>
+    request<Inquiry>(`/inquiries/${id}`, { method: "PATCH", body: JSON.stringify({ state }) }, token),
+  deleteInquiry: (token: string, id: string): Promise<void> =>
+    request(`/inquiries/${id}`, { method: "DELETE" }, token),
 
   // Lockers
   listLockers: (token: string) =>
@@ -781,6 +798,19 @@ export interface TenantSettings {
   kiosk_style: string;
   staff_list?: string | null;
   purpose_list?: string | null;
+  kiosk_phone_number?: string | null;
+  inquiry_form_url?: string | null;
+}
+
+export interface Inquiry {
+  id: string;
+  name: string;
+  company: string | null;
+  email: string | null;
+  phone: string | null;
+  message: string;
+  state: string;
+  created_at: string;
 }
 
 export interface PublicTenantSettings {
@@ -800,6 +830,9 @@ export interface PublicTenantSettings {
   is_suspended: boolean;
   staff_list?: string[];
   purpose_list?: string[];
+  kiosk_phone_number?: string | null;
+  inquiry_url?: string;
+  inquiry_qr?: string | null;
 }
 
 export interface KioskScheduleResponse {

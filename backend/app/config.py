@@ -40,5 +40,9 @@ class Settings(BaseSettings):
     # push payloads that the Service Worker (served cross-origin from Netlify) must call.
     public_api_url: str = "https://mokuture-plus-api.onrender.com/api"
 
+    # Public web app base (Netlify). Used to build the mokuture common inquiry-form URL
+    # (/{slug}/inquiry) shown as a QR on the kiosk お断り screen when no external form URL is set.
+    public_web_url: str = "https://mokuture-plus.netlify.app"
+
 
 settings = Settings()

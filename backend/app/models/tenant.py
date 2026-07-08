@@ -51,6 +51,13 @@ class Tenant(Base):
     # Purpose list — comma-separated visit purposes for kiosk dropdown (e.g. "商談・打合せ,採用面接,配送・搬入")
     purpose_list: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Kiosk phone number — shown to visitors when staff responds "電話"(対応不可) on a reception notification.
+    kiosk_phone_number: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
+    # Inquiry form URL — external HP contact-form URL shown (as a QR) on the kiosk お断り screen.
+    # When empty, the kiosk falls back to the mokuture common inquiry form (/{slug}/inquiry).
+    inquiry_form_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     media = relationship("Media", back_populates="tenant", cascade="all, delete-orphan")
     playlists = relationship("Playlist", back_populates="tenant", cascade="all, delete-orphan")
@@ -59,3 +66,4 @@ class Tenant(Base):
     lockers = relationship("Locker", back_populates="tenant", cascade="all, delete-orphan")
     notification_settings = relationship("NotificationSetting", back_populates="tenant", cascade="all, delete-orphan")
     push_subscriptions = relationship("PushSubscription", back_populates="tenant", cascade="all, delete-orphan")
+    inquiries = relationship("Inquiry", back_populates="tenant", cascade="all, delete-orphan")

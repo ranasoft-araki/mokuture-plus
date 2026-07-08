@@ -83,14 +83,16 @@ mokuture/
 │       │   ├── reception.py   ← /reception (受付ログ一覧)
 │       │   ├── notifications.py ← /notifications (Slack/Chatwork 設定)
 │       │   ├── lockers.py     ← /lockers (ロッカー制御モック)
+│       │   ├── inquiries.py   ← /inquiries (共通問い合わせフォーム: 公開送信・管理閲覧)
 │       │   ├── push.py        ← /push (Web Push 購読管理)
 │       │   └── users.py       ← /users (テナント内ユーザー管理)
 │       ├── models/            ← SQLAlchemy ORM モデル
-│       │   ├── tenant.py      ← Tenant (ブランディング・キオスク設定・ロゴ配置)
+│       │   ├── tenant.py      ← Tenant (ブランディング・キオスク設定・電話番号・問い合わせURL)
 │       │   ├── user.py        ← User (email, password_hash, role, tenant_id)
 │       │   ├── content.py     ← Media, Playlist, PlaylistItem, Schedule
 │       │   ├── device.py      ← Device (token, status=承認状態, hardware_id), Locker
-│       │   ├── reception.py   ← ReceptionLog (visitor_name, company, staff, purpose)
+│       │   ├── reception.py   ← ReceptionLog (visitor_name, company, staff, purpose, state)
+│       │   ├── inquiry.py     ← Inquiry (共通問い合わせフォーム受信)
 │       │   └── notification.py ← NotificationSetting, PushSubscription
 │       ├── middleware/
 │       │   └── tenant.py      ← JWT 検証・テナント分離 (get_current_user)
@@ -119,7 +121,8 @@ mokuture/
 │   │       │   ├── playlists/page.tsx ← プレイリスト管理
 │   │       │   ├── schedules/page.tsx ← スケジュール管理
 │   │       │   ├── kiosk/page.tsx     ← キオスク端末管理・承認待ち端末の承認・端末名/場所の変更(鉛筆ボタン or ダブルクリック)
-│   │       │   ├── reception/page.tsx ← 受付ログ一覧・フィルター
+│   │       │   ├── reception/page.tsx ← 受付ログ一覧・フィルター・受付/電話/お断り応答ボタン
+│   │       │   ├── inquiries/page.tsx ← 共通問い合わせフォーム受信の閲覧・状態更新・削除
 │   │       │   ├── appointments/page.tsx ← 来社予定管理・QRコード発行 (qrcode.react) + 日付/ステータスフィルタ + 会議室紐付け
 │   │       │   ├── meeting-rooms/page.tsx ← 会議室管理 (CRUD・カラー・定員・場所)
 │   │       │   ├── kiosk-settings/page.tsx ← 受付設定 (キオスク文言・ロゴ配置ドラッグ)
@@ -136,6 +139,7 @@ mokuture/
 │   │       │   ├── reception/page.tsx ← 代理店クロステナント受付ログ
 │   │       │   ├── profile/page.tsx   ← 代理店プロフィール
 │   │       │   └── settings/page.tsx  ← 代理店テナント設定
+│   │       ├── inquiry/page.tsx ← 共通問い合わせフォーム(公開・認証不要)。お断り画面のQRリンク先
 │   │       └── kiosk/         ← キオスク受付画面 (デバイストークン必須)
 │   │           ├── page.tsx           ← KioskFlow マウント
 │   │           ├── KioskFlow.tsx      ← メインキオスクコンポーネント (全画面遷移管理)
@@ -208,8 +212,10 @@ mokuture/
 - `GET /reseller/reception/export.csv` — 受付ログCSVエクスポート（代理店）
 - `GET /reseller/reception` — 代理店クロステナント受付ログ
 - `PATCH /reception/{id}` — 受付ログのステータス・スタッフメモ更新 (body: `{ state?, staff_notes? }`)
-- `POST /reception/{id}/decision` — 受付OK/NG応答 (JWT)。body `{ decision: accept|decline }` → state を `accepted`/`declined` に更新。管理画面「受付ログ」のアプリ内OK/NGボタン用（iOS PWA は通知アクション非対応のためのフォールバック兼・全端末共通経路）
-- `POST /reception/decision` — 受付OK/NG応答 (**認証なし・署名トークン**)。body `{ token, decision }`。スタッフPWAの Service Worker が通知アクションボタン（すぐ伺います/只今対応できません）から、JWTを持たずに応答するための経路。token は `services/auth.create_decision_token`（JWT HS256, type=decision, 2h）
+- `POST /reception/{id}/decision` — 受付応答 (JWT)。body `{ decision: accept|phone|decline }` → state を `accepted`/`phone`/`declined` に更新。管理画面「受付ログ」のアプリ内3ボタン(受付/電話/お断り)用（iOS PWA は通知アクション非対応のためのフォールバック兼・全端末共通経路）
+- `POST /reception/decision` — 受付応答 (**認証なし・署名トークン**)。body `{ token, decision: accept|phone|decline }`。スタッフPWAの Service Worker が通知アクションボタン（受付/電話/お断り）から、JWTを持たずに応答するための経路。token は `services/auth.create_decision_token`（JWT HS256, type=decision, 2h）
+- `POST /inquiries/public/{slug}` — mokuture共通問い合わせフォーム送信 (**認証なし**, rate-limit 10/min)。body `{ name, company?, email?, phone?, message }`。キオスク「営業お断り」画面が案内する共通フォームの受け皿
+- `GET /inquiries` — 問い合わせ一覧 (JWT, `state`/`date_from`/`date_to` フィルタ)。`PATCH /inquiries/{id}`(state 更新)・`DELETE /inquiries/{id}` も管理者用
 - `GET /kiosk/reception/{id}` — 受付のスタッフ応答結果(state) 取得 (デバイストークン)。キオスク「お待ちください」画面が 2.5s 間隔でポーリングして OK/NG 画面へ切替する
 - `_apply_decision` は冪等：既に accepted/declined の受付は上書きしない（通知ボタン＋アプリ内ボタンの二重タップでも安全）
 - `PATCH /users/me/password` — 自分のパスワード変更
@@ -225,7 +231,8 @@ mokuture/
 ### フロントエンド機能
 - 受付ログ自動更新（Auto-refresh）: 管理画面 `/reception` および運営画面 `/operator/reception` に ON/OFF トグル付き自動更新機能（`setInterval` ポーリング）を実装
 - 受付OK/NG応答: 管理画面「受付ログ」の未応答行(received/notified)に「すぐ伺います」「只今対応できません」ボタン(`DecisionButtons`)を表示し `api.decideReception` を呼ぶ。ステータス `accepted`(対応中)/`declined`(対応不可) を `STATUS_LABEL`/`STATUS_COLOR`・フィルタに追加。
-- Web Push: スタッフPWAの Service Worker(`public/sw.js`)は受付プッシュ(`kind==="reception_decision"`)に OK/NG アクションボタンを表示し、通知タップで署名トークン付き `POST /reception/decision` を送る。iOS PWA は通知アクション非対応のため上記アプリ内ボタンがフォールバック。
+- Web Push: スタッフPWAの Service Worker(`public/sw.js`)は受付プッシュ(`kind==="reception_decision"`)に 受付/電話/お断り アクションボタンを表示し、通知タップ(`accept`/`phone`/`decline`)で署名トークン付き `POST /reception/decision` を送る。iOS PWA は通知アクション非対応のため上記アプリ内ボタンがフォールバック。
+- 問い合わせ管理: 管理画面「問い合わせ」(`/{tenant}/admin/inquiries`)で共通フォーム受信を閲覧・既読/対応済み/削除。公開入力ページは `/{tenant}/inquiry`(認証不要, `app/[tenant]/inquiry/page.tsx`)。
 
 ---
 
@@ -285,6 +292,10 @@ mokuture/
 | kiosk_style | VARCHAR(32) | （廃止予定・常に `default`）旧・業種別テーマID。テーマ機能廃止により UI からは選択不可。`ALLOWED_KIOSK_STYLES = {"default"}` |
 | is_suspended | BOOLEAN | テナント停止フラグ |
 | operator_notes | TEXT | 運営用内部メモ (nullable) |
+| kiosk_phone_number | VARCHAR(32) | 受付応答「電話(対応不可)」時にキオスクへ表示する電話番号 (nullable) |
+| inquiry_form_url | VARCHAR(512) | 「お断り」時に案内する外部問い合わせフォームURL (nullable、未設定時は共通フォーム `/{slug}/inquiry`) |
+
+> `kiosk_phone_number` / `inquiry_form_url` は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS.tenants`)で追加。`GET /settings/public/{slug}` は解決済みの `inquiry_url`(外部 or 共通フォーム)＋`inquiry_qr`(SVG data URI, `segno` で生成)＋`kiosk_phone_number` を返す。
 
 ### devices (追加カラム)
 
@@ -299,7 +310,8 @@ mokuture/
 - **schedules** — 曜日・時間帯ごとのプレイリスト割当
 - **devices** — キオスク端末 (token, **status**=`pending`承認待ち/`active`承認済み, **hardware_id**=物理端末の安定ID(冪等な再登録用) nullable, last_seen_at, force_update_at)。PIN列は廃止。status/hardware_id は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS`)で追加。既存端末は `active` で埋まる
 - **lockers** — ロッカー (door_number=gpio_pin, state, **name**=表示ラベル, **pin_hash**=bcrypt(4桁PIN) nullable, **occupied**=利用中フラグ, **occupied_at**)
-- **reception_logs** — 受付ログ (visitor_name, company, staff, purpose, method, **state**, staff_notes, appointment_id, **decided_at**)。`state`: `received | notified | accepted(OK=すぐ伺う) | declined(NG=対応不可) | completed | cancelled`。`decided_at`=スタッフがOK/NGを押した時刻(nullable)。state/decided_at は素の型でDB制約なし＝カラム追加は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS`)で対応済み
+- **reception_logs** — 受付ログ (visitor_name, company, staff, purpose, method, **state**, staff_notes, appointment_id, **decided_at**)。`state`: `received | notified | accepted(受付=参ります) | phone(電話=対応不可・電話番号案内) | declined(お断り=営業お断り+フォーム案内) | completed | cancelled`。`decided_at`=スタッフが応答した時刻(nullable)。state/decided_at は素の型でDB制約なし＝カラム追加は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS`)で対応済み
+- **inquiries** — mokuture 共通問い合わせフォーム受信 (tenant_id, name, company, email, phone, message, **state**=`new|read|archived`, created_at)。公開送信 `POST /inquiries/public/{slug}`、管理閲覧 `GET /inquiries`。キオスク「営業お断り」画面が案内する共通フォーム(`/{slug}/inquiry`)の受け皿。テーブルは起動時 `create_all` で自動作成
 - **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired, meeting_room_id FK nullable)
 - **meeting_rooms** — 会議室 (name, location, capacity, color, description, is_active, **map_image_url**=館内マップ画像URL nullable)
 - **notification_settings** — 通知先設定 (Fernet 暗号化, `type` で種別)。受付: `slack`/`chatwork`/`webhook`/`vapid`。配達専用: `slack_delivery`/`chatwork_delivery`/`webhook_delivery`(未設定時は受付用にフォールバック)、`push_delivery`(`{enabled}` プッシュ通知ON/OFF, 既定ON)
@@ -345,6 +357,8 @@ mokuture/
 | PATCH | /meeting-rooms/{id} | JWT | 会議室更新 (map_image_url 対応) |
 | DELETE | /meeting-rooms/{id} | JWT | 会議室削除 |
 | GET | /reception | JWT | 受付ログ一覧 |
+| POST | /inquiries/public/{slug} | なし | 共通問い合わせフォーム送信 (rate-limit 10/min) |
+| GET/PATCH/DELETE | /inquiries | JWT | 問い合わせ閲覧・状態更新・削除 |
 | GET/PATCH | /notifications | JWT | 通知設定 |
 | GET/POST | /lockers | JWT | ロッカー管理 (name 永続化, occupied/has_pin 返却) |
 | GET | /kiosk/lockers | デバイストークン | ロッカー一覧 `{lockers:[{id,name,door_number,occupied,has_pin}], available_count}` |
@@ -385,24 +399,31 @@ mokuture/
 画面遷移フロー（`go(screen, data)` で管理）:
 
 ```
-idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 3タイル)
-  top: ご訪問 → welcome,  荷物の配達 → delivery(Phase3実装済み),  ロッカー → locker(Phase2実装済み)
-  welcome(QR有無) → qr / reception
-  qr(スキャン) / reception(フォーム) → calling(お待ちください) → resultOk / resultNg / complete
-  complete ──(60s 等)──▶ idle
+idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面: 左=QRカメラ常時 / 右=案内＋「ご予約のない方はこちら」)
+  welcome: QR検出(予約) → calling,  「こちら」ボタン → top(受付メニュー 3タイル)
+  top: ご訪問 → reception(フォーム),  荷物の配達 → delivery,  ロッカー → lockerMode(保管/受取) → locker
+  reception(フォーム・用件5択) → calling(お待ちください)
+  calling ──(スタッフ応答)──▶ resultOk(受付) / resultPhone(電話) / resultDecline(お断り) / complete(予約マップ)
+  各結果 ──▶ idle
 ```
+※旧・独立QR画面(`showQr`)は `showWelcome` に統合して**廃止**。QR専用画面 `go("qr")` は無い。
 
-**受付OK/NG応答フロー**（`showCalling` @ kiosk.html）:
+**受付応答フロー（受付/電話/お断り）**（`showCalling` @ kiosk.html）— スタッフ側の3択応答をキオスクに反映:
 - 受付送信で受け取った `receptionId` を `go("calling", {receptionId})` に渡す。`calling`(=「お待ちください」画面)は `GET /proxy/reception/{id}`(→backend `GET /kiosk/reception/{id}`) を **2.5s間隔でポーリング**する。
-- スタッフがプッシュ通知の「すぐ伺います/只今対応できません」or 管理画面「受付ログ」のOK/NGボタンを押す → backend が state を `accepted`/`declined` に更新。
-- ポーリングが検知 → `accepted`→`showResultOk`(「担当者がまいります」)、`declined`→`showResultNg`(「只今ご対応が難しい状況です。受付/内線へ」)。予約(QR)で会議室マップがある accepted は従来の歓迎画面(`showComplete`)で案内。
-- **無応答フォールバック**: 90s で中立の歓迎画面(`showComplete`)→idle に復帰し、来客を固まらせない。受付ID が無い旧経路は従来どおり数秒で `complete`。
-- MOCK: `mockFetch` が `/proxy/reception/{id}` を数回ポーリング後に `accepted` を返し、UIフローを実機/バックエンド無しで確認できる。
+- **応答は来訪者ではなく「通知を受けたスタッフ」が押す**。プッシュ通知アクション or 管理画面「受付ログ」の3ボタン(`DecisionButtons`)。backend `_normalize_decision`/`_apply_decision` が state を `accepted`/`phone`/`declined` に更新(いずれも確定＝冪等、上書き不可)。
+  - **受付(accepted)** → `showResultOk`「参りますので少々お待ちください」。予約(QR)で会議室マップがある場合は歓迎画面(`showComplete`)で案内。
+  - **電話(phone)** → `showResultPhone`。管理画面設定の電話番号(`ST.kiosk_phone_number`)を大きく表示し「対応不可のため、こちらへお電話ください」。
+  - **お断り(declined)** → `showResultDecline`「営業・セールス等のご訪問はご遠慮…」＋問い合わせフォールQR(`ST.inquiry_qr`)を表示。
+- **通知ボタンは method 別**: QR予約(`method="appointment"`)は 受付/電話 の2択、非QR(form/qr)は 受付/電話/お断り の3択(`build_decision_push_extras`)。push は `sw.js` が `accept`/`phone`/`decline` を署名トークンで `POST /reception/decision`。
+- **無応答フォールバック**: 90s で中立の歓迎画面(`showComplete`)→idle に復帰。受付ID が無い旧経路は数秒で `complete`。
+- MOCK: `mockFetch` は受付ごとに `accepted`→`phone`→`declined` を巡回して返し、3つの結果画面をオフラインで確認できる。
 
-- **idle**: 人感センサー（`GET /device/pir` を 700ms ポーリング）で来訪検知 → `top` へ自動遷移。タッチCTAは非表示（PIR非搭載/開発環境向けに画面タップでも遷移可）。画面は屋号(ロゴ/welcome_message)・タグラインのみ。signage メディアがあれば再生。
-- **top（受付メニュー）**: `ご訪問 / 荷物の配達 / ロッカー` の3タイル（日英併記・大型）。3タイルとも実装済み。
+- **idle**: 人感センサー（`GET /device/pir` を 700ms ポーリング）で来訪検知 → `welcome`(統合QR画面) へ自動遷移。タッチCTAは非表示（PIR非搭載/開発環境向けに画面タップでも遷移可）。画面は屋号(ロゴ/welcome_message)・タグラインのみ。signage メディアがあれば再生。
+- **welcome（統合QRようこそ画面・`showWelcome`）**: 待機解除後の最初の画面。**左=QRカメラ常時スキャン**(BarcodeDetector→jsQR fallback、`parseQR`で `appt:<token>`/`name`付きURLのみ受付、未対応/エラーは `pauseScan`でクールダウン)、**右=案内＋「ご予約のない方はこちら →」ボタン**。QR検出→`/proxy/reception`送信して `calling` へ。「こちら」→ `top`。カメラは `disposed`/`stopStream` で離脱時に確実に解放。旧・独立QR画面(`showQr`)はここに統合済み。
+- **top（受付メニュー）**: `ご訪問 / 荷物の配達 / ロッカー` の3タイル（日英併記・大型）。`welcome` の「こちら」から到達。ご訪問→`reception`、配達→`delivery`、ロッカー→`lockerMode`。
 - **delivery（荷物の配達・Phase3実装済み）**: `showDelivery`。配達方法を選択 — **置き配**(空きロッカーへ施錠。空きが無ければ選択不可。空きロッカー選択→`pulseLocker`でGPIO開錠→「扉を閉めました」→`/proxy/lockers/{id}/occupy-delivery`。**backendがランダム4桁PINを自動生成してbcrypt保存し、「どのロッカーにこのPINで置き配された」を担当者へ通知**。配達員にはPINを表示しない) / **呼び出し**(`/proxy/call-staff`→担当者へ「どの端末から呼び出しか(device.name)」をSlack/WebPush/Webhook/Chatwork通知)。置き配ロッカーはPIN付き(`has_pin:true`)＝通常の「利用中」ロッカーとして扱われ、スタッフが通知で受け取ったPINでロッカー画面から解錠して受取。
-- **locker（ロッカー・Phase2実装済み）**: 3段縦並び、空き=緑/利用中=アンバー。空き→`pulseLocker(door_number)`でGPIO開錠→「扉を閉めました」→4桁PIN設定(`/proxy/lockers/{id}/occupy`)。利用中→4桁PIN入力(`/proxy/lockers/{id}/release`)→照合OKでGPIO開錠。PINは backend で bcrypt 保存。扉開閉センサーが無いため閉扉は手動ボタン（センサー導入時は自動化可）。
+- **lockerMode（ロッカー入口・`showLockerMode`）**: ロッカータイルの直後。**手荷物一時保管**(store: 空き=PIN未設定ロッカーのみ→`showLocker("store")`) / **荷物受け取り**(pickup: PIN設定済ロッカーのみ→`showLocker("pickup")`) を選ぶ。戻る→`top`。
+- **locker（ロッカー・`showLocker(mode)`）**: モードでグリッドを絞り込む。store=`!occupied` のみ表示→`openEmpty`→4桁PIN設定(`/proxy/lockers/{id}/occupy`)。pickup=`occupied && has_pin` のみ表示→4桁PIN入力(`/proxy/lockers/{id}/release`)→照合OKでGPIO開錠。クリックは**絞込後の `shownLockers`** をインデックスする。該当0件は空状態メッセージ。戻る→`lockerMode`(mode時)。PINは backend で bcrypt 保存。扉開閉センサーが無いため閉扉は手動ボタン（センサー導入時は自動化可）。
   - **GPIO設定の注意**: kiosk は `POST /device/locker/{door_number}/open` を叩くため、kiosk_agent の `LOCKER_PINS_JSON` は **door_number(=GPIOピン番号)をキー**にすること。例: `{"17":17,"18":18,"19":19}`。
   - **ドアセンサー連動の自動施錠 (`main.py` `_open_with_autolock`)**: 電気ストライク(通電ON=解錠 / 無通電OFF=施錠位置)向け。`/device/locker/{id}/open` は該当ロッカーに**ドアセンサーが設定されていれば**、解錠通電→**扉が開いたら即無通電化**(以後は閉扉でラッチが自動施錠)する経路(`{state:"opening", autolock:true}` を即返す=非ブロック)に入る。開錠パルス長や「扉を閉めました」操作のタイミングに依存せず確実に施錠できる。**有効化には `DOOR_PINS_JSON` のキーを door_number(=`LOCKER_PINS_JSON` のキー)と一致**させること。ドアセンサー未設定のロッカーは従来の固定パルス(`LOCKER_PULSE_SEC`)にフォールバック。開錠通電の保持上限は `LOCKER_OPEN_WINDOW_SEC`(既定12s)。
 - **モック方針（実機ハードのみ最小スタブ／バックエンドは常に実経路）**: MOCKは「処理ルートごと本番と分ける」のではなく、**実機でしか動かないハードだけ**を最小限スタブする。バックエンド通信（`/proxy/*`）は開発機でも常に実経路を通す。
@@ -413,9 +434,11 @@ idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 
     - MOCKロッカー: A/C=空き、B=利用中(解錠PIN `1234`)。QR画面の「（MOCK）予約QRを読み取ったことにする」で歓迎画面＋館内マップを確認可。
     - **固定ダミーデータ**: `mockFetch` は管理画面設定を参照せず固定値を返す。`/proxy/appointment/*` は常に「（MOCK）商談ルーム A / 2階」＋組み込みSVG地図＝**管理画面の地図とは一致しない**（仕様。実データ確認は上記の実経路手順で）。
     - **MOCKバッジ**: `showMockBadge()`(`bootMock` で呼ぶ)が上部中央に固定の「MOCK モード…」バッジを常時表示し、ダミー表示だと一目で分かる（`body`直下・`pointer-events:none`で操作を妨げない）。通常起動(実経路)では出ない。
-- **reception（フォーム）**: オンスクリーン50音キーボードは廃止。OS標準ソフトキーボードを使用するため、入力欄は上半分に2列配置＋送信、下半分は空ける（実機OSのソフトキーボード表示領域）。
-- **qr**: カメラ位置を示す画像エリア（`ST.qr_camera_image_url` 未設定時はプレースホルダー）。読み取ったQRは `parseQR()` で判定し、**対応形式(`appt:<token>` / `name` パラメータ付きURL)のみ受付**。未対応QR(無関係URL・WiFi QR・プレーンテキスト等)は「未対応のQRコードです」を表示し `pauseScan()` で数秒スキャンを停止してから自動再開する（即時再スキャンによるビジーループ＝「無反応＋重い」を防止）。予約取得/受付エラーも同じく `pauseScan()` で表示＋クールダウン。`scanLoop` はデコードを ≈8fps に間引き、`startCamera` の `getUserMedia` は `disposed` フラグで teardown ガード。
-- **complete（歓迎画面「お待ちしておりました」）**: 氏名と「様」を同サイズでインライン表示。予約情報（Googleカレンダー連携）を拡大表示。QR受付で行き先（会議室）が確定し、かつその会議室に `map_image_url` が登録されている場合のみ館内マップを表示（`go("calling"/"complete", { name, staff, room, scheduledAt, method })` でデータを伝搬）。
+- **reception（フォーム・`showReception`）**: OS標準ソフトキーボード前提の1画面。お名前(必須)/会社名/担当者名 は上半分2列。**ご用件は5択の選択形式**(チップ: 管理画面 `purpose_list` があればそれ、無ければ既定「ご予約のあるお客様/お打ち合わせ/納品/採用面接/その他」)＋注記「※営業・セールス・勧誘等のご訪問はお受けしておりません」。チップ選択は `form.purpose` 更新＋チップのスタイルのみ差し替え（テキスト入力を再描画しない）。送信→`method:"form"` で `calling`。
+- **QR読取**: `welcome`(統合)に統合。`parseQR()` は **`appt:<token>` / `name` パラメータ付きURLのみ受付**、未対応/エラーは `pauseScan()` でメッセージ＋クールダウン。`scanLoop` は ≈8fps 間引き、`getUserMedia` は `disposed` フラグで teardown ガード。
+- **resultPhone（電話案内・`showResultPhone`）**: スタッフ「電話(対応不可)」応答時。`ST.kiosk_phone_number` を大きく表示（未設定時は「受付までお声がけください」）。一定時間で idle 復帰。
+- **resultDecline（営業お断り・`showResultDecline`）**: スタッフ「お断り」応答時。「営業・セールス等の…ご協力をお願いいたします」＋「お問い合わせフォームよりお願いいたします。受付でのお取次ぎは行っておりません」＋`ST.inquiry_qr`(SVG data URI, backend生成) の問い合わせフォールQRを表示。未生成時はURL文字列で代替。一定時間で idle 復帰。
+- **complete（歓迎画面「お待ちしておりました」）**: 氏名と「様」を同サイズでインライン表示。予約情報を拡大表示。QR受付で行き先（会議室）が確定し、かつその会議室に `map_image_url` が登録されている場合のみ館内マップを表示（`go("calling"/"complete", { name, staff, room, scheduledAt, method })` でデータを伝搬）。
 - **キオスク設定（スタッフ専用・`showKioskSettings`）**: 画面**左上＋右上の同時タッチ**（または `Ctrl+Shift+M`）で開く。上部の**タブで「設定」/「デバイスチェック」を切替**（統合済み）。
   - **設定タブ**: 音量スライダー＋サウンドON/OFF（タップ音/チャイム/音声ガイダンス, `/device/volume`）、Wi-Fi（`/device/wifi/networks|connect|toggle`）、ロッカーの鍵 全解除（`/proxy/lockers/open-all`）、フッター端末名の**5連タップで再登録**。
   - **デバイスチェックタブ**: `getUserMedia` による**カメラ・ライブプレビュー**、Web Audio(AnalyserNode) の**マイク音量レベルメーター**、`GET /device/status`（1.2s ポーリング）に基づく **PIR/ドア/電子錠を緑(ON/正常)・赤(OFF/異常)のトグル表示**（電子錠トグルは `POST /device/locker/{id}/state`、開錠テストは `/pulse`。委譲クリックで捕捉）。旧 device-control の「DEVICE」情報パネルは非表示。カメラ/マイクのストリーム・AudioContext・rAF・ポーリングは画面離脱/タブ切替で確実に停止（**世代トークン `dcGen`** で teardown 後に解決した in-flight `getUserMedia` も解放）。
@@ -455,6 +478,8 @@ idle ──(人感センサー PIR / タップ)──▶ top(受付メニュー 
 - `AdminShell.tsx` の `NavId` 型・`NAV_SETTINGS`・`NAV_PATHS`・`NavIcon` を一括管理。
 - ページを追加したら 4 箇所全て更新すること。
 - 現在の設定メニュー: 通知設定 / ロッカー / **受付設定** / 基本設定
+- 運用メニューに **問い合わせ**(`inquiries`)を追加（`AdminShell` の `NavId`/`NAV_OPS`/`NAV_PATHS`/`NavIcon` の4箇所を更新済み）。
+- **受付設定(`kiosk-settings`)** に「受付電話番号(`kiosk_phone_number`)」「問い合わせフォームURL(外部・任意, `inquiry_form_url`)」を追加。
 
 ### 秘密情報の暗号化
 - Slack/Chatwork Webhook URL は `services/crypto.py` (Fernet) で暗号化して DB 保存。

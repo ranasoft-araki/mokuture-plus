@@ -1,5 +1,5 @@
 /* mokuture+ Service Worker — push notifications & offline shell cache */
-const CACHE = 'mokuture-v2';
+const CACHE = 'mokuture-v3';
 const SHELL = ['/', '/icons/icon.svg', '/manifest.json'];
 
 // 受付 OK/NG 応答の送信先フォールバック（プッシュ payload に decisionEndpoint が無い場合）
@@ -96,9 +96,9 @@ self.addEventListener('notificationclick', (e) => {
 
   const data = e.notification.data || {};
 
-  // 受付応答: 通知ボタンの すぐ伺います / 只今対応できません。
+  // 受付応答: 通知ボタンの 受付 / 電話 / お断り。
   // SW は JWT を持てないので payload の署名トークンで直接 POST する（ウィンドウは開かない）。
-  if (e.action === 'accept' || e.action === 'decline') {
+  if (e.action === 'accept' || e.action === 'phone' || e.action === 'decline') {
     const endpoint = data.decisionEndpoint || DECISION_ENDPOINT_FALLBACK;
     if (data.decisionToken) {
       e.waitUntil(

@@ -23,25 +23,35 @@ router = APIRouter(prefix="/reception", tags=["reception"])
 
 _ALLOWED_METHODS = {"form", "qr", "calendar"}
 
-# 受付 OK/NG 応答（スタッフのプッシュ通知アクション & 管理画面ボタン）
-DECISION_ACCEPT_LABEL = "すぐ伺います"
-DECISION_DECLINE_LABEL = "只今対応できません"
+# 受付応答（スタッフのプッシュ通知アクション & 管理画面ボタン）。
+#   受付(accept)   → キオスク「参りますので少々お待ちください」
+#   電話(phone)    → キオスク「管理画面設定の電話番号」を表示（対応不可時にかけてもらう）
+#   お断り(decline) → キオスク「営業お断り＋問い合わせフォームQR」（QR予約以外のみ）
+DECISION_ACCEPT_LABEL = "受付"
+DECISION_PHONE_LABEL = "電話"
+DECISION_DECLINE_LABEL = "お断り"
+
+# 応答が確定した(=これ以上上書きしない)とみなす state。
+_DECIDED_STATES = ("accepted", "declined", "phone")
 
 
 def _normalize_decision(value: str) -> str:
-    """'accept'/'accepted' → 'accepted', 'decline'/'declined' → 'declined'. Raises 422 otherwise."""
+    """Normalize a staff decision. accept(ed)→accepted, phone/call→phone,
+    decline(d)→declined. Raises 422 otherwise."""
     v = (value or "").strip().lower()
     if v in ("accept", "accepted"):
         return "accepted"
+    if v in ("phone", "call"):
+        return "phone"
     if v in ("decline", "declined"):
         return "declined"
-    raise HTTPException(status_code=422, detail="decision must be accept(ed) or decline(d)")
+    raise HTTPException(status_code=422, detail="decision must be accept(ed), phone, or decline(d)")
 
 
 async def _apply_decision(db: AsyncSession, log: ReceptionLog, decision: str) -> str:
-    """Set accepted/declined on a reception log. Idempotent: a log already decided
-    (via push button AND/OR in-app button, or a double-tap) is left as-is."""
-    if log.state in ("accepted", "declined"):
+    """Set accepted/phone/declined on a reception log. Idempotent: a log already
+    decided (via push button AND/OR in-app button, or a double-tap) is left as-is."""
+    if log.state in _DECIDED_STATES:
         return log.state
     log.state = _normalize_decision(decision)
     log.decided_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -51,9 +61,11 @@ async def _apply_decision(db: AsyncSession, log: ReceptionLog, decision: str) ->
 
 
 def build_decision_push_extras(tenant_id: str, log: ReceptionLog) -> tuple[dict, list]:
-    """(data, actions) to attach to the reception push so staff can answer OK/NG
-    from the notification itself. The token lets the Service Worker post the decision
-    without a login (see auth.create_decision_token)."""
+    """(data, actions) to attach to the reception push so staff can answer
+    受付/電話/お断り from the notification itself. The token lets the Service Worker
+    post the decision without a login (see auth.create_decision_token).
+
+    QR予約(method=="appointment")は お断り を出さず 受付/電話 の2択。"""
     token = create_decision_token(log.id, tenant_id)
     data = {
         "kind": "reception_decision",
@@ -64,8 +76,10 @@ def build_decision_push_extras(tenant_id: str, log: ReceptionLog) -> tuple[dict,
     }
     actions = [
         {"action": "accept", "title": DECISION_ACCEPT_LABEL},
-        {"action": "decline", "title": DECISION_DECLINE_LABEL},
+        {"action": "phone", "title": DECISION_PHONE_LABEL},
     ]
+    if (log.method or "") != "appointment":
+        actions.append({"action": "decline", "title": DECISION_DECLINE_LABEL})
     return data, actions
 
 
@@ -253,7 +267,7 @@ async def update_reception(
 
 
 class DecisionRequest(BaseModel):
-    decision: str  # accept(ed) | decline(d)
+    decision: str  # accept(ed) | phone | decline(d)
 
 
 class TokenDecisionRequest(BaseModel):
@@ -267,8 +281,8 @@ async def decide_reception_by_token(
     db: AsyncSession = Depends(get_db),
 ):
     """Public, token-authenticated. Called by the staff PWA Service Worker when a
-    notification action button (すぐ伺います / 只今対応できません) is tapped — the SW has
-    no JWT, so the signed decision token in the push payload is the credential."""
+    notification action button (受付 / 電話 / お断り) is tapped — the SW has no JWT,
+    so the signed decision token in the push payload is the credential."""
     try:
         payload = decode_token(body.token)
     except JWTError:

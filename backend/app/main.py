@@ -19,6 +19,12 @@ _ENSURE_COLUMNS = {
     "meeting_rooms": {
         "map_image_url": "VARCHAR(512)",
     },
+    "tenants": {
+        # 受付通知で「電話(対応不可)」応答時にキオスクへ表示する電話番号、
+        # 「お断り」応答時に案内する外部問い合わせフォールURL(未設定時は共通フォームへ)。
+        "kiosk_phone_number": "VARCHAR(32)",
+        "inquiry_form_url": "VARCHAR(512)",
+    },
     "lockers": {
         "name": "VARCHAR(255)",
         "pin_hash": "VARCHAR(255)",

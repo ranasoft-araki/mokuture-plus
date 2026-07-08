@@ -5,6 +5,7 @@ from app.models.reception import ReceptionLog
 from app.models.device import Device, Locker
 from app.models.notification import NotificationSetting, PushSubscription
 from app.models.room import MeetingRoom
+from app.models.inquiry import Inquiry
 
 __all__ = [
     "Tenant",
@@ -19,4 +20,5 @@ __all__ = [
     "NotificationSetting",
     "PushSubscription",
     "MeetingRoom",
+    "Inquiry",
 ]

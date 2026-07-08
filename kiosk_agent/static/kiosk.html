@@ -42,6 +42,9 @@ let ST = {
   kiosk_complete_timeout_sec: 10,
   kiosk_style: "default",
   purpose_list: [],
+  kiosk_phone_number: "",   // 受付応答「電話(対応不可)」時に表示する電話番号
+  inquiry_url: "",          // 営業お断り画面で案内する問い合わせフォールURL(解決済み)
+  inquiry_qr: null,         // 上記URLのQR(SVG data URI)。バックエンドが生成
 };
 let ITEMS = [];
 let TRANSITION_TYPE = "fade";
@@ -82,7 +85,9 @@ function cleanup() { CLEANUPS.forEach(f => f()); CLEANUPS = []; }
 //   表示: http://localhost:8000/kiosk.html?mock=1
 // ?mock=1 で即モック。エージェントの /config が mock:true を返した場合(例:Windows開発機)も boot() で有効化する。
 let MOCK = new URLSearchParams(location.search).has("mock");
-let _mockDecisionPolls = 0;  // MOCK: 待機画面ポーリングの回数(数回でaccepted)
+let _mockDecisionPolls = 0;  // MOCK: 待機画面ポーリングの回数(数回で確定)
+let _mockDecisionState = "accepted";  // MOCK: 巡回する確定状態(accepted/phone/declined)
+let _mockCreateCount = 0;    // MOCK: 受付回数(結果画面の巡回に使用)
 const MOCK_LOCKERS = [
   { id: "A", name: "A（上段）", door_number: 17, occupied: false, _pin: null },
   { id: "B", name: "B（中段）", door_number: 18, occupied: true,  _pin: "1234" },
@@ -104,14 +109,22 @@ async function mockFetch(method, path, body) {
     kiosk_welcome_message: "磯野木工所", kiosk_sub_message: "ご用件をお選びください",
     kiosk_calling_message: "担当者をお呼びしています", kiosk_complete_message: "担当者がご案内します",
     kiosk_idle_timeout_sec: 60, kiosk_complete_timeout_sec: 10,
-    staff_list: ["山田 太郎", "佐藤 花子", "鈴木 一郎"], purpose_list: ["お打ち合わせ", "納品", "採用面接"],
+    staff_list: ["山田 太郎", "佐藤 花子", "鈴木 一郎"], purpose_list: [],
+    kiosk_phone_number: "03-1234-5678",
+    inquiry_url: "https://example.com/contact",
+    inquiry_qr: "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 29 29' shape-rendering='crispEdges'><rect width='29' height='29' fill='#fff'/><g fill='#000'>${Array.from({length:29},(_,y)=>Array.from({length:29},(_,x)=>((x*7+y*13+((x^y)&3))%3===0)?`<rect x='${x}' y='${y}' width='1' height='1'/>`:"").join("")).join("")}<rect x='2' y='2' width='7' height='7' fill='none' stroke='#000'/><rect x='4' y='4' width='3' height='3'/><rect x='20' y='2' width='7' height='7' fill='none' stroke='#000'/><rect x='22' y='4' width='3' height='3'/><rect x='2' y='20' width='7' height='7' fill='none' stroke='#000'/><rect x='4' y='22' width='3' height='3'/></g></svg>`),
   };
   if (path === "/proxy/schedule") return { playlist: null, suspended: false };
-  if (path === "/proxy/reception") { _mockDecisionPolls = 0; return { id: "mock", visitor_name: body?.visitor_name ?? "", created_at: "" }; }
+  if (path === "/proxy/reception") {
+    // 受付ごとに 受付→電話→お断り を巡回し、3つの結果画面をオフラインで確認できる。
+    _mockDecisionPolls = 0;
+    _mockDecisionState = ["accepted", "phone", "declined"][_mockCreateCount++ % 3];
+    return { id: "mock", visitor_name: body?.visitor_name ?? "", created_at: "" };
+  }
   if (path.startsWith("/proxy/reception/")) {
-    // 待機画面のポーリング: 数回で「accepted」を返してOK画面デモへ。
+    // 待機画面のポーリング: 数回で確定状態を返して結果画面デモへ。
     _mockDecisionPolls += 1;
-    return { id: "mock", state: _mockDecisionPolls >= 2 ? "accepted" : "received" };
+    return { id: "mock", state: _mockDecisionPolls >= 2 ? _mockDecisionState : "received" };
   }
   if (path.startsWith("/proxy/appointment/")) return {
     id: "mock-appt", visitor_name: "山田 太郎", company: "株式会社テスト", purpose: "お打ち合わせ",
@@ -233,12 +246,13 @@ function go(screen, data = {}) {
     else if (screen === "welcome")        showWelcome();
     else if (screen === "top")            showTop();
     else if (screen === "reception")      showReception(data.purpose ?? "");
-    else if (screen === "qr")             showQr();
-    else if (screen === "locker")         showLocker();
+    else if (screen === "lockerMode")     showLockerMode();
+    else if (screen === "locker")         showLocker(data.mode ?? "all");
     else if (screen === "delivery")       showDelivery();
     else if (screen === "calling")        showCalling(data);
     else if (screen === "resultOk")       showResultOk(data);
-    else if (screen === "resultNg")       showResultNg(data);
+    else if (screen === "resultPhone")    showResultPhone(data);
+    else if (screen === "resultDecline")  showResultDecline(data);
     else if (screen === "complete")       showComplete(data);
     else if (screen === "kiosk-settings") showKioskSettings();
   }
@@ -474,46 +488,187 @@ function showIdle() {
 
   showItem();
 }
-// ─── VISIT (QR check) ─────────────────────────────────────────────────────────
-// 「ご訪問」選択後: QRコードの有無を選ぶ。
+// ─── WELCOME + QR (統合ようこそ画面) ─────────────────────────────────────────
+// 待機解除後の最初の画面。左=QRカメラ常時スキャン(予約QRを自動検出→受付)、
+// 右=案内＋「ご予約のない方はこちら」ボタン(受付メニューへ)。
+// 旧・独立QR画面(showQr)は本画面に統合済み。
 function showWelcome() {
   const bc = ST.brand_color;
-  sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0">
-    <button id="wel-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button>
+  let stream = null, scanning = false, submitting = false, errMsg = "";
+  let idleId, countId, cooldownId = null, paused = false, disposed = false;
+  let lastScanTs = 0;
+  const QR_SCAN_INTERVAL_MS = 120;
+  const QR_UNSUPPORTED_COOLDOWN_MS = 3500;
+  const QR_ERROR_COOLDOWN_MS = 2500;
+  function resetIdle() {
+    clearTimeout(idleId); clearInterval(countId);
+    let c = ST.kiosk_idle_timeout_sec;
+    const update = () => {
+      const cEl = document.getElementById("qr-cnt"), bEl = document.getElementById("qr-bar");
+      const urgent = c <= 10, color = urgent ? T.urgent : bc;
+      if (cEl) { cEl.textContent = c; cEl.style.color = color; }
+      if (bEl) { bEl.style.width = `${(c / ST.kiosk_idle_timeout_sec) * 100}%`; bEl.style.background = color; }
+      [document.getElementById("qr-cnt-lbl"), document.getElementById("qr-cnt-s")].forEach(el => { if (el) el.style.color = urgent ? T.urgent : T.muted; });
+    };
+    update();
+    idleId = setTimeout(() => { stopStream(); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
+    countId = setInterval(() => { c--; if (c <= 0) { clearInterval(countId); return; } update(); }, 1000);
+  }
+  CLEANUPS.push(() => { disposed = true; clearTimeout(idleId); clearInterval(countId); clearTimeout(cooldownId); stopStream(); });
+  function stopStream() { scanning = false; stream?.getTracks().forEach(t => t.stop()); stream = null; }
+
+  function camContent() {
+    if (submitting) return `<div style="text-align:center;color:#fff"><div style="width:64px;height:64px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:${bc};animation:spin .8s linear infinite;margin:0 auto 20px"></div><div style="font-size:20px;opacity:.7">受付処理中…</div></div>`;
+    const corners = [[0,0,0],[0,1,90],[1,1,180],[1,0,270]].map(([tb,lr,rot]) =>
+      `<div style="position:absolute;${tb ? "bottom" : "top"}:-3px;${lr ? "right" : "left"}:-3px;width:60px;height:60px;transform:rotate(${rot}deg);border-top:5px solid ${bc};border-left:5px solid ${bc};border-radius:14px 0 0 0"></div>`
+    ).join("");
+    return `
+<div style="position:absolute;inset:64px;border:3px dashed rgba(255,255,255,.2);border-radius:22px">${corners}${scanning ? `<div style="position:absolute;left:0;right:0;height:3px;background:${bc};box-shadow:0 0 24px ${bc};animation:scan-line 2s linear infinite"></div>` : ""}</div>
+<video id="qr-vid" muted playsinline style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.85"></video>
+<div style="position:absolute;bottom:24px;left:0;right:0;display:flex;justify-content:center"><span style="display:inline-flex;align-items:center;gap:8px;background:rgba(0,0,0,.5);color:#fff;padding:10px 22px;border-radius:999px;font-size:17px"><span style="width:8px;height:8px;border-radius:50%;background:${bc};animation:dot-pulse 1.4s ease-in-out infinite"></span>${scanning ? "読み取り中…" : paused ? "少々お待ちください…" : "カメラ準備中…"}</span></div>`;
+  }
+
+  function render() {
+    sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
+  <div style="padding:28px 80px 0;flex-shrink:0"><button id="wel-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button></div>
+  <div style="flex:1;padding:8px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:64px;align-items:center;min-height:0">
+    <div id="cam-box" style="background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;height:100%;max-height:800px">${camContent()}</div>
+    <div style="display:flex;flex-direction:column">
+      <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:14px;font-family:Inter,system-ui,sans-serif">WELCOME</div>
+      <div style="font-size:66px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.1;margin-bottom:10px">${escHtml(ST.kiosk_welcome_message || "ようこそ")}</div>
+      <div style="font-size:30px;color:${T.sub};line-height:1.5;margin-bottom:28px">ご予約QRをお持ちの方は<br>左のカメラへかざしてください</div>
+      <div style="font-size:22px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-bottom:34px">Hold your reservation QR code over the camera</div>
+      ${errMsg ? `<div style="padding:16px 20px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.3);border-radius:14px;color:${T.urgent};font-size:19px;line-height:1.6;margin-bottom:26px">${escHtml(errMsg)}</div>` : ""}
+      <button id="wel-form" style="width:100%;padding:36px;background:${T.dark};border:none;border-radius:20px;font-size:36px;font-weight:600;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:18px">ご予約のない方はこちら <span style="display:inline-flex">${ICO.arrow_lg}</span></button>
+      <div style="font-size:22px;color:${T.muted};text-align:center;margin-top:16px">ご訪問・お荷物の配達・ロッカーのご利用</div>
+      ${MOCK ? `<button id="qr-mock" style="margin-top:18px;padding:16px;background:transparent;border:1.5px dashed ${T.muted};border-radius:12px;font-size:16px;color:${T.muted};cursor:pointer">（MOCK）予約QRを読み取ったことにする</button>` : ""}
+    </div>
   </div>
-  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:64px;min-height:0">
-    <div style="text-align:center">
-      <div style="font-size:64px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.1">QRコードはお持ちですか？</div>
-      <div style="font-size:40px;color:${T.muted};font-family:Inter,system-ui,sans-serif;letter-spacing:1px;margin-top:12px">Do you have a QR code?</div>
-    </div>
-    <div style="display:flex;gap:44px">
-      <button id="wel-qr" style="width:560px;height:300px;border-radius:32px;border:2.5px solid ${T.borderStrong};background:${T.canvas};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;cursor:pointer">
-        <div style="color:${bc};transform:scale(2.1)">${ICO.qr}</div>
-        <div style="text-align:center">
-          <div style="font-size:42px;font-weight:600;color:${T.ink}">QRコードがある</div>
-          <div style="font-size:28px;color:${T.sub};font-family:Inter,system-ui,sans-serif;margin-top:6px">I have a QR code</div>
-        </div>
-      </button>
-      <button id="wel-form" style="width:560px;height:300px;border-radius:32px;border:none;background:${bc};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;cursor:pointer">
-        <div style="color:#fff;transform:scale(2.1)">${ICO.reception}</div>
-        <div style="text-align:center">
-          <div style="font-size:42px;font-weight:600;color:#fff">QRコードがない</div>
-          <div style="font-size:28px;color:rgba(255,255,255,.8);font-family:Inter,system-ui,sans-serif;margin-top:6px">No QR code</div>
-        </div>
-      </button>
-    </div>
+  <div style="padding:16px 80px 28px;display:flex;align-items:center;color:${T.muted};font-size:22px;flex-shrink:0">
+    <span id="qr-clk" style="font-family:'JetBrains Mono',monospace;font-size:22px"></span><span style="flex:1"></span>
+    <div style="display:flex;align-items:center;gap:16px"><span id="qr-cnt-lbl">待機画面に戻るまで</span><span id="qr-cnt" style="font-size:32px;font-weight:700;font-family:'JetBrains Mono',monospace;color:${T.sub};min-width:52px;text-align:right;transition:color .3s">${ST.kiosk_idle_timeout_sec}</span><span id="qr-cnt-s">秒</span><div style="width:200px;height:8px;background:${T.border};border-radius:4px;overflow:hidden"><div id="qr-bar" style="width:100%;height:100%;background:${bc};border-radius:4px;transition:width 1s linear,background .3s"></div></div></div>
+    <span style="flex:1"></span><span style="font-family:'JetBrains Mono',monospace">${devName()}</span>
   </div>
 </div>`;
-  rescale();
-  let idleId;
-  function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
-  CLEANUPS.push(() => clearTimeout(idleId));
+    rescale();
+    document.getElementById("qr-clk").textContent = fmtClock();
+    document.getElementById("wel-back").addEventListener("click", () => { stopStream(); cleanup(); go("idle"); });
+    document.getElementById("wel-form").addEventListener("click", () => { stopStream(); cleanup(); go("top"); });
+    if (MOCK) { const mb = document.getElementById("qr-mock"); if (mb) mb.addEventListener("click", () => { stopStream(); handleQR("appt:mock"); }); }
+    onSc("click", resetIdle);
+    if (stream) { const vid = document.getElementById("qr-vid"); if (vid) { vid.srcObject = stream; vid.play().catch(() => {}); } }
+  }
+
+  function refreshCam() {
+    const box = document.getElementById("cam-box");
+    if (!box) return;
+    box.innerHTML = camContent();
+    if (stream) { const vid = document.getElementById("qr-vid"); if (vid) { vid.srcObject = stream; vid.play().catch(() => {}); } }
+  }
+
+  async function startCamera() {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } });
+      if (disposed) { s.getTracks().forEach(t => t.stop()); return; }
+      stream = s;
+      const vid = document.getElementById("qr-vid");
+      if (vid) { vid.srcObject = stream; await vid.play(); }
+      if (disposed) { stopStream(); return; }
+      scanning = true; refreshCam(); scanLoop();
+    } catch {
+      if (!disposed) { errMsg = "カメラを起動できませんでした。ご予約のない方は「こちら」からお進みください。"; render(); }
+    }
+  }
+
+  let _qrCanvas = null, _qrCtx = null, _barcodeDet = null;
+  async function scanLoop() {
+    if (!scanning) return;
+    const vid = document.getElementById("qr-vid");
+    if (!vid || vid.readyState < 2) { if (scanning) requestAnimationFrame(scanLoop); return; }
+    const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    if (now - lastScanTs < QR_SCAN_INTERVAL_MS) { if (scanning) requestAnimationFrame(scanLoop); return; }
+    lastScanTs = now;
+    if (typeof BarcodeDetector !== "undefined") {
+      try {
+        if (!_barcodeDet) _barcodeDet = new BarcodeDetector({ formats: ["qr_code"] });
+        const codes = await _barcodeDet.detect(vid);
+        if (codes.length > 0 && codes[0].rawValue) { scanning = false; await handleQR(codes[0].rawValue); return; }
+      } catch {}
+    } else if (typeof jsQR !== "undefined") {
+      if (!_qrCanvas) { _qrCanvas = document.createElement("canvas"); _qrCtx = _qrCanvas.getContext("2d", { willReadFrequently: true }); }
+      _qrCanvas.width = vid.videoWidth || 640; _qrCanvas.height = vid.videoHeight || 480;
+      _qrCtx.drawImage(vid, 0, 0);
+      const imageData = _qrCtx.getImageData(0, 0, _qrCanvas.width, _qrCanvas.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+      if (code) { scanning = false; await handleQR(code.data); return; }
+    }
+    if (scanning) requestAnimationFrame(scanLoop);
+  }
+
+  // 読み取ったQR文字列を判定。対応形式のみ受け付け、それ以外は null(=未対応)。
+  function parseQR(raw) {
+    const s = (raw || "").trim();
+    if (!s) return null;
+    if (s.startsWith("appt:")) {
+      const token = s.slice(5).trim();
+      return token ? { kind: "appt", token } : null;
+    }
+    try {
+      const u = new URL(s);
+      const name = (u.searchParams.get("name") ?? "").trim();
+      if (name) return { kind: "walkin", name, company: u.searchParams.get("company") ?? "", purpose: u.searchParams.get("purpose") ?? "" };
+    } catch {}
+    return null;
+  }
+
+  function pauseScan(msg, ms) {
+    submitting = false; scanning = false; paused = true; errMsg = msg;
+    resetIdle();
+    clearTimeout(cooldownId);
+    render();
+    cooldownId = setTimeout(() => {
+      cooldownId = null; paused = false; errMsg = ""; scanning = true;
+      lastScanTs = 0; render(); scanLoop();
+    }, ms);
+  }
+
+  async function handleQR(raw) {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) { stopStream(); cleanup(); boot(); return; }
+
+    const parsed = parseQR(raw);
+    if (!parsed) { pauseScan("未対応のQRコードです。ご予約時にお送りしたQRコードをかざしてください。", QR_UNSUPPORTED_COOLDOWN_MS); return; }
+
+    if (parsed.kind === "appt") {
+      submitting = true; refreshCam();
+      try {
+        const appt = await apiGet("/proxy/appointment/" + encodeURIComponent(parsed.token), token);
+        const rec = await apiPost("/proxy/reception", {
+          visitor_name: appt.visitor_name, company: appt.company || "", purpose: appt.purpose || "",
+          staff: appt.staff || "", method: "appointment", appointment_id: appt.id,
+        }, token);
+        stopStream(); cleanup();
+        go("calling", { name: appt.visitor_name, staff: appt.staff || "", room: appt.meeting_room || null, scheduledAt: appt.scheduled_at || null, method: "appointment", receptionId: rec?.id });
+      } catch (e) {
+        pauseScan(e.message || "予約情報の取得に失敗しました", QR_ERROR_COOLDOWN_MS);
+      }
+      return;
+    }
+
+    // walkin: name パラメータ付きURL
+    submitting = true; refreshCam();
+    try {
+      const rec = await apiPost("/proxy/reception", { visitor_name: parsed.name, company: parsed.company, purpose: parsed.purpose, method: "qr" }, token);
+      stopStream(); cleanup(); go("calling", { name: parsed.name, staff: "", method: "qr", receptionId: rec?.id });
+    } catch (e) {
+      pauseScan(e.message || "受付処理に失敗しました", QR_ERROR_COOLDOWN_MS);
+    }
+  }
+
+  render();
   resetIdle();
-  onSc("click", resetIdle);
-  document.getElementById("wel-back").addEventListener("click", () => { cleanup(); go("idle"); });
-  document.getElementById("wel-qr").addEventListener("click", () => { cleanup(); go("qr"); });
-  document.getElementById("wel-form").addEventListener("click", () => { cleanup(); go("top"); });
+  every(30000, () => { const c = document.getElementById("qr-clk"); if (c) c.textContent = fmtClock(); });
+  startCamera();
 }
 
 // ─── RECEPTION MENU (受付メニュー) ────────────────────────────────────────────
@@ -523,7 +678,7 @@ function showTop() {
   const TILES = [
     { icon: ICO.reception, label: "ご訪問",     en: "Visit",    desc: "ご来訪の受付",     descEn: "Check in for a visit", screen: "reception",  primary: true },
     { icon: ICO.truck,     label: "荷物の配達", en: "Delivery", desc: "宅配・配送のお届け", descEn: "Parcel delivery",      screen: "delivery" },
-    { icon: ICO.locker,    label: "ロッカー",   en: "Locker",   desc: "お預け・お受け取り", descEn: "Lockers",              screen: "locker" },
+    { icon: ICO.locker,    label: "ロッカー",   en: "Locker",   desc: "お預け・お受け取り", descEn: "Lockers",              screen: "lockerMode" },
   ];
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
   <div style="padding:48px 80px 0;flex-shrink:0;display:flex;align-items:flex-end;gap:32px">
@@ -586,16 +741,51 @@ function showTop() {
   });
 }
 
+// ─── LOCKER MODE (手荷物一時保管 / 荷物受け取り) ─────────────────────────────
+// ロッカー選択後の入口。手荷物一時保管=空き(PIN未設定)ロッカーのみ / 荷物受け取り=
+// PIN設定済ロッカーのみ、を選んでから showLocker(mode) のグリッドへ進む。
+function showLockerMode() {
+  const bc = ST.brand_color;
+  let idleId;
+  function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
+  CLEANUPS.push(() => clearTimeout(idleId));
+  sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
+  <div style="padding:28px 80px 0;flex-shrink:0"><button id="lm-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button></div>
+  <div style="padding:14px 80px 0;flex-shrink:0"><div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">ロッカーのご利用</div><div style="font-size:36px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Lockers</div></div>
+  <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:44px;padding:0 80px;min-height:0">
+    <button id="lm-store" style="width:620px;height:520px;border-radius:32px;border:3px solid ${bc};background:#eef4ee;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;cursor:pointer;text-align:center;padding:0 40px">
+      <div style="width:150px;height:150px;border-radius:34px;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.3)">${ICO.locker}</div></div>
+      <div><div style="font-size:54px;font-weight:700;color:${T.ink}">手荷物一時保管</div><div style="font-size:34px;color:${T.sub};font-family:Inter,system-ui,sans-serif;margin-top:6px">Store your belongings</div></div>
+      <div style="font-size:24px;color:${T.sub}">空きロッカーに預け、暗証番号を設定します</div>
+    </button>
+    <button id="lm-pickup" style="width:620px;height:520px;border-radius:32px;border:3px solid ${LOCKER_AMBER};background:#faf2e6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;cursor:pointer;text-align:center;padding:0 40px">
+      <div style="width:150px;height:150px;border-radius:34px;background:${LOCKER_AMBER}22;color:${LOCKER_AMBER};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.3)">${ICO.pin}</div></div>
+      <div><div style="font-size:54px;font-weight:700;color:${T.ink}">荷物受け取り</div><div style="font-size:34px;color:${T.sub};font-family:Inter,system-ui,sans-serif;margin-top:6px">Pick up your item</div></div>
+      <div style="font-size:24px;color:${T.sub}">暗証番号を入力してお荷物を受け取ります</div>
+    </button>
+  </div>
+</div>`;
+  rescale();
+  resetIdle();
+  onSc("click", resetIdle);
+  document.getElementById("lm-back").addEventListener("click", () => { cleanup(); go("top"); });
+  document.getElementById("lm-store").addEventListener("click", () => { cleanup(); go("locker", { mode: "store" }); });
+  document.getElementById("lm-pickup").addEventListener("click", () => { cleanup(); go("locker", { mode: "pickup" }); });
+}
+
 // ─── LOCKER (Phase 2) ─────────────────────────────────────────────────────────
 // 3段縦並び(上段A/中段B/下段C)。空き=緑/利用中=アンバー。
 //  空き  : タッチ→自動開錠(GPIO)→荷物投入→扉を閉める→4桁PIN設定→お預け完了
 //  利用中: タッチ→4桁PIN入力→照合OKで開錠(GPIO)→お受け取り
 // ※実機に扉開閉センサーが無いため「扉を閉めました」ボタンでPIN設定へ進む(センサー導入時は自動化可)。
 const LOCKER_AMBER = "#bd7e2e";
-function showLocker() {
+// mode: "store"(手荷物一時保管=空きロッカーのみ) / "pickup"(荷物受け取り=PIN設定済のみ) / "all"(旧・両方)
+function showLocker(mode) {
+  mode = mode || "all";
+  const isStore = mode === "store", isPickup = mode === "pickup";
   const bc = ST.brand_color;
   const token = localStorage.getItem(TOKEN_KEY);
-  let lockers = [], available = 0;
+  let lockers = [], available = 0, shownLockers = [];
   let view = "loading";      // loading | grid | openwait | pinset | pininput | result | error
   let sel = null, pin = "", err = "", busy = false, resultTitle = "", resultSub = "";
   let idleId, resultTimer = null;
@@ -618,15 +808,22 @@ function showLocker() {
     } else if (view === "error") {
       sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px"><div style="font-size:40px;font-weight:600;color:${T.ink}">ロッカーを利用できません</div><div style="font-size:22px;color:${T.sub}">${escHtml(err || "しばらくしてからお試しください")}</div></div>`);
     } else if (view === "grid") {
-      sc.innerHTML = shell(`
-  <div style="padding:14px 80px 0;flex-shrink:0;display:flex;align-items:flex-end;justify-content:space-between">
-    <div><div style="font-size:54px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">ロッカー</div><div style="font-size:34px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:4px">Lockers</div></div>
-    <div style="font-size:26px;color:${T.sub}">空き <b style="font-size:34px;color:${bc}">${available}</b> / 全 ${lockers.length}</div>
-  </div>
-  <div id="lk-doors" style="flex:1;display:flex;flex-direction:column;gap:18px;padding:24px 80px 40px;min-height:0">
-    ${lockers.map((l, i) => {
+      shownLockers = isStore ? lockers.filter(l => !l.occupied)
+                   : isPickup ? lockers.filter(l => l.occupied && l.has_pin)
+                   : lockers;
+      const gridTitle = isStore ? "手荷物一時保管" : isPickup ? "荷物受け取り" : "ロッカー";
+      const gridTitleEn = isStore ? "Store your belongings" : isPickup ? "Pick up your item" : "Lockers";
+      const counter = isPickup
+        ? `お預かり中 <b style="font-size:34px;color:${LOCKER_AMBER}">${shownLockers.length}</b>`
+        : `空き <b style="font-size:34px;color:${bc}">${isStore ? shownLockers.length : available}</b> / 全 ${lockers.length}`;
+      const emptyMsg = isStore ? "現在ご利用いただける空きロッカーがありません"
+                     : isPickup ? "お預かり中のお荷物が見つかりません" : "ロッカーがありません";
+      const body = shownLockers.length === 0
+        ? `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px"><div style="font-size:40px;font-weight:600;color:${T.ink}">${emptyMsg}</div><div style="font-size:24px;color:${T.sub}">「← 戻る」でお戻りください</div></div>`
+        : `<div id="lk-doors" style="flex:1;display:flex;flex-direction:column;gap:18px;padding:24px 80px 40px;min-height:0">
+    ${shownLockers.map((l, i) => {
       const used = l.occupied;
-      const delivery = used && !l.has_pin;   // 置き配(PIN無し): 利用者は解錠不可・スタッフ対応
+      const delivery = mode === "all" && used && !l.has_pin;   // 旧・置き配(PIN無し)は all モードのみ考慮
       const accent = used ? LOCKER_AMBER : bc;
       const stateJa = delivery ? "配達保管中" : (used ? "利用中" : "空き");
       const stateEn = delivery ? "Held for pickup" : (used ? "In use" : "Available");
@@ -639,7 +836,13 @@ function showLocker() {
         <div style="font-size:24px;color:${accent};font-weight:600;flex-shrink:0">${cta}</div>
       </button>`;
     }).join("")}
-  </div>`);
+  </div>`;
+      sc.innerHTML = shell(`
+  <div style="padding:14px 80px 0;flex-shrink:0;display:flex;align-items:flex-end;justify-content:space-between">
+    <div><div style="font-size:54px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">${gridTitle}</div><div style="font-size:34px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:4px">${gridTitleEn}</div></div>
+    <div style="font-size:26px;color:${T.sub}">${counter}</div>
+  </div>
+  ${body}`);
     } else if (view === "openwait") {
       sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;text-align:center;padding:0 120px">
         <div style="width:120px;height:120px;border-radius:30px;background:${bc}1a;color:${bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.4)">${ICO.locker}</div></div>
@@ -672,15 +875,17 @@ function showLocker() {
     rescale();
 
     const back = document.getElementById("lk-back");
-    if (back) back.addEventListener("click", () => { cleanup(); go("top"); });
+    // モード指定時(store/pickup)はロッカーモード選択へ、旧allは受付メニューへ戻る。
+    if (back) back.addEventListener("click", () => { cleanup(); go(mode === "all" ? "top" : "lockerMode"); });
 
     if (view === "grid") {
-      document.getElementById("lk-doors").addEventListener("click", e => {
+      const doors = document.getElementById("lk-doors");
+      if (doors) doors.addEventListener("click", e => {
         const btn = e.target.closest("[data-li]"); if (!btn || btn.disabled) return;  // 配達保管中(disabled)は無視
         resetIdle();
-        sel = lockers[+btn.dataset.li];
-        if (sel.occupied) { pin = ""; err = ""; view = "pininput"; render(); }  // 利用中(PIN有)のみ
-        else { openEmpty(); }
+        sel = shownLockers[+btn.dataset.li];
+        if (sel.occupied) { pin = ""; err = ""; view = "pininput"; render(); }  // 利用中(PIN有)=荷物受け取り
+        else { openEmpty(); }                                                    // 空き=手荷物一時保管(PIN設定)
       });
     } else if (view === "openwait") {
       document.getElementById("lk-closed").addEventListener("click", async () => {
@@ -913,6 +1118,10 @@ function showReception(initPurpose) {
   const bc = ST.brand_color;
   const STAFF_LIST = Array.isArray(ST.staff_list) ? ST.staff_list.filter(Boolean) : [];
   const PURPOSE_LIST = Array.isArray(ST.purpose_list) ? ST.purpose_list.filter(Boolean) : [];
+  // ご用件は選択形式。管理画面の来訪目的リストがあればそれを、無ければ既定の5択を使う。
+  const PURPOSE_OPTIONS = PURPOSE_LIST.length ? PURPOSE_LIST
+    : ["ご予約のあるお客様", "お打ち合わせ", "納品", "採用面接", "その他"];
+  const chipStyle = (sel) => `padding:16px 28px;border-radius:14px;border:2px solid ${sel ? bc : T.borderStrong};background:${sel ? bc : T.canvas};color:${sel ? "#fff" : T.ink};font-size:26px;font-weight:600;cursor:pointer;font-family:inherit`;
   let submitting = false, errMsg = "";
   let form = { visitor_name: "", company: "", staff: "", purpose: initPurpose ?? "" };
   let idleId;
@@ -936,9 +1145,11 @@ function showReception(initPurpose) {
     const staffInner = STAFF_LIST.length
       ? `<select id="f-staff" style="${selStyle}"><option value="">選択してください</option>${STAFF_LIST.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join("")}</select>`
       : `<input id="f-staff" type="text" placeholder="担当者のお名前" style="${inputStyle}">`;
-    const purposeInner = PURPOSE_LIST.length
-      ? `<select id="f-purpose" style="${selStyle}"><option value="">選択してください</option>${PURPOSE_LIST.map(p => `<option value="${escHtml(p)}">${escHtml(p)}</option>`).join("")}</select>`
-      : `<input id="f-purpose" type="text" placeholder="お打ち合わせ など" style="${inputStyle}">`;
+    const purposeInner = `
+      <div id="f-purpose-chips" style="display:flex;flex-wrap:wrap;gap:14px">
+        ${PURPOSE_OPTIONS.map(p => `<button type="button" data-purpose="${escHtml(p)}" style="${chipStyle(form.purpose === p)}">${escHtml(p)}</button>`).join("")}
+      </div>
+      <div style="margin-top:16px;border-top:1px solid ${T.border};padding-top:14px;font-size:22px;color:${T.sub}">※営業・セールス・勧誘等のご訪問はお受けしておりません。</div>`;
     sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
   <div style="padding:28px 80px 0;flex-shrink:0">
     <button id="rec-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button>
@@ -947,11 +1158,12 @@ function showReception(initPurpose) {
     <div style="font-size:52px;font-weight:600;color:${T.ink};letter-spacing:-1.4px;line-height:1.12">ご来訪情報をご記入ください</div>
     <div style="font-size:34px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Please enter your visit details</div>
     ${errMsg ? `<div style="margin-top:18px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.35);border-radius:12px;padding:14px 18px;color:${T.urgent};font-size:18px">${escHtml(errMsg)}</div>` : ""}
-    <div style="margin-top:28px;display:grid;grid-template-columns:1fr 1fr;gap:24px 40px">
+    <div style="margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:22px 40px">
       ${fieldWrap("お名前", "Name", true, `<input id="f-name" type="text" autocomplete="name" placeholder="山田 太郎" style="${inputStyle}">`)}
       ${fieldWrap("会社名", "Company", false, `<input id="f-company" type="text" autocomplete="organization" placeholder="株式会社 〇〇" style="${inputStyle}">`)}
       ${fieldWrap("担当者名", "Host", false, staffInner)}
-      ${fieldWrap("ご用件", "Purpose", false, purposeInner)}
+      <div></div>
+      <div style="grid-column:1 / -1">${fieldWrap("ご用件を選択してください", "Purpose", false, purposeInner)}</div>
     </div>
     <button id="rec-send" style="margin-top:30px;width:100%;height:88px;background:${submitting ? bc : T.dark};border:none;border-radius:16px;color:#fff;font-size:28px;font-weight:600;cursor:${submitting ? "not-allowed" : "pointer"};display:flex;align-items:center;justify-content:center;gap:12px;font-family:inherit">
       ${submitting ? `<div style="width:26px;height:26px;border-radius:50%;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;animation:spin .7s linear infinite"></div> 送信中…` : "受付する →"}
@@ -969,15 +1181,20 @@ function showReception(initPurpose) {
     g("f-name").value = form.visitor_name;
     g("f-company").value = form.company;
     if (g("f-staff")) g("f-staff").value = form.staff;
-    if (g("f-purpose")) g("f-purpose").value = form.purpose;
     g("rec-back").addEventListener("click", () => { cleanup(); go("top"); });
-    const KEY = { "f-name": "visitor_name", "f-company": "company", "f-staff": "staff", "f-purpose": "purpose" };
+    const KEY = { "f-name": "visitor_name", "f-company": "company", "f-staff": "staff" };
     Object.keys(KEY).forEach(id => {
       const el = g(id); if (!el) return;
       const ev = el.tagName === "SELECT" ? "change" : "input";
       el.addEventListener(ev, () => { form[KEY[id]] = el.value; resetIdle(); });
       el.addEventListener("focus", resetIdle);
     });
+    // ご用件チップ: 選択で form.purpose を更新し、全チップのスタイルのみ更新(テキスト入力を再描画しない)。
+    const chips = sc.querySelectorAll("#f-purpose-chips [data-purpose]");
+    chips.forEach(btn => btn.addEventListener("click", () => {
+      form.purpose = btn.dataset.purpose; resetIdle();
+      chips.forEach(b => b.setAttribute("style", chipStyle(b.dataset.purpose === form.purpose)));
+    }));
     g("rec-send").addEventListener("click", handleSubmit);
     onSc("click", resetIdle);
   }
@@ -999,201 +1216,6 @@ function showReception(initPurpose) {
   }
 
   render();
-}
-
-// ─── QR ───────────────────────────────────────────────────────────────────────
-function showQr() {
-  const bc = ST.brand_color;
-  let stream = null, scanning = false, submitting = false, errMsg = "";
-  let idleId, countId, cooldownId = null, paused = false, disposed = false;
-  let lastScanTs = 0;                       // デコード間引き用のタイムスタンプ
-  const QR_SCAN_INTERVAL_MS = 120;          // デコード間隔(≈8fps)。フルフレーム解析の常時負荷を抑える
-  const QR_UNSUPPORTED_COOLDOWN_MS = 3500;  // 未対応QR検出後に読み取りを一時停止する時間
-  const QR_ERROR_COOLDOWN_MS = 2500;        // 予約取得/受付エラー後に読み取りを一時停止する時間
-  function resetIdle() {
-    clearTimeout(idleId); clearInterval(countId);
-    let c = ST.kiosk_idle_timeout_sec;
-    const update = () => {
-      const cEl = document.getElementById("qr-cnt"), bEl = document.getElementById("qr-bar");
-      const urgent = c <= 10, color = urgent ? T.urgent : bc;
-      if (cEl) { cEl.textContent = c; cEl.style.color = color; }
-      if (bEl) { bEl.style.width = `${(c / ST.kiosk_idle_timeout_sec) * 100}%`; bEl.style.background = color; }
-      [document.getElementById("qr-cnt-lbl"), document.getElementById("qr-cnt-s")].forEach(el => { if (el) el.style.color = urgent ? T.urgent : T.muted; });
-    };
-    update();
-    idleId = setTimeout(() => { stopStream(); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
-    countId = setInterval(() => { c--; if (c <= 0) { clearInterval(countId); return; } update(); }, 1000);
-  }
-  CLEANUPS.push(() => { disposed = true; clearTimeout(idleId); clearInterval(countId); clearTimeout(cooldownId); stopStream(); });
-  function stopStream() { scanning = false; stream?.getTracks().forEach(t => t.stop()); stream = null; }
-
-  function camContent() {
-    if (submitting) return `<div style="text-align:center;color:#fff"><div style="width:64px;height:64px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:${bc};animation:spin .8s linear infinite;margin:0 auto 20px"></div><div style="font-size:20px;opacity:.7">受付処理中…</div></div>`;
-    const corners = [[0,0,0],[0,1,90],[1,1,180],[1,0,270]].map(([tb,lr,rot]) =>
-      `<div style="position:absolute;${tb ? "bottom" : "top"}:-3px;${lr ? "right" : "left"}:-3px;width:60px;height:60px;transform:rotate(${rot}deg);border-top:5px solid ${bc};border-left:5px solid ${bc};border-radius:14px 0 0 0"></div>`
-    ).join("");
-    return `
-<div style="position:absolute;inset:64px;border:3px dashed rgba(255,255,255,.2);border-radius:22px">${corners}${scanning ? `<div style="position:absolute;left:0;right:0;height:3px;background:${bc};box-shadow:0 0 24px ${bc};animation:scan-line 2s linear infinite"></div>` : ""}</div>
-<video id="qr-vid" muted playsinline style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.85"></video>
-<div style="position:absolute;bottom:24px;left:0;right:0;display:flex;justify-content:center"><span style="display:inline-flex;align-items:center;gap:8px;background:rgba(0,0,0,.5);color:#fff;padding:10px 22px;border-radius:999px;font-size:17px"><span style="width:8px;height:8px;border-radius:50%;background:${bc};animation:dot-pulse 1.4s ease-in-out infinite"></span>${scanning ? "読み取り中…" : paused ? "少々お待ちください…" : "カメラ準備中…"}</span></div>`;
-  }
-
-  // カメラ位置を示す画像エリア(プレースホルダー)。実機のカメラ位置写真/図を qr_camera_image_url に設定すると差し替わる。
-  const camGuide = ST.qr_camera_image_url
-    ? `<img src="${escHtml(ST.qr_camera_image_url)}" style="width:100%;height:100%;object-fit:cover" alt="カメラ位置">`
-    : `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:${T.muted};text-align:center;padding:12px"><div style="transform:scale(1.2);color:${bc}">${ICO.qr}</div><div style="font-size:14px;color:${T.sub};font-weight:600">カメラ位置</div></div>`;
-
-  function render() {
-    sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0"><button id="qr-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button></div>
-  <div style="flex:1;padding:8px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center;min-height:0">
-    <div id="cam-box" style="background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;height:100%;max-height:800px">${camContent()}</div>
-    <div style="display:flex;flex-direction:column">
-      <div style="font-size:64px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.12;margin-bottom:8px">QRコードをかざしてください</div>
-      <div style="font-size:40px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-bottom:22px">Please hold your QR code over the camera</div>
-      <div style="font-size:22px;color:${T.sub};line-height:1.6;margin-bottom:24px">メールでお送りした招待コードを<br>左の読み取り口へかざしてください</div>
-      <div style="display:flex;align-items:center;gap:18px;background:${T.canvas};border:1px solid ${T.border};border-radius:18px;padding:16px 20px;margin-bottom:24px">
-        <div style="width:128px;height:96px;border-radius:12px;overflow:hidden;background:${T.panel};border:1px solid ${T.border};display:flex;align-items:center;justify-content:center;flex-shrink:0">${camGuide}</div>
-        <div><div style="font-size:20px;font-weight:600;color:${T.ink}">カメラはこちらの位置にあります</div><div style="font-size:15px;color:${T.muted};margin-top:4px">読み取り口の位置をご確認ください · Camera location</div></div>
-      </div>
-      ${errMsg ? `<div style="padding:16px 20px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.3);border-radius:14px;color:${T.urgent};font-size:17px;line-height:1.6;margin-bottom:22px">${escHtml(errMsg)}</div>` : ""}
-      <div style="display:flex;gap:14px">
-        <button id="qr-form1" style="flex:1;padding:30px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:16px;font-size:26px;font-weight:600;color:${T.ink};cursor:pointer">QRを持っていない</button>
-        <button id="qr-form2" style="flex:1;padding:30px;background:${T.dark};border:2px solid ${T.dark};border-radius:16px;font-size:26px;font-weight:600;color:#fff;cursor:pointer">フォームで受付する →</button>
-      </div>
-      ${MOCK ? `<button id="qr-mock" style="margin-top:14px;padding:16px;background:transparent;border:1.5px dashed ${T.muted};border-radius:12px;font-size:16px;color:${T.muted};cursor:pointer">（MOCK）予約QRを読み取ったことにする</button>` : ""}
-    </div>
-  </div>
-  <div style="padding:16px 80px 28px;display:flex;align-items:center;color:${T.muted};font-size:22px;flex-shrink:0">
-    <span id="qr-clk" style="font-family:'JetBrains Mono',monospace;font-size:22px"></span><span style="flex:1"></span>
-    <div style="display:flex;align-items:center;gap:16px"><span id="qr-cnt-lbl">待機画面に戻るまで</span><span id="qr-cnt" style="font-size:32px;font-weight:700;font-family:'JetBrains Mono',monospace;color:${T.sub};min-width:52px;text-align:right;transition:color .3s">${ST.kiosk_idle_timeout_sec}</span><span id="qr-cnt-s">秒</span><div style="width:200px;height:8px;background:${T.border};border-radius:4px;overflow:hidden"><div id="qr-bar" style="width:100%;height:100%;background:${bc};border-radius:4px;transition:width 1s linear,background .3s"></div></div></div>
-    <span style="flex:1"></span><span style="font-family:'JetBrains Mono',monospace">${devName()}</span>
-  </div>
-</div>`;
-    rescale();
-    document.getElementById("qr-clk").textContent = fmtClock();
-    document.getElementById("qr-back").addEventListener("click", () => { stopStream(); cleanup(); go("welcome"); });
-    document.getElementById("qr-form1").addEventListener("click", () => { stopStream(); cleanup(); go("top"); });
-    document.getElementById("qr-form2").addEventListener("click", () => { stopStream(); cleanup(); go("reception"); });
-    if (MOCK) { const mb = document.getElementById("qr-mock"); if (mb) mb.addEventListener("click", () => { stopStream(); handleQR("appt:mock"); }); }
-    onSc("click", resetIdle);
-    if (stream) { const vid = document.getElementById("qr-vid"); if (vid) { vid.srcObject = stream; vid.play().catch(() => {}); } }
-  }
-
-  function refreshCam() {
-    const box = document.getElementById("cam-box");
-    if (!box) return;
-    box.innerHTML = camContent();
-    if (stream) { const vid = document.getElementById("qr-vid"); if (vid) { vid.srcObject = stream; vid.play().catch(() => {}); } }
-  }
-
-  async function startCamera() {
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } });
-      if (disposed) { s.getTracks().forEach(t => t.stop()); return; }   // 初期化中に画面離脱 → ストリームを解放して打ち切る
-      stream = s;
-      const vid = document.getElementById("qr-vid");
-      if (vid) { vid.srcObject = stream; await vid.play(); }
-      if (disposed) { stopStream(); return; }                          // play 待ちの間に離脱した場合の保険
-      scanning = true; refreshCam(); scanLoop();
-    } catch {
-      if (!disposed) { errMsg = "カメラを起動できませんでした。アクセス許可を確認してください。"; render(); }
-    }
-  }
-
-  let _qrCanvas = null, _qrCtx = null, _barcodeDet = null;
-  async function scanLoop() {
-    if (!scanning) return;
-    const vid = document.getElementById("qr-vid");
-    if (!vid || vid.readyState < 2) { if (scanning) requestAnimationFrame(scanLoop); return; }
-    // デコードは QR_SCAN_INTERVAL_MS 間隔に間引く(フルフレーム解析の常時負荷/連続再検出のスパイクを抑える)
-    const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
-    if (now - lastScanTs < QR_SCAN_INTERVAL_MS) { if (scanning) requestAnimationFrame(scanLoop); return; }
-    lastScanTs = now;
-    if (typeof BarcodeDetector !== "undefined") {
-      try {
-        if (!_barcodeDet) _barcodeDet = new BarcodeDetector({ formats: ["qr_code"] });   // 毎フレーム生成せず使い回す
-        const codes = await _barcodeDet.detect(vid);
-        if (codes.length > 0 && codes[0].rawValue) { scanning = false; await handleQR(codes[0].rawValue); return; }
-      } catch {}
-    } else if (typeof jsQR !== "undefined") {
-      if (!_qrCanvas) { _qrCanvas = document.createElement("canvas"); _qrCtx = _qrCanvas.getContext("2d", { willReadFrequently: true }); }
-      _qrCanvas.width = vid.videoWidth || 640; _qrCanvas.height = vid.videoHeight || 480;
-      _qrCtx.drawImage(vid, 0, 0);
-      const imageData = _qrCtx.getImageData(0, 0, _qrCanvas.width, _qrCanvas.height);
-      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
-      if (code) { scanning = false; await handleQR(code.data); return; }
-    }
-    if (scanning) requestAnimationFrame(scanLoop);
-  }
-
-  // 読み取ったQR文字列を判定。対応形式のみ受け付け、それ以外は null(=未対応)。
-  //   appt:<token>            … 来社予約QR
-  //   ...?name=&company=&…    … name パラメータ付きURL(ウォークイン)
-  function parseQR(raw) {
-    const s = (raw || "").trim();
-    if (!s) return null;
-    if (s.startsWith("appt:")) {
-      const token = s.slice(5).trim();
-      return token ? { kind: "appt", token } : null;
-    }
-    try {
-      const u = new URL(s);
-      const name = (u.searchParams.get("name") ?? "").trim();
-      if (name) return { kind: "walkin", name, company: u.searchParams.get("company") ?? "", purpose: u.searchParams.get("purpose") ?? "" };
-    } catch {}
-    return null;
-  }
-
-  // エラー表示 + 一定時間スキャンを停止してから自動再開する。
-  // 同じQRがカメラ前に留まっても即時に再処理してビジーループ化するのを防ぐ。
-  function pauseScan(msg, ms) {
-    submitting = false; scanning = false; paused = true; errMsg = msg;
-    resetIdle();                 // 来訪者は目の前に居るのでアイドル復帰を先送り
-    clearTimeout(cooldownId);
-    render();                    // メッセージを実際に描画(refreshCam だけだと右カラムが更新されない)
-    cooldownId = setTimeout(() => {
-      cooldownId = null; paused = false; errMsg = ""; scanning = true;
-      lastScanTs = 0; render(); scanLoop();
-    }, ms);
-  }
-
-  async function handleQR(raw) {
-    const token = localStorage.getItem(TOKEN_KEY);
-    if (!token) { stopStream(); cleanup(); boot(); return; }
-
-    const parsed = parseQR(raw);
-    if (!parsed) { pauseScan("未対応のQRコードです。ご予約時にお送りしたQRコードをかざしてください。", QR_UNSUPPORTED_COOLDOWN_MS); return; }
-
-    if (parsed.kind === "appt") {
-      submitting = true; refreshCam();
-      try {
-        const appt = await apiGet("/proxy/appointment/" + encodeURIComponent(parsed.token), token);
-        const rec = await apiPost("/proxy/reception", {
-          visitor_name: appt.visitor_name, company: appt.company || "", purpose: appt.purpose || "",
-          staff: appt.staff || "", method: "appointment", appointment_id: appt.id,
-        }, token);
-        stopStream(); cleanup();
-        go("calling", { name: appt.visitor_name, staff: appt.staff || "", room: appt.meeting_room || null, scheduledAt: appt.scheduled_at || null, method: "appointment", receptionId: rec?.id });
-      } catch (e) {
-        pauseScan(e.message || "予約情報の取得に失敗しました", QR_ERROR_COOLDOWN_MS);
-      }
-      return;
-    }
-
-    // walkin: name パラメータ付きURL
-    submitting = true; refreshCam();
-    try {
-      const rec = await apiPost("/proxy/reception", { visitor_name: parsed.name, company: parsed.company, purpose: parsed.purpose, method: "qr" }, token);
-      stopStream(); cleanup(); go("calling", { name: parsed.name, staff: "", method: "qr", receptionId: rec?.id });
-    } catch (e) {
-      pauseScan(e.message || "受付処理に失敗しました", QR_ERROR_COOLDOWN_MS);
-    }
-  }
-
-  render();
-  resetIdle();
-  startCamera();
 }
 
 // ─── CALLING ─────────────────────────────────────────────────────────────────
@@ -1247,7 +1269,8 @@ function showCalling(data) {
     try {
       const r = await apiGet("/proxy/reception/" + encodeURIComponent(rid), token);
       if (r && r.state === "accepted")      { done = true; cleanup(); go("resultOk", data); }
-      else if (r && r.state === "declined") { done = true; cleanup(); go("resultNg", data); }
+      else if (r && r.state === "phone")    { done = true; cleanup(); go("resultPhone", data); }
+      else if (r && r.state === "declined") { done = true; cleanup(); go("resultDecline", data); }
     } catch (_) { /* 通信不調は無視。下のタイムアウトで必ず離脱する */ }
   });
   // 無応答フォールバック: 一定時間で中立の歓迎画面へ→idle復帰(来客を固まらせない)。
@@ -1271,9 +1294,9 @@ function showResultOk(data) {
   <div style="width:150px;height:150px;border-radius:50%;background:${bc};color:#fff;display:flex;align-items:center;justify-content:center;margin-bottom:44px;box-shadow:0 12px 40px ${bc}55;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
   ${logo}
   <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:20px;font-family:Inter,system-ui,sans-serif">STAFF IS COMING</div>
-  <div style="font-size:96px;font-weight:600;color:${T.ink};letter-spacing:-3px;line-height:1.05;margin-bottom:26px">担当者がまいります</div>
+  <div style="font-size:88px;font-weight:600;color:${T.ink};letter-spacing:-3px;line-height:1.05;margin-bottom:26px">参りますので<br>少々お待ちください</div>
   ${vName ? `<div style="font-size:36px;color:${T.sub};margin-bottom:8px">${escHtml(vName)} 様</div>` : ""}
-  <div style="font-size:30px;color:${T.sub};line-height:1.6;margin-bottom:8px">そのままお待ちください。担当者がお迎えにあがります。</div>
+  <div style="font-size:30px;color:${T.sub};line-height:1.6;margin-bottom:8px">担当者がお迎えにあがります。そのままお待ちください。</div>
   ${staff ? `<div style="font-size:22px;color:${T.muted};margin-top:6px">ご担当：${escHtml(staff)}</div>` : ""}
   <div style="margin-top:54px;display:flex;align-items:center;gap:14px;color:${T.muted};font-size:18px">${ICO.clock}<span>待機画面に戻るまで</span><span id="ok-cnt" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${bc}">${count}</span><span>秒</span></div>
 </div>`;
@@ -1285,32 +1308,78 @@ function showResultOk(data) {
   });
 }
 
-// ─── RESULT: NG (スタッフが「只今対応できません」) ───────────────────────────
-// 担当者が対応できないため、来客を受付(内線)へ誘導する。自動でidleへ復帰。
-function showResultNg(data) {
+// ─── RESULT: PHONE (スタッフが「電話」= 対応不可) ────────────────────────────
+// 担当者が今は伺えないため、管理画面設定の電話番号へおかけいただくよう案内する。自動でidle復帰。
+function showResultPhone(data) {
   data = data || {};
-  const accent = T.urgent;         // #a84238 和モダンの朱
-  const accentBg = T.urgentBg;     // #f6e0dc
+  const bc = ST.brand_color;
   const vName = data.name || "";
+  const phone = (ST.kiosk_phone_number || "").trim();
   const logo = ST.logo_url ? `<img src="${escHtml(ST.logo_url)}" style="height:48px;object-fit:contain;margin-bottom:28px" alt="logo">` : "";
-  const returnSec = Math.max((ST.kiosk_complete_timeout_sec || 10) + 5, 15);
+  const returnSec = Math.max((ST.kiosk_complete_timeout_sec || 10) + 10, 20);
   let count = returnSec;
-  const infoIco = `<svg width="66" height="66" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16.5" x2="12.01" y2="16.5"/></svg>`;
+  const phoneIco = `<svg width="66" height="66" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>`;
+  const phoneBlock = phone
+    ? `<div style="font-size:32px;color:${T.sub};line-height:1.6;margin-bottom:20px">恐れ入りますが、下記までお電話くださいますよう<br>お願いいたします。</div>
+       <div style="display:inline-flex;align-items:center;gap:22px;background:${T.canvas};border:2px solid ${bc};border-radius:22px;padding:26px 52px"><span style="font-size:34px;color:${T.sub}">お電話番号</span><span style="font-size:72px;font-weight:700;color:${T.ink};font-family:'JetBrains Mono',monospace;letter-spacing:1px">${escHtml(phone)}</span></div>`
+    : `<div style="font-size:32px;color:${T.sub};line-height:1.6">恐れ入りますが、受付までお声がけ<br>くださいますようお願いいたします。</div>`;
   sc.innerHTML = `
 <div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;text-align:center;padding:0 160px">
-  <div style="width:150px;height:150px;border-radius:50%;background:${accentBg};color:${accent};display:flex;align-items:center;justify-content:center;margin-bottom:44px;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${infoIco}</div>
+  <div style="width:150px;height:150px;border-radius:50%;background:${bc}1a;color:${bc};display:flex;align-items:center;justify-content:center;margin-bottom:40px;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${phoneIco}</div>
   ${logo}
-  <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:20px;font-family:Inter,system-ui,sans-serif">PLEASE ASK AT RECEPTION</div>
-  <div style="font-size:76px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.12;margin-bottom:28px">只今ご対応が難しい状況です</div>
-  ${vName ? `<div style="font-size:34px;color:${T.sub};margin-bottom:14px">${escHtml(vName)} 様</div>` : ""}
-  <div style="font-size:32px;color:${T.sub};line-height:1.6">恐れ入りますが、受付（内線）へ<br>お声がけくださいますようお願いいたします。</div>
-  <div style="margin-top:54px;display:flex;align-items:center;gap:14px;color:${T.muted};font-size:18px">${ICO.clock}<span>待機画面に戻るまで</span><span id="ng-cnt" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${accent}">${count}</span><span>秒</span></div>
+  <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:20px;font-family:Inter,system-ui,sans-serif">PLEASE CALL</div>
+  <div style="font-size:72px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.1;margin-bottom:28px">お電話にてお呼び出しください</div>
+  ${vName ? `<div style="font-size:32px;color:${T.sub};margin-bottom:16px">${escHtml(vName)} 様</div>` : ""}
+  ${phoneBlock}
+  <div style="margin-top:50px;display:flex;align-items:center;gap:14px;color:${T.muted};font-size:18px">${ICO.clock}<span>待機画面に戻るまで</span><span id="ph-cnt" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${bc}">${count}</span><span>秒</span></div>
 </div>`;
   rescale();
   every(1000, () => {
     count--;
     if (count <= 0) { cleanup(); go("idle"); return; }
-    const c = document.getElementById("ng-cnt"); if (c) c.textContent = count;
+    const c = document.getElementById("ph-cnt"); if (c) c.textContent = count;
+  });
+}
+
+// ─── RESULT: DECLINE (スタッフが「お断り」= 営業・セールス) ──────────────────
+// 営業お断りの旨を伝え、問い合わせフォールのQRを案内する。自動でidle復帰。
+function showResultDecline(data) {
+  data = data || {};
+  const accent = T.urgent;         // #a84238 和モダンの朱
+  const accentBg = T.urgentBg;     // #f6e0dc
+  const qr = ST.inquiry_qr || null;
+  const url = (ST.inquiry_url || "").trim();
+  const returnSec = Math.max((ST.kiosk_complete_timeout_sec || 10) + 15, 25);
+  let count = returnSec;
+  const infoIco = `<svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16.5" x2="12.01" y2="16.5"/></svg>`;
+  const qrPanel = qr
+    ? `<div style="background:${T.canvas};border:2px solid ${T.border};border-radius:22px;padding:26px;display:flex;flex-direction:column;align-items:center;gap:14px">
+         <img src="${escHtml(qr)}" alt="問い合わせフォーム QR" style="width:340px;height:340px;background:#fff;border-radius:10px">
+         <div style="font-size:22px;font-weight:600;color:${T.ink}">お問い合わせフォーム</div>
+         <div style="font-size:17px;color:${T.muted}">スマートフォンで読み取ってください</div>
+       </div>`
+    : `<div style="background:${T.canvas};border:2px solid ${T.border};border-radius:22px;padding:40px;display:flex;flex-direction:column;align-items:center;gap:14px;max-width:520px">
+         <div style="font-size:22px;font-weight:600;color:${T.ink}">お問い合わせフォーム</div>
+         <div style="font-size:22px;color:${T.sub};word-break:break-all;text-align:center">${escHtml(url || "受付までお問い合わせください")}</div>
+       </div>`;
+  sc.innerHTML = `
+<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;padding:0 120px;justify-content:center">
+  <div style="display:grid;grid-template-columns:1.15fr 0.85fr;gap:64px;align-items:center">
+    <div>
+      <div style="width:110px;height:110px;border-radius:50%;background:${accentBg};color:${accent};display:flex;align-items:center;justify-content:center;margin-bottom:34px;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${infoIco}</div>
+      <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:18px;font-family:Inter,system-ui,sans-serif">NO SOLICITATION</div>
+      <div style="font-size:52px;font-weight:600;color:${T.ink};letter-spacing:-1.5px;line-height:1.3;margin-bottom:26px">営業・セールス等のご訪問は<br>ご遠慮いただいております。<br>ご理解・ご協力をお願いいたします。</div>
+      <div style="font-size:30px;color:${T.sub};line-height:1.6">お問い合わせフォームよりお願いいたします。<br>受付でのお取次ぎは行っておりません。</div>
+      <div style="margin-top:40px;display:flex;align-items:center;gap:14px;color:${T.muted};font-size:18px">${ICO.clock}<span>待機画面に戻るまで</span><span id="dc-cnt" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${accent}">${count}</span><span>秒</span></div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:center">${qrPanel}</div>
+  </div>
+</div>`;
+  rescale();
+  every(1000, () => {
+    count--;
+    if (count <= 0) { cleanup(); go("idle"); return; }
+    const c = document.getElementById("dc-cnt"); if (c) c.textContent = count;
   });
 }
 
