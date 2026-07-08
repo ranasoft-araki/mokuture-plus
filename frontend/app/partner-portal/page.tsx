@@ -75,8 +75,8 @@ export default function PartnerPortalPage() {
           )}
 
           <form onSubmit={submit}>
-            <LightField label="代理店ID" type="text" value={resellerId} onChange={setResellerId} hint="例：asahi-1042" icon="folder" />
-            <LightField label="パスワード" type="password" value={password} onChange={setPassword} icon="lock" />
+            <LightField label="代理店ID" type="text" value={resellerId} onChange={setResellerId} hint="例：asahi-1042" icon="folder" name="username" autoComplete="username" />
+            <LightField label="パスワード" type="password" value={password} onChange={setPassword} icon="lock" name="password" autoComplete="current-password" />
 
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4, marginBottom: 24 }}>
               <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#6b6559", cursor: "pointer" }}>
@@ -107,8 +107,8 @@ export default function PartnerPortalPage() {
   );
 }
 
-function LightField({ label, type, value, onChange, hint, icon }: {
-  label: string; type: string; value: string; onChange: (v: string) => void; hint?: string; icon?: string;
+function LightField({ label, type, value, onChange, hint, icon, name, autoComplete }: {
+  label: string; type: string; value: string; onChange: (v: string) => void; hint?: string; icon?: string; name?: string; autoComplete?: string;
 }) {
   return (
     <div style={{ marginBottom: 18 }}>
@@ -121,6 +121,9 @@ function LightField({ label, type, value, onChange, hint, icon }: {
         {icon === "folder" && <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#a8a198" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>}
         <input
           type={type}
+          name={name}
+          id={name}
+          autoComplete={autoComplete}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           required

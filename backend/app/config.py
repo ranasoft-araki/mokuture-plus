@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "change-me-in-production-use-256bit-random"
     jwt_algorithm: str = "HS256"
     jwt_access_expire_minutes: int = 15
-    jwt_refresh_expire_days: int = 7
+    jwt_refresh_expire_days: int = 30  # 「ログイン状態を保持」= localStorage の refresh token でこの期間ログインを維持
 
     # Cloudflare R2 / MinIO (S3-compatible)
     storage_endpoint_url: str = "http://localhost:9000"

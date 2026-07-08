@@ -339,6 +339,80 @@ function DecisionButtons({ log, token, onUpdate }: { log: ReceptionLog; token: s
   );
 }
 
+// 通知タップ経由の「対応」モーダル。特定の受付に対して大きな 受付/電話/お断り ボタンを直接押せる。
+// 通知アクション非対応端末(iOS PWA 等)や、通知本体タップからの主要導線。QR予約は お断り を出さず2択。
+function RespondModal({ log, token, onClose, onUpdate }: { log: ReceptionLog; token: string; onClose: () => void; onUpdate: (id: string, state: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const state = log.state ?? "received";
+  const alreadyDecided = state !== "received" && state !== "notified";
+  const isAppointment = log.method === "appointment";
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  const d = new Date(log.created_at);
+  const timeStr = d.toLocaleString("ja-JP", { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  const decide = (decision: "accept" | "phone" | "decline", nextState: string, label: string) => () => {
+    setBusy(true);
+    api.decideReception(token, log.id, decision)
+      .then(() => { onUpdate(log.id, nextState); setDone(label); })
+      .catch(() => setBusy(false));
+  };
+
+  const bigBtn: React.CSSProperties = { flex: 1, border: "none", borderRadius: 14, padding: "22px 12px", color: "#fff", cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 };
+  const closeBtn: React.CSSProperties = { marginTop: 20, width: "100%", padding: "14px", borderRadius: 12, background: "#1d1a15", color: "#fffefb", border: "none", fontSize: 15, fontWeight: 600, cursor: "pointer" };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fffefb", borderRadius: 20, padding: 28, width: 460, maxWidth: "94vw", boxShadow: "0 24px 70px rgba(0,0,0,0.25)" }}>
+        <div style={{ fontSize: 11, color: "#a8a198", letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: 6 }}>受付対応</div>
+        <div style={{ fontSize: 26, fontWeight: 700, color: "#1d1a15" }}>{log.visitor_name} <span style={{ fontSize: 18, fontWeight: 500 }}>様</span></div>
+        <div style={{ fontSize: 14, color: "#6b6559", marginTop: 4 }}>{log.company || "—"}{log.purpose ? ` ・ ${log.purpose}` : ""}</div>
+        <div style={{ fontSize: 12, color: "#a8a198", marginTop: 4 }}>{timeStr} 受付</div>
+
+        {done ? (
+          <div style={{ marginTop: 24, textAlign: "center" }}>
+            <div style={{ fontSize: 40, marginBottom: 8, color: "#059669" }}>✓</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#1d1a15" }}>「{done}」で応答しました</div>
+            <div style={{ fontSize: 13, color: "#6b6559", marginTop: 4 }}>キオスク画面に反映されます</div>
+            <button onClick={onClose} style={closeBtn}>閉じる</button>
+          </div>
+        ) : alreadyDecided ? (
+          <div style={{ marginTop: 24, textAlign: "center" }}>
+            <div style={{ fontSize: 14, color: "#6b6559" }}>この受付は既に対応済みです（{STATUS_LABEL[state] ?? state}）</div>
+            <button onClick={onClose} style={closeBtn}>閉じる</button>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
+              <button type="button" disabled={busy} onClick={decide("accept", "accepted", "受付")} style={{ ...bigBtn, backgroundColor: "#059669" }}>
+                <span style={{ fontSize: 22, fontWeight: 700 }}>受付</span>
+                <span style={{ fontSize: 12, fontWeight: 500, opacity: 0.9 }}>すぐ伺います</span>
+              </button>
+              <button type="button" disabled={busy} onClick={decide("phone", "phone", "電話")} style={{ ...bigBtn, backgroundColor: "#0ea5e9" }}>
+                <span style={{ fontSize: 22, fontWeight: 700 }}>電話</span>
+                <span style={{ fontSize: 12, fontWeight: 500, opacity: 0.9 }}>電話番号を案内</span>
+              </button>
+              {!isAppointment && (
+                <button type="button" disabled={busy} onClick={decide("decline", "declined", "お断り")} style={{ ...bigBtn, backgroundColor: "#ef4444" }}>
+                  <span style={{ fontSize: 22, fontWeight: 700 }}>お断り</span>
+                  <span style={{ fontSize: 12, fontWeight: 500, opacity: 0.9 }}>フォーム案内</span>
+                </button>
+              )}
+            </div>
+            <button onClick={onClose} style={{ marginTop: 14, width: "100%", padding: "12px", borderRadius: 12, background: "transparent", color: "#6b6559", border: "1px solid #d8d3c7", fontSize: 14, cursor: "pointer" }}>あとで対応する</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ReceptionLogsPage() {
   const router = useRouter();
   const [logs, setLogs] = useState<ReceptionLog[]>([]);
@@ -355,6 +429,7 @@ export default function ReceptionLogsPage() {
   const [modal, setModal] = useState<{ msg: string; confirmLabel?: string; action: () => Promise<void> } | null>(null);
   const [methodFilter, setMethodFilter] = useState("");
   const [stateFilter, setStateFilter] = useState("");
+  const [respondId, setRespondId] = useState<string | null>(null);
 
   useEffect(() => {
     const t = getAccessToken();
@@ -366,6 +441,34 @@ export default function ReceptionLogsPage() {
       .finally(() => setLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // プッシュ通知タップ経由で対応モーダルを開く。
+  // ・新規に開かれた場合 → URL の ?respond=<id> を読む
+  // ・既に画面が開いている場合 → Service Worker からの postMessage(FOCUS_RECEPTION) を受ける
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const rid = params.get("respond");
+    if (rid) {
+      setRespondId(rid);
+      window.history.replaceState(null, "", window.location.pathname); // クエリを消して履歴を汚さない
+    }
+    const onMsg = (e: MessageEvent) => {
+      if (e.data?.type === "FOCUS_RECEPTION" && e.data.logId) setRespondId(e.data.logId);
+    };
+    navigator.serviceWorker?.addEventListener("message", onMsg);
+    return () => navigator.serviceWorker?.removeEventListener("message", onMsg);
+  }, []);
+
+  // 通知直後は一覧が古い可能性があるため、対象が手元に無ければ即時リフレッシュ
+  useEffect(() => {
+    if (!respondId || !token) return;
+    if (!logs.some((l) => l.id === respondId)) {
+      api.listReception(token)
+        .then((data) => { setLogs(data); setLastRefreshed(new Date()); })
+        .catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [respondId, token]);
 
   useEffect(() => {
     if (!autoRefresh || !token) return;
@@ -459,6 +562,11 @@ export default function ReceptionLogsPage() {
     return list;
   }, [logs, dateFilter, search, methodFilter, stateFilter]);
 
+  const respondLog = useMemo(
+    () => (respondId ? logs.find((l) => l.id === respondId) ?? null : null),
+    [respondId, logs],
+  );
+
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
@@ -537,6 +645,9 @@ export default function ReceptionLogsPage() {
       <style>{`@keyframes mk-pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
       {selectedLog && (
         <ReceptionDetailModal log={selectedLog} token={token} onClose={() => setSelectedLog(null)} onNotesUpdate={handleNotesUpdate} />
+      )}
+      {respondLog && (
+        <RespondModal log={respondLog} token={token} onClose={() => setRespondId(null)} onUpdate={handleStateUpdate} />
       )}
 
       <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap", justifyContent: "space-between" }}>

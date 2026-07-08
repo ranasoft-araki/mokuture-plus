@@ -69,7 +69,9 @@ def build_decision_push_extras(tenant_id: str, log: ReceptionLog) -> tuple[dict,
     token = create_decision_token(log.id, tenant_id)
     data = {
         "kind": "reception_decision",
-        "url": f"/{tenant_id}/admin/reception",
+        # 通知本体タップ時の遷移先。?respond=<id> を付けて受付ログ画面で該当受付の
+        # 対応モーダル(受付/電話/お断り)を直接開かせる。iOS PWA など通知アクション非対応端末の主経路。
+        "url": f"/{tenant_id}/admin/reception?respond={log.id}",
         "logId": log.id,
         "decisionToken": token,
         "decisionEndpoint": f"{settings.public_api_url}/reception/decision",

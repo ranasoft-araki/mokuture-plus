@@ -74,8 +74,8 @@ export default function OpsConsolePage() {
         )}
 
         <form onSubmit={submit}>
-          <DarkField label="メールアドレス" type="email" value={email} onChange={setEmail} />
-          <DarkField label="パスワード" type="password" value={password} onChange={setPassword} />
+          <DarkField label="メールアドレス" type="email" value={email} onChange={setEmail} name="email" autoComplete="username" />
+          <DarkField label="パスワード" type="password" value={password} onChange={setPassword} name="password" autoComplete="current-password" />
 
           <button
             type="submit"
@@ -100,12 +100,15 @@ export default function OpsConsolePage() {
   );
 }
 
-function DarkField({ label, type, value, onChange }: { label: string; type: string; value: string; onChange: (v: string) => void }) {
+function DarkField({ label, type, value, onChange, name, autoComplete }: { label: string; type: string; value: string; onChange: (v: string) => void; name?: string; autoComplete?: string }) {
   return (
     <div style={{ marginBottom: 18 }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.7)", letterSpacing: 0.4, marginBottom: 8 }}>{label}</div>
       <input
         type={type}
+        name={name}
+        id={name}
+        autoComplete={autoComplete}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         required

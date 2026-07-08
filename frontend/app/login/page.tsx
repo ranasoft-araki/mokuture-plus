@@ -13,7 +13,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [tab, setTab] = useState<"login" | "register">("login");
   const [form, setForm] = useState({ email: "", password: "", tenant_name: "", tenant_slug: "" });
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -96,8 +96,8 @@ export default function LoginPage() {
                 <LightField label="テナントID（URLに使用）" type="text" value={form.tenant_slug} onChange={(v) => handle("tenant_slug", v.toLowerCase())} hint="isonoki（小文字英数字）" />
               </>
             )}
-            <LightField label="メールアドレス" type="email" value={form.email} onChange={(v) => handle("email", v)} icon="user" />
-            <LightField label="パスワード" type="password" value={form.password} onChange={(v) => handle("password", v)} icon="lock" />
+            <LightField label="メールアドレス" type="email" value={form.email} onChange={(v) => handle("email", v)} icon="user" name="email" autoComplete="username" />
+            <LightField label="パスワード" type="password" value={form.password} onChange={(v) => handle("password", v)} icon="lock" name="password" autoComplete={tab === "login" ? "current-password" : "new-password"} />
 
             {tab === "login" && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
@@ -132,8 +132,8 @@ export default function LoginPage() {
   );
 }
 
-function LightField({ label, type, value, onChange, hint, icon }: {
-  label: string; type: string; value: string; onChange: (v: string) => void; hint?: string; icon?: string;
+function LightField({ label, type, value, onChange, hint, icon, name, autoComplete }: {
+  label: string; type: string; value: string; onChange: (v: string) => void; hint?: string; icon?: string; name?: string; autoComplete?: string;
 }) {
   return (
     <div style={{ marginBottom: 18 }}>
@@ -146,6 +146,9 @@ function LightField({ label, type, value, onChange, hint, icon }: {
         {icon === "user" && <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#a8a198" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>}
         <input
           type={type}
+          name={name}
+          id={name}
+          autoComplete={autoComplete}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           required
