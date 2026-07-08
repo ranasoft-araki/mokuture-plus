@@ -863,11 +863,14 @@ function showDelivery() {
   }
 
   async function openForDelivery() {
-    await pulseLocker(sel.door_number);
+    // 開錠パルス(GPIO)は待たずに即「扉が開きました」へ。await すると開錠パルス長(LOCKER_PULSE_SEC)
+    // が経過するまで画面が固まる。通常ロッカーの openEmpty と挙動を揃える。
+    pulseLocker(sel.door_number).catch(() => {});
     view = "openwait"; render();
   }
   async function lockDelivery() {
     view = "sending"; render();
+    await forceLockLocker(sel.door_number);   // 物理施錠(通常ロッカーの「扉を閉めました」と同経路)
     try {
       await apiPost(`/proxy/lockers/${encodeURIComponent(sel.id)}/occupy-delivery`, {}, token);
       resultTitle = "お預け完了"; resultSub = "施錠しました。担当者がお受け取りします（暗証番号は不要です）。";
@@ -1649,23 +1652,36 @@ function showKioskSettings() {
     micRAF = requestAnimationFrame(micLoop);
   }
 
+  // 楽観的にリレー表示だけ即更新する（/device/status の1.2sポーリングだと約1秒の開錠パルスON窓を
+  // 取り逃し「一瞬しかON表示にならない/ラグる」ため、押下時にUI側で確実にONを見せる）。
+  function showRelayState(id, on) {
+    if (!dcStatus) return;
+    const relays = (dcStatus.relays || dcStatus.lockers || []).map(r =>
+      String(r.locker_id) === String(id) ? Object.assign({}, r, { on }) : r);
+    const rl = document.getElementById("dc-relaylist");
+    if (rl) rl.innerHTML = relays.map(relayRowHTML).join('');
+  }
+  const RELAY_PULSE_MS = 1000;  // agent /pulse の開錠パルス長(=1.0s)に合わせる
+
   async function handleRelay(id, action) {
-    document.querySelectorAll(`[data-relay-id="${id}"]`).forEach(x => { x.style.pointerEvents = "none"; });
+    if (action === "pulse") {
+      // 開錠テスト: 押下と同時にON表示 → パルス長経過でOFF表示。実リレーも同区間ONになる。
+      // pulseエンドポイントはパルス完了までブロックするため、fetch は待たずに投げる。
+      showRelayState(id, true);
+      fetch(`/device/locker/${encodeURIComponent(id)}/pulse`, { method: "POST" }).catch(() => {});
+      setTimeout(() => { showRelayState(id, false); pollDeviceStatus(); }, RELAY_PULSE_MS + 250);
+      return;
+    }
+    // トグル(維持): 楽観更新 → 実反映 → ポーリングで整合
     try {
-      if (action === "pulse") {
-        await fetch(`/device/locker/${encodeURIComponent(id)}/pulse`, { method: "POST" });
-      } else {
-        const cur = ((dcStatus && (dcStatus.relays || dcStatus.lockers)) || []).find(r => String(r.locker_id) === String(id));
-        const next = !(cur && cur.on);
-        await fetch(`/device/locker/${encodeURIComponent(id)}/state`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on: next }),
-        });
-      }
+      const cur = ((dcStatus && (dcStatus.relays || dcStatus.lockers)) || []).find(r => String(r.locker_id) === String(id));
+      const next = !(cur && cur.on);
+      showRelayState(id, next);
+      await fetch(`/device/locker/${encodeURIComponent(id)}/state`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on: next }),
+      });
       await pollDeviceStatus();
     } catch (e) { /* 失敗時は次のポーリングで整合 */ }
-    finally {
-      document.querySelectorAll(`[data-relay-id="${id}"]`).forEach(x => { x.style.pointerEvents = ""; });
-    }
   }
 
   function mountDeviceCheck() {
