@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { saveTokens } from "@/lib/auth";
 
@@ -10,7 +9,6 @@ const FONT_JP = '"Noto Sans JP", "Inter", system-ui, sans-serif';
 const FONT_MONO = '"JetBrains Mono", "SF Mono", ui-monospace, monospace';
 
 export default function PartnerPortalPage() {
-  const router = useRouter();
   const [resellerId, setResellerId] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
@@ -24,10 +22,11 @@ export default function PartnerPortalPage() {
     try {
       const tokens = await api.resellerLogin(resellerId, password);
       saveTokens(tokens.access_token, tokens.refresh_token, tokens.role, rememberMe);
+      // iOS Safari/PWA にパスワード保存を促すため、SPA遷移ではなく実ナビゲーションで遷移する
       if (tokens.role === "reseller") {
-        router.push(`/${tokens.tenant_slug}/reseller`);
+        window.location.assign(`/${tokens.tenant_slug}/reseller`);
       } else {
-        router.push("/partner-portal");
+        window.location.assign("/partner-portal");
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "エラーが発生しました");

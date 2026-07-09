@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { saveTokens } from "@/lib/auth";
 
@@ -10,7 +9,6 @@ const FONT_JP = '"Noto Sans JP", "Inter", system-ui, sans-serif';
 const FONT_MONO = '"JetBrains Mono", "SF Mono", ui-monospace, monospace';
 
 export default function OpsConsolePage() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -23,10 +21,11 @@ export default function OpsConsolePage() {
     try {
       const tokens = await api.operatorLogin(email, password);
       saveTokens(tokens.access_token, tokens.refresh_token, tokens.role, true);
+      // iOS Safari/PWA にパスワード保存を促すため、SPA遷移ではなく実ナビゲーションで遷移する
       if (tokens.role === "operator") {
-        router.push("/operator");
+        window.location.assign("/operator");
       } else {
-        router.push("/ops-console");
+        window.location.assign("/ops-console");
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "エラーが発生しました");
