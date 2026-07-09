@@ -38,7 +38,7 @@ from app.services.slack import SlackNotifier
 from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
 from app.services.webpush import send_push
-from app.services.auth import hash_password, verify_password
+from app.services.auth import hash_password, verify_password, create_decision_token
 from app.config import settings
 
 _PIN_RE = re.compile(r"^\d{4}$")
@@ -812,7 +812,14 @@ async def _notify_slack(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> 
             host_name=log.staff,
             when=log.created_at,
         )
-        ok = await SlackNotifier.send_to_config(config, msg)
+        # 署名シークレット設定時のみ、受付/電話/お断りの対応ボタン(Block Kit)を付ける。
+        # Bot Token 経路のときだけ(webhook はインタラクション不可)。押下は署名トークンで検証。
+        blocks = None
+        if settings.slack_signing_secret and config.get("bot_access_token") and config.get("channel_id"):
+            from app.api.reception import decision_actions
+            token = create_decision_token(log.id, tenant_id)
+            blocks = SlackNotifier.build_reception_blocks(msg, decision_actions(log), token)
+        ok = await SlackNotifier.send_to_config(config, msg, blocks=blocks)
         if not ok:
             # 受付は失敗させない(best-effort)。エラーは残すが Bot Token/Webhook URL は絶対に出さない。
             logger.warning("Slack reception notification failed (tenant=%s, reception=%s)", tenant_id, log.id)

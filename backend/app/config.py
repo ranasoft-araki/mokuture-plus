@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     slack_client_id: str = ""
     slack_client_secret: str = ""
     slack_redirect_uri: str = ""
+    # Slack Interactivity (受付通知の 受付/電話/お断り ボタン). 設定時のみボタンを出し押下を受け付ける。
+    # Slack App の Interactivity Request URL に <API>/notifications/slack/interactions を登録し、
+    # 各リクエストをこの署名シークレットで検証する。未設定ならボタン無し(従来のテキスト通知)。
+    slack_signing_secret: str = ""
 
     @property
     def slack_oauth_enabled(self) -> bool:

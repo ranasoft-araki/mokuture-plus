@@ -62,12 +62,22 @@ async def _apply_decision(db: AsyncSession, log: ReceptionLog, decision: str) ->
     return log.state
 
 
+def decision_actions(log: ReceptionLog) -> list[dict]:
+    """受付応答ボタンの選択肢 [{action,title}]。QR予約(method=="appointment")は
+    お断り を出さず 受付/電話 の2択。Web Push と Slack で共用する。"""
+    actions = [
+        {"action": "accept", "title": DECISION_ACCEPT_LABEL},
+        {"action": "phone", "title": DECISION_PHONE_LABEL},
+    ]
+    if (log.method or "") != "appointment":
+        actions.append({"action": "decline", "title": DECISION_DECLINE_LABEL})
+    return actions
+
+
 def build_decision_push_extras(tenant_id: str, log: ReceptionLog) -> tuple[dict, list]:
     """(data, actions) to attach to the reception push so staff can answer
     受付/電話/お断り from the notification itself. The token lets the Service Worker
-    post the decision without a login (see auth.create_decision_token).
-
-    QR予約(method=="appointment")は お断り を出さず 受付/電話 の2択。"""
+    post the decision without a login (see auth.create_decision_token)."""
     token = create_decision_token(log.id, tenant_id)
     data = {
         "kind": "reception_decision",
@@ -78,13 +88,7 @@ def build_decision_push_extras(tenant_id: str, log: ReceptionLog) -> tuple[dict,
         "decisionToken": token,
         "decisionEndpoint": f"{settings.public_api_url}/reception/decision",
     }
-    actions = [
-        {"action": "accept", "title": DECISION_ACCEPT_LABEL},
-        {"action": "phone", "title": DECISION_PHONE_LABEL},
-    ]
-    if (log.method or "") != "appointment":
-        actions.append({"action": "decline", "title": DECISION_DECLINE_LABEL})
-    return data, actions
+    return data, decision_actions(log)
 
 
 class ReceptionCreate(BaseModel):

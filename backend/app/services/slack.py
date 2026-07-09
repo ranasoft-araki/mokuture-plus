@@ -221,40 +221,69 @@ class SlackNotifier:
 
     # ── Messaging ──────────────────────────────────────────────────────────────
     @staticmethod
-    async def post_message(token: str, channel_id: str, text: str) -> bool:
-        """Send `text` to `channel_id` via chat.postMessage. Best-effort → returns bool.
+    async def post_message(token: str, channel_id: str, text: str, blocks: list | None = None) -> bool:
+        """Send `text` (+ optional Block Kit `blocks`) to `channel_id` via chat.postMessage.
+        Best-effort → returns bool. `text` はブロック使用時も通知/フォールバック用に必須。
 
         If the bot isn't in a public channel yet (not_in_channel), it joins and retries
         once. Never raises (callers treat Slack as best-effort)."""
         if not token or not channel_id:
             return False
+        body = {"channel": channel_id, "text": text}
+        if blocks:
+            body["blocks"] = blocks
         try:
-            data = await _slack_post(token, "chat.postMessage", {"channel": channel_id, "text": text})
+            data = await _slack_post(token, "chat.postMessage", body)
             if data.get("ok"):
                 return True
             if data.get("error") == "not_in_channel":
                 if await SlackNotifier.join_channel(token, channel_id):
-                    retry = await _slack_post(token, "chat.postMessage", {"channel": channel_id, "text": text})
+                    retry = await _slack_post(token, "chat.postMessage", body)
                     return bool(retry.get("ok"))
             return False
         except SlackApiError:
             return False
 
     @staticmethod
-    async def send_to_config(config: dict, text: str) -> bool:
-        """Send `text` to whatever destination a stored Slack config describes.
+    async def send_to_config(config: dict, text: str, blocks: list | None = None) -> bool:
+        """Send `text` (+ optional interactive `blocks`) to a stored Slack config's destination.
 
         Prefers the Bot Token path ({bot_access_token, channel_id}); falls back to a
         legacy Incoming Webhook ({webhook_url}) so pre-existing webhook destinations
-        (e.g. slack_delivery) keep working. Best-effort → returns bool."""
+        (e.g. slack_delivery) keep working. Webhook はボタン非対応のため text のみ送る。
+        Best-effort → returns bool."""
         token = config.get("bot_access_token") or ""
         channel_id = config.get("channel_id") or ""
         if token and channel_id:
-            return await SlackNotifier.post_message(token, channel_id, text)
+            return await SlackNotifier.post_message(token, channel_id, text, blocks=blocks)
         webhook_url = config.get("webhook_url") or ""
         if webhook_url:
             return await send_slack_notification(webhook_url, text)
         return False
+
+    @staticmethod
+    def build_reception_blocks(text: str, actions: list[dict], token: str) -> list[dict]:
+        """受付通知の Block Kit(本文 + 受付/電話/お断り ボタン)を組み立てる。
+        `text`=build_reception_message の本文, `actions`=[{action,title}],
+        `token`=決定署名トークン(create_decision_token)。押下は各ボタンの value に
+        `"{action}|{token}"` として運び、interactions エンドポイントで検証・適用する。"""
+        style = {"accept": "primary", "decline": "danger"}
+        buttons = []
+        for a in actions:
+            act = a["action"]
+            btn = {
+                "type": "button",
+                "text": {"type": "plain_text", "text": a["title"], "emoji": True},
+                "action_id": f"reception_decision_{act}",
+                "value": f"{act}|{token}",
+            }
+            if act in style:
+                btn["style"] = style[act]
+            buttons.append(btn)
+        return [
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+            {"type": "actions", "elements": buttons},
+        ]
 
     @staticmethod
     def public_config(config: dict) -> dict:

@@ -1,6 +1,11 @@
+import hashlib
+import hmac
+import json
+import time
 from datetime import datetime, timezone
+from urllib.parse import parse_qs
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from jose import JWTError
 from pydantic import BaseModel
@@ -491,3 +496,103 @@ async def slack_callback(
     # Overwrite any existing Slack link (再連携 = 上書き, 作業指示 §3).
     await _upsert_setting(tenant_id, "slack", config, db)
     return _slack_redirect(slug, "connected")
+
+
+def _verify_slack_signature(raw: bytes, timestamp: str, signature: str) -> bool:
+    """Slack の署名検証(v0)。`v0:{ts}:{raw}` を signing secret で HMAC-SHA256 し比較。
+    5分より古いリクエストはリプレイ防止で拒否。"""
+    secret = settings.slack_signing_secret
+    if not secret or not timestamp or not signature:
+        return False
+    try:
+        if abs(time.time() - int(timestamp)) > 60 * 5:
+            return False
+    except ValueError:
+        return False
+    base = b"v0:" + timestamp.encode() + b":" + raw
+    expected = "v0=" + hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+_DECISION_JP = {"accepted": "受付", "phone": "電話", "declined": "お断り"}
+
+
+async def _post_slack_response_url(url: str, body: dict) -> None:
+    """response_url へメッセージ更新をbest-effort送信(30分/5回有効)。失敗しても無視。"""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(url, json=body)
+    except Exception:
+        pass
+
+
+@router.post("/slack/interactions")
+async def slack_interactions(
+    request: Request,
+    background: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Slack の受付通知ボタン(受付/電話/お断り)押下の受け口。未認証だが署名検証で真正性を担保。
+
+    ボタンの value に載る署名トークン(create_decision_token)で受付ログ→テナントを特定し、
+    _apply_decision(冪等)で state を更新。元メッセージを response_url 経由で「対応済み」に
+    置き換える(ボタン除去)。Slack App の Interactivity Request URL に本エンドポイントを登録する。"""
+    if not settings.slack_signing_secret:
+        raise HTTPException(status_code=404, detail="Slack interactivity disabled")
+    raw = await request.body()
+    if not _verify_slack_signature(
+        raw,
+        request.headers.get("X-Slack-Request-Timestamp", ""),
+        request.headers.get("X-Slack-Signature", ""),
+    ):
+        raise HTTPException(status_code=401, detail="invalid signature")
+
+    form = parse_qs(raw.decode("utf-8"))
+    try:
+        payload = json.loads(form.get("payload", ["{}"])[0])
+    except (ValueError, IndexError):
+        raise HTTPException(status_code=400, detail="bad payload")
+
+    actions = payload.get("actions") or []
+    if not actions:
+        return {}
+    decision, _, token = (actions[0].get("value") or "").partition("|")
+
+    # 遅延 import で循環参照を避ける（reception は auth/models のみ依存、notifications は未参照）。
+    from app.api.reception import _apply_decision
+    from app.services.auth import decode_token
+    from app.models.reception import ReceptionLog
+
+    try:
+        tok = decode_token(token)
+    except JWTError:
+        return {"text": "リンクが無効か期限切れです。管理画面「受付ログ」から対応してください。"}
+    if tok.get("type") != "decision":
+        return {"text": "無効なトークンです。"}
+    log_id = tok.get("sub")
+    tenant_id = tok.get("tenant_id")
+    res = await db.execute(select(ReceptionLog).where(ReceptionLog.id == log_id))
+    log = res.scalar_one_or_none()
+    if not log or log.tenant_id != tenant_id:
+        return {"text": "対象の受付が見つかりません。"}
+
+    state = await _apply_decision(db, log, decision)
+
+    # 元メッセージを「対応済み」に置換（ボタン除去）。押した人も添える。response_url は30分/5回有効。
+    label = _DECISION_JP.get(state, state)
+    who = (payload.get("user") or {}).get("username") or (payload.get("user") or {}).get("name") or ""
+    orig_text = (payload.get("message") or {}).get("text") or "来客の受付"
+    ctx = f"✅ 対応済み：*{label}*" + (f"（{who}）" if who else "")
+    updated = {
+        "replace_original": True,
+        "text": orig_text,
+        "blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": orig_text}},
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": ctx}]},
+        ],
+    }
+    # Slack は3秒以内の応答を要求。response_url 更新は背後で送り、即200を返す。
+    response_url = payload.get("response_url")
+    if response_url:
+        background.add_task(_post_slack_response_url, response_url, updated)
+    return {}
