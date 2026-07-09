@@ -368,6 +368,7 @@ mokuture/
 | GET | /notifications/slack/channels | JWT | 通知先候補チャンネル一覧 `{channels:[{id,name,is_private,is_member}]}`(`conversations.list`, 公開=channels:read/非公開=groups:read)。管理画面のチャンネル選択用 |
 | POST | /notifications/slack/channel | JWT | 通知先チャンネル確定 `{channel_id}`。`conversations.info`で名称取得＋公開ch未参加なら`conversations.join`→`{channel_id, channel_name}`保存→`{ok, channel_name}` |
 | POST | /notifications/slack/disconnect | JWT | Slack連携解除(type=slack の row 削除。Bot Token 破棄) |
+| POST | /notifications/slack/interactions | なし(署名検証) | **受付通知の対応ボタン(受付/電話/お断り)押下の受け口**。Slack が Block Kit ボタン押下時にPOSTする。`X-Slack-Signature`(v0, `SLACK_SIGNING_SECRET`)＋5分リプレイ防止で検証→ボタン`value`の署名トークン(`create_decision_token`)で受付ログ→テナント特定→`_apply_decision`(冪等)→`response_url`で元メッセージを「対応済み」に置換(ボタン除去)、即200。`SLACK_SIGNING_SECRET`未設定時は404 |
 | GET/POST | /lockers | JWT | ロッカー管理 (name 永続化, occupied/has_pin 返却) |
 | GET | /kiosk/lockers | デバイストークン | ロッカー一覧 `{lockers:[{id,name,door_number,occupied,has_pin}], available_count}`。**ローカルファースト化後は agent の台帳同期用**（占有/PINはミラーで反映された表示値）。キオスクUIは代わりに agent の `GET /device/locker-list` を使う |
 | POST | /kiosk/lockers/{id}/occupy | デバイストークン | 空き→PIN設定 `{pin:4桁}`→`{ok}`。409/422。**後方互換で残置**（現行キオスクは agent `POST /device/locker/{id}/occupy` を使い、PINは端末ローカルで管理） |
@@ -510,6 +511,13 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - **受付通知文面**(`SlackNotifier.build_reception_message`): `:bell: 来客がありました` + 会社名/お名前 様/訪問先/時刻(JST)。会社名・訪問先は空なら行を省略（最低=お名前+時刻）。
 - **Slack App設定**: OAuth&Permissions に `SLACK_REDIRECT_URI` を Redirect URL 登録、Bot Token Scopes に `chat:write`/`channels:read`/`groups:read`/`channels:join`。非公開チャンネルへ通知するには事前に Slack で Bot をそのチャンネルへ招待。連携解除(`POST /notifications/slack/disconnect`)は自テナントの設定削除のみ（Slack側App削除まではPhase1では必須にしない）。
 
+### Slack 受付通知の対応ボタン（Block Kit + Interactivity）
+受付通知(`_notify_slack`)を **Block Kit 化**し、Slack メッセージ内の 受付/電話/お断り ボタンでスタッフが応答できる。Web Push・管理画面「受付ログ」と同じ `_apply_decision`(冪等)に集約。
+- **有効化条件**: `SLACK_SIGNING_SECRET`(env) が設定され、かつ Bot Token 経路(`bot_access_token`+`channel_id`)のとき**のみ**ボタンを付ける。未設定なら従来のテキスト通知（後方互換・無効化）。Webhook 経路はインタラクション不可のため text のみ。
+- **送信**: `SlackNotifier.build_reception_blocks(text, actions, token)` が本文セクション＋`actions`ブロック(ボタン)を生成。ボタン `value` に `"{action}|{token}"`(token=`create_decision_token`)。ボタンの選択肢は `reception.decision_actions(log)`（QR予約=受付/電話の2択、非QR=3択、push と共用）。受付=primary/お断り=danger。
+- **押下受け口**: `POST /api/notifications/slack/interactions`（未認証）。`_verify_slack_signature`(v0 HMAC-SHA256, `SLACK_SIGNING_SECRET`, 5分リプレイ防止)→`value`の署名トークン検証→`ReceptionLog`特定(テナント越境不可)→`_apply_decision`→`response_url` で元メッセージを「✅ 対応済み：受付/電話/お断り（押した人）」に置換(ボタン除去)。**Slackの3秒制限のため response_url 更新は `BackgroundTasks` で背後送信し即200**。
+- **必要な手動設定**: ① Render env に `SLACK_SIGNING_SECRET`(Slack App の Basic Information → Signing Secret) を設定。② Slack App → **Interactivity & Shortcuts を ON**、Request URL に `https://mokuture-plus-api.onrender.com/api/notifications/slack/interactions` を登録。追加スコープ不要(既存 `chat:write` で更新可)。
+
 ### DB マイグレーション
 - Alembic 未導入のため、カラム追加は Neon Console または `mcp__Neon__run_sql` で手動 `ALTER TABLE`。
 - SQLAlchemy モデルと DB スキーマを常に同期すること。
@@ -535,6 +543,11 @@ STORAGE_PUBLIC_URL=...
 SLACK_CLIENT_ID=...
 SLACK_CLIENT_SECRET=...
 SLACK_REDIRECT_URI=https://mokuture-plus-api.onrender.com/api/notifications/slack/callback
+
+# Slack 受付通知の対応ボタン(Interactivity)。Slack App の Basic Information → Signing Secret。
+# 設定時のみ 受付/電話/お断り ボタンを付け、押下(/notifications/slack/interactions)を署名検証する。
+# 未設定ならボタン無し(従来のテキスト通知)。Slack App 側で Interactivity Request URL の登録も必要。
+SLACK_SIGNING_SECRET=...
 ```
 
 ### Frontend (.env.local)

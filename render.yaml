@@ -33,3 +33,6 @@ services:
         sync: false
       - key: SLACK_REDIRECT_URI
         sync: false
+      # Slack Interactivity（受付通知の対応ボタン）の署名検証用。未設定ならボタン無し。
+      - key: SLACK_SIGNING_SECRET
+        sync: false
