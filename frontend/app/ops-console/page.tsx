@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { saveTokens } from "@/lib/auth";
+import { saveTokens, getHomeUrl, rememberLoginId, getSavedLoginId } from "@/lib/auth";
 
 const FONT_UI = '"Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
 const FONT_JP = '"Noto Sans JP", "Inter", system-ui, sans-serif';
@@ -13,6 +13,18 @@ export default function OpsConsolePage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  // ログイン済みなら開いた瞬間に運営画面へ。未ログインなら記憶したIDを補完してフォーム表示。
+  useEffect(() => {
+    const home = getHomeUrl();
+    if (home) { window.location.assign(home); return; }
+    const saved = getSavedLoginId("ops");
+    // マウント後のクライアント専用初期化（ログイン済み判定・記憶したIDの補完・フォーム表示）
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (saved) setEmail(saved);
+    setReady(true);
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,7 +32,8 @@ export default function OpsConsolePage() {
     setLoading(true);
     try {
       const tokens = await api.operatorLogin(email, password);
-      saveTokens(tokens.access_token, tokens.refresh_token, tokens.role, true);
+      saveTokens(tokens.access_token, tokens.refresh_token, tokens.role, true, tokens.tenant_slug);
+      rememberLoginId("ops", email);
       // iOS Safari/PWA にパスワード保存を促すため、SPA遷移ではなく実ナビゲーションで遷移する
       if (tokens.role === "operator") {
         window.location.assign("/operator");
@@ -33,6 +46,8 @@ export default function OpsConsolePage() {
       setLoading(false);
     }
   };
+
+  if (!ready) return <div style={{ width: "100vw", height: "100vh", background: "#0e0c08" }} />;
 
   return (
     <div style={{

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { saveTokens } from "@/lib/auth";
+import { saveTokens, getHomeUrl, rememberLoginId, getSavedLoginId } from "@/lib/auth";
 
 const FONT_UI = '"Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
 const FONT_JP = '"Noto Sans JP", "Inter", system-ui, sans-serif';
@@ -11,9 +11,21 @@ const FONT_MONO = '"JetBrains Mono", "SF Mono", ui-monospace, monospace';
 export default function PartnerPortalPage() {
   const [resellerId, setResellerId] = useState("");
   const [password, setPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  // ログイン済みなら開いた瞬間に代理店画面へ。未ログインなら記憶したIDを補完してフォーム表示。
+  useEffect(() => {
+    const home = getHomeUrl();
+    if (home) { window.location.assign(home); return; }
+    const saved = getSavedLoginId("reseller");
+    // マウント後のクライアント専用初期化（ログイン済み判定・記憶したIDの補完・フォーム表示）
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (saved) setResellerId(saved);
+    setReady(true);
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,7 +33,8 @@ export default function PartnerPortalPage() {
     setLoading(true);
     try {
       const tokens = await api.resellerLogin(resellerId, password);
-      saveTokens(tokens.access_token, tokens.refresh_token, tokens.role, rememberMe);
+      saveTokens(tokens.access_token, tokens.refresh_token, tokens.role, rememberMe, tokens.tenant_slug);
+      rememberLoginId("reseller", resellerId);
       // iOS Safari/PWA にパスワード保存を促すため、SPA遷移ではなく実ナビゲーションで遷移する
       if (tokens.role === "reseller") {
         window.location.assign(`/${tokens.tenant_slug}/reseller`);
@@ -34,6 +47,8 @@ export default function PartnerPortalPage() {
       setLoading(false);
     }
   };
+
+  if (!ready) return <div style={{ width: "100vw", height: "100vh", background: "#faf8f4" }} />;
 
   return (
     <div style={{ width: "100vw", height: "100vh", overflow: "hidden", fontFamily: FONT_UI, background: "#faf8f4", display: "flex" }}>
