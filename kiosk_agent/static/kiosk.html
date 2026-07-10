@@ -92,24 +92,47 @@ function tapVolume() {
 }
 function playPon() {
   if (!tapSoundEnabled()) return;
-  const peak = 0.22 * tapVolume();
-  if (peak <= 0) return;
+  const level = tapVolume();
+  if (level <= 0) return;
   try {
     if (!_tapAudioCtx) _tapAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const ctx = _tapAudioCtx;
     if (ctx.state === "suspended") ctx.resume();   // 初回タップ(ユーザー操作)で解錠される
     const t = ctx.currentTime;
-    const osc = ctx.createOscillator(), gain = ctx.createGain();
-    const lp = ctx.createBiquadFilter();           // 高域を丸めて柔らかい音に
-    lp.type = "lowpass"; lp.frequency.value = 900; lp.Q.value = 0.5;
-    osc.connect(lp); lp.connect(gain); gain.connect(ctx.destination);
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(420, t);                       // 低めから
-    osc.frequency.exponentialRampToValueAtTime(180, t + 0.16);  // ゆるやかに下がる=落ち着いた「ポン」
-    gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(peak, t + 0.018);         // やわらかいアタック
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);   // ゆったりした余韻
-    osc.start(t); osc.stop(t + 0.36);
+
+    // 木琴＋木を軽く叩いた「ポンッ」。基音 D5(≈587Hz, C5〜E5帯) 固定＋木琴特有の高次倍音。
+    const master = ctx.createGain();
+    master.gain.value = 0.55 * level;              // Windows通知音の~70%相当に抑えた基準レベル
+    master.connect(ctx.destination);
+
+    const f0 = 587;                                // D5(C5=523〜E5=659 の中央)
+    // 木琴のバー: 基音 + 高次倍音(木琴は倍音が高く速く減衰)。全体で120〜180ms・余韻~100ms。
+    const partials = [
+      { mult: 1.0, gain: 1.00, dur: 0.16 },        // 基音
+      { mult: 3.0, gain: 0.32, dur: 0.08 },        // 木琴らしい12度上
+      { mult: 6.1, gain: 0.10, dur: 0.045 },       // 木質の高次成分
+    ];
+    partials.forEach(p => {
+      const osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = f0 * p.mult;
+      osc.connect(g); g.connect(master);
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(p.gain, t + 0.003);        // 撥の当たる速い立ち上がり
+      g.gain.exponentialRampToValueAtTime(0.0001, t + p.dur);   // 木琴らしいスッと切れる減衰
+      osc.start(t); osc.stop(t + p.dur + 0.02);
+    });
+
+    // 木を軽く叩く質感: ごく短い帯域ノイズのアタック(~18ms)
+    const nlen = Math.max(1, Math.floor(ctx.sampleRate * 0.018));
+    const buf = ctx.createBuffer(1, nlen, ctx.sampleRate);
+    const nd = buf.getChannelData(0);
+    for (let i = 0; i < nlen; i++) nd[i] = (Math.random() * 2 - 1) * (1 - i / nlen);
+    const noise = ctx.createBufferSource(); noise.buffer = buf;
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 2000; bp.Q.value = 0.7;
+    const ng = ctx.createGain(); ng.gain.value = 0.22;
+    noise.connect(bp); bp.connect(ng); ng.connect(master);
+    noise.start(t); noise.stop(t + 0.02);
   } catch (e) {}
 }
 function showRipple(x, y) {
