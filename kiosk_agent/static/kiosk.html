@@ -84,7 +84,7 @@ function cleanup() { CLEANUPS.forEach(f => f()); CLEANUPS = []; }
 // ─── Tap feedback (波紋エフェクト + 「ポン」音) ───────────────────────────────
 // 画面のどこをタップしても、その位置に波紋を広げて「ポン」という音を鳴らす。
 // 音は受付設定の「タップ操作音」(kiosk_snd_tap) と音量(kiosk_vol) に従う。波紋は常に表示。
-// タップ音は音源ファイル /tap.mp3(Business22-3 をトリム＋響き付けで加工した操作音)を Web Audio で再生する。
+// タップ音は音源ファイル /tap.mp3(Business22-3 を参考に additive 合成した明るいチャイム)を Web Audio で再生する。
 // 起動時に一度デコードしてバッファを使い回し、連打でも重ねて鳴らせる/低レイテンシ。
 let _tapAudioCtx = null;
 let _tapBuffer = null;      // デコード済みタップ音
@@ -109,18 +109,24 @@ function _ensureTapAudio() {
   }
   return _tapAudioCtx;
 }
-// mp3 が未ロード/未配信のときのフォールバック合成音(木質の低い「ポン」)。
+// mp3 が未ロード/未配信のときのフォールバック合成音。tap.mp3(Business22-3参考の
+// 明るいチャイム)に寄せた 基音1300Hz＋倍音のきらめき。
 function _synthPon(ctx, level) {
   const t = ctx.currentTime;
   const master = ctx.createGain();
-  master.gain.value = 0.42 * level;
+  master.gain.value = 0.34 * level;
   master.connect(ctx.destination);
-  [{ mult: 1.0, gain: 1.0, dur: 0.24 }, { mult: 2.76, gain: 0.16, dur: 0.10 }].forEach(p => {
+  [
+    { hz: 1300, gain: 1.00, dur: 0.34 },   // 基音(明るく長めに響く)
+    { hz: 2600, gain: 0.30, dur: 0.16 },
+    { hz: 3588, gain: 0.18, dur: 0.10 },
+    { hz: 6900, gain: 0.12, dur: 0.05 },   // 高域きらめき
+  ].forEach(p => {
     const osc = ctx.createOscillator(), g = ctx.createGain();
-    osc.type = "sine"; osc.frequency.value = 233 * p.mult;
+    osc.type = "sine"; osc.frequency.value = p.hz;
     osc.connect(g); g.connect(master);
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(p.gain, t + 0.004);
+    g.gain.linearRampToValueAtTime(p.gain, t + 0.003);
     g.gain.exponentialRampToValueAtTime(0.0001, t + p.dur);
     osc.start(t); osc.stop(t + p.dur + 0.02);
   });
