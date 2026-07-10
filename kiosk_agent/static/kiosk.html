@@ -100,17 +100,18 @@ function playPon() {
     if (ctx.state === "suspended") ctx.resume();   // 初回タップ(ユーザー操作)で解錠される
     const t = ctx.currentTime;
 
-    // 木琴＋木を軽く叩いた「ポンッ」。基音 D5(≈587Hz, C5〜E5帯) 固定＋木琴特有の高次倍音。
+    // やや低めの木箱を軽く叩いた「ポンッ」。基音 Bb3(≈233Hz, G3〜C4帯) 固定＋
+    // 木箱の共鳴(ボディ)＋木を叩くアタックノイズ。全体で~260ms・余韻150〜250ms。
     const master = ctx.createGain();
-    master.gain.value = 0.55 * level;              // Windows通知音の~70%相当に抑えた基準レベル
+    master.gain.value = 0.42 * level;              // Windows通知音の50〜60%相当に抑えた基準レベル
     master.connect(ctx.destination);
 
-    const f0 = 587;                                // D5(C5=523〜E5=659 の中央)
-    // 木琴のバー: 基音 + 高次倍音(木琴は倍音が高く速く減衰)。全体で120〜180ms・余韻~100ms。
+    const f0 = 233;                                // Bb3(G3=196〜C4=262 の中央)
+    // 木の胴の音: 基音 + やわらかい高次倍音(低音寄りなので倍音は控えめ)。
     const partials = [
-      { mult: 1.0, gain: 1.00, dur: 0.16 },        // 基音
-      { mult: 3.0, gain: 0.32, dur: 0.08 },        // 木琴らしい12度上
-      { mult: 6.1, gain: 0.10, dur: 0.045 },       // 木質の高次成分
+      { mult: 1.0,  gain: 1.00, dur: 0.26 },       // 基音(長めの余韻)
+      { mult: 2.76, gain: 0.18, dur: 0.11 },       // まろやかな高次倍音
+      { mult: 4.2,  gain: 0.06, dur: 0.05 },       // 木質の高次成分
     ];
     partials.forEach(p => {
       const osc = ctx.createOscillator(), g = ctx.createGain();
@@ -118,21 +119,35 @@ function playPon() {
       osc.frequency.value = f0 * p.mult;
       osc.connect(g); g.connect(master);
       g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(p.gain, t + 0.003);        // 撥の当たる速い立ち上がり
-      g.gain.exponentialRampToValueAtTime(0.0001, t + p.dur);   // 木琴らしいスッと切れる減衰
+      g.gain.linearRampToValueAtTime(p.gain, t + 0.004);        // 撥の当たる立ち上がり
+      g.gain.exponentialRampToValueAtTime(0.0001, t + p.dur);   // ゆったりした減衰
       osc.start(t); osc.stop(t + p.dur + 0.02);
     });
 
-    // 木を軽く叩く質感: ごく短い帯域ノイズのアタック(~18ms)
-    const nlen = Math.max(1, Math.floor(ctx.sampleRate * 0.018));
-    const buf = ctx.createBuffer(1, nlen, ctx.sampleRate);
-    const nd = buf.getChannelData(0);
-    for (let i = 0; i < nlen; i++) nd[i] = (Math.random() * 2 - 1) * (1 - i / nlen);
-    const noise = ctx.createBufferSource(); noise.buffer = buf;
-    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 2000; bp.Q.value = 0.7;
-    const ng = ctx.createGain(); ng.gain.value = 0.22;
-    noise.connect(bp); bp.connect(ng); ng.connect(master);
-    noise.start(t); noise.stop(t + 0.02);
+    // 木を軽く叩く質感: ごく短い帯域ノイズのアタック(~16ms)
+    const tapLen = Math.max(1, Math.floor(ctx.sampleRate * 0.016));
+    const tapBuf = ctx.createBuffer(1, tapLen, ctx.sampleRate);
+    const td = tapBuf.getChannelData(0);
+    for (let i = 0; i < tapLen; i++) td[i] = (Math.random() * 2 - 1) * (1 - i / tapLen);
+    const tap = ctx.createBufferSource(); tap.buffer = tapBuf;
+    const tapBp = ctx.createBiquadFilter(); tapBp.type = "bandpass"; tapBp.frequency.value = 1800; tapBp.Q.value = 0.7;
+    const tapG = ctx.createGain(); tapG.gain.value = 0.18;
+    tap.connect(tapBp); tapBp.connect(tapG); tapG.connect(master);
+    tap.start(t); tap.stop(t + 0.02);
+
+    // 木箱の共鳴(ボディ): 低域を高Qバンドパスで鳴らし、中空の胴鳴りを少し加える(~140ms)
+    const bodyLen = Math.max(1, Math.floor(ctx.sampleRate * 0.04));
+    const bodyBuf = ctx.createBuffer(1, bodyLen, ctx.sampleRate);
+    const bd = bodyBuf.getChannelData(0);
+    for (let i = 0; i < bodyLen; i++) bd[i] = (Math.random() * 2 - 1) * (1 - i / bodyLen);
+    const body = ctx.createBufferSource(); body.buffer = bodyBuf;
+    const bodyBp = ctx.createBiquadFilter(); bodyBp.type = "bandpass"; bodyBp.frequency.value = 190; bodyBp.Q.value = 7;
+    const bodyG = ctx.createGain();
+    bodyG.gain.setValueAtTime(0, t);
+    bodyG.gain.linearRampToValueAtTime(0.30, t + 0.005);
+    bodyG.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    body.connect(bodyBp); bodyBp.connect(bodyG); bodyG.connect(master);
+    body.start(t); body.stop(t + 0.16);
   } catch (e) {}
 }
 function showRipple(x, y) {
