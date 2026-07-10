@@ -305,6 +305,7 @@ async def _open_with_autolock(locker_id: str, door: DoorSensor) -> None:
 
 _KIOSK_HTML = Path(__file__).parent / "static" / "kiosk.html"
 _JSQR_JS   = Path(__file__).parent / "static" / "jsqr.min.js"
+_TAP_MP3   = Path(__file__).parent / "static" / "tap.mp3"
 _CONTROL_PANEL_HTML = Path(__file__).parent / "static" / "device-control.html"
 
 
@@ -365,6 +366,14 @@ async def serve_jsqr():
     if not _JSQR_JS.exists():
         raise HTTPException(status_code=404, detail="jsqr.min.js not found")
     return FileResponse(_JSQR_JS, media_type="application/javascript")
+
+
+@app.get("/tap.mp3", include_in_schema=False)
+async def serve_tap_mp3():
+    # キオスクの全画面タップ音(決定4を-3半音下げた木質の「ポン」)。kiosk.html が先読みして再生する。
+    if not _TAP_MP3.exists():
+        raise HTTPException(status_code=404, detail="tap.mp3 not found")
+    return FileResponse(_TAP_MP3, media_type="audio/mpeg")
 
 
 @app.get("/kiosk.html", include_in_schema=False)
