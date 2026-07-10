@@ -89,6 +89,7 @@ function cleanup() { CLEANUPS.forEach(f => f()); CLEANUPS = []; }
 let _tapAudioCtx = null;
 let _tapBuffer = null;      // デコード済みタップ音
 let _tapLoading = false;
+let _tapNextTry = 0;        // 取得失敗時の再試行時刻(毎タップの404連打を防ぐ)
 function tapSoundEnabled() { return localStorage.getItem("kiosk_snd_tap") !== "off"; }
 function tapVolume() {
   const v = parseInt(localStorage.getItem("kiosk_vol") || "70", 10);
@@ -98,28 +99,48 @@ function _ensureTapAudio() {
   try {
     if (!_tapAudioCtx) _tapAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
   } catch (e) { return null; }
-  if (!_tapBuffer && !_tapLoading) {
+  if (!_tapBuffer && !_tapLoading && Date.now() >= _tapNextTry) {
     _tapLoading = true;
     fetch("/tap.mp3")
-      .then(r => r.arrayBuffer())
+      .then(r => { if (!r.ok) throw new Error("tap.mp3 " + r.status); return r.arrayBuffer(); })
       .then(b => _tapAudioCtx.decodeAudioData(b))
       .then(buf => { _tapBuffer = buf; _tapLoading = false; })
-      .catch(() => { _tapLoading = false; });   // 取得失敗時は無音(波紋のみ)
+      .catch(() => { _tapLoading = false; _tapNextTry = Date.now() + 60000; });  // 60秒後に再試行。それまでは合成音
   }
   return _tapAudioCtx;
+}
+// mp3 が未ロード/未配信のときのフォールバック合成音(木質の低い「ポン」)。
+function _synthPon(ctx, level) {
+  const t = ctx.currentTime;
+  const master = ctx.createGain();
+  master.gain.value = 0.42 * level;
+  master.connect(ctx.destination);
+  [{ mult: 1.0, gain: 1.0, dur: 0.24 }, { mult: 2.76, gain: 0.16, dur: 0.10 }].forEach(p => {
+    const osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.type = "sine"; osc.frequency.value = 233 * p.mult;
+    osc.connect(g); g.connect(master);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(p.gain, t + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + p.dur);
+    osc.start(t); osc.stop(t + p.dur + 0.02);
+  });
 }
 function playPon() {
   if (!tapSoundEnabled()) return;
   const level = tapVolume();
   if (level <= 0) return;
   const ctx = _ensureTapAudio();
-  if (!ctx || !_tapBuffer) return;               // まだデコード中なら今回はスキップ
+  if (!ctx) return;
   try {
     if (ctx.state === "suspended") ctx.resume(); // 初回タップ(ユーザー操作)で解錠される
-    const src = ctx.createBufferSource(); src.buffer = _tapBuffer;
-    const g = ctx.createGain(); g.gain.value = 0.9 * level;  // 音量スライダーに追従
-    src.connect(g); g.connect(ctx.destination);
-    src.start();
+    if (_tapBuffer) {                            // mp3 が使えるならそれを再生
+      const src = ctx.createBufferSource(); src.buffer = _tapBuffer;
+      const g = ctx.createGain(); g.gain.value = 0.9 * level;  // 音量スライダーに追従
+      src.connect(g); g.connect(ctx.destination);
+      src.start();
+    } else {                                     // まだ/読めない時は合成音で必ず鳴らす
+      _synthPon(ctx, level);
+    }
   } catch (e) {}
 }
 _ensureTapAudio();   // 起動時に先読みして初回タップから鳴らせるようにする

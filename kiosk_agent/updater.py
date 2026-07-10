@@ -31,6 +31,7 @@ _VERSION_FILE = _APP_DIR / ".bundle_version"
 # Files managed by OTA (relative to kiosk_agent root).
 MANAGED_FILES = [
     "static/kiosk.html",
+    "static/tap.mp3",   # タップ操作音の音源(バイナリ)。再起動不要でコピーのみ
     "main.py",
     "updater.py",
     "gpio.py",
