@@ -81,6 +81,51 @@ function onSc(event, fn) {
 }
 function cleanup() { CLEANUPS.forEach(f => f()); CLEANUPS = []; }
 
+// ─── Tap feedback (波紋エフェクト + 「ポン」音) ───────────────────────────────
+// 画面のどこをタップしても、その位置に波紋を広げて「ポン」という音を鳴らす。
+// 音は受付設定の「タップ操作音」(kiosk_snd_tap) と音量(kiosk_vol) に従う。波紋は常に表示。
+let _tapAudioCtx = null;
+function tapSoundEnabled() { return localStorage.getItem("kiosk_snd_tap") !== "off"; }
+function tapVolume() {
+  const v = parseInt(localStorage.getItem("kiosk_vol") || "70", 10);
+  return isNaN(v) ? 0.7 : Math.max(0, Math.min(100, v)) / 100;
+}
+function playPon() {
+  if (!tapSoundEnabled()) return;
+  const peak = 0.28 * tapVolume();
+  if (peak <= 0) return;
+  try {
+    if (!_tapAudioCtx) _tapAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = _tapAudioCtx;
+    if (ctx.state === "suspended") ctx.resume();   // 初回タップ(ユーザー操作)で解錠される
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator(), gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(720, t);                       // 高めから
+    osc.frequency.exponentialRampToValueAtTime(300, t + 0.12);  // すっと下がる=「ポン」
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(peak, t + 0.008);         // 速いアタック
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.19);   // 短い減衰
+    osc.start(t); osc.stop(t + 0.2);
+  } catch (e) {}
+}
+function showRipple(x, y) {
+  const size = 150;
+  const r = document.createElement("div");
+  const c = (ST && ST.brand_color) || "#4a7c4e";
+  r.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:${size}px;height:${size}px;`
+    + `margin:${-size/2}px 0 0 ${-size/2}px;border-radius:50%;pointer-events:none;z-index:99999;`
+    + `background:radial-gradient(circle, ${c} 0%, ${c}66 42%, ${c}00 70%);`
+    + `animation:ripple .6s ease-out forwards`;
+  document.body.appendChild(r);
+  setTimeout(() => r.remove(), 650);
+}
+document.addEventListener("pointerdown", e => {
+  showRipple(e.clientX, e.clientY);
+  playPon();
+}, { passive: true, capture: true });
+
 // ─── MOCK MODE ───────────────────────────────────────────────────────────────
 // ?mock=1 を付けるとエージェント/バックエンドAPIをスタブ化し、Windows等のブラウザで
 // 全画面フロー(ロッカー含む)を実機・バックエンド無しで確認できる。
@@ -2035,6 +2080,7 @@ function showKioskSettings() {
     if (pct)   pct.textContent = vol + "%";
     if (fill)  fill.style.width = vol + "%";
     if (thumb) thumb.style.left = vol + "%";
+    localStorage.setItem("kiosk_vol", String(vol));   // タップ音(playPon)が参照する
     clearTimeout(volDebounce);
     volDebounce = setTimeout(postVolume, 400);
   }
@@ -2262,6 +2308,7 @@ function showKioskSettings() {
     ]);
     if (volRes.status === "fulfilled") {
       vol = volRes.value.level ?? 70;
+      localStorage.setItem("kiosk_vol", String(vol));   // タップ音(playPon)が参照する
       if (volRes.value.error) console.warn("[kiosk] volume:", volRes.value.error);
     }
     if (wifiRes.status === "fulfilled") {
