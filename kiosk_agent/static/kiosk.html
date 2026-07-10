@@ -92,7 +92,7 @@ function tapVolume() {
 }
 function playPon() {
   if (!tapSoundEnabled()) return;
-  const peak = 0.28 * tapVolume();
+  const peak = 0.22 * tapVolume();
   if (peak <= 0) return;
   try {
     if (!_tapAudioCtx) _tapAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -100,14 +100,16 @@ function playPon() {
     if (ctx.state === "suspended") ctx.resume();   // 初回タップ(ユーザー操作)で解錠される
     const t = ctx.currentTime;
     const osc = ctx.createOscillator(), gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
+    const lp = ctx.createBiquadFilter();           // 高域を丸めて柔らかい音に
+    lp.type = "lowpass"; lp.frequency.value = 900; lp.Q.value = 0.5;
+    osc.connect(lp); lp.connect(gain); gain.connect(ctx.destination);
     osc.type = "sine";
-    osc.frequency.setValueAtTime(720, t);                       // 高めから
-    osc.frequency.exponentialRampToValueAtTime(300, t + 0.12);  // すっと下がる=「ポン」
+    osc.frequency.setValueAtTime(420, t);                       // 低めから
+    osc.frequency.exponentialRampToValueAtTime(180, t + 0.16);  // ゆるやかに下がる=落ち着いた「ポン」
     gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(peak, t + 0.008);         // 速いアタック
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.19);   // 短い減衰
-    osc.start(t); osc.stop(t + 0.2);
+    gain.gain.linearRampToValueAtTime(peak, t + 0.018);         // やわらかいアタック
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);   // ゆったりした余韻
+    osc.start(t); osc.stop(t + 0.36);
   } catch (e) {}
 }
 function showRipple(x, y) {
