@@ -370,7 +370,7 @@ async def serve_jsqr():
 
 @app.get("/tap.mp3", include_in_schema=False)
 async def serve_tap_mp3():
-    # キオスクの全画面タップ音(決定4を-3半音下げた木質の「ポン」)。kiosk.html が先読みして再生する。
+    # キオスクの全画面タップ音(Business22-3 をトリム＋響き付けで加工)。kiosk.html が先読みして再生する。
     if not _TAP_MP3.exists():
         raise HTTPException(status_code=404, detail="tap.mp3 not found")
     return FileResponse(_TAP_MP3, media_type="audio/mpeg")
