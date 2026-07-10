@@ -31,7 +31,6 @@ const NAV_OPS: { id: NavId; label: string }[] = [
 
 const NAV_SETTINGS: { id: NavId; label: string }[] = [
   { id: "notify",         label: "通知設定" },
-  { id: "locker",         label: "ロッカー" },
   { id: "kiosk_settings", label: "受付設定" },
   { id: "settings",       label: "基本設定" },
   { id: "users",          label: "ユーザー管理" },

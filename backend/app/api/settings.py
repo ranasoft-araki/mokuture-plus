@@ -60,6 +60,9 @@ class TenantSettingsOut(BaseModel):
     kiosk_sub_message: str
     kiosk_calling_message: str
     kiosk_complete_message: str
+    kiosk_menu_title: str
+    kiosk_welcome_qr_guide: str
+    kiosk_welcome_form_label: str
     kiosk_idle_timeout_sec: int
     kiosk_complete_timeout_sec: int
     logo_pos_x: float
@@ -80,6 +83,9 @@ class PublicTenantSettingsOut(BaseModel):
     kiosk_sub_message: str
     kiosk_calling_message: str
     kiosk_complete_message: str
+    kiosk_menu_title: str
+    kiosk_welcome_qr_guide: str
+    kiosk_welcome_form_label: str
     kiosk_idle_timeout_sec: int
     kiosk_complete_timeout_sec: int
     logo_pos_x: float
@@ -103,6 +109,9 @@ class TenantSettingsPatch(BaseModel):
     kiosk_sub_message: str | None = None
     kiosk_calling_message: str | None = None
     kiosk_complete_message: str | None = None
+    kiosk_menu_title: str | None = None
+    kiosk_welcome_qr_guide: str | None = None
+    kiosk_welcome_form_label: str | None = None
     kiosk_idle_timeout_sec: int | None = None
     kiosk_complete_timeout_sec: int | None = None
     logo_pos_x: float | None = None
@@ -157,6 +166,9 @@ def _out(tenant: Tenant) -> TenantSettingsOut:
         kiosk_sub_message=getattr(tenant, "kiosk_sub_message", "ご用件をお選びください"),
         kiosk_calling_message=getattr(tenant, "kiosk_calling_message", "担当者をお呼びしています。少々お待ちください。"),
         kiosk_complete_message=getattr(tenant, "kiosk_complete_message", "担当者がご案内します"),
+        kiosk_menu_title=getattr(tenant, "kiosk_menu_title", None) or "ご用件をお選びください",
+        kiosk_welcome_qr_guide=getattr(tenant, "kiosk_welcome_qr_guide", None) or "ご予約QRをお持ちの方はカメラへかざしてください",
+        kiosk_welcome_form_label=getattr(tenant, "kiosk_welcome_form_label", None) or "QRをお持ちでない方はこちら",
         kiosk_idle_timeout_sec=getattr(tenant, "kiosk_idle_timeout_sec", 60),
         kiosk_complete_timeout_sec=getattr(tenant, "kiosk_complete_timeout_sec", 10),
         logo_pos_x=getattr(tenant, "logo_pos_x", 0.04),
@@ -184,6 +196,9 @@ def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
         kiosk_sub_message=getattr(tenant, "kiosk_sub_message", "ご用件をお選びください"),
         kiosk_calling_message=getattr(tenant, "kiosk_calling_message", "担当者をお呼びしています。少々お待ちください。"),
         kiosk_complete_message=getattr(tenant, "kiosk_complete_message", "担当者がご案内します"),
+        kiosk_menu_title=getattr(tenant, "kiosk_menu_title", None) or "ご用件をお選びください",
+        kiosk_welcome_qr_guide=getattr(tenant, "kiosk_welcome_qr_guide", None) or "ご予約QRをお持ちの方はカメラへかざしてください",
+        kiosk_welcome_form_label=getattr(tenant, "kiosk_welcome_form_label", None) or "QRをお持ちでない方はこちら",
         kiosk_idle_timeout_sec=getattr(tenant, "kiosk_idle_timeout_sec", 60),
         kiosk_complete_timeout_sec=getattr(tenant, "kiosk_complete_timeout_sec", 10),
         logo_pos_x=getattr(tenant, "logo_pos_x", 0.04),
@@ -302,6 +317,12 @@ async def patch_settings(
         tenant.kiosk_calling_message = body.kiosk_calling_message[:255]
     if body.kiosk_complete_message is not None:
         tenant.kiosk_complete_message = body.kiosk_complete_message[:255]
+    if body.kiosk_menu_title is not None:
+        tenant.kiosk_menu_title = body.kiosk_menu_title[:255]
+    if body.kiosk_welcome_qr_guide is not None:
+        tenant.kiosk_welcome_qr_guide = body.kiosk_welcome_qr_guide[:255]
+    if body.kiosk_welcome_form_label is not None:
+        tenant.kiosk_welcome_form_label = body.kiosk_welcome_form_label[:255]
     if body.kiosk_idle_timeout_sec is not None:
         tenant.kiosk_idle_timeout_sec = max(10, min(300, body.kiosk_idle_timeout_sec))
     if body.kiosk_complete_timeout_sec is not None:

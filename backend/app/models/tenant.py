@@ -26,6 +26,10 @@ class Tenant(Base):
     kiosk_sub_message: Mapped[str] = mapped_column(String(255), default="ご用件をお選びください")
     kiosk_calling_message: Mapped[str] = mapped_column(String(255), default="担当者をお呼びしています。少々お待ちください。")
     kiosk_complete_message: Mapped[str] = mapped_column(String(255), default="担当者がご案内します")
+    # 受付メニュー(top)の見出し / ようこそ(welcome)画面のQR案内・フォームボタン文言
+    kiosk_menu_title: Mapped[str] = mapped_column(String(255), default="ご用件をお選びください")
+    kiosk_welcome_qr_guide: Mapped[str] = mapped_column(String(255), default="ご予約QRをお持ちの方はカメラへかざしてください")
+    kiosk_welcome_form_label: Mapped[str] = mapped_column(String(255), default="QRをお持ちでない方はこちら")
     kiosk_idle_timeout_sec: Mapped[int] = mapped_column(Integer, default=60)
     kiosk_complete_timeout_sec: Mapped[int] = mapped_column(Integer, default=10)
 

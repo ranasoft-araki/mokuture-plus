@@ -38,6 +38,9 @@ let ST = {
   kiosk_sub_message: "ご用件をお選びください",
   kiosk_calling_message: "担当者をお呼びしています",
   kiosk_complete_message: "担当者がご案内します",
+  kiosk_menu_title: "ご用件をお選びください",
+  kiosk_welcome_qr_guide: "ご予約QRをお持ちの方はカメラへかざしてください",
+  kiosk_welcome_form_label: "QRをお持ちでない方はこちら",
   kiosk_idle_timeout_sec: 60,
   kiosk_complete_timeout_sec: 10,
   kiosk_style: "default",
@@ -127,6 +130,9 @@ async function mockFetch(method, path, body) {
     brand_color: "#2d6a4f", logo_url: "",
     kiosk_welcome_message: "磯野木工所", kiosk_sub_message: "ご用件をお選びください",
     kiosk_calling_message: "担当者をお呼びしています", kiosk_complete_message: "担当者がご案内します",
+    kiosk_menu_title: "ご用件をお選びください",
+    kiosk_welcome_qr_guide: "ご予約QRをお持ちの方はカメラへかざしてください",
+    kiosk_welcome_form_label: "QRをお持ちでない方はこちら",
     kiosk_idle_timeout_sec: 60, kiosk_complete_timeout_sec: 10,
     staff_list: ["山田 太郎", "佐藤 花子", "鈴木 一郎"], purpose_list: [],
     kiosk_phone_number: "03-1234-5678",
@@ -583,7 +589,7 @@ function showWelcome() {
     ).join("");
     // 案内文はカメラ映像の上にオーバーレイ表示する。
     const guide = `<div style="position:absolute;top:0;left:0;right:0;padding:34px 40px 60px;background:linear-gradient(180deg,rgba(0,0,0,.66),transparent);text-align:center;pointer-events:none">
-      <div style="font-size:40px;font-weight:700;color:#fff;line-height:1.35;text-shadow:0 2px 14px rgba(0,0,0,.6)">ご予約QRをお持ちの方は<br>カメラへかざしてください</div>
+      <div style="font-size:40px;font-weight:700;color:#fff;line-height:1.35;text-shadow:0 2px 14px rgba(0,0,0,.6)">${escHtml(ST.kiosk_welcome_qr_guide || "ご予約QRをお持ちの方はカメラへかざしてください")}</div>
       <div style="font-size:19px;color:rgba(255,255,255,.78);margin-top:10px;font-family:Inter,system-ui,sans-serif">Hold your reservation QR code over the camera</div>
     </div>`;
     const errBanner = errMsg ? `<div style="position:absolute;left:40px;right:40px;bottom:84px;padding:16px 22px;background:rgba(168,66,56,.94);border-radius:14px;color:#fff;font-size:22px;line-height:1.5;text-align:center">${escHtml(errMsg)}</div>` : "";
@@ -610,7 +616,7 @@ ${errBanner}
       <button id="wel-form" style="flex:1;width:100%;background:${T.dark};border:none;border-radius:28px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:30px;text-align:center;padding:40px 56px">
         <div style="width:150px;height:150px;border-radius:36px;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.6)">${ICO.reception}</div></div>
         <div>
-          <div style="font-size:56px;font-weight:700;color:#fff;line-height:1.15">QRをお持ちでない方は<br>こちら</div>
+          <div style="font-size:56px;font-weight:700;color:#fff;line-height:1.15">${escHtml(ST.kiosk_welcome_form_label || "QRをお持ちでない方はこちら")}</div>
           <div style="font-size:27px;color:rgba(255,255,255,.74);margin-top:18px;line-height:1.6">ご予約の無い方・お荷物の配達、<br>ロッカーのご利用</div>
         </div>
         <div style="color:rgba(255,255,255,.55);transform:scale(1.7)">${ICO.arrow_lg}</div>
@@ -754,11 +760,16 @@ function showTop() {
     { icon: ICO.truck,     label: "荷物の配達", en: "Delivery", desc: "宅配・配送のお届け", descEn: "Parcel delivery",      screen: "delivery" },
     { icon: ICO.locker,    label: "ロッカー",   en: "Locker",   desc: "お預け・お受け取り", descEn: "Lockers",              screen: "lockerMode" },
   ];
-  sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
+  // ロゴは管理画面「受付設定」のロゴ配置(logo_pos_x/y=画面比, logo_width_pct=画面幅%)で
+  // 絶対配置する。未設定時は既定(左上)。
+  const logoOverlay = ST.logo_url
+    ? `<img src="${escHtml(ST.logo_url)}" alt="logo" style="position:absolute;left:${(ST.logo_pos_x ?? 0.04) * 100}%;top:${(ST.logo_pos_y ?? 0.04) * 100}%;width:${ST.logo_width_pct ?? 8}%;height:auto;object-fit:contain;z-index:5">`
+    : "";
+  sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;position:relative">
+  ${logoOverlay}
   <div style="padding:48px 80px 0;flex-shrink:0;display:flex;align-items:flex-end;gap:32px">
-    ${ST.logo_url ? `<img src="${escHtml(ST.logo_url)}" style="height:72px;object-fit:contain" alt="logo">` : ""}
     <div>
-      <div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px;line-height:1.1">ご用件をお選びください</div>
+      <div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px;line-height:1.1">${escHtml(ST.kiosk_menu_title || "ご用件をお選びください")}</div>
       <div style="font-size:38px;color:${T.muted};font-family:Inter,system-ui,sans-serif;letter-spacing:1px;margin-top:8px">Please select</div>
     </div>
   </div>
@@ -1313,7 +1324,7 @@ function showCalling(data) {
       <div style="font-size:92px;font-weight:600;color:${T.ink};letter-spacing:-3px;line-height:1.04;margin-bottom:24px">お待ちください</div>
       ${vName ? `<div style="font-size:34px;color:${T.sub};margin-bottom:10px">${escHtml(vName)} 様</div>` : ""}
       ${staff ? `<div style="font-size:24px;color:${T.muted};margin-bottom:22px">ご担当：${escHtml(staff)}</div>` : ""}
-      <div style="font-size:24px;color:${T.sub};line-height:1.7;margin-bottom:30px">担当者が確認しています。少々お待ちください。</div>
+      <div style="font-size:24px;color:${T.sub};line-height:1.7;margin-bottom:30px">${escHtml(callingMsg || "担当者が確認しています。少々お待ちください。")}</div>
       <div style="display:flex;gap:14px"><div class="cal-dot"></div><div class="cal-dot"></div><div class="cal-dot"></div></div>
     </div>
   </div>
@@ -1510,7 +1521,7 @@ function showComplete(data) {
       <div style="width:96px;height:96px;border-radius:24px;background:${bc}1a;color:${bc};display:flex;align-items:center;justify-content:center;margin-bottom:28px;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
       <div style="font-size:18px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;font-family:Inter,system-ui,sans-serif;margin-bottom:14px">WELCOME</div>
       <div style="font-size:84px;font-weight:600;color:${T.ink};letter-spacing:-3px;line-height:1.06;margin-bottom:18px">${escHtml(vName)} 様</div>
-      <div style="font-size:34px;color:${T.sub};line-height:1.5">お待ちしておりました</div>
+      <div style="font-size:34px;color:${T.sub};line-height:1.5">${escHtml(ST.kiosk_complete_message || "お待ちしておりました")}</div>
       <div style="margin-top:38px">
         <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">${ICO.clock}<span style="font-size:18px;color:${T.sub};flex:1">待機画面に戻るまで</span><span id="cnt" style="font-size:40px;font-weight:700;font-family:'JetBrains Mono',monospace;color:${bc};min-width:58px;text-align:right;transition:color .3s">${count}</span><span style="font-size:18px;color:${T.sub}">秒</span></div>
         <div style="height:8px;background:${T.border};border-radius:4px;overflow:hidden"><div id="bar" style="width:100%;height:100%;background:${bc};border-radius:4px;transition:width 1s linear,background .3s"></div></div>

@@ -125,7 +125,7 @@ mokuture/
 │   │       │   ├── inquiries/page.tsx ← 共通問い合わせフォーム受信の閲覧・状態更新・削除
 │   │       │   ├── appointments/page.tsx ← 来社予定管理・QRコード発行 (qrcode.react) + 日付/ステータスフィルタ + 会議室紐付け
 │   │       │   ├── meeting-rooms/page.tsx ← 会議室管理 (CRUD・カラー・定員・場所)
-│   │       │   ├── kiosk-settings/page.tsx ← 受付設定 (キオスク文言・ロゴ配置ドラッグ)
+│   │       │   ├── kiosk-settings/page.tsx ← 受付設定 (実機準拠の5画面WYSIWYGプレビュー: 待機/ようこそ/受付メニュー/呼び出し中/完了。文言はプレビュー上を直接クリックしてインライン編集=Canva風、ロゴは受付メニュー画面でドラッグ配置・リサイズ)
 │   │       │   ├── settings/page.tsx  ← 基本設定 (ブランディング: ロゴ・カラー・フォント)
 │   │       │   ├── notify/page.tsx    ← 通知設定 (Slack=OAuth「Slackに追加」/Chatwork/PWA/カスタムWebhook + 配達専用通知先: Slack/Chatwork/Webhook/プッシュON-OFF)
 │   │       │   ├── locker/page.tsx    ← ロッカー管理
@@ -284,8 +284,11 @@ mokuture/
 | font | VARCHAR(64) | フォント設定 |
 | kiosk_welcome_message | VARCHAR(255) | トップ画面メインメッセージ |
 | kiosk_sub_message | VARCHAR(255) | トップ画面サブメッセージ |
-| kiosk_calling_message | VARCHAR(255) | 呼び出し中メッセージ |
-| kiosk_complete_message | VARCHAR(255) | 完了画面メッセージ |
+| kiosk_calling_message | VARCHAR(255) | 呼び出し中メッセージ (実配線: `showCalling` 本文) |
+| kiosk_complete_message | VARCHAR(255) | 完了画面メッセージ (実配線: `showComplete` の「お待ちしておりました」行) |
+| kiosk_menu_title | VARCHAR(255) | 受付メニュー(top)見出し。既定「ご用件をお選びください」 |
+| kiosk_welcome_qr_guide | VARCHAR(255) | ようこそ画面のQRカメラ案内文。既定「ご予約QRをお持ちの方はカメラへかざしてください」 |
+| kiosk_welcome_form_label | VARCHAR(255) | ようこそ画面のフォームボタン見出し。既定「QRをお持ちでない方はこちら」 |
 | kiosk_idle_timeout_sec | INT | 無操作タイムアウト秒数 (10–300) |
 | kiosk_complete_timeout_sec | INT | 完了画面表示秒数 (5–60) |
 | logo_pos_x | FLOAT | ロゴ X 位置 (0.0–0.9、画面幅比) |
@@ -297,7 +300,7 @@ mokuture/
 | kiosk_phone_number | VARCHAR(32) | 受付応答「電話(対応不可)」時にキオスクへ表示する電話番号 (nullable) |
 | inquiry_form_url | VARCHAR(512) | 「お断り」時に案内する外部問い合わせフォームURL (nullable、未設定時は共通フォーム `/{slug}/inquiry`) |
 
-> `kiosk_phone_number` / `inquiry_form_url` は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS.tenants`)で追加。`GET /settings/public/{slug}` は解決済みの `inquiry_url`(外部 or 共通フォーム)＋`inquiry_qr`(SVG data URI, `segno` で生成)＋`kiosk_phone_number` を返す。
+> `kiosk_phone_number` / `inquiry_form_url` / `kiosk_menu_title` / `kiosk_welcome_qr_guide` / `kiosk_welcome_form_label` は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS.tenants`)で追加(後者3つは既存行を埋める DEFAULT 付き)。`GET /settings/public/{slug}` は解決済みの `inquiry_url`(外部 or 共通フォーム)＋`inquiry_qr`(SVG data URI, `segno` で生成)＋`kiosk_phone_number` を返す。
 
 ### devices (追加カラム)
 
@@ -490,9 +493,10 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 ### 管理画面ナビゲーション
 - `AdminShell.tsx` の `NavId` 型・`NAV_SETTINGS`・`NAV_PATHS`・`NavIcon` を一括管理。
 - ページを追加したら 4 箇所全て更新すること。
-- 現在の設定メニュー: 通知設定 / ロッカー / **受付設定** / 基本設定
+- 現在の設定メニュー: 通知設定 / **受付設定** / 基本設定（ロッカーは管理画面上不要のためメニューから削除。ページ実体 `admin/locker/page.tsx` とルート/型は残置）
 - 運用メニューに **問い合わせ**(`inquiries`)を追加（`AdminShell` の `NavId`/`NAV_OPS`/`NAV_PATHS`/`NavIcon` の4箇所を更新済み）。
 - **受付設定(`kiosk-settings`)** に「受付電話番号(`kiosk_phone_number`)」「問い合わせフォームURL(外部・任意, `inquiry_form_url`)」を追加。
+- **受付設定はCanva風WYSIWYGに刷新**: 実キオスク画面(kiosk.html)を1920×1080で忠実に再現した5画面プレビュー(待機/ようこそ/受付メニュー/呼び出し中/完了)を`ScaledCanvas`で縮小表示し、`Editable`(contentEditable, onBlurでcommit)で文言を画面上から直接編集する。編集対象=`kiosk_welcome_message`/`kiosk_sub_message`/`kiosk_menu_title`/`kiosk_welcome_qr_guide`/`kiosk_welcome_form_label`/`kiosk_calling_message`/`kiosk_complete_message`。ロゴは受付メニュー画面で`logo_pos_x/y`(画面比)・`logo_width_pct`(画面幅%)をドラッグ/ハンドルで調整=kiosk.html `showTop` の絶対配置ロゴに実配線。旧プレビューの誤り(存在しない4タイル「QR受付/配送/その他」)を廃し実機の3タイル(ご訪問/荷物の配達/ロッカー)に一致。数値・電話番号・スタッフ/来訪目的リストは下部の補助フォーム。**以前プレビュー限定で実機未使用だった `kiosk_calling_message`/`kiosk_complete_message`/`logo_pos_*` を kiosk.html に配線して同期を回復した。**
 
 ### 秘密情報の暗号化
 - Slack/Chatwork Webhook URL は `services/crypto.py` (Fernet) で暗号化して DB 保存。

@@ -24,6 +24,11 @@ _ENSURE_COLUMNS = {
         # 「お断り」応答時に案内する外部問い合わせフォールURL(未設定時は共通フォームへ)。
         "kiosk_phone_number": "VARCHAR(32)",
         "inquiry_form_url": "VARCHAR(512)",
+        # キオスク文言(受付メニュー見出し / ようこそ画面QR案内・フォームボタン)。
+        # DEFAULT 付きで既存行も埋める。
+        "kiosk_menu_title": "VARCHAR(255) DEFAULT 'ご用件をお選びください'",
+        "kiosk_welcome_qr_guide": "VARCHAR(255) DEFAULT 'ご予約QRをお持ちの方はカメラへかざしてください'",
+        "kiosk_welcome_form_label": "VARCHAR(255) DEFAULT 'QRをお持ちでない方はこちら'",
     },
     "lockers": {
         "name": "VARCHAR(255)",

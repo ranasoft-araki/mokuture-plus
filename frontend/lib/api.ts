@@ -261,6 +261,7 @@ export const api = {
     name?: string; brand_color?: string; font?: string;
     kiosk_welcome_message?: string; kiosk_sub_message?: string;
     kiosk_calling_message?: string; kiosk_complete_message?: string;
+    kiosk_menu_title?: string; kiosk_welcome_qr_guide?: string; kiosk_welcome_form_label?: string;
     kiosk_idle_timeout_sec?: number; kiosk_complete_timeout_sec?: number;
     logo_pos_x?: number; logo_pos_y?: number; logo_width_pct?: number;
     kiosk_style?: string; staff_list?: string | null; purpose_list?: string | null;
@@ -802,6 +803,9 @@ export interface TenantSettings {
   kiosk_sub_message: string;
   kiosk_calling_message: string;
   kiosk_complete_message: string;
+  kiosk_menu_title: string;
+  kiosk_welcome_qr_guide: string;
+  kiosk_welcome_form_label: string;
   kiosk_idle_timeout_sec: number;
   kiosk_complete_timeout_sec: number;
   logo_pos_x: number;
@@ -833,6 +837,9 @@ export interface PublicTenantSettings {
   kiosk_sub_message: string;
   kiosk_calling_message: string;
   kiosk_complete_message: string;
+  kiosk_menu_title: string;
+  kiosk_welcome_qr_guide: string;
+  kiosk_welcome_form_label: string;
   kiosk_idle_timeout_sec: number;
   kiosk_complete_timeout_sec: number;
   logo_pos_x: number;
