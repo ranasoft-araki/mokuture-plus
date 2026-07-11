@@ -1687,7 +1687,6 @@ function showKioskSettings() {
   let vol = 70;
   let sounds = {
     tap:   localStorage.getItem("kiosk_snd_tap")   !== "off",
-    chime: localStorage.getItem("kiosk_snd_chime") !== "off",
     voice: localStorage.getItem("kiosk_snd_voice") === "on",
   };
   let wifiOn = true;
@@ -2063,7 +2062,6 @@ function showKioskSettings() {
         <button id="ks-vol-plus" style="width:56px;height:56px;border-radius:50%;background:${C.canvas};border:2px solid ${C.ash};font-size:26px;color:${C.ink};flex-shrink:0;display:flex;align-items:center;justify-content:center;cursor:pointer">＋</button>
       </div>
       ${soundRow('tap', 'タップ操作音', 'TAP SOUND', sounds.tap)}
-      ${soundRow('chime', '呼び出しチャイム', 'CALL CHIME', sounds.chime)}
       ${soundRow('voice', '音声ガイダンス', 'VOICE GUIDANCE', sounds.voice)}
       <div style="margin-top:auto;display:flex;gap:14px;padding-top:20px">
         <button id="ks-test" style="flex:1.4;padding:18px;border-radius:14px;border:2px solid ${C.ash};background:${C.canvas};font-size:17px;font-weight:600;color:${C.ink};display:flex;align-items:center;justify-content:center;gap:10px;font-family:Inter,'Noto Sans JP',system-ui,sans-serif;cursor:pointer">${SVG.play} テスト音を再生</button>
