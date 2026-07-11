@@ -154,11 +154,11 @@ export default function KioskSettingsPage() {
       }
     >
       <style>{`
-        /* 編集可能な文字は常時うっすら(半透明の背景+破線の枠)ハイライトして、編集できる箇所が一目で分かるようにする */
-        .mk-edit { cursor: text; border-radius: 5px; background: rgba(74,124,78,.14); outline: 1.5px dashed rgba(74,124,78,.6); outline-offset: 2px; transition: background .12s, box-shadow .12s, outline-color .12s; }
-        .mk-edit:empty::before { content: attr(data-ph); color: rgba(120,120,120,.5); }
-        .mk-edit:hover { background: rgba(74,124,78,.22); outline-color: rgba(74,124,78,.95); }
-        .mk-edit:focus { outline: none; box-shadow: 0 0 0 2px #4a7c4e; background: rgba(74,124,78,.10); }
+        /* 編集可能な文字は常時ハイライト(半透明の背景+破線の枠)。黒背景でも分かるよう明るめの緑で濃いめに */
+        .mk-edit { cursor: text; border-radius: 5px; background: rgba(122,180,120,.22); outline: 2px dashed rgba(122,180,120,.9); outline-offset: 2px; transition: background .12s, box-shadow .12s, outline-color .12s; }
+        .mk-edit:empty::before { content: attr(data-ph); color: rgba(160,160,160,.7); }
+        .mk-edit:hover { background: rgba(122,180,120,.34); outline-color: #8fd08c; }
+        .mk-edit:focus { outline: none; box-shadow: 0 0 0 2.5px #7ab478; background: rgba(122,180,120,.18); }
         @keyframes mkpv-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.06)} }
       `}</style>
 
@@ -480,7 +480,7 @@ function MenuScreen({ bc, logoUrl, menuTitle, onMenuTitle, idleTimeout, logoPosX
     <div ref={rootRef} style={{ width: 1920, height: 1080, background: T.bg, display: "flex", flexDirection: "column", fontFamily: FONT, position: "relative" }}>
       {logoUrl && (
         <div onMouseDown={onLogoDown}
-          style={{ position: "absolute", left: `${logoPosX * 100}%`, top: `${logoPosY * 100}%`, width: `${logoWidthPct}%`, cursor: "grab", zIndex: 5, outline: "1.5px dashed rgba(74,124,78,.65)", outlineOffset: 4, borderRadius: 6 }}>
+          style={{ position: "absolute", left: `${logoPosX * 100}%`, top: `${logoPosY * 100}%`, width: `${logoWidthPct}%`, cursor: "grab", zIndex: 5, outline: "2px dashed rgba(122,180,120,.9)", outlineOffset: 4, borderRadius: 6 }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={logoUrl} alt="logo" style={{ width: "100%", height: "auto", objectFit: "contain", display: "block", pointerEvents: "none" }} />
           <div onMouseDown={onResizeDown}
