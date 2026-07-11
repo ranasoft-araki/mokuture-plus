@@ -317,10 +317,9 @@ function DecisionButtons({ log, token, onUpdate }: { log: ReceptionLog; token: s
   const [busy, setBusy] = useState(false);
   const state = log.state ?? "received";
   if (state !== "received" && state !== "notified") return null;
-  // 配達呼び出しは 受付/電話/お断り の応答対象ではない（キオスク側に待機画面ポーリングが無い）。
-  // 状態は下の StatusSelect（受付済み→完了 等）で管理する。
-  if (log.method === "delivery") return null;
-  const isAppointment = log.method === "appointment";
+  // 配達呼び出し(delivery)・QR予約(appointment)は お断り を出さず 受付/電話 の2択。
+  // 応答(受付/電話)はキオスクの待機画面に反映される。
+  const hideDecline = log.method === "appointment" || log.method === "delivery";
 
   const decide = (decision: "accept" | "phone" | "decline", nextState: string) => (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -336,7 +335,7 @@ function DecisionButtons({ log, token, onUpdate }: { log: ReceptionLog; token: s
     <div style={{ display: "inline-flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>
       <button type="button" disabled={busy} onClick={decide("accept", "accepted")} style={{ ...base, backgroundColor: "#059669" }}>受付</button>
       <button type="button" disabled={busy} onClick={decide("phone", "phone")} style={{ ...base, backgroundColor: "#0ea5e9" }}>電話</button>
-      {!isAppointment && (
+      {!hideDecline && (
         <button type="button" disabled={busy} onClick={decide("decline", "declined")} style={{ ...base, backgroundColor: "#ef4444" }}>お断り</button>
       )}
     </div>
@@ -350,7 +349,7 @@ function RespondModal({ log, token, onClose, onUpdate }: { log: ReceptionLog; to
   const [done, setDone] = useState<string | null>(null);
   const state = log.state ?? "received";
   const alreadyDecided = state !== "received" && state !== "notified";
-  const isAppointment = log.method === "appointment";
+  const hideDecline = log.method === "appointment" || log.method === "delivery";
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -402,7 +401,7 @@ function RespondModal({ log, token, onClose, onUpdate }: { log: ReceptionLog; to
                 <span style={{ fontSize: 22, fontWeight: 700 }}>電話</span>
                 <span style={{ fontSize: 12, fontWeight: 500, opacity: 0.9 }}>電話番号を案内</span>
               </button>
-              {!isAppointment && (
+              {!hideDecline && (
                 <button type="button" disabled={busy} onClick={decide("decline", "declined", "お断り")} style={{ ...bigBtn, backgroundColor: "#ef4444" }}>
                   <span style={{ fontSize: 22, fontWeight: 700 }}>お断り</span>
                   <span style={{ fontSize: 12, fontWeight: 500, opacity: 0.9 }}>フォーム案内</span>

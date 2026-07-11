@@ -506,9 +506,9 @@ async def kiosk_call_staff(
     message = (body.message or "").strip() or None
     device_label = device.name or "受付端末"
 
-    # 呼び出しを受付ログに残す（スタッフが通知タップで受付ログ画面を開いたとき、対応する記録が
-    # 並ぶようにする）。配達呼び出しは来訪者受付のような 受付/電話/お断り 応答は無く、記録＋
-    # 状態管理（受付済み→完了）のみ。company に呼び出し元端末、purpose に用件を入れて一覧で分かる。
+    # 呼び出しを受付ログに残す。スタッフが 受付/電話 で応答でき、その結果をキオスクが
+    # ポーリングして結果画面へ遷移できるようにする（来訪者受付と同じ仕組み。ただし配達では
+    # お断りは無く 受付/電話 の2択）。company に呼び出し元端末、purpose に用件を入れて一覧で分かる。
     log = ReceptionLog(
         tenant_id=tenant.id,
         visitor_name="配達",
@@ -519,9 +519,13 @@ async def kiosk_call_staff(
     )
     db.add(log)
     await db.commit()
+    await db.refresh(log)
 
     title = "配達の呼び出し"
     text = f"🔔 配達の呼び出し\n「{device_label}」から呼び出しがあります。{message or ''}"
+
+    # 通知タップで該当受付の対応モーダル(受付/電話)を直接開かせる。
+    push_url = f"/{tenant.id}/admin/reception?respond={log.id}"
 
     background.add_task(
         _fire_delivery_notifications,
@@ -536,9 +540,11 @@ async def kiosk_call_staff(
             "message": message,
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
+        push_url,
     )
 
-    return {"ok": True}
+    # id を返してキオスクの待機画面が応答(受付/電話)をポーリングできるようにする。
+    return {"ok": True, "id": log.id}
 
 
 # ── Lockers (device token auth) ────────────────────────────────────────────────
@@ -991,9 +997,13 @@ async def _push_delivery_enabled(tenant_id: str, db: AsyncSession) -> bool:
 
 
 async def _notify_push_text(
-    tenant_id: str, title: str, body: str, url_tenant_id: str, db: AsyncSession
+    tenant_id: str, title: str, body: str, url_tenant_id: str, db: AsyncSession,
+    url: str | None = None,
 ) -> None:
-    """Fire Web Push with a plain title/body to all subscriptions. Best-effort."""
+    """Fire Web Push with a plain title/body to all subscriptions. Best-effort.
+
+    ``url`` は通知タップ時に開くURL。未指定なら受付ログ一覧を開く。"""
+    target_url = url or f"/{url_tenant_id}/admin/reception"
     try:
         vapid_result = await db.execute(
             select(NotificationSetting).where(
@@ -1029,7 +1039,7 @@ async def _notify_push_text(
                     auth=sub.auth_key,
                     title=title,
                     body=body,
-                    url=f"/{url_tenant_id}/admin/reception",
+                    url=target_url,
                     private_key=private_key,
                     subject=settings.vapid_subject,
                 )
@@ -1085,7 +1095,7 @@ async def _notify_chatwork_text(
 
 
 async def _fire_delivery_notifications(
-    tenant_id: str, title: str, text: str, webhook_payload: dict
+    tenant_id: str, title: str, text: str, webhook_payload: dict, push_url: str | None = None
 ) -> None:
     """置き配/呼び出しの通知を新しいDBセッションで並行送信する（BackgroundTasks 用）。
 
@@ -1100,7 +1110,7 @@ async def _fire_delivery_notifications(
                 _notify_chatwork_text(tenant_id, text, db, types=("chatwork_delivery", "chatwork")),
             ]
             if await _push_delivery_enabled(tenant_id, db):
-                tasks.append(_notify_push_text(tenant_id, title, text, tenant_id, db))
+                tasks.append(_notify_push_text(tenant_id, title, text, tenant_id, db, push_url))
             await asyncio.gather(*tasks, return_exceptions=True)
     except Exception:
         pass

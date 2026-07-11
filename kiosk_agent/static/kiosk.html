@@ -266,7 +266,12 @@ async function mockFetch(method, path, body) {
   if (m) return _mockRelease(m[1], body?.pin);
   m = path.match(/^\/proxy\/lockers\/([^/]+)\/occupy-delivery$/);
   if (m) return _mockOccupyDelivery(m[1]);
-  if (path === "/proxy/call-staff") return { ok: true };
+  if (path === "/proxy/call-staff") {
+    // 配達呼び出しも受付と同様に応答をポーリングする。お断りは無いので 受付/電話 を巡回。
+    _mockDecisionPolls = 0;
+    _mockDecisionState = ["accepted", "phone"][_mockCreateCount++ % 2];
+    return { ok: true, id: "mock" };
+  }
   if (path === "/proxy/lockers/open-all") return _mockOpenAll();
   return {};
 }
@@ -1152,7 +1157,7 @@ function showDelivery() {
   let lockers = [], available = 0;
   let view = "loading";  // loading | choose | pick | openwait | sending | result | error
   let sel = null, err = "", resultTitle = "", resultSub = "";
-  let idleId, resultTimer = null;
+  let idleId, resultTimer = null, callId = null;
   function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
   CLEANUPS.push(() => { clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); });
 
@@ -1245,8 +1250,27 @@ function showDelivery() {
     } else if (view === "openwait") {
       document.getElementById("dl-lock").addEventListener("click", () => { resetIdle(); lockDelivery(); });
     } else if (view === "wait") {
-      // 受動的な待機画面。一定時間後に待機画面へ復帰(担当者は実地で対応)。
-      resultTimer = setTimeout(() => { cleanup(); go("idle"); }, Math.max(30, ST.kiosk_complete_timeout_sec * 3) * 1000);
+      // スタッフの応答(受付/電話)をポーリングし、結果画面へ切替。無応答は「電話」扱い。
+      // 受付フロー(showCalling)と同じ仕組み。応答待ちの間は無操作タイムアウトを止める。
+      clearTimeout(idleId);
+      if (callId) {
+        const ptoken = localStorage.getItem(TOKEN_KEY);
+        let settled = false;
+        const finish = (screen) => { if (settled) return; settled = true; go(screen, {}); };
+        every(2500, async () => {
+          if (settled) return;
+          try {
+            const r = await apiGet("/proxy/reception/" + encodeURIComponent(callId), ptoken);
+            if (r && r.state === "accepted") finish("resultOk");
+            else if (r && (r.state === "phone" || r.state === "declined")) finish("resultPhone");
+          } catch (_) { /* 通信不調は無視。下のタイムアウトで必ず離脱 */ }
+        });
+        // 無応答フォールバック: 90秒で電話案内へ(配達員が電話できるように)。
+        later(90000, () => finish("resultPhone"));
+      } else {
+        // 受付IDが無い旧経路: 一定時間で待機画面へ復帰。
+        resultTimer = setTimeout(() => { cleanup(); go("idle"); }, Math.max(30, ST.kiosk_complete_timeout_sec * 3) * 1000);
+      }
     } else if (view === "result") {
       document.getElementById("dl-done").addEventListener("click", () => { cleanup(); go("idle"); });
       resultTimer = setTimeout(() => { cleanup(); go("idle"); }, Math.max(6, ST.kiosk_complete_timeout_sec) * 1000);
@@ -1273,8 +1297,9 @@ function showDelivery() {
   async function callStaff() {
     view = "sending"; render();
     try {
-      await apiPost("/proxy/call-staff", { message: "" }, token);
-      view = "wait"; render();   // お待ちください画面へ
+      const r = await apiPost("/proxy/call-staff", { message: "" }, token);
+      callId = (r && r.id) || null;   // 応答(受付/電話)ポーリング用の受付ID
+      view = "wait"; render();        // お待ちください画面へ(応答をポーリング)
     } catch (e) {
       resultTitle = "通知に失敗しました"; resultSub = "恐れ入りますが、受付スタッフへお声がけください。";
       view = "result"; render();
