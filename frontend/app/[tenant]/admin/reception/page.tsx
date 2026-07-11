@@ -88,6 +88,7 @@ const STATUS_COLOR: Record<string, string> = {
 const METHOD_LABEL: Record<string, string> = {
   form: "フォーム入力",
   qr: "QR読取",
+  delivery: "配達呼出",
 };
 
 function translateMethod(method: string | null | undefined): string {
@@ -316,6 +317,9 @@ function DecisionButtons({ log, token, onUpdate }: { log: ReceptionLog; token: s
   const [busy, setBusy] = useState(false);
   const state = log.state ?? "received";
   if (state !== "received" && state !== "notified") return null;
+  // 配達呼び出しは 受付/電話/お断り の応答対象ではない（キオスク側に待機画面ポーリングが無い）。
+  // 状態は下の StatusSelect（受付済み→完了 等）で管理する。
+  if (log.method === "delivery") return null;
   const isAppointment = log.method === "appointment";
 
   const decide = (decision: "accept" | "phone" | "decline", nextState: string) => (e: React.MouseEvent) => {
@@ -831,7 +835,7 @@ export default function ReceptionLogsPage() {
                       <td style={{ padding: "12px 14px", color: "#6b6559" }}>{r.purpose || "—"}</td>
                       <td style={{ padding: "12px 14px" }}>
                         <span style={{ fontSize: 10.5, color: "#6b6559", background: "#f4f1ea", padding: "2px 8px", borderRadius: 3, border: "1px solid #efece5" }}>
-                          {r.method || "フォーム"}
+                          {r.method ? (METHOD_LABEL[r.method] ?? r.method) : "フォーム"}
                         </span>
                       </td>
                       <td style={{ padding: "12px 14px", color: "#6b6559" }}>{r.staff || "—"}</td>

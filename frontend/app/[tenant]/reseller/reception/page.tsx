@@ -51,6 +51,7 @@ const STATUS_COLOR: Record<string, string> = {
 const METHOD_LABEL: Record<string, string> = {
   form: "フォーム入力",
   qr: "QR読取",
+  delivery: "配達呼出",
 };
 
 function translateMethod(method: string | null | undefined): string {

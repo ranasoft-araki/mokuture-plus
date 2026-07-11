@@ -506,6 +506,20 @@ async def kiosk_call_staff(
     message = (body.message or "").strip() or None
     device_label = device.name or "受付端末"
 
+    # 呼び出しを受付ログに残す（スタッフが通知タップで受付ログ画面を開いたとき、対応する記録が
+    # 並ぶようにする）。配達呼び出しは来訪者受付のような 受付/電話/お断り 応答は無く、記録＋
+    # 状態管理（受付済み→完了）のみ。company に呼び出し元端末、purpose に用件を入れて一覧で分かる。
+    log = ReceptionLog(
+        tenant_id=tenant.id,
+        visitor_name="配達",
+        company=device_label,
+        purpose="配達の呼び出し" + (f"（{message}）" if message else ""),
+        method="delivery",
+        state="received",
+    )
+    db.add(log)
+    await db.commit()
+
     title = "配達の呼び出し"
     text = f"🔔 配達の呼び出し\n「{device_label}」から呼び出しがあります。{message or ''}"
 
