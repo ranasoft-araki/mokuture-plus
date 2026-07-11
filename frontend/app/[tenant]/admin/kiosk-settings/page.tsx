@@ -419,13 +419,13 @@ function WelcomeScreen({ bc, welcome, onWelcome, qrGuide, onQrGuide, formLabel, 
         </div>
         {/* Form button */}
         <div style={{ display: "flex", flexDirection: "column", height: 640 }}>
-          <div style={{ flex: 1, width: "100%", background: T.dark, borderRadius: 28, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 30, textAlign: "center", padding: "40px 56px" }}>
+          <div style={{ flex: 1, width: "100%", background: T.dark, borderRadius: 28, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 30, textAlign: "center", padding: "40px 24px" }}>
             <div style={{ width: 150, height: 150, borderRadius: 36, background: "rgba(255,255,255,.12)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Ico.Reception size={64} />
             </div>
             <div>
               <Editable value={formLabel} onChange={onFormLabel} placeholder="ボタン見出し"
-                style={{ fontSize: 56, fontWeight: 700, color: "#fff", lineHeight: 1.15 }} />
+                style={{ fontSize: 56, fontWeight: 700, color: "#fff", lineHeight: 1.15, whiteSpace: "nowrap" }} />
               <div style={{ fontSize: 27, color: "rgba(255,255,255,.74)", marginTop: 18, lineHeight: 1.6 }}>ご予約の無い方・お荷物の配達、<br />ロッカーのご利用</div>
             </div>
           </div>

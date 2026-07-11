@@ -714,10 +714,10 @@ ${errBanner}
   <div style="flex:1;padding:12px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center;min-height:0">
     <div id="cam-box" style="background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;width:100%;height:640px;max-height:100%">${camContent()}</div>
     <div style="display:flex;flex-direction:column;height:640px;max-height:100%">
-      <button id="wel-form" style="flex:1;width:100%;background:${T.dark};border:none;border-radius:28px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:30px;text-align:center;padding:40px 56px">
+      <button id="wel-form" style="flex:1;width:100%;background:${T.dark};border:none;border-radius:28px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:30px;text-align:center;padding:40px 24px">
         <div style="width:150px;height:150px;border-radius:36px;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.6)">${ICO.reception}</div></div>
         <div>
-          <div style="font-size:56px;font-weight:700;color:#fff;line-height:1.15">${escHtml(ST.kiosk_welcome_form_label || "QRをお持ちでない方はこちら")}</div>
+          <div style="font-size:56px;font-weight:700;color:#fff;line-height:1.15;white-space:nowrap">${escHtml(ST.kiosk_welcome_form_label || "QRをお持ちでない方はこちら")}</div>
           <div style="font-size:27px;color:rgba(255,255,255,.74);margin-top:18px;line-height:1.6">ご予約の無い方・お荷物の配達、<br>ロッカーのご利用</div>
         </div>
         <div style="color:rgba(255,255,255,.55);transform:scale(1.7)">${ICO.arrow_lg}</div>
