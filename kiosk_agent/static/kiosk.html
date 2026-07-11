@@ -23,7 +23,8 @@ button{font-family:inherit}
 @keyframes slide-in-up{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
 @keyframes fade-out{from{opacity:1}to{opacity:0}}
 @keyframes pop-in{from{opacity:0;transform:scale(0.85)}to{opacity:1;transform:scale(1)}}
-@keyframes ripple{from{transform:scale(0);opacity:.4}to{transform:scale(3);opacity:0}}
+@keyframes water-ring{0%{transform:scale(0);opacity:0}12%{opacity:.5}100%{transform:scale(1);opacity:0}}
+@keyframes water-splash{0%{transform:scale(.2);opacity:.4}100%{transform:scale(1.6);opacity:0}}
 </style>
 <script src="/jsqr.min.js"></script>
 </head>
@@ -84,7 +85,7 @@ function cleanup() { CLEANUPS.forEach(f => f()); CLEANUPS = []; }
 // ─── Tap feedback (波紋エフェクト + 「ポン」音) ───────────────────────────────
 // 画面のどこをタップしても、その位置に波紋を広げて「ポン」という音を鳴らす。
 // 音は受付設定の「タップ操作音」(kiosk_snd_tap) と音量(kiosk_vol) に従う。波紋は常に表示。
-// タップ音は音源ファイル /tap.mp3(Business22-3 を参考に additive 合成したほんわり柔らかいチャイム)を Web Audio で再生する。
+// タップ音は音源ファイル /tap.mp3(Business22-3 を参考に additive 合成したほわんとした淡いチャイム)を Web Audio で再生する。
 // 起動時に一度デコードしてバッファを使い回し、連打でも重ねて鳴らせる/低レイテンシ。
 let _tapAudioCtx = null;
 let _tapBuffer = null;      // デコード済みタップ音
@@ -109,24 +110,24 @@ function _ensureTapAudio() {
   }
   return _tapAudioCtx;
 }
-// mp3 が未ロード/未配信のときのフォールバック合成音。tap.mp3(ほんわり柔らかいチャイム)
-// に寄せた 低域ボディ(325/650Hz)＋暖かい芯(975Hz)。高域は控え、立ち上がりを柔らかく。
+// mp3 が未ロード/未配信のときのフォールバック合成音。tap.mp3(ほわんとした淡いチャイム)
+// に寄せた 低域ボディ(325/650Hz)＋暖かい芯(975Hz)。高域を抑え、立ち上がりをより柔らかく淡く。
 function _synthPon(ctx, level) {
   const t = ctx.currentTime;
   const master = ctx.createGain();
-  master.gain.value = 0.30 * level;
+  master.gain.value = 0.24 * level;
   master.connect(ctx.destination);
   [
-    { hz: 325,  gain: 0.45, dur: 0.70 },   // 低域ボディ
-    { hz: 650,  gain: 0.72, dur: 0.62 },   // 暖かい芯
-    { hz: 975,  gain: 0.55, dur: 0.52 },
-    { hz: 1300, gain: 0.14, dur: 0.34 },   // 控えめな上倍音
+    { hz: 325,  gain: 0.40, dur: 0.85 },   // 低域ボディ
+    { hz: 650,  gain: 0.70, dur: 0.75 },   // 暖かい芯
+    { hz: 975,  gain: 0.52, dur: 0.62 },
+    { hz: 1300, gain: 0.10, dur: 0.40 },   // 控えめな上倍音
   ].forEach(p => {
     const osc = ctx.createOscillator(), g = ctx.createGain();
     osc.type = "sine"; osc.frequency.value = p.hz;
     osc.connect(g); g.connect(master);
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(p.gain, t + 0.025);   // ゆっくり柔らかく立ち上げる
+    g.gain.linearRampToValueAtTime(p.gain, t + 0.05);    // さらにゆっくり柔らかく立ち上げる
     g.gain.exponentialRampToValueAtTime(0.0001, t + p.dur);
     osc.start(t); osc.stop(t + p.dur + 0.03);
   });
@@ -153,16 +154,30 @@ function playPon() {
   } catch (e) {}
 }
 _ensureTapAudio();   // 起動時に先読みして初回タップから鳴らせるようにする
+// 水面に石を落としたような波紋: 中心の淡い水しぶき＋広がる同心円を重ねる。
 function showRipple(x, y) {
-  const size = 150;
-  const r = document.createElement("div");
   const c = (ST && ST.brand_color) || "#4a7c4e";
-  r.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:${size}px;height:${size}px;`
-    + `margin:${-size/2}px 0 0 ${-size/2}px;border-radius:50%;pointer-events:none;z-index:99999;`
-    + `background:radial-gradient(circle, ${c} 0%, ${c}66 42%, ${c}00 70%);`
-    + `animation:ripple .6s ease-out forwards`;
-  document.body.appendChild(r);
-  setTimeout(() => r.remove(), 650);
+  const host = document.createElement("div");
+  host.style.cssText = `position:fixed;left:${x}px;top:${y}px;pointer-events:none;z-index:99999`;
+  // 中心の淡い水しぶき
+  const ss = 190;
+  const splash = document.createElement("div");
+  splash.style.cssText = `position:absolute;width:${ss}px;height:${ss}px;margin:${-ss/2}px 0 0 ${-ss/2}px;`
+    + `border-radius:50%;background:radial-gradient(circle, ${c}55 0%, ${c}22 40%, ${c}00 68%);`
+    + `animation:water-splash .9s ease-out forwards`;
+  host.appendChild(splash);
+  // 広がる同心円(水面の波紋)。時間差で3重にして水紋らしく。
+  const N = 3, maxSize = 360;
+  for (let i = 0; i < N; i++) {
+    const ring = document.createElement("div");
+    ring.style.cssText = `position:absolute;width:${maxSize}px;height:${maxSize}px;`
+      + `margin:${-maxSize/2}px 0 0 ${-maxSize/2}px;border-radius:50%;border:2px solid ${c};`
+      + `box-shadow:0 0 8px ${c}44, inset 0 0 8px ${c}33;opacity:0;`
+      + `animation:water-ring 1.5s cubic-bezier(.15,.6,.25,1) ${(i * 0.24).toFixed(2)}s forwards`;
+    host.appendChild(ring);
+  }
+  document.body.appendChild(host);
+  setTimeout(() => host.remove(), 1500 + N * 240 + 120);
 }
 document.addEventListener("pointerdown", e => {
   showRipple(e.clientX, e.clientY);
