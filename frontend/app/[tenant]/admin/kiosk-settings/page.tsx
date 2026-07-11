@@ -154,10 +154,11 @@ export default function KioskSettingsPage() {
       }
     >
       <style>{`
-        .mk-edit { cursor: text; outline: none; border-radius: 4px; transition: background .12s, box-shadow .12s; }
+        /* 編集可能な文字は常時うっすら(半透明の背景+破線の枠)ハイライトして、編集できる箇所が一目で分かるようにする */
+        .mk-edit { cursor: text; border-radius: 5px; background: rgba(74,124,78,.14); outline: 1.5px dashed rgba(74,124,78,.6); outline-offset: 2px; transition: background .12s, box-shadow .12s, outline-color .12s; }
         .mk-edit:empty::before { content: attr(data-ph); color: rgba(120,120,120,.5); }
-        .mk-edit:hover { box-shadow: 0 0 0 2px rgba(74,124,78,.45); background: rgba(74,124,78,.05); }
-        .mk-edit:focus { box-shadow: 0 0 0 2px #4a7c4e; background: rgba(74,124,78,.08); }
+        .mk-edit:hover { background: rgba(74,124,78,.22); outline-color: rgba(74,124,78,.95); }
+        .mk-edit:focus { outline: none; box-shadow: 0 0 0 2px #4a7c4e; background: rgba(74,124,78,.10); }
         @keyframes mkpv-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.06)} }
       `}</style>
 
@@ -171,7 +172,7 @@ export default function KioskSettingsPage() {
       <MkCard padding="16px" style={{ marginBottom: 20 }}>
         <MkSectionTitle
           title="ライブプレビュー"
-          subtitle="実際のキオスク画面です。青くハイライトされる文字をクリックすると直接編集できます"
+          subtitle="実際のキオスク画面です。破線で囲まれ、うっすら色が付いた文字がクリックで直接編集できる箇所です"
         />
 
         {/* Tab bar */}
@@ -479,7 +480,7 @@ function MenuScreen({ bc, logoUrl, menuTitle, onMenuTitle, idleTimeout, logoPosX
     <div ref={rootRef} style={{ width: 1920, height: 1080, background: T.bg, display: "flex", flexDirection: "column", fontFamily: FONT, position: "relative" }}>
       {logoUrl && (
         <div onMouseDown={onLogoDown}
-          style={{ position: "absolute", left: `${logoPosX * 100}%`, top: `${logoPosY * 100}%`, width: `${logoWidthPct}%`, cursor: "grab", zIndex: 5 }}>
+          style={{ position: "absolute", left: `${logoPosX * 100}%`, top: `${logoPosY * 100}%`, width: `${logoWidthPct}%`, cursor: "grab", zIndex: 5, outline: "1.5px dashed rgba(74,124,78,.65)", outlineOffset: 4, borderRadius: 6 }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={logoUrl} alt="logo" style={{ width: "100%", height: "auto", objectFit: "contain", display: "block", pointerEvents: "none" }} />
           <div onMouseDown={onResizeDown}
