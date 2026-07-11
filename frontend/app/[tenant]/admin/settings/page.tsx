@@ -172,7 +172,7 @@ export default function AdminSettingsPage() {
               </Field>
               <div style={{ gridColumn: "span 2" }}>
                 <Field label="企業ロゴ" hint="PNG / SVG · 透明背景推奨 · 512×512以上">
-                  <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
                     <div style={{ width: 72, height: 72, borderRadius: 7, background: "#f4f1ea", border: "1px solid #efece5", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
                       {(logoPreview ?? logoUrl) ? (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -206,7 +206,7 @@ export default function AdminSettingsPage() {
                 </Field>
               </div>
               <Field label="テーマカラー" hint="キオスクUIのアクセントカラー">
-                <div style={{ display: "flex", gap: 8 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                   {THEME_COLORS.map((c) => (
                     <button
                       key={c}

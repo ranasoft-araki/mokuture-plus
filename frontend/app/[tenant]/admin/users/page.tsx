@@ -159,7 +159,7 @@ export default function AdminUsersPage() {
           <MkCard style={{ marginBottom: 20 }}>
             <MkSectionTitle title="新しいユーザーを追加" />
             <form onSubmit={handleCreate}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <div className="adm-cols-2" style={{ marginBottom: 12 }}>
                 <div>
                   <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>
                     メールアドレス
@@ -252,7 +252,8 @@ export default function AdminUsersPage() {
               ユーザーがいません
             </div>
           ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <div className="adm-scroll-x">
+            <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #efece5" }}>
                   {["メールアドレス", "ロール", "作成日", "操作"].map((h) => (
@@ -320,7 +321,7 @@ export default function AdminUsersPage() {
                                 onChange={(e) => setPwResetValue(e.target.value)}
                                 style={{
                                   padding: "4px 8px", fontSize: 12, border: "1px solid #d8d3c7",
-                                  borderRadius: 6, fontFamily: FONT_JP, background: "#faf8f4", width: 180,
+                                  borderRadius: 6, fontFamily: FONT_JP, background: "#faf8f4", maxWidth: 180, width: "100%",
                                 }}
                               />
                               <MkBtn type="submit" variant="primary" size="sm" disabled={pwResetSaving}>
@@ -353,6 +354,7 @@ export default function AdminUsersPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </MkCard>
       </div>

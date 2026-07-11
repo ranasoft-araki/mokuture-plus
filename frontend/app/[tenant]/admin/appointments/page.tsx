@@ -147,7 +147,7 @@ function AppointmentForm({
 
   return (
     <form onSubmit={onSubmit}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+      <div className="adm-cols-2" style={{ marginBottom: 12 }}>
         <div>
           <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>
             氏名 <span style={{ color: "#a84238" }}>*</span>
@@ -1006,7 +1006,7 @@ export default function AppointmentsPage() {
           /* ════════════ TIMELINE ════════════ */
           <div>
             {/* Navigation row */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+            <div className="adm-toolbar" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
               {/* Day/Week/Month mode */}
               <div style={{ display: "flex", border: "1px solid #d8d3c7", borderRadius: 8, overflow: "hidden" }}>
                 {(["day", "week", "month"] as TimelineMode[]).map((m, i) => (
@@ -1072,17 +1072,17 @@ export default function AppointmentsPage() {
         ) : (
           /* ════════════ LIST ════════════ */
           <div>
-            <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <div className="adm-toolbar" style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
               <div style={{ display: "flex", gap: 4 }}>
                 {DATE_TABS.map(t => <button key={t.id} style={filterTabStyle(dateFilter === t.id)} onClick={() => setDateFilter(t.id)}>{t.label}</button>)}
               </div>
               {dateFilter === "range" && (
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <input type="date" value={rangeFrom} onChange={e => setRangeFrom(e.target.value)}
-                    style={{ ...INPUT_STYLE, width: 140, padding: "5px 8px", fontSize: 12.5 }} />
+                    style={{ ...INPUT_STYLE, maxWidth: 140, width: "100%", padding: "5px 8px", fontSize: 12.5 }} />
                   <span style={{ fontSize: 12, color: "#a8a198", fontFamily: FONT_JP }}>〜</span>
                   <input type="date" value={rangeTo} onChange={e => setRangeTo(e.target.value)}
-                    style={{ ...INPUT_STYLE, width: 140, padding: "5px 8px", fontSize: 12.5 }} />
+                    style={{ ...INPUT_STYLE, maxWidth: 140, width: "100%", padding: "5px 8px", fontSize: 12.5 }} />
                 </div>
               )}
               <div style={{ width: 1, height: 20, background: "#d8d3c7" }} />
@@ -1131,7 +1131,8 @@ export default function AppointmentsPage() {
                   ))}
                 </div>
               ) : (
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <div className="adm-scroll-x">
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
                   <thead>
                     <tr style={{ borderBottom: "1px solid #efece5", background: "#faf8f4" }}>
                       {["来社日時", "氏名", "会社", "担当", "目的", "会議室", "時間", "ステータス", "操作"].map(h => (
@@ -1172,6 +1173,7 @@ export default function AppointmentsPage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
             </MkCard>
           </div>

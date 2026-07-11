@@ -110,7 +110,7 @@ export default function InquiriesPage() {
                   </div>
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 12, justifyContent: "flex-end" }}>
+              <div style={{ display: "flex", gap: 8, marginTop: 12, justifyContent: "flex-end", flexWrap: "wrap" }}>
                 {it.state !== "read" && <MkBtn variant="default" size="sm" onClick={() => setState(it.id, "read")}>既読にする</MkBtn>}
                 {it.state !== "archived" && <MkBtn variant="default" size="sm" onClick={() => setState(it.id, "archived")}>対応済みにする</MkBtn>}
                 <MkBtn variant="ghost" size="sm" onClick={() => remove(it.id)}>削除</MkBtn>

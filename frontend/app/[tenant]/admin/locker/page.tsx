@@ -332,7 +332,7 @@ export default function AdminLockerPage() {
         >
           <MkSectionTitle title="ロッカーを追加" />
           <form onSubmit={handleCreate}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+            <div className="adm-cols-2" style={{ marginBottom: 16 }}>
               <div>
                 <label style={labelStyle}>ロッカー名</label>
                 <input

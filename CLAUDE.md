@@ -498,6 +498,20 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - **受付設定(`kiosk-settings`)** に「受付電話番号(`kiosk_phone_number`)」「問い合わせフォームURL(外部・任意, `inquiry_form_url`)」を追加。
 - **受付設定はCanva風WYSIWYGに刷新**: 実キオスク画面(kiosk.html)を1920×1080で忠実に再現した5画面プレビュー(待機/ようこそ/受付メニュー/呼び出し中/完了)を`ScaledCanvas`で縮小表示し、`Editable`(contentEditable, onBlurでcommit)で文言を画面上から直接編集する。編集対象=`kiosk_welcome_message`/`kiosk_sub_message`/`kiosk_menu_title`/`kiosk_welcome_qr_guide`/`kiosk_welcome_form_label`/`kiosk_calling_message`/`kiosk_complete_message`。ロゴは受付メニュー画面で`logo_pos_x/y`(画面比)・`logo_width_pct`(画面幅%)をドラッグ/ハンドルで調整=kiosk.html `showTop` の絶対配置ロゴに実配線。旧プレビューの誤り(存在しない4タイル「QR受付/配送/その他」)を廃し実機の3タイル(ご訪問/荷物の配達/ロッカー)に一致。数値・電話番号・スタッフ/来訪目的リストは下部の補助フォーム。**以前プレビュー限定で実機未使用だった `kiosk_calling_message`/`kiosk_complete_message`/`logo_pos_*` を kiosk.html に配線して同期を回復した。**
 
+### 管理画面のモバイル・レスポンシブ
+
+管理画面(`AdminShell` 配下の全ページ)は幅 320–767px のスマホでも横あふれ・見切れなく表示・操作できるようにする。`AdminShell` はモバイルでサイドバー→ハンバーガー化済み(`adm-sidebar`/`adm-hamburger`/`adm-topbar`/`adm-content`)。**各ページのコンテンツは固定幅/固定列グリッドを直書きせず、`globals.css` の共通ユーティリティを使う**こと:
+
+- `.adm-autofit` / `.adm-autofit-sm` / `.adm-autofit-lg` — カード/KPI/統計/クイックリンク等の自動折返しグリッド(`repeat(auto-fit, minmax(160/120/240px, 1fr))`、gap内蔵)。**インラインの `display:grid`/`gridTemplateColumns`/`gap` の代わりに使う**(併記時は grid 系インラインを削除)。
+- `.adm-scroll-x` — 横長のテーブル/タイムライン/カレンダーを**その要素の中だけ横スクロール**させるラッパー(`overflow-x:auto`)。`<table>` は必ずこれで囲み、テーブルに `minWidth`(列数×約90px)を付けて潰れ防止。ページ全体はズレない。
+- `.adm-toolbar` — 検索+フィルタ+アクションの行(`flex-wrap`)。中の検索ボックス等は `maxWidth:<元値>, width:"100%", flex:"1 1 220px", minWidth:0` で可変化。
+- `.adm-cols-2` — 2カラムのフォーム/詳細グリッド(640px以下で1カラム、gap内蔵)。子の `gridColumn:"span 2"`/`"1 / -1"` は1列化後も破綻しない。
+- `.adm-bulkbar` — 画面下部 `position:fixed` のアクションバー(767px以下で折返し+padding調整)。
+- `.adm-modal` — ピクセル固定幅モーダルの幅上限(767px以下 `max-width:calc(100vw-24px)`)。個別に `maxWidth:"90vw"` を付けても可。
+- 既存の `.adm-grid-2/3/4/5/main/locker/kiosk-settings` も 767px で縮む。
+
+**新しい管理画面ページ/UI を追加するときは、固定 `gridTemplateColumns`・固定幅入力・生の `<table>`・折返さないツールバー/下部バーを避け、上記ユーティリティを使うこと。** ルート `viewport` は `width=device-width` 設定済み(`app/layout.tsx`)。キオスク受付設定の 1920×1080 `ScaledCanvas` プレビューは `transform:scale` でコンテナ幅に縮小されるため**内部は固定サイズのままでよい(触らない)**。
+
 ### 秘密情報の暗号化
 - Slack/Chatwork Webhook URL は `services/crypto.py` (Fernet) で暗号化して DB 保存。
 - `ENCRYPTION_KEY` 環境変数が必須。

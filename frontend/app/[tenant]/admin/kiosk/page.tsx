@@ -218,7 +218,7 @@ export default function AdminKioskPage() {
         </div>
       )}
       {/* Summary strip — 4 cards */}
-      <div style={{ display: "flex", gap: 14, marginBottom: 22 }}>
+      <div className="adm-autofit-sm" style={{ marginBottom: 22 }}>
         {[
           { label: "稼働中",      value: onlineCount,   color: "#3a6240" },
           { label: "承認待ち",    value: pendingCount,  color: pendingCount > 0 ? "#b8763a" : "#a8a198" },
@@ -279,13 +279,13 @@ export default function AdminKioskPage() {
       )}
 
       {/* Search / filter toolbar */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+      <div className="adm-toolbar" style={{ marginBottom: 14 }}>
         <input
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="端末名・場所で検索"
-          style={{ height: 32, border: "1px solid #efece5", borderRadius: 6, fontSize: 13, padding: "0 10px", background: "#fffefb", color: "#2d2a24", outline: "none", minWidth: 200 }}
+          style={{ height: 32, border: "1px solid #efece5", borderRadius: 6, fontSize: 13, padding: "0 10px", background: "#fffefb", color: "#2d2a24", outline: "none", flex: "1 1 200px", minWidth: 0 }}
         />
         <select
           value={statusFilter}
@@ -312,7 +312,7 @@ export default function AdminKioskPage() {
             const online = isOnline(d);
             return (
               <MkCard key={d.id} padding="0" style={!online && d.last_seen_at ? { borderLeft: "3px solid #d4a017" } : undefined}>
-                <div style={{ display: "flex", alignItems: "stretch" }}>
+                <div style={{ display: "flex", alignItems: "stretch", flexWrap: "wrap" }}>
                   {/* Preview area */}
                   <div
                     style={{
@@ -333,8 +333,8 @@ export default function AdminKioskPage() {
                   </div>
 
                   {/* Details */}
-                  <div style={{ flex: 1, padding: "18px 22px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 120, padding: "18px 22px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                       {editingDeviceId === d.id ? (
                         <>
                           <input
@@ -393,7 +393,7 @@ export default function AdminKioskPage() {
                             }}
                             placeholder="例: 1F受付デスク"
                             autoFocus
-                            style={{ border: "1px solid #c8a96e", borderRadius: 4, padding: "2px 8px", fontSize: 12, color: "#1d1a15", background: "#fffefb", width: 180 }}
+                            style={{ border: "1px solid #c8a96e", borderRadius: 4, padding: "2px 8px", fontSize: 12, color: "#1d1a15", background: "#fffefb", maxWidth: 180, width: "100%", minWidth: 0 }}
                           />
                           <button
                             onClick={() => void handleSaveDeviceLocation(d.id)}
@@ -424,8 +424,7 @@ export default function AdminKioskPage() {
                         </span>
                       )}
                     </div>
-                    <div style={{
-                      display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16,
+                    <div className="adm-autofit-sm" style={{
                       marginTop: 18, paddingTop: 14, borderTop: "1px solid #efece5",
                     }}>
                       {[
@@ -483,7 +482,7 @@ export default function AdminKioskPage() {
       <div style={{ marginTop: 16, padding: "12px 16px", background: "#f4f1ea", borderRadius: 7, borderLeft: "2px solid #4a7c4e", fontSize: 11.5, color: "#6b6559" }}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>セットアップ手順</div>
         <ol style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
-          <li>キオスク端末を起動する（Raspberry Pi は自動、ブラウザ端末は <span style={{ fontFamily: "monospace", fontSize: 11 }}>{kioskUrl}</span> を開く）</li>
+          <li>キオスク端末を起動する（Raspberry Pi は自動、ブラウザ端末は <span style={{ fontFamily: "monospace", fontSize: 11, overflowWrap: "anywhere" }}>{kioskUrl}</span> を開く）</li>
           <li>端末画面に「承認待ちです」と表示される</li>
           <li>この画面の<strong>「承認待ちの端末」</strong>に自動で表示されるので「承認する」を押す</li>
           <li>端末が自動的にキオスク受付画面へ切り替わる</li>

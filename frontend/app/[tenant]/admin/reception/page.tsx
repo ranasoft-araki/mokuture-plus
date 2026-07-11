@@ -200,7 +200,7 @@ function ReceptionDetailModal({ log, token, onClose, onNotesUpdate }: { log: Rec
             </span>
           </div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 20 }}>
+        <div className="adm-cols-2" style={{ marginTop: 20 }}>
           <div>
             <div style={labelStyle}>訪問者名</div>
             <div style={valueStyle}>{log.visitor_name}</div>
@@ -653,8 +653,8 @@ export default function ReceptionLogsPage() {
         <RespondModal log={respondLog} token={token} onClose={() => setRespondId(null)} onUpdate={handleStateUpdate} />
       )}
 
-      <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#fffefb", border: "1px solid #d8d3c7", borderRadius: 7, padding: "0 12px", height: 34, width: 280 }}>
+      <div className="adm-toolbar" style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#fffefb", border: "1px solid #d8d3c7", borderRadius: 7, padding: "0 12px", height: 34, maxWidth: 280, width: "100%", flex: "1 1 220px", minWidth: 0 }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a8a198" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
           </svg>
@@ -772,7 +772,8 @@ export default function ReceptionLogsPage() {
           <div style={{ padding: "48px 20px", textAlign: "center", color: "#a8a198" }}>受付記録がありません</div>
         ) : (
           <>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <div className="adm-scroll-x">
+            <table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "#f4f1ea", fontSize: 10.5, color: "#a8a198", textAlign: "left", letterSpacing: "0.3px" }}>
                   <th style={{ padding: "11px 14px", fontWeight: 600 }}>
@@ -865,6 +866,7 @@ export default function ReceptionLogsPage() {
                 })}
               </tbody>
             </table>
+            </div>
 
             <div style={{ padding: "14px 20px", display: "flex", alignItems: "center", borderTop: "1px solid #efece5", fontSize: 11.5 }}>
               <span style={{ color: "#a8a198" }}>{paginated.length} / {filtered.length} 件</span>
@@ -895,7 +897,7 @@ export default function ReceptionLogsPage() {
       </MkCard>
 
       {selectedIds.size > 0 && (
-        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#1d1a15", color: "#f4f0e8", padding: "16px 24px", display: "flex", alignItems: "center", gap: 16, zIndex: 100 }}>
+        <div className="adm-bulkbar" style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#1d1a15", color: "#f4f0e8", padding: "16px 24px", display: "flex", alignItems: "center", gap: 16, zIndex: 100 }}>
           <span style={{ fontSize: 13 }}>{selectedIds.size}件を選択中</span>
           <button
             onClick={() => handleBulkStateUpdate("notified")}

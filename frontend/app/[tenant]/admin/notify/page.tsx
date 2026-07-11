@@ -261,7 +261,7 @@ function PushPanel({ authToken }: { authToken: string }) {
             {vapidKey && (
               <div style={{ marginBottom: 16 }}>
                 {isSubscribed ? (
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <div style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500, flex: 1 }}>
                       このデバイスで受信中
                     </div>
@@ -852,7 +852,7 @@ export default function AdminNotifyPage() {
                     連携解除
                   </button>
                 ) : (
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <span style={{ fontSize: 12, color: "#6b6559" }}>連携を解除しますか？</span>
                     <button
                       onClick={handleDisconnectSlack}
@@ -980,7 +980,7 @@ export default function AdminNotifyPage() {
               />
             </Field>
             <Field label="通知対象">
-              <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {["受付完了", "呼び出し中", "タイムアウト"].map((l, i) => (
                   <label key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "1px solid #d8d3c7", background: "#fffefb", borderRadius: 5, fontSize: 11.5, color: "#6b6559", cursor: "pointer" }}>
                     <span style={{ width: 14, height: 14, borderRadius: 3, border: "1.5px solid #d8d3c7", background: "#fffefb", display: "flex", alignItems: "center", justifyContent: "center" }} />
@@ -995,7 +995,7 @@ export default function AdminNotifyPage() {
               {cwError}
             </div>
           )}
-          <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <MkBtn variant="primary" size="sm" onClick={handleSaveChatwork}>
               {cwSaving ? "保存中…" : "保存"}
             </MkBtn>
@@ -1083,7 +1083,7 @@ export default function AdminNotifyPage() {
               {customWebhookError}
             </div>
           )}
-          <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <MkBtn variant="primary" size="sm" onClick={handleSaveCustomWebhook}>
               {customWebhookSaving ? "保存中…" : "保存"}
             </MkBtn>
@@ -1141,7 +1141,7 @@ export default function AdminNotifyPage() {
                   {dlSlackError}
                 </div>
               )}
-              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center" }}>
+              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <MkBtn variant="primary" size="sm" onClick={handleSaveDlSlack}>
                   {dlSlackSaving ? "保存中…" : "保存"}
                 </MkBtn>
@@ -1189,7 +1189,7 @@ export default function AdminNotifyPage() {
                   {dlCwError}
                 </div>
               )}
-              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center" }}>
+              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <MkBtn variant="primary" size="sm" onClick={handleSaveDlChatwork}>
                   {dlCwSaving ? "保存中…" : "保存"}
                 </MkBtn>
@@ -1227,7 +1227,7 @@ export default function AdminNotifyPage() {
                   {dlWebhookError}
                 </div>
               )}
-              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center" }}>
+              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <MkBtn variant="primary" size="sm" onClick={handleSaveDlWebhook}>
                   {dlWebhookSaving ? "保存中…" : "保存"}
                 </MkBtn>
@@ -1280,7 +1280,7 @@ export default function AdminNotifyPage() {
                   {dlPushError}
                 </div>
               )}
-              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center" }}>
+              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <button
                   onClick={handleTestDlPush}
                   disabled={dlPushTesting || !dlPushEnabled}

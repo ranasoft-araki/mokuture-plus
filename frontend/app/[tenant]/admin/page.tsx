@@ -87,7 +87,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
+      <div className="adm-autofit" style={{ marginBottom: 24 }}>
         <KpiCard
           label="デバイス"
           value={stats?.device_count ?? 0}
@@ -117,7 +117,7 @@ export default function DashboardPage() {
         />
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
+      <div className="adm-autofit-lg" style={{ marginBottom: 24 }}>
         <MkCard style={{ textAlign: "center" as const, padding: "32px 24px" }}>
           <MkSectionTitle title="本日の受付" subtitle="今日 00:00 以降" style={{ marginBottom: 16 }} />
           <div style={{ fontSize: 72, fontWeight: 700, color: "#2d6a4f", lineHeight: 1, letterSpacing: "-2px" }}>
@@ -179,7 +179,7 @@ export default function DashboardPage() {
 
       <MkCard>
         <MkSectionTitle title="クイックアクセス" subtitle="よく使う管理ページ" style={{ marginBottom: 16 }} />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+        <div className="adm-autofit">
           <QuickLink
             icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>}
             label="メディア管理"

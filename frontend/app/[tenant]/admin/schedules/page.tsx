@@ -44,7 +44,7 @@ function ConfirmDialog({ open, title, description, onConfirm, onCancel, danger }
       onClick={onCancel}
     >
       <div
-        style={{ background: "#fffefb", borderRadius: 12, padding: 28, width: 360, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
+        style={{ background: "#fffefb", borderRadius: 12, padding: 28, width: 360, maxWidth: "90vw", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15", marginBottom: 8 }}>{title}</div>
@@ -365,7 +365,7 @@ export default function AdminSchedulesPage() {
               を先に作成してください
             </p>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: 12, alignItems: "end" }}>
+            <div className="adm-autofit" style={{ alignItems: "end" }}>
               <div>
                 <label style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 6 }}>プレイリスト</label>
                 <select value={formPlaylistId} onChange={(e) => setFormPlaylistId(e.target.value)} style={inputStyle}>
@@ -418,7 +418,8 @@ export default function AdminSchedulesPage() {
 
       {/* Weekly grid */}
       <MkCard padding="0">
-        <div ref={gridRef}>
+        <div className="adm-scroll-x">
+        <div ref={gridRef} style={{ minWidth: 760 }}>
           {/* Hour header */}
           <div style={{ display: "grid", gridTemplateColumns: "60px 1fr", borderBottom: "1px solid #efece5", background: "#f4f1ea" }}>
             <div style={{ padding: "10px 12px", fontSize: 10.5, color: "#a8a198", fontFamily: "monospace", letterSpacing: "0.4px" }}>HOUR</div>
@@ -568,6 +569,7 @@ export default function AdminSchedulesPage() {
             );
           })}
         </div>
+        </div>
       </MkCard>
 
       {schedules.length === 0 && !loading && (
@@ -631,11 +633,11 @@ export default function AdminSchedulesPage() {
           onClick={() => setEditTarget(null)}
         >
           <div
-            style={{ background: "#fffefb", borderRadius: 12, padding: 28, width: 480, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
+            style={{ background: "#fffefb", borderRadius: 12, padding: 28, width: 480, maxWidth: "90vw", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
             onClick={(e) => e.stopPropagation()}
           >
             <div style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15", marginBottom: 20 }}>スケジュール編集</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+            <div className="adm-cols-2" style={{ marginBottom: 20 }}>
               <div style={{ gridColumn: "1 / -1" }}>
                 <label style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 6 }}>プレイリスト</label>
                 <select value={editPlaylistId} onChange={(e) => setEditPlaylistId(e.target.value)} style={inputStyle}>

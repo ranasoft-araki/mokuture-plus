@@ -83,7 +83,7 @@ function RoomForm({
       onSubmit={(e) => { e.preventDefault(); onSubmit(data); }}
       style={{ display: "flex", flexDirection: "column", gap: 14 }}
     >
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div className="adm-cols-2">
         <div style={{ gridColumn: "span 2" }}>
           <label style={{ display: "block", fontSize: 11.5, color: "#6b6559", marginBottom: 5, fontFamily: FONT_JP }}>
             会議室名 <span style={{ color: "#a84238" }}>*</span>

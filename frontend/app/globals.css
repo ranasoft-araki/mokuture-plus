@@ -92,6 +92,37 @@ body {
   .adm-kpi-row > * { flex: 1 1 calc(50% - 7px); min-width: 0; }
 }
 
+/* ── Admin responsive helpers (use these instead of inline fixed grids) ──
+   These let page content reflow cleanly on phones without per-page breakpoints. */
+
+/* Auto-reflowing card / KPI / stat / quick-link grid.
+   Packs as many columns as fit; collapses to fewer on narrow screens. */
+.adm-autofit    { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.adm-autofit-sm { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+.adm-autofit-lg { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+
+/* Wide tables / timelines / calendars: scroll horizontally *inside their own box*
+   so cards and the rest of the page stay put on narrow screens. Wrap the wide element. */
+.adm-scroll-x   { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* Toolbar row (search + filters + actions) that wraps cleanly instead of overflowing. */
+.adm-toolbar    { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+
+/* Simple two-column form/detail grid that stacks to one column on phones. */
+.adm-cols-2     { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+@media (max-width: 640px) {
+  .adm-cols-2 { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 767px) {
+  /* Fixed bottom action bar (bulk actions etc.): wrap buttons, tighten padding. */
+  .adm-bulkbar      { flex-wrap: wrap; gap: 8px !important; padding: 12px 16px !important; row-gap: 8px; }
+  .adm-bulkbar > *  { flex: 1 1 auto; }
+  /* Modals that declare a fixed pixel width should never exceed the viewport. */
+  .adm-modal        { width: 100% !important; max-width: calc(100vw - 24px) !important; }
+}
+
 /* ── Kiosk UI animations ── */
 @keyframes kiosk-screen-in {
   from { opacity: 0; transform: translateY(18px); }
