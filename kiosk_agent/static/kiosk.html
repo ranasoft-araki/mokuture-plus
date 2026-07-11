@@ -154,7 +154,7 @@ function playPon() {
   } catch (e) {}
 }
 _ensureTapAudio();   // 起動時に先読みして初回タップから鳴らせるようにする
-// 水面に石を落としたような波紋: 中心の淡い水しぶき＋広がる同心円を重ねる。
+// 水面に石を落としたような波紋を1つ: 中心の淡い水しぶき＋広がる同心円1本。
 function showRipple(x, y) {
   const c = (ST && ST.brand_color) || "#4a7c4e";
   const host = document.createElement("div");
@@ -166,18 +166,16 @@ function showRipple(x, y) {
     + `border-radius:50%;background:radial-gradient(circle, ${c}55 0%, ${c}22 40%, ${c}00 68%);`
     + `animation:water-splash .9s ease-out forwards`;
   host.appendChild(splash);
-  // 広がる同心円(水面の波紋)。時間差で3重にして水紋らしく。
-  const N = 3, maxSize = 360;
-  for (let i = 0; i < N; i++) {
-    const ring = document.createElement("div");
-    ring.style.cssText = `position:absolute;width:${maxSize}px;height:${maxSize}px;`
-      + `margin:${-maxSize/2}px 0 0 ${-maxSize/2}px;border-radius:50%;border:2px solid ${c};`
-      + `box-shadow:0 0 8px ${c}44, inset 0 0 8px ${c}33;opacity:0;`
-      + `animation:water-ring 1.5s cubic-bezier(.15,.6,.25,1) ${(i * 0.24).toFixed(2)}s forwards`;
-    host.appendChild(ring);
-  }
+  // 広がる同心円(水面の波紋) 1本
+  const maxSize = 360;
+  const ring = document.createElement("div");
+  ring.style.cssText = `position:absolute;width:${maxSize}px;height:${maxSize}px;`
+    + `margin:${-maxSize/2}px 0 0 ${-maxSize/2}px;border-radius:50%;border:2px solid ${c};`
+    + `box-shadow:0 0 8px ${c}44, inset 0 0 8px ${c}33;opacity:0;`
+    + `animation:water-ring 1.5s cubic-bezier(.15,.6,.25,1) forwards`;
+  host.appendChild(ring);
   document.body.appendChild(host);
-  setTimeout(() => host.remove(), 1500 + N * 240 + 120);
+  setTimeout(() => host.remove(), 1620);
 }
 document.addEventListener("pointerdown", e => {
   showRipple(e.clientX, e.clientY);
