@@ -142,16 +142,20 @@ export default function AdminSchedulesPage() {
     return () => document.removeEventListener("keydown", onKey);
   }, [contextMenu]);
 
-  // Drag event handlers
+  // Drag event handlers (mouse + touch)
   useEffect(() => {
     if (!dragging) return;
 
-    const onMouseMove = (e: MouseEvent) => {
+    const onMove = (e: MouseEvent | TouchEvent) => {
       if (!gridRef.current) return;
       const rect = gridRef.current.getBoundingClientRect();
+      const clientX = "touches" in e ? e.touches[0]?.clientX : (e as MouseEvent).clientX;
+      const clientY = "touches" in e ? e.touches[0]?.clientY : (e as MouseEvent).clientY;
+      if (clientX === undefined || clientY === undefined) return;
+
       const DAY_LABEL_WIDTH = 60;
       const gridWidth = rect.width - DAY_LABEL_WIDTH;
-      const relX = e.clientX - rect.left - DAY_LABEL_WIDTH;
+      const relX = clientX - rect.left - DAY_LABEL_WIDTH;
       const fraction = Math.max(0, Math.min(1, relX / gridWidth));
       const minuteAtCursor = fraction * 1440;
 
@@ -162,7 +166,7 @@ export default function AdminSchedulesPage() {
         const newEnd = newStart + duration;
 
         const headerHeight = 41;
-        const relY = e.clientY - rect.top - headerHeight;
+        const relY = clientY - rect.top - headerHeight;
         const rowHeight = (rect.height - headerHeight) / 7;
         const newDay = Math.max(0, Math.min(6, Math.floor(relY / rowHeight)));
 
@@ -174,7 +178,7 @@ export default function AdminSchedulesPage() {
       }
     };
 
-    const onMouseUp = async () => {
+    const onEnd = async () => {
       if (!dragging) return;
       const token = getAccessToken();
       if (!token) return;
@@ -212,11 +216,15 @@ export default function AdminSchedulesPage() {
       }
     };
 
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
+    document.addEventListener("mousemove", onMove as EventListener);
+    document.addEventListener("touchmove", onMove as EventListener);
+    document.addEventListener("mouseup", onEnd);
+    document.addEventListener("touchend", onEnd);
     return () => {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
+      document.removeEventListener("mousemove", onMove as EventListener);
+      document.removeEventListener("touchmove", onMove as EventListener);
+      document.removeEventListener("mouseup", onEnd);
+      document.removeEventListener("touchend", onEnd);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragging]);
@@ -520,6 +528,35 @@ export default function AdminSchedulesPage() {
                               tempDay: di,
                             });
                           }}
+                          onTouchStart={(e) => {
+                            e.preventDefault();
+                            if (!gridRef.current) return;
+                            const rect = gridRef.current.getBoundingClientRect();
+                            const DAY_LABEL_WIDTH = 60;
+                            const gridWidth = rect.width - DAY_LABEL_WIDTH;
+                            const startMin0 = timeToMinutes(s.start_time);
+                            const endMin0 = timeToMinutes(s.end_time);
+                            const blockLeftPx = (startMin0 / 1440) * gridWidth;
+                            const clientX = e.touches[0]?.clientX;
+                            const clientY = e.touches[0]?.clientY;
+                            if (clientX === undefined || clientY === undefined) return;
+                            const clickRelX = clientX - rect.left - DAY_LABEL_WIDTH;
+                            const offsetMin = Math.round(((clickRelX - blockLeftPx) / gridWidth) * 1440);
+                            setDragging({
+                              type: "move",
+                              id: s.id,
+                              startX: clientX,
+                              startY: clientY,
+                              origStartMin: startMin0,
+                              origEndMin: endMin0,
+                              origDay: di,
+                              origDayOfWeek: s.day_of_week,
+                              offsetMin: Math.max(0, offsetMin),
+                              tempStartMin: startMin0,
+                              tempEndMin: endMin0,
+                              tempDay: di,
+                            });
+                          }}
                           onContextMenu={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
@@ -549,6 +586,29 @@ export default function AdminSchedulesPage() {
                                 id: s.id,
                                 startX: e.clientX,
                                 startY: e.clientY,
+                                origStartMin: startMin0,
+                                origEndMin: endMin0,
+                                origDay: di,
+                                origDayOfWeek: s.day_of_week,
+                                offsetMin: 0,
+                                tempStartMin: startMin0,
+                                tempEndMin: endMin0,
+                                tempDay: di,
+                              });
+                            }}
+                            onTouchStart={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              const startMin0 = timeToMinutes(s.start_time);
+                              const endMin0 = timeToMinutes(s.end_time);
+                              const clientX = e.touches[0]?.clientX;
+                              const clientY = e.touches[0]?.clientY;
+                              if (clientX === undefined || clientY === undefined) return;
+                              setDragging({
+                                type: "resize",
+                                id: s.id,
+                                startX: clientX,
+                                startY: clientY,
                                 origStartMin: startMin0,
                                 origEndMin: endMin0,
                                 origDay: di,
