@@ -120,7 +120,7 @@ export function ResellerShell({ children, receptionUnread: receptionUnreadProp }
         </nav>
 
         {/* Footer */}
-        <div style={{ borderTop: "1px solid #efece5" }}>
+        <div style={{ borderTop: "1px solid #efece5", flexShrink: 0 }}>
           <button
             onClick={() => { clearTokens(); router.push(getLogoutUrl()); }}
             style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "12px 14px", background: "none", border: "none", borderTop: "1px solid #efece5", cursor: "pointer", color: "#6b6559", fontSize: 12.5, fontFamily: FONT_JP, textAlign: "left" as const }}

@@ -1709,7 +1709,7 @@ function showKioskSettings() {
     door: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v18"/><path d="M2 22h18"/><circle cx="14" cy="12" r="1"/></svg>`,
   };
 
-  let vol = 70;
+  let vol = parseInt(localStorage.getItem("kiosk_vol") || "70", 10);
   let sounds = {
     tap:   localStorage.getItem("kiosk_snd_tap")   !== "off",
   };

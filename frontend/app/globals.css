@@ -79,7 +79,8 @@ body {
     margin-right: 8px;
     flex-shrink: 0;
   }
-  .adm-topbar  { padding: 14px 16px 12px; }
+  .adm-topbar  { padding: 14px 16px 12px; flex-wrap: wrap !important; }
+  .adm-topbar > div:last-child { margin-top: 8px; margin-left: auto; }
   .adm-content { padding: 16px 16px 32px; }
 
   .adm-grid-2     { grid-template-columns: 1fr; }

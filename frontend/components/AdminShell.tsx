@@ -149,7 +149,7 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
         </nav>
 
         {/* User footer */}
-        <div style={{ borderTop: "1px solid #efece5" }}>
+        <div style={{ borderTop: "1px solid #efece5", flexShrink: 0 }}>
           <div style={{ padding: "12px 12px 8px", display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#f7ecd9", color: "#b8763a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
               {tenant[0]?.toUpperCase() ?? "A"}
@@ -182,7 +182,7 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
       {/* ─ Main ────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* TopBar */}
-        <div className="adm-topbar" style={{ borderBottom: "1px solid #efece5", background: "#fffefb", display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="adm-topbar" style={{ borderBottom: "1px solid #efece5", background: "#fffefb", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {/* Hamburger (mobile only) */}
           <button className="adm-hamburger" onClick={() => setSidebarOpen(true)} aria-label="メニューを開く">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">

@@ -105,7 +105,7 @@ export function OperatorShell({ children, receptionUnread }: { children: ReactNo
         </nav>
 
         {/* Footer */}
-        <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", flexShrink: 0 }}>
           {userEmail && (
             <div style={{ padding: "10px 14px 6px", display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(74,124,78,0.2)", color: "#7ec483", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
