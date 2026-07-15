@@ -349,7 +349,7 @@ function Editable({
         const t = (e.currentTarget as HTMLSpanElement).innerText.replace(/\s*\n\s*/g, " ").trim();
         onChange(t);
       }}
-      style={{ display: "inline-block", ...style }}
+      style={{ display: "inline-block", wordBreak: "break-word", ...style }}
     />
   );
 }
@@ -666,6 +666,6 @@ function TextInputNumber({ value, onChange, suffix }: { value: string; onChange:
 function Textarea({ value, onChange, rows, placeholder }: { value: string; onChange: (v: string) => void; rows: number; placeholder?: string }) {
   return (
     <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={rows} placeholder={placeholder}
-      style={{ width: "100%", border: "1px solid #d8d3c7", borderRadius: 7, background: "#fffefb", padding: "8px 10px", fontSize: 12.5, color: "#2d2a24", resize: "vertical", outline: "none", fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif", boxSizing: "border-box" }} />
+      style={{ width: "100%", border: "1px solid #d8d3c7", borderRadius: 7, background: "#fffefb", padding: "8px 10px", fontSize: 12.5, color: "#2d2a24", resize: "vertical", outline: "none", fontFamily: "'Noto Sans JP', Inter, system-ui, sans-serif", boxSizing: "border-box", wordBreak: "break-word", overflowWrap: "break-word" }} />
   );
 }
