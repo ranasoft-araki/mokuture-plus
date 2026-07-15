@@ -786,7 +786,7 @@ export default function ReceptionLogsPage() {
                       style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#2d6a4f" }}
                     />
                   </th>
-                  {["日付", "時刻", "来訪者", "会社", "用件", "受付経路", "担当", "状態", ""].map((h) => (
+                  {["日付", "時刻", "来訪者", "会社", "用件", "受付経路", "担当", ""].map((h) => (
                     <th key={h} style={{ padding: "11px 14px", fontWeight: 600 }}>{h}</th>
                   ))}
                 </tr>
@@ -839,12 +839,6 @@ export default function ReceptionLogsPage() {
                         </span>
                       </td>
                       <td style={{ padding: "12px 14px", color: "#6b6559" }}>{r.staff || "—"}</td>
-                      <td style={{ padding: "12px 14px" }}>
-                        <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
-                          <StatusSelect log={r} token={token} onUpdate={handleStateUpdate} />
-                          <DecisionButtons log={r} token={token} onUpdate={handleStateUpdate} />
-                        </div>
-                      </td>
                       <td style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 4 }}>
                         <button
                           onClick={(e) => handleDeleteSingle(e, r.id)}

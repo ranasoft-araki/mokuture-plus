@@ -1335,7 +1335,9 @@ function showReception(initPurpose) {
   const chipStyle = (sel) => `padding:16px 28px;border-radius:14px;border:2px solid ${sel ? bc : T.borderStrong};background:${sel ? bc : T.canvas};color:${sel ? "#fff" : T.ink};font-size:26px;font-weight:600;cursor:pointer;font-family:inherit`;
   let submitting = false, errMsg = "";
   let form = { visitor_name: "", company: "", staff: "", purpose: initPurpose ?? "" };
-  let idleId;
+  let idleId, kbMode = "kana", focusedField = null;
+  const KANA_KEYS = ["あ","い","う","え","お","か","き","く","け","こ","さ","し","す","せ","そ","た","ち","つ","て","と","な","に","ぬ","ね","の","は","ひ","ふ","へ","ほ","ま","み","む","め","も","や","ゆ","よ","ら","り","る","れ","ろ","わ","を","ん"];
+  const ABC_KEYS = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"];
   function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
   CLEANUPS.push(() => clearTimeout(idleId));
   resetIdle();
@@ -1352,6 +1354,32 @@ function showReception(initPurpose) {
       ${inner}
     </div>`;
 
+  function buildKeyboardHtml() {
+    const keys = kbMode === "kana" ? KANA_KEYS : ABC_KEYS;
+    const keyGroups = [];
+    for (let i = 0; i < keys.length; i += 10) keyGroups.push(keys.slice(i, i + 10));
+    const keyBtnStyle = `width:120px;height:56px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:20px;font-weight:600;color:${T.ink};cursor:pointer;font-family:inherit`;
+    return `
+      <div id="kb-header" style="display:flex;gap:10px;margin-bottom:12px;justify-content:space-between">
+        <button type="button" id="kb-kana" style="flex:1;height:50px;background:${kbMode === "kana" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "kana" ? "#fff" : T.ink};font-size:18px;font-weight:600;cursor:pointer;font-family:inherit">ひらがな</button>
+        <button type="button" id="kb-abc" style="flex:1;height:50px;background:${kbMode === "abc" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "abc" ? "#fff" : T.ink};font-size:18px;font-weight:600;cursor:pointer;font-family:inherit">ABC</button>
+        <button type="button" id="kb-company" style="flex:1;height:50px;background:${T.canvas};border:1px solid ${bc};border-radius:8px;color:${bc};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">株式会社</button>
+        <button type="button" id="kb-bs" style="width:120px;height:50px;background:#f4f1ea;border:1px solid ${T.borderStrong};border-radius:8px;color:${T.ink};font-size:20px;cursor:pointer">⌫</button>
+      </div>
+      <div id="kb-keys" style="display:flex;flex-direction:column;gap:8px">
+        ${keyGroups.map((row, ri) => `
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            ${row.map(k => `<button type="button" class="kb-key" data-key="${escHtml(k)}" style="${keyBtnStyle}">${escHtml(k)}</button>`).join("")}
+          </div>
+        `).join("")}
+        <div style="display:flex;gap:8px;margin-top:6px">
+          <button type="button" id="kb-space" style="flex:1;height:50px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:18px;color:${T.muted};cursor:pointer;font-family:inherit">スペース</button>
+          <button type="button" id="kb-close" style="flex:1;height:50px;background:${T.dark};border:none;border-radius:8px;color:#fff;font-size:18px;font-weight:600;cursor:pointer;font-family:inherit">完了</button>
+        </div>
+      </div>
+    `;
+  }
+
   function render() {
     const staffInner = STAFF_LIST.length
       ? `<select id="f-staff" style="${selStyle}"><option value="">選択してください</option>${STAFF_LIST.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join("")}</select>`
@@ -1365,22 +1393,24 @@ function showReception(initPurpose) {
   <div style="padding:28px 80px 0;flex-shrink:0">
     <button id="rec-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button>
   </div>
-  <div style="padding:18px 80px 0;flex-shrink:0">
-    <div style="font-size:52px;font-weight:600;color:${T.ink};letter-spacing:-1.4px;line-height:1.12">ご来訪情報をご記入ください</div>
-    <div style="font-size:34px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Please enter your visit details</div>
-    ${errMsg ? `<div style="margin-top:18px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.35);border-radius:12px;padding:14px 18px;color:${T.urgent};font-size:18px">${escHtml(errMsg)}</div>` : ""}
-    <div style="margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:22px 40px">
-      ${fieldWrap("お名前", "Name", true, `<input id="f-name" type="text" autocomplete="name" placeholder="山田 太郎" style="${inputStyle}">`)}
-      ${fieldWrap("会社名", "Company", false, `<input id="f-company" type="text" autocomplete="organization" placeholder="株式会社 〇〇" style="${inputStyle}">`)}
-      ${fieldWrap("担当者名", "Host", false, staffInner)}
-      <div></div>
-      <div style="grid-column:1 / -1">${fieldWrap("ご用件を選択してください", "Purpose", false, purposeInner)}</div>
+  <div style="flex:1;display:flex;flex-direction:column;overflow-y:auto">
+    <div style="padding:18px 80px 0;flex-shrink:0">
+      <div style="font-size:52px;font-weight:600;color:${T.ink};letter-spacing:-1.4px;line-height:1.12">ご来訪情報をご記入ください</div>
+      <div style="font-size:34px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Please enter your visit details</div>
+      ${errMsg ? `<div style="margin-top:18px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.35);border-radius:12px;padding:14px 18px;color:${T.urgent};font-size:18px">${escHtml(errMsg)}</div>` : ""}
+      <div style="margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:22px 40px;padding-bottom:30px">
+        ${fieldWrap("お名前", "Name", true, `<input id="f-name" type="text" autocomplete="off" placeholder="山田 太郎" style="${inputStyle}">`)}
+        ${fieldWrap("会社名", "Company", false, `<input id="f-company" type="text" autocomplete="off" placeholder="株式会社 〇〇" style="${inputStyle}">`)}
+        ${fieldWrap("担当者名", "Host", false, staffInner)}
+        <div></div>
+        <div style="grid-column:1 / -1">${fieldWrap("ご用件を選択してください", "Purpose", false, purposeInner)}</div>
+      </div>
+      <button id="rec-send" style="margin-top:30px;width:100%;height:88px;background:${submitting ? bc : T.dark};border:none;border-radius:16px;color:#fff;font-size:28px;font-weight:600;cursor:${submitting ? "not-allowed" : "pointer"};display:flex;align-items:center;justify-content:center;gap:12px;font-family:inherit">
+        ${submitting ? `<div style="width:26px;height:26px;border-radius:50%;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;animation:spin .7s linear infinite"></div> 送信中…` : "受付する →"}
+      </button>
     </div>
-    <button id="rec-send" style="margin-top:30px;width:100%;height:88px;background:${submitting ? bc : T.dark};border:none;border-radius:16px;color:#fff;font-size:28px;font-weight:600;cursor:${submitting ? "not-allowed" : "pointer"};display:flex;align-items:center;justify-content:center;gap:12px;font-family:inherit">
-      ${submitting ? `<div style="width:26px;height:26px;border-radius:50%;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;animation:spin .7s linear infinite"></div> 送信中…` : "受付する →"}
-    </button>
+    ${focusedField ? `<div id="kb-pane" style="margin-top:30px;flex-shrink:0;padding:18px 80px 22px;border-top:2px solid ${T.border};background:${T.canvas}">${buildKeyboardHtml()}</div>` : ""}
   </div>
-  <div style="flex:1;min-height:0"></div>
   <div style="padding:12px 80px 22px;display:flex;align-items:center;color:${T.muted};font-size:20px;flex-shrink:0">
     <span style="font-family:Inter,system-ui,sans-serif">入力欄をタッチするとキーボードが表示されます</span>
     <span style="flex:1"></span>
@@ -1398,7 +1428,8 @@ function showReception(initPurpose) {
       const el = g(id); if (!el) return;
       const ev = el.tagName === "SELECT" ? "change" : "input";
       el.addEventListener(ev, () => { form[KEY[id]] = el.value; resetIdle(); });
-      el.addEventListener("focus", resetIdle);
+      el.addEventListener("focus", () => { resetIdle(); focusedField = id; render(); });
+      el.addEventListener("blur", () => { focusedField = null; render(); });
     });
     // ご用件チップ: 選択で form.purpose を更新し、全チップのスタイルのみ更新(テキスト入力を再描画しない)。
     const chips = sc.querySelectorAll("#f-purpose-chips [data-purpose]");
@@ -1407,6 +1438,26 @@ function showReception(initPurpose) {
       chips.forEach(b => b.setAttribute("style", chipStyle(b.dataset.purpose === form.purpose)));
     }));
     g("rec-send").addEventListener("click", handleSubmit);
+    // ソフトウェアキーボードイベント
+    if (focusedField) {
+      const kbPane = g("kb-pane"); if (!kbPane) return;
+      const addKey = (key) => {
+        const el = g(focusedField); if (!el) return;
+        el.value += key; form[KEY[focusedField]] = el.value; resetIdle();
+      };
+      g("kb-kana")?.addEventListener("click", () => { kbMode = "kana"; render(); });
+      g("kb-abc")?.addEventListener("click", () => { kbMode = "abc"; render(); });
+      g("kb-company")?.addEventListener("click", () => { addKey("株式会社"); });
+      g("kb-bs")?.addEventListener("click", () => {
+        const el = g(focusedField); if (!el) return;
+        el.value = el.value.slice(0, -1); form[KEY[focusedField]] = el.value; resetIdle();
+      });
+      g("kb-space")?.addEventListener("click", () => { addKey(" "); });
+      g("kb-close")?.addEventListener("click", () => { focusedField = null; render(); });
+      document.querySelectorAll(".kb-key").forEach(btn => {
+        btn.addEventListener("click", () => addKey(btn.dataset.key));
+      });
+    }
     onSc("click", resetIdle);
   }
 
