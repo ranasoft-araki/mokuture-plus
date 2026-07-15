@@ -189,7 +189,7 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
               <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
             </svg>
           </button>
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ flex: "1 1 auto", minWidth: 0 }}>
             {breadcrumb && (
               <div style={{ fontSize: 11.5, color: "#a8a198", marginBottom: 4, fontFamily: FONT_JP, letterSpacing: "0.2px" }}>
                 {breadcrumb}
