@@ -1413,6 +1413,10 @@ function showReception(initPurpose) {
   function updateKeyboard() {
     const kbPane = g("kb-pane");
     if (!kbPane) return;
+
+    // focusedField を保存
+    const savedFocusedField = focusedField;
+
     kbPane.innerHTML = buildKeyboardHtml();
 
     // イベントリスナー再登録
@@ -1430,6 +1434,12 @@ function showReception(initPurpose) {
     document.querySelectorAll(".kb-key").forEach(btn => {
       btn.addEventListener("click", () => { addKey(btn.dataset.key); refocusField(); });
     });
+
+    // focusedField を復元してフォーカスをセット
+    focusedField = savedFocusedField;
+    if (focusedField) {
+      setTimeout(() => g(focusedField)?.focus(), 0);
+    }
   }
 
   function render() {
