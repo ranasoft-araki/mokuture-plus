@@ -1482,14 +1482,7 @@ function showReception(initPurpose) {
       const ev = el.tagName === "SELECT" ? "change" : "input";
       el.addEventListener(ev, () => { form[KEY[id]] = el.value; resetIdle(); });
       el.addEventListener("focus", () => { resetIdle(); focusedField = id; });
-      el.addEventListener("blur", (e) => {
-        // キーボード領域内のクリックでは focusedField を保持
-        setTimeout(() => {
-          if (!g("kb-pane")?.contains(document.activeElement)) {
-            focusedField = null;
-          }
-        }, 0);
-      });
+      // blur イベントは無視 - スクリーン外クリック時のみ focusedField をクリア
       // タッチイベントで強制フォーカス
       el.addEventListener("touchstart", (e) => { e.preventDefault(); focusedField = id; el.focus(); });
     });
@@ -1504,7 +1497,16 @@ function showReception(initPurpose) {
     // キーボード初期化
     updateKeyboard();
 
-    onSc("click", resetIdle);
+    // スクリーン全体のクリック - 入力/キーボード/ご用件ボタン外なら focusedField をクリア
+    onSc("click", (e) => {
+      resetIdle();
+      const isInputField = e.target.closest("input");
+      const isKeyboard = g("kb-pane")?.contains(e.target);
+      const isPurpose = e.target.closest("[data-purpose]");
+      if (!isInputField && !isKeyboard && !isPurpose) {
+        focusedField = null;
+      }
+    });
   }
 
   async function handleSubmit() {
