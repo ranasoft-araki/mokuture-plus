@@ -1518,6 +1518,10 @@ function showReception(initPurpose) {
     // キーボード初期化
     updateKeyboard();
 
+    // デフォルトでお名前フィールドにフォーカスを設定（最初のキーボード入力を有効にする）
+    focusedField = "f-name";
+    setTimeout(() => g("f-name")?.focus(), 50);
+
     // スクリーン全体のクリック - 入力/キーボード/ご用件ボタン外なら focusedField をクリア
     onSc("click", (e) => {
       resetIdle();
