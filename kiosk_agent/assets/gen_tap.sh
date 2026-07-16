@@ -20,11 +20,11 @@ TONE="0.22*sin(2*PI*325*t)*exp(-2.6*t)\
 ffmpeg -hide_banner -loglevel error \
   -f lavfi -i "aevalsrc=${TONE}:s=44100:d=1.5" \
   -af "\
-afade=t=in:st=0:d=0.05:curve=ipar,\
-afade=t=out:st=0.70:d=0.55,\
-lowpass=f=2800,\
-aecho=0.7:0.55:80|150|230:0.18|0.11|0.06,\
-volume=0dB,alimiter=limit=0.72" \
+afade=t=in:st=0:d=0.10:curve=ipar,\
+afade=t=out:st=0.70:d=0.60,\
+lowpass=f=2200,\
+aecho=0.8:0.60:80|150|230|280:0.20|0.13|0.08|0.05,\
+volume=-2dB,alimiter=limit=0.72" \
   -ar 44100 -b:a 128k -y "tap_source.mp3"
 
 cp "tap_source.mp3" "../static/tap.mp3"
