@@ -1390,29 +1390,32 @@ function showReception(initPurpose) {
       </div>
       <div style="margin-top:16px;border-top:1px solid ${T.border};padding-top:14px;font-size:22px;color:${T.sub}">※営業・セールス・勧誘等のご訪問はお受けしておりません。</div>`;
     sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0">
+  <div style="padding:28px 40px 0;flex-shrink:0">
     <button id="rec-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button>
   </div>
-  <div style="flex:1;display:flex;flex-direction:column;overflow-y:auto">
-    <div style="padding:18px 80px 0;flex-shrink:0">
-      <div style="font-size:52px;font-weight:600;color:${T.ink};letter-spacing:-1.4px;line-height:1.12">ご来訪情報をご記入ください</div>
-      <div style="font-size:34px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Please enter your visit details</div>
-      ${errMsg ? `<div style="margin-top:18px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.35);border-radius:12px;padding:14px 18px;color:${T.urgent};font-size:18px">${escHtml(errMsg)}</div>` : ""}
-      <div style="margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:22px 40px;padding-bottom:20px">
+  <div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:20px 40px;overflow:hidden">
+    <!-- 左側：入力フォーム -->
+    <div style="display:flex;flex-direction:column;overflow-y:auto;padding-right:10px">
+      <div style="margin-bottom:16px">
+        <div style="font-size:44px;font-weight:600;color:${T.ink};letter-spacing:-1.2px;line-height:1.1">ご来訪情報</div>
+        <div style="font-size:28px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:4px">Visit Details</div>
+      </div>
+      ${errMsg ? `<div style="margin-bottom:14px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.35);border-radius:12px;padding:12px 14px;color:${T.urgent};font-size:16px">${escHtml(errMsg)}</div>` : ""}
+      <div style="display:flex;flex-direction:column;gap:16px;flex:1">
         ${fieldWrap("お名前", "Name", true, `<input id="f-name" type="text" autocomplete="off" placeholder="山田 太郎" style="${inputStyle}">`)}
         ${fieldWrap("会社名", "Company", false, `<input id="f-company" type="text" autocomplete="off" placeholder="株式会社 〇〇" style="${inputStyle}">`)}
         ${fieldWrap("担当者名", "Host", false, staffInner)}
-        <div></div>
-        <div style="grid-column:1 / -1">${fieldWrap("ご用件を選択してください", "Purpose", false, purposeInner)}</div>
+        <div>${fieldWrap("ご用件を選択してください", "Purpose", false, purposeInner)}</div>
       </div>
-      <button id="rec-send" style="margin-top:20px;width:100%;height:88px;background:${submitting ? bc : T.dark};border:none;border-radius:16px;color:#fff;font-size:28px;font-weight:600;cursor:${submitting ? "not-allowed" : "pointer"};display:flex;align-items:center;justify-content:center;gap:12px;font-family:inherit">
-        ${submitting ? `<div style="width:26px;height:26px;border-radius:50%;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;animation:spin .7s linear infinite"></div> 送信中…` : "受付する →"}
+      <button id="rec-send" style="margin-top:16px;width:100%;height:76px;background:${submitting ? bc : T.dark};border:none;border-radius:14px;color:#fff;font-size:24px;font-weight:600;cursor:${submitting ? "not-allowed" : "pointer"};display:flex;align-items:center;justify-content:center;gap:10px;font-family:inherit">
+        ${submitting ? `<div style="width:20px;height:20px;border-radius:50%;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;animation:spin .7s linear infinite"></div> 送信中…` : "受付する →"}
       </button>
     </div>
-    <div id="kb-pane" style="flex-shrink:0;padding:16px 80px 20px;border-top:2px solid ${T.border};background:${T.canvas};min-height:340px">${buildKeyboardHtml()}</div>
+    <!-- 右側：キーボード -->
+    <div id="kb-pane" style="display:flex;flex-direction:column;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:12px;padding:14px;overflow-y:auto">${buildKeyboardHtml()}</div>
   </div>
-  <div style="padding:12px 80px 20px;display:flex;align-items:center;color:${T.muted};font-size:18px;flex-shrink:0">
-    <span style="font-family:Inter,system-ui,sans-serif">下のキーボードで入力 · 「完了」で次へ</span>
+  <div style="padding:10px 40px 16px;display:flex;align-items:center;color:${T.muted};font-size:16px;flex-shrink:0">
+    <span style="font-family:Inter,system-ui,sans-serif">右のキーボードで入力してください</span>
     <span style="flex:1"></span>
     <span style="font-family:'JetBrains Mono',monospace">${devName()}</span>
   </div>
@@ -1428,8 +1431,10 @@ function showReception(initPurpose) {
       const el = g(id); if (!el) return;
       const ev = el.tagName === "SELECT" ? "change" : "input";
       el.addEventListener(ev, () => { form[KEY[id]] = el.value; resetIdle(); });
-      el.addEventListener("focus", () => { resetIdle(); focusedField = id; render(); });
-      el.addEventListener("blur", () => { focusedField = null; render(); });
+      el.addEventListener("focus", () => { resetIdle(); focusedField = id; });
+      el.addEventListener("blur", () => { focusedField = null; });
+      // タッチイベントで強制フォーカス
+      el.addEventListener("touchstart", (e) => { e.preventDefault(); focusedField = id; el.focus(); });
     });
     // ご用件チップ: 選択で form.purpose を更新し、全チップのスタイルのみ更新(テキスト入力を再描画しない)。
     const chips = sc.querySelectorAll("#f-purpose-chips [data-purpose]");
