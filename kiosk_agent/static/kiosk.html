@@ -1353,12 +1353,22 @@ function showReception(initPurpose) {
   let submitting = false, errMsg = "";
   let form = { visitor_name: "", company: "", staff: "", purpose: initPurpose ?? "" };
   let idleId, kbMode = "kana", focusedField = null;
+  const KEY = { "f-name": "visitor_name", "f-company": "company", "f-staff": "staff" };
   const KANA_KEYS = ["あ","い","う","え","お","か","き","く","け","こ","さ","し","す","せ","そ","た","ち","つ","て","と","な","に","ぬ","ね","の","は","ひ","ふ","へ","ほ","ま","み","む","め","も","や","ゆ","よ","ら","り","る","れ","ろ","わ","を","ん"];
   const KATA_KEYS = ["ア","イ","ウ","エ","オ","カ","キ","ク","ケ","コ","サ","シ","ス","セ","ソ","タ","チ","ツ","テ","ト","ナ","ニ","ヌ","ネ","ノ","ハ","ヒ","フ","ヘ","ホ","マ","ミ","ム","メ","モ","ヤ","ユ","ヨ","ラ","リ","ル","レ","ロ","ワ","ヲ","ン"];
   const ABC_KEYS = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"];
+  const g = id => document.getElementById(id);
+
   function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
   CLEANUPS.push(() => clearTimeout(idleId));
   resetIdle();
+
+  const addKey = (key) => {
+    if (!focusedField) return;
+    const el = g(focusedField); if (!el) return;
+    el.value += key; form[KEY[focusedField]] = el.value; resetIdle();
+  };
+  const refocusField = () => { if (focusedField) setTimeout(() => g(focusedField)?.focus(), 0); };
 
   const inputStyle = `width:100%;height:78px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:14px;padding:0 22px;font-size:26px;color:${T.ink};outline:none;font-family:'Noto Sans JP',Inter,system-ui,sans-serif`;
   const selStyle = inputStyle + ";cursor:pointer";
@@ -1378,6 +1388,7 @@ function showReception(initPurpose) {
     for (let i = 0; i < keys.length; i += 10) keyGroups.push(keys.slice(i, i + 10));
     const keyBtnStyle = `width:120px;height:56px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:20px;font-weight:600;color:${T.ink};cursor:pointer;font-family:inherit`;
     const btnPrevent = `onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()"`;
+    const bc = ST.brand_color;
     return `
       <div id="kb-header" style="display:flex;gap:8px;margin-bottom:12px;justify-content:space-between">
         <button type="button" id="kb-kana" ${btnPrevent} style="flex:1;height:50px;background:${kbMode === "kana" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "kana" ? "#fff" : T.ink};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">ひらがな</button>
@@ -1397,6 +1408,28 @@ function showReception(initPurpose) {
         </div>
       </div>
     `;
+  }
+
+  function updateKeyboard() {
+    const kbPane = g("kb-pane");
+    if (!kbPane) return;
+    kbPane.innerHTML = buildKeyboardHtml();
+
+    // イベントリスナー再登録
+    g("kb-kana")?.addEventListener("click", () => { kbMode = "kana"; updateKeyboard(); });
+    g("kb-kata")?.addEventListener("click", () => { kbMode = "kata"; updateKeyboard(); });
+    g("kb-abc")?.addEventListener("click", () => { kbMode = "abc"; updateKeyboard(); });
+    g("kb-company")?.addEventListener("click", () => { addKey("株式会社"); refocusField(); });
+    g("kb-bs")?.addEventListener("click", () => {
+      if (!focusedField) return;
+      const el = g(focusedField); if (!el) return;
+      el.value = el.value.slice(0, -1); form[KEY[focusedField]] = el.value; resetIdle();
+      refocusField();
+    });
+    g("kb-space")?.addEventListener("click", () => { addKey(" "); refocusField(); });
+    document.querySelectorAll(".kb-key").forEach(btn => {
+      btn.addEventListener("click", () => { addKey(btn.dataset.key); refocusField(); });
+    });
   }
 
   function render() {
@@ -1440,12 +1473,10 @@ function showReception(initPurpose) {
   </div>
 </div>`;
     rescale();
-    const g = id => document.getElementById(id);
     g("f-name").value = form.visitor_name;
     g("f-company").value = form.company;
     if (g("f-staff")) g("f-staff").value = form.staff;
     g("rec-back").addEventListener("click", () => { cleanup(); go("top"); });
-    const KEY = { "f-name": "visitor_name", "f-company": "company", "f-staff": "staff" };
     Object.keys(KEY).forEach(id => {
       const el = g(id); if (!el) return;
       const ev = el.tagName === "SELECT" ? "change" : "input";
@@ -1463,40 +1494,8 @@ function showReception(initPurpose) {
     }));
     g("rec-send").addEventListener("click", handleSubmit);
 
-    // ソフトウェアキーボードイベント登録（常時表示）
-    const addKey = (key) => {
-      if (!focusedField) return;
-      const el = g(focusedField); if (!el) return;
-      el.value += key; form[KEY[focusedField]] = el.value; resetIdle();
-    };
-
-    const refocusField = () => { if (focusedField) setTimeout(() => g(focusedField)?.focus(), 0); };
-
-    g("kb-kana")?.addEventListener("click", () => { kbMode = "kana"; render(); refocusField(); });
-    g("kb-kata")?.addEventListener("click", () => { kbMode = "kata"; render(); refocusField(); });
-    g("kb-abc")?.addEventListener("click", () => { kbMode = "abc"; render(); refocusField(); });
-    g("kb-company")?.addEventListener("click", () => { addKey("株式会社"); refocusField(); });
-    g("kb-bs")?.addEventListener("click", () => {
-      if (!focusedField) return;
-      const el = g(focusedField); if (!el) return;
-      el.value = el.value.slice(0, -1); form[KEY[focusedField]] = el.value; resetIdle();
-      refocusField();
-    });
-    g("kb-space")?.addEventListener("click", () => { addKey(" "); refocusField(); });
-
-    document.querySelectorAll(".kb-key").forEach(btn => {
-      btn.addEventListener("click", () => { addKey(btn.dataset.key); refocusField(); });
-    });
-
-    // キーボード親要素のクリック時、focusedField を保持
-    const kbPane = g("kb-pane");
-    if (kbPane) {
-      kbPane.addEventListener("click", (e) => {
-        if (e.target === kbPane || (e.target.style && !e.target.dataset.key && !e.target.id.startsWith("kb-"))) {
-          e.stopPropagation();
-        }
-      });
-    }
+    // キーボード初期化
+    updateKeyboard();
 
     onSc("click", resetIdle);
   }
