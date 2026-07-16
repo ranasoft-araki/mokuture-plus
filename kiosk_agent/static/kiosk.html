@@ -1349,11 +1349,12 @@ function showReception(initPurpose) {
   // ご用件は選択形式。管理画面の来訪目的リストがあればそれを、無ければ既定の5択を使う。
   const PURPOSE_OPTIONS = PURPOSE_LIST.length ? PURPOSE_LIST
     : ["ご予約のあるお客様", "お打ち合わせ", "納品", "採用面接", "その他"];
-  const chipStyle = (sel) => `padding:16px 28px;border-radius:14px;border:2px solid ${sel ? bc : T.borderStrong};background:${sel ? bc : T.canvas};color:${sel ? "#fff" : T.ink};font-size:26px;font-weight:600;cursor:pointer;font-family:inherit`;
+  const chipStyle = (sel) => `padding:20px 32px;border-radius:14px;border:2px solid ${sel ? bc : T.borderStrong};background:${sel ? bc : T.canvas};color:${sel ? "#fff" : T.ink};font-size:28px;font-weight:600;cursor:pointer;font-family:inherit;min-height:72px;display:flex;align-items:center;justify-content:center`;
   let submitting = false, errMsg = "";
   let form = { visitor_name: "", company: "", staff: "", purpose: initPurpose ?? "" };
   let idleId, kbMode = "kana", focusedField = null;
   const KANA_KEYS = ["あ","い","う","え","お","か","き","く","け","こ","さ","し","す","せ","そ","た","ち","つ","て","と","な","に","ぬ","ね","の","は","ひ","ふ","へ","ほ","ま","み","む","め","も","や","ゆ","よ","ら","り","る","れ","ろ","わ","を","ん"];
+  const KATA_KEYS = ["ア","イ","ウ","エ","オ","カ","キ","ク","ケ","コ","サ","シ","ス","セ","ソ","タ","チ","ツ","テ","ト","ナ","ニ","ヌ","ネ","ノ","ハ","ヒ","フ","ヘ","ホ","マ","ミ","ム","メ","モ","ヤ","ユ","ヨ","ラ","リ","ル","レ","ロ","ワ","ヲ","ン"];
   const ABC_KEYS = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"];
   function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
   CLEANUPS.push(() => clearTimeout(idleId));
@@ -1372,15 +1373,16 @@ function showReception(initPurpose) {
     </div>`;
 
   function buildKeyboardHtml() {
-    const keys = kbMode === "kana" ? KANA_KEYS : ABC_KEYS;
+    const keys = kbMode === "kana" ? KANA_KEYS : kbMode === "kata" ? KATA_KEYS : ABC_KEYS;
     const keyGroups = [];
     for (let i = 0; i < keys.length; i += 10) keyGroups.push(keys.slice(i, i + 10));
     const keyBtnStyle = `width:120px;height:56px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:20px;font-weight:600;color:${T.ink};cursor:pointer;font-family:inherit`;
     const btnPrevent = `onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()"`;
     return `
-      <div id="kb-header" style="display:flex;gap:10px;margin-bottom:12px;justify-content:space-between">
-        <button type="button" id="kb-kana" ${btnPrevent} style="flex:1;height:50px;background:${kbMode === "kana" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "kana" ? "#fff" : T.ink};font-size:18px;font-weight:600;cursor:pointer;font-family:inherit">ひらがな</button>
-        <button type="button" id="kb-abc" ${btnPrevent} style="flex:1;height:50px;background:${kbMode === "abc" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "abc" ? "#fff" : T.ink};font-size:18px;font-weight:600;cursor:pointer;font-family:inherit">ABC</button>
+      <div id="kb-header" style="display:flex;gap:8px;margin-bottom:12px;justify-content:space-between">
+        <button type="button" id="kb-kana" ${btnPrevent} style="flex:1;height:50px;background:${kbMode === "kana" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "kana" ? "#fff" : T.ink};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">ひらがな</button>
+        <button type="button" id="kb-kata" ${btnPrevent} style="flex:1;height:50px;background:${kbMode === "kata" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "kata" ? "#fff" : T.ink};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">カタカナ</button>
+        <button type="button" id="kb-abc" ${btnPrevent} style="flex:1;height:50px;background:${kbMode === "abc" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "abc" ? "#fff" : T.ink};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">ABC</button>
         <button type="button" id="kb-company" ${btnPrevent} style="flex:1;height:50px;background:${T.canvas};border:1px solid ${bc};border-radius:8px;color:${bc};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">株式会社</button>
         <button type="button" id="kb-bs" ${btnPrevent} style="width:120px;height:50px;background:#f4f1ea;border:1px solid ${T.borderStrong};border-radius:8px;color:${T.ink};font-size:20px;cursor:pointer">⌫</button>
       </div>
@@ -1403,7 +1405,7 @@ function showReception(initPurpose) {
       ? `<select id="f-staff" style="${selStyle}"><option value="">選択してください</option>${STAFF_LIST.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join("")}</select>`
       : `<input id="f-staff" type="text" placeholder="担当者のお名前" style="${inputStyle}">`;
     const purposeInner = `
-      <div id="f-purpose-chips" style="display:flex;flex-wrap:wrap;gap:14px">
+      <div id="f-purpose-chips" style="display:flex;flex-direction:column;gap:12px">
         ${PURPOSE_OPTIONS.map(p => `<button type="button" data-purpose="${escHtml(p)}" style="${chipStyle(form.purpose === p)}">${escHtml(p)}</button>`).join("")}
       </div>
       <div style="margin-top:16px;border-top:1px solid ${T.border};padding-top:14px;font-size:22px;color:${T.sub}">※営業・セールス・勧誘等のご訪問はお受けしておりません。</div>`;
@@ -1469,19 +1471,23 @@ function showReception(initPurpose) {
       el.value += key; form[KEY[focusedField]] = el.value; resetIdle();
     };
 
-    g("kb-kana")?.addEventListener("click", () => { kbMode = "kana"; render(); });
-    g("kb-abc")?.addEventListener("click", () => { kbMode = "abc"; render(); });
-    g("kb-company")?.addEventListener("click", () => { addKey("株式会社"); });
+    const refocusField = () => { if (focusedField) setTimeout(() => g(focusedField)?.focus(), 0); };
+
+    g("kb-kana")?.addEventListener("click", () => { kbMode = "kana"; render(); refocusField(); });
+    g("kb-kata")?.addEventListener("click", () => { kbMode = "kata"; render(); refocusField(); });
+    g("kb-abc")?.addEventListener("click", () => { kbMode = "abc"; render(); refocusField(); });
+    g("kb-company")?.addEventListener("click", () => { addKey("株式会社"); refocusField(); });
     g("kb-bs")?.addEventListener("click", () => {
       if (!focusedField) return;
       const el = g(focusedField); if (!el) return;
       el.value = el.value.slice(0, -1); form[KEY[focusedField]] = el.value; resetIdle();
+      refocusField();
     });
-    g("kb-space")?.addEventListener("click", () => { addKey(" "); });
+    g("kb-space")?.addEventListener("click", () => { addKey(" "); refocusField(); });
     g("kb-close")?.addEventListener("click", () => { focusedField = null; });
 
     document.querySelectorAll(".kb-key").forEach(btn => {
-      btn.addEventListener("click", () => addKey(btn.dataset.key));
+      btn.addEventListener("click", () => { addKey(btn.dataset.key); refocusField(); });
     });
 
     onSc("click", resetIdle);
