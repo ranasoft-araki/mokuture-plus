@@ -1410,47 +1410,46 @@ function showReception(initPurpose) {
     `;
   }
 
-  let kbPaneListener = null;
-
+  // モード切替時はキーボード部分(kb-pane の中身)だけ差し替える。左のフォーム(入力欄)は
+  // 触らないので focusedField が指す入力要素は生き続ける。念のため保存→復元もする。
   function updateKeyboard() {
     const kbPane = g("kb-pane");
     if (!kbPane) return;
-
-    // focusedField を保存
-    const savedFocusedField = focusedField;
-
+    const saved = focusedField;
     kbPane.innerHTML = buildKeyboardHtml();
+    focusedField = saved;
+    if (focusedField) setTimeout(() => g(focusedField)?.focus(), 0);
+  }
 
-    // 古いリスナーを削除
-    if (kbPaneListener) {
-      kbPane.removeEventListener("click", kbPaneListener);
-    }
-
-    // イベント委譲で登録（重複を防止）
-    kbPaneListener = (e) => {
-      const id = e.target.id;
-      const key = e.target.dataset.key;
-
+  // キーボード操作は click ではなく mousedown/touchstart で処理する。
+  // 理由: (1) preventDefault で入力欄からフォーカスを奪わない (2) タッチ実機でも
+  // 確実に発火する(ボタンの ontouchstart preventDefault が click を抑止しても影響なし)
+  // (3) モード切替で innerHTML を作り直しても click の e.target 切り離し問題が起きない。
+  function bindKeyboard() {
+    const kbPane = g("kb-pane");
+    if (!kbPane) return;
+    const kbAction = (e) => {
+      const btn = e.target.closest("button");
+      if (!btn || !kbPane.contains(btn)) return;
+      e.preventDefault();       // 入力欄からフォーカスを奪わない
+      resetIdle();
+      const id = btn.id, key = btn.dataset.key;
       if (id === "kb-kana") { kbMode = "kana"; updateKeyboard(); }
       else if (id === "kb-kata") { kbMode = "kata"; updateKeyboard(); }
       else if (id === "kb-abc") { kbMode = "abc"; updateKeyboard(); }
       else if (id === "kb-company") { addKey("株式会社"); refocusField(); }
       else if (id === "kb-bs") {
-        if (!focusedField) return;
-        const el = g(focusedField); if (!el) return;
-        el.value = el.value.slice(0, -1); form[KEY[focusedField]] = el.value; resetIdle();
+        if (focusedField) {
+          const el = g(focusedField);
+          if (el) { el.value = el.value.slice(0, -1); form[KEY[focusedField]] = el.value; }
+        }
         refocusField();
       }
       else if (id === "kb-space") { addKey(" "); refocusField(); }
-      else if (key) { addKey(key); refocusField(); }
+      else if (key != null) { addKey(key); refocusField(); }
     };
-    kbPane.addEventListener("click", kbPaneListener);
-
-    // focusedField を復元してフォーカスをセット
-    focusedField = savedFocusedField;
-    if (focusedField) {
-      setTimeout(() => g(focusedField)?.focus(), 0);
-    }
+    kbPane.addEventListener("mousedown", kbAction);
+    kbPane.addEventListener("touchstart", kbAction, { passive: false });
   }
 
   function render() {
@@ -1515,23 +1514,16 @@ function showReception(initPurpose) {
     }));
     g("rec-send").addEventListener("click", handleSubmit);
 
-    // キーボード初期化
+    // キーボード初期化 + 操作ハンドラ登録（mousedown/touchstart 委譲）
     updateKeyboard();
+    bindKeyboard();
 
-    // デフォルトでお名前フィールドにフォーカスを設定（最初のキーボード入力を有効にする）
+    // デフォルトでお名前フィールドにフォーカス（最初から文字入力できるように）
     focusedField = "f-name";
     setTimeout(() => g("f-name")?.focus(), 50);
 
-    // スクリーン全体のクリック - 入力/キーボード/ご用件ボタン外なら focusedField をクリア
-    onSc("click", (e) => {
-      resetIdle();
-      const isInputField = e.target.closest("input");
-      const isKeyboard = g("kb-pane")?.contains(e.target);
-      const isPurpose = e.target.closest("[data-purpose]");
-      if (!isInputField && !isKeyboard && !isPurpose) {
-        focusedField = null;
-      }
-    });
+    // 任意のタップで待機タイマーをリセット（focusedField はここでは触らない）
+    onSc("click", resetIdle);
   }
 
   async function handleSubmit() {
