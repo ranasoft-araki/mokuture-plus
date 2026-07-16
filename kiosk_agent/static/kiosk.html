@@ -1410,6 +1410,8 @@ function showReception(initPurpose) {
     `;
   }
 
+  let kbPaneListener = null;
+
   function updateKeyboard() {
     const kbPane = g("kb-pane");
     if (!kbPane) return;
@@ -1419,21 +1421,30 @@ function showReception(initPurpose) {
 
     kbPane.innerHTML = buildKeyboardHtml();
 
-    // イベントリスナー再登録
-    g("kb-kana")?.addEventListener("click", () => { kbMode = "kana"; updateKeyboard(); });
-    g("kb-kata")?.addEventListener("click", () => { kbMode = "kata"; updateKeyboard(); });
-    g("kb-abc")?.addEventListener("click", () => { kbMode = "abc"; updateKeyboard(); });
-    g("kb-company")?.addEventListener("click", () => { addKey("株式会社"); refocusField(); });
-    g("kb-bs")?.addEventListener("click", () => {
-      if (!focusedField) return;
-      const el = g(focusedField); if (!el) return;
-      el.value = el.value.slice(0, -1); form[KEY[focusedField]] = el.value; resetIdle();
-      refocusField();
-    });
-    g("kb-space")?.addEventListener("click", () => { addKey(" "); refocusField(); });
-    document.querySelectorAll(".kb-key").forEach(btn => {
-      btn.addEventListener("click", () => { addKey(btn.dataset.key); refocusField(); });
-    });
+    // 古いリスナーを削除
+    if (kbPaneListener) {
+      kbPane.removeEventListener("click", kbPaneListener);
+    }
+
+    // イベント委譲で登録（重複を防止）
+    kbPaneListener = (e) => {
+      const id = e.target.id;
+      const key = e.target.dataset.key;
+
+      if (id === "kb-kana") { kbMode = "kana"; updateKeyboard(); }
+      else if (id === "kb-kata") { kbMode = "kata"; updateKeyboard(); }
+      else if (id === "kb-abc") { kbMode = "abc"; updateKeyboard(); }
+      else if (id === "kb-company") { addKey("株式会社"); refocusField(); }
+      else if (id === "kb-bs") {
+        if (!focusedField) return;
+        const el = g(focusedField); if (!el) return;
+        el.value = el.value.slice(0, -1); form[KEY[focusedField]] = el.value; resetIdle();
+        refocusField();
+      }
+      else if (id === "kb-space") { addKey(" "); refocusField(); }
+      else if (key) { addKey(key); refocusField(); }
+    };
+    kbPane.addEventListener("click", kbPaneListener);
 
     // focusedField を復元してフォーカスをセット
     focusedField = savedFocusedField;
