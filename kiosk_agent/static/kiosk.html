@@ -1438,25 +1438,35 @@ function showReception(initPurpose) {
       chips.forEach(b => b.setAttribute("style", chipStyle(b.dataset.purpose === form.purpose)));
     }));
     g("rec-send").addEventListener("click", handleSubmit);
-    // ソフトウェアキーボードイベント
+    // ソフトウェアキーボードイベント（focusedField がある時のみ登録）
     if (focusedField) {
-      const kbPane = g("kb-pane"); if (!kbPane) return;
-      const addKey = (key) => {
-        const el = g(focusedField); if (!el) return;
-        el.value += key; form[KEY[focusedField]] = el.value; resetIdle();
-      };
-      g("kb-kana")?.addEventListener("click", () => { kbMode = "kana"; render(); });
-      g("kb-abc")?.addEventListener("click", () => { kbMode = "abc"; render(); });
-      g("kb-company")?.addEventListener("click", () => { addKey("株式会社"); });
-      g("kb-bs")?.addEventListener("click", () => {
-        const el = g(focusedField); if (!el) return;
-        el.value = el.value.slice(0, -1); form[KEY[focusedField]] = el.value; resetIdle();
-      });
-      g("kb-space")?.addEventListener("click", () => { addKey(" "); });
-      g("kb-close")?.addEventListener("click", () => { focusedField = null; render(); });
-      document.querySelectorAll(".kb-key").forEach(btn => {
-        btn.addEventListener("click", () => addKey(btn.dataset.key));
-      });
+      const kbPane = g("kb-pane");
+      if (kbPane) {
+        const addKey = (key) => {
+          const el = g(focusedField); if (!el) return;
+          el.value += key; form[KEY[focusedField]] = el.value; resetIdle();
+        };
+        const kbKana = g("kb-kana");
+        const kbAbc = g("kb-abc");
+        const kbCompany = g("kb-company");
+        const kbBs = g("kb-bs");
+        const kbSpace = g("kb-space");
+        const kbClose = g("kb-close");
+
+        if (kbKana) kbKana.addEventListener("click", () => { kbMode = "kana"; render(); });
+        if (kbAbc) kbAbc.addEventListener("click", () => { kbMode = "abc"; render(); });
+        if (kbCompany) kbCompany.addEventListener("click", () => { addKey("株式会社"); });
+        if (kbBs) kbBs.addEventListener("click", () => {
+          const el = g(focusedField); if (!el) return;
+          el.value = el.value.slice(0, -1); form[KEY[focusedField]] = el.value; resetIdle();
+        });
+        if (kbSpace) kbSpace.addEventListener("click", () => { addKey(" "); });
+        if (kbClose) kbClose.addEventListener("click", () => { focusedField = null; render(); });
+
+        document.querySelectorAll(".kb-key").forEach(btn => {
+          btn.addEventListener("click", () => addKey(btn.dataset.key));
+        });
+      }
     }
     onSc("click", resetIdle);
   }
