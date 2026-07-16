@@ -1394,7 +1394,6 @@ function showReception(initPurpose) {
         `).join("")}
         <div style="display:flex;gap:8px;margin-top:6px">
           <button type="button" id="kb-space" ${btnPrevent} style="flex:1;height:50px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:18px;color:${T.muted};cursor:pointer;font-family:inherit">スペース</button>
-          <button type="button" id="kb-close" ${btnPrevent} style="flex:1;height:50px;background:${T.dark};border:none;border-radius:8px;color:#fff;font-size:18px;font-weight:600;cursor:pointer;font-family:inherit">完了</button>
         </div>
       </div>
     `;
@@ -1415,7 +1414,7 @@ function showReception(initPurpose) {
   </div>
   <div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:20px 40px;overflow:hidden">
     <!-- 左側：入力フォーム -->
-    <div style="display:flex;flex-direction:column;overflow-y:auto;padding-right:10px">
+    <div style="display:flex;flex-direction:column;gap:16px">
       <div style="margin-bottom:16px">
         <div style="font-size:44px;font-weight:600;color:${T.ink};letter-spacing:-1.2px;line-height:1.1">ご来訪情報</div>
         <div style="font-size:28px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:4px">Visit Details</div>
@@ -1432,7 +1431,7 @@ function showReception(initPurpose) {
       </button>
     </div>
     <!-- 右側：キーボード -->
-    <div id="kb-pane" style="display:flex;flex-direction:column;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:12px;padding:14px;overflow-y:auto">${buildKeyboardHtml()}</div>
+    <div id="kb-pane" style="display:flex;flex-direction:column;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:12px;padding:14px;overflow:hidden;font-size:0">${buildKeyboardHtml()}</div>
   </div>
   <div style="padding:10px 40px 16px;display:flex;align-items:center;color:${T.muted};font-size:16px;flex-shrink:0">
     <span style="font-family:Inter,system-ui,sans-serif">右のキーボードで入力してください</span>
@@ -1484,11 +1483,20 @@ function showReception(initPurpose) {
       refocusField();
     });
     g("kb-space")?.addEventListener("click", () => { addKey(" "); refocusField(); });
-    g("kb-close")?.addEventListener("click", () => { focusedField = null; });
 
     document.querySelectorAll(".kb-key").forEach(btn => {
       btn.addEventListener("click", () => { addKey(btn.dataset.key); refocusField(); });
     });
+
+    // キーボード親要素のクリック時、focusedField を保持
+    const kbPane = g("kb-pane");
+    if (kbPane) {
+      kbPane.addEventListener("click", (e) => {
+        if (e.target === kbPane || (e.target.style && !e.target.dataset.key && !e.target.id.startsWith("kb-"))) {
+          e.stopPropagation();
+        }
+      });
+    }
 
     onSc("click", resetIdle);
   }
