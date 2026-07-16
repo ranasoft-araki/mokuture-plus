@@ -11,20 +11,21 @@
 set -e
 cd "$(dirname "$0")"
 
-TONE="0.22*sin(2*PI*325*t)*exp(-2.6*t)\
-+0.42*sin(2*PI*650*t+0.12*sin(2*PI*5.0*t))*exp(-3.2*t)\
-+0.40*sin(2*PI*975*t+0.14*sin(2*PI*5.3*t))*exp(-3.8*t)\
-+0.30*sin(2*PI*976.5*t)*exp(-3.8*t)\
-+0.10*sin(2*PI*1300*t)*exp(-5.0*t)"
+TONE="0.30*sin(2*PI*1200*t)*exp(-2.8*t)\
++0.35*sin(2*PI*2400*t+0.10*sin(2*PI*6.0*t))*exp(-3.2*t)\
++0.25*sin(2*PI*3600*t+0.12*sin(2*PI*6.5*t))*exp(-3.5*t)\
++0.15*sin(2*PI*4800*t)*exp(-4.0*t)\
++0.08*sin(2*PI*600*t)*exp(-3.0*t)"
 
 ffmpeg -hide_banner -loglevel error \
   -f lavfi -i "aevalsrc=${TONE}:s=44100:d=1.5" \
   -af "\
-afade=t=in:st=0:d=0.03:curve=ipar,\
-afade=t=out:st=0.55:d=0.50,\
-lowpass=f=3200,\
-aecho=0.5:0.40:100|180:0.12|0.07,\
-volume=-1dB,alimiter=limit=0.72" \
+afade=t=in:st=0:d=0.02:curve=ipar,\
+afade=t=out:st=0.45:d=0.40,\
+highpass=f=400,\
+lowpass=f=5000,\
+aecho=0.3:0.25:60:0.08,\
+volume=-2dB,alimiter=limit=0.75" \
   -ar 44100 -b:a 128k -y "tap_source.mp3"
 
 cp "tap_source.mp3" "../static/tap.mp3"
