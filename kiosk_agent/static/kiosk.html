@@ -1398,21 +1398,21 @@ function showReception(initPurpose) {
       <div style="font-size:52px;font-weight:600;color:${T.ink};letter-spacing:-1.4px;line-height:1.12">ご来訪情報をご記入ください</div>
       <div style="font-size:34px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Please enter your visit details</div>
       ${errMsg ? `<div style="margin-top:18px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.35);border-radius:12px;padding:14px 18px;color:${T.urgent};font-size:18px">${escHtml(errMsg)}</div>` : ""}
-      <div style="margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:22px 40px;padding-bottom:30px">
-        ${fieldWrap("お名前", "Name", true, `<input id="f-name" type="text" autocomplete="off" inputmode="none" placeholder="山田 太郎" style="${inputStyle}">`)}
-        ${fieldWrap("会社名", "Company", false, `<input id="f-company" type="text" autocomplete="off" inputmode="none" placeholder="株式会社 〇〇" style="${inputStyle}">`)}
+      <div style="margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:22px 40px;padding-bottom:20px">
+        ${fieldWrap("お名前", "Name", true, `<input id="f-name" type="text" autocomplete="off" placeholder="山田 太郎" style="${inputStyle}">`)}
+        ${fieldWrap("会社名", "Company", false, `<input id="f-company" type="text" autocomplete="off" placeholder="株式会社 〇〇" style="${inputStyle}">`)}
         ${fieldWrap("担当者名", "Host", false, staffInner)}
         <div></div>
         <div style="grid-column:1 / -1">${fieldWrap("ご用件を選択してください", "Purpose", false, purposeInner)}</div>
       </div>
-      <button id="rec-send" style="margin-top:30px;width:100%;height:88px;background:${submitting ? bc : T.dark};border:none;border-radius:16px;color:#fff;font-size:28px;font-weight:600;cursor:${submitting ? "not-allowed" : "pointer"};display:flex;align-items:center;justify-content:center;gap:12px;font-family:inherit">
+      <button id="rec-send" style="margin-top:20px;width:100%;height:88px;background:${submitting ? bc : T.dark};border:none;border-radius:16px;color:#fff;font-size:28px;font-weight:600;cursor:${submitting ? "not-allowed" : "pointer"};display:flex;align-items:center;justify-content:center;gap:12px;font-family:inherit">
         ${submitting ? `<div style="width:26px;height:26px;border-radius:50%;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;animation:spin .7s linear infinite"></div> 送信中…` : "受付する →"}
       </button>
     </div>
-    ${focusedField ? `<div id="kb-pane" style="margin-top:30px;flex-shrink:0;padding:18px 80px 22px;border-top:2px solid ${T.border};background:${T.canvas}">${buildKeyboardHtml()}</div>` : ""}
+    <div id="kb-pane" style="flex-shrink:0;padding:16px 80px 20px;border-top:2px solid ${T.border};background:${T.canvas};min-height:340px">${buildKeyboardHtml()}</div>
   </div>
-  <div style="padding:12px 80px 22px;display:flex;align-items:center;color:${T.muted};font-size:20px;flex-shrink:0">
-    <span style="font-family:Inter,system-ui,sans-serif">入力欄をタッチするとキーボードが表示されます</span>
+  <div style="padding:12px 80px 20px;display:flex;align-items:center;color:${T.muted};font-size:18px;flex-shrink:0">
+    <span style="font-family:Inter,system-ui,sans-serif">下のキーボードで入力 · 「完了」で次へ</span>
     <span style="flex:1"></span>
     <span style="font-family:'JetBrains Mono',monospace">${devName()}</span>
   </div>
@@ -1438,36 +1438,29 @@ function showReception(initPurpose) {
       chips.forEach(b => b.setAttribute("style", chipStyle(b.dataset.purpose === form.purpose)));
     }));
     g("rec-send").addEventListener("click", handleSubmit);
-    // ソフトウェアキーボードイベント（focusedField がある時のみ登録）
-    if (focusedField) {
-      const kbPane = g("kb-pane");
-      if (kbPane) {
-        const addKey = (key) => {
-          const el = g(focusedField); if (!el) return;
-          el.value += key; form[KEY[focusedField]] = el.value; resetIdle();
-        };
-        const kbKana = g("kb-kana");
-        const kbAbc = g("kb-abc");
-        const kbCompany = g("kb-company");
-        const kbBs = g("kb-bs");
-        const kbSpace = g("kb-space");
-        const kbClose = g("kb-close");
 
-        if (kbKana) kbKana.addEventListener("click", () => { kbMode = "kana"; render(); });
-        if (kbAbc) kbAbc.addEventListener("click", () => { kbMode = "abc"; render(); });
-        if (kbCompany) kbCompany.addEventListener("click", () => { addKey("株式会社"); });
-        if (kbBs) kbBs.addEventListener("click", () => {
-          const el = g(focusedField); if (!el) return;
-          el.value = el.value.slice(0, -1); form[KEY[focusedField]] = el.value; resetIdle();
-        });
-        if (kbSpace) kbSpace.addEventListener("click", () => { addKey(" "); });
-        if (kbClose) kbClose.addEventListener("click", () => { focusedField = null; render(); });
+    // ソフトウェアキーボードイベント登録（常時表示）
+    const addKey = (key) => {
+      if (!focusedField) return;
+      const el = g(focusedField); if (!el) return;
+      el.value += key; form[KEY[focusedField]] = el.value; resetIdle();
+    };
 
-        document.querySelectorAll(".kb-key").forEach(btn => {
-          btn.addEventListener("click", () => addKey(btn.dataset.key));
-        });
-      }
-    }
+    g("kb-kana")?.addEventListener("click", () => { kbMode = "kana"; render(); });
+    g("kb-abc")?.addEventListener("click", () => { kbMode = "abc"; render(); });
+    g("kb-company")?.addEventListener("click", () => { addKey("株式会社"); });
+    g("kb-bs")?.addEventListener("click", () => {
+      if (!focusedField) return;
+      const el = g(focusedField); if (!el) return;
+      el.value = el.value.slice(0, -1); form[KEY[focusedField]] = el.value; resetIdle();
+    });
+    g("kb-space")?.addEventListener("click", () => { addKey(" "); });
+    g("kb-close")?.addEventListener("click", () => { focusedField = null; });
+
+    document.querySelectorAll(".kb-key").forEach(btn => {
+      btn.addEventListener("click", () => addKey(btn.dataset.key));
+    });
+
     onSc("click", resetIdle);
   }
 
