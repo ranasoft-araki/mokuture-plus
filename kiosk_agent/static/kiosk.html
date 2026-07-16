@@ -1376,22 +1376,23 @@ function showReception(initPurpose) {
     const keyGroups = [];
     for (let i = 0; i < keys.length; i += 10) keyGroups.push(keys.slice(i, i + 10));
     const keyBtnStyle = `width:120px;height:56px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:20px;font-weight:600;color:${T.ink};cursor:pointer;font-family:inherit`;
+    const btnPrevent = `onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()"`;
     return `
       <div id="kb-header" style="display:flex;gap:10px;margin-bottom:12px;justify-content:space-between">
-        <button type="button" id="kb-kana" style="flex:1;height:50px;background:${kbMode === "kana" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "kana" ? "#fff" : T.ink};font-size:18px;font-weight:600;cursor:pointer;font-family:inherit">ひらがな</button>
-        <button type="button" id="kb-abc" style="flex:1;height:50px;background:${kbMode === "abc" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "abc" ? "#fff" : T.ink};font-size:18px;font-weight:600;cursor:pointer;font-family:inherit">ABC</button>
-        <button type="button" id="kb-company" style="flex:1;height:50px;background:${T.canvas};border:1px solid ${bc};border-radius:8px;color:${bc};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">株式会社</button>
-        <button type="button" id="kb-bs" style="width:120px;height:50px;background:#f4f1ea;border:1px solid ${T.borderStrong};border-radius:8px;color:${T.ink};font-size:20px;cursor:pointer">⌫</button>
+        <button type="button" id="kb-kana" ${btnPrevent} style="flex:1;height:50px;background:${kbMode === "kana" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "kana" ? "#fff" : T.ink};font-size:18px;font-weight:600;cursor:pointer;font-family:inherit">ひらがな</button>
+        <button type="button" id="kb-abc" ${btnPrevent} style="flex:1;height:50px;background:${kbMode === "abc" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "abc" ? "#fff" : T.ink};font-size:18px;font-weight:600;cursor:pointer;font-family:inherit">ABC</button>
+        <button type="button" id="kb-company" ${btnPrevent} style="flex:1;height:50px;background:${T.canvas};border:1px solid ${bc};border-radius:8px;color:${bc};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">株式会社</button>
+        <button type="button" id="kb-bs" ${btnPrevent} style="width:120px;height:50px;background:#f4f1ea;border:1px solid ${T.borderStrong};border-radius:8px;color:${T.ink};font-size:20px;cursor:pointer">⌫</button>
       </div>
       <div id="kb-keys" style="display:flex;flex-direction:column;gap:8px">
         ${keyGroups.map((row, ri) => `
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            ${row.map(k => `<button type="button" class="kb-key" data-key="${escHtml(k)}" style="${keyBtnStyle}">${escHtml(k)}</button>`).join("")}
+            ${row.map(k => `<button type="button" class="kb-key" data-key="${escHtml(k)}" ${btnPrevent} style="${keyBtnStyle}">${escHtml(k)}</button>`).join("")}
           </div>
         `).join("")}
         <div style="display:flex;gap:8px;margin-top:6px">
-          <button type="button" id="kb-space" style="flex:1;height:50px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:18px;color:${T.muted};cursor:pointer;font-family:inherit">スペース</button>
-          <button type="button" id="kb-close" style="flex:1;height:50px;background:${T.dark};border:none;border-radius:8px;color:#fff;font-size:18px;font-weight:600;cursor:pointer;font-family:inherit">完了</button>
+          <button type="button" id="kb-space" ${btnPrevent} style="flex:1;height:50px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:18px;color:${T.muted};cursor:pointer;font-family:inherit">スペース</button>
+          <button type="button" id="kb-close" ${btnPrevent} style="flex:1;height:50px;background:${T.dark};border:none;border-radius:8px;color:#fff;font-size:18px;font-weight:600;cursor:pointer;font-family:inherit">完了</button>
         </div>
       </div>
     `;
