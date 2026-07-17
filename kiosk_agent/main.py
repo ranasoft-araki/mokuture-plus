@@ -116,11 +116,13 @@ def _parse_nmcli_wifi_rows(output: str) -> list[dict]:
     """nmcli terse 出力をパースする。人間向け multiline 出力の揺れを避ける。"""
     nets: list[dict] = []
     seen: set[str] = set()
+    malformed = 0
     for line in output.splitlines():
         if not line.strip():
             continue
         parts = line.split(_NMCLI_WIFI_SEP)
         if len(parts) != 4:
+            malformed += 1
             continue
         in_use_raw, ssid, sig_str, security = (part.strip() for part in parts)
         if not ssid or ssid == "--" or ssid in seen:
@@ -137,6 +139,8 @@ def _parse_nmcli_wifi_rows(output: str) -> list[dict]:
             "connected": in_use,
         })
     nets.sort(key=lambda n: (not n["connected"], -n["signal"]))
+    if malformed:
+        print(f"[wifi] skipped malformed rows: {malformed}")
     return nets
 
 
@@ -162,6 +166,12 @@ def _wifi_networks() -> tuple[list[dict], str | None]:
         if r.returncode != 0:
             return [], f"nmcli エラー: {r.stderr.strip()}"
         nets = _parse_nmcli_wifi_rows(r.stdout)
+        print(f"[wifi] nmcli rows={len([ln for ln in r.stdout.splitlines() if ln.strip()])} parsed={len(nets)}")
+        if nets:
+            print(f"[wifi] ssids={[n['ssid'] for n in nets[:8]]}")
+        else:
+            sample = r.stdout.splitlines()[:8]
+            print(f"[wifi] raw sample={sample}")
         return nets, None
     except FileNotFoundError:
         return [], "nmcli が見つかりません (NetworkManager がインストールされていますか?)"
