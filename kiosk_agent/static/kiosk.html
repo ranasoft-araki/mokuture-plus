@@ -60,9 +60,13 @@ let CLEANUPS = [];
 let CURRENT_SCREEN = "idle";
 
 function getMasterVolumeLevel() {
-  const raw = parseInt(localStorage.getItem("kiosk_vol") || "70", 10);
-  const pct = isNaN(raw) ? 70 : Math.max(0, Math.min(100, raw));
+  const pct = getStoredVolumePercent();
   return pct / 100;
+}
+
+function getStoredVolumePercent() {
+  const raw = parseInt(localStorage.getItem("kiosk_vol") || "70", 10);
+  return isNaN(raw) ? 70 : Math.max(0, Math.min(100, raw));
 }
 
 function applyMediaElementVolume(scope = document) {
@@ -111,8 +115,7 @@ let _tapLoading = false;
 let _tapNextTry = 0;        // 取得失敗時の再試行時刻(毎タップの404連打を防ぐ)
 function tapSoundEnabled() { return localStorage.getItem("kiosk_snd_tap") !== "off"; }
 function tapVolume() {
-  const v = parseInt(localStorage.getItem("kiosk_vol") || "70", 10);
-  return isNaN(v) ? 0.7 : Math.max(0, Math.min(100, v)) / 100;
+  return getStoredVolumePercent() / 100;
 }
 function _ensureTapAudio() {
   try {
@@ -1996,7 +1999,7 @@ function showKioskSettings() {
     door: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v18"/><path d="M2 22h18"/><circle cx="14" cy="12" r="1"/></svg>`,
   };
 
-  let vol = parseInt(localStorage.getItem("kiosk_vol") || "70", 10);
+  let vol = getStoredVolumePercent();
   let sounds = {
     tap:   localStorage.getItem("kiosk_snd_tap")   !== "off",
   };
@@ -2675,6 +2678,8 @@ function showKioskSettings() {
       vol = volRes.value.level ?? 70;
       localStorage.setItem("kiosk_vol", String(vol));   // タップ音(playPon)が参照する
       if (volRes.value.error) console.warn("[kiosk] volume:", volRes.value.error);
+    } else {
+      vol = getStoredVolumePercent();
     }
     if (wifiRes.status === "fulfilled") {
       networks = wifiRes.value.networks ?? [];
