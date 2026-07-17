@@ -75,7 +75,7 @@ _KIOSK_AGENT_DIR = Path(
 # Files distributed via OTA (relative to kiosk_agent root); order is stable for hashing.
 BUNDLE_FILES = [
     "static/kiosk.html",
-    "static/tap.mp3",   # タップ操作音の音源(Business22-3 を参考に合成)。kiosk.html が /tap.mp3 で再生
+    "static/tap.mp3",   # タップ操作音の音源(木琴C6の単音。VSQ plus+のフリー効果音を加工)。kiosk.html が /tap.mp3 で再生
     "main.py",
     "updater.py",
     "gpio.py",

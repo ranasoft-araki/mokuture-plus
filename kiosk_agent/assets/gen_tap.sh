@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# キオスクのタップ操作音を生成するスクリプト（要 ffmpeg）。
+# キオスクのタップ操作音を生成するスクリプト（要 ffmpeg / curl）。
 #
-# Business22-3(High).mp3 を参考にしつつ、コピーではなく additive 合成で新規生成した
-# 「ほわんとした淡い」音色。微ビブラートの揺らぎ・ゆっくりした立ち上がり・高域を大きく
-# 丸めた暖かい低〜中域・淡いリバーブの広がりが特徴。
+# 音源: VSQ plus+ のフリー効果音「木琴 ５」(VSQSE_1128_xylophone_05.mp3) の
+#   フレーズ最後の 1 音（後続音のない綺麗な単音）を抽出したもの。
+#     一覧  : https://vsq.co.jp/plus/sound/category_sub/xylophone/
+#     規約  : https://vsq.co.jp/plus/tos/
+#             商用・非商用ともに無料で利用可・加工可・クレジット任意。
+#             ただし「オリジナルのままの再配布・販売」は禁止のため、本リポジトリには
+#             加工済み（単音を切り出し・整音した）tap_source.mp3 のみを収録する。
+#   磯野木工所の和モダン（木工所）ブランドに合わせ、木の打楽器＝木琴の単音（C6, 約1050Hz）を
+#   0.5 秒に切り出した乾いた「コツッ」というタップ音。
 #
 # 使い方: このディレクトリで  bash gen_tap.sh
 #   → assets/tap_source.mp3 (ソース) と ../static/tap.mp3 (配信用) を更新する。
@@ -11,22 +17,23 @@
 set -e
 cd "$(dirname "$0")"
 
-TONE="0.30*sin(2*PI*1200*t)*exp(-2.8*t)\
-+0.35*sin(2*PI*2400*t+0.10*sin(2*PI*6.0*t))*exp(-3.2*t)\
-+0.25*sin(2*PI*3600*t+0.12*sin(2*PI*6.5*t))*exp(-3.5*t)\
-+0.15*sin(2*PI*4800*t)*exp(-4.0*t)\
-+0.08*sin(2*PI*600*t)*exp(-3.0*t)"
+SRC_URL="https://vsq.co.jp/plus/wordpress/wp-content/uploads/2021/07/VSQSE_1128_xylophone_05.mp3"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+curl -sL -A "Mozilla/5.0" "$SRC_URL" -o "$TMP/xylophone_05.mp3"
 
-ffmpeg -hide_banner -loglevel error \
-  -f lavfi -i "aevalsrc=${TONE}:s=44100:d=1.5" \
-  -af "\
-afade=t=in:st=0:d=0.02:curve=ipar,\
-afade=t=out:st=0.45:d=0.40,\
-highpass=f=400,\
-lowpass=f=5000,\
-aecho=0.3:0.25:60:0.08,\
-volume=-2dB,alimiter=limit=0.75" \
-  -ar 44100 -b:a 128k -y "tap_source.mp3"
+# フレーズ最後の単音（onset≈0.833s）を 0.5 秒だけ切り出し、頭 3ms / 尻 100ms をフェード。
+ffmpeg -hide_banner -loglevel error -i "$TMP/xylophone_05.mp3" \
+  -af "atrim=0.8215:1.3215,asetpts=PTS-STARTPTS,\
+afade=t=in:st=0:d=0.003,afade=t=out:st=0.40:d=0.10" \
+  -ar 44100 -ac 2 -b:a 160k -y "$TMP/cut.mp3"
+
+# ピークを -4.5dB へ正規化（打楽器としての存在感。音量はキオスク側スライダーで別途調整可）。
+max=$(ffmpeg -hide_banner -i "$TMP/cut.mp3" -af volumedetect -f null - 2>&1 \
+      | grep max_volume | grep -oE '\-?[0-9.]+ dB' | grep -oE '\-?[0-9.]+')
+gain=$(awk "BEGIN{printf \"%.1f\", -4.5-($max)}")
+ffmpeg -hide_banner -loglevel error -i "$TMP/cut.mp3" -af "volume=${gain}dB" \
+  -ar 44100 -ac 2 -b:a 160k -y "tap_source.mp3"
 
 cp "tap_source.mp3" "../static/tap.mp3"
 echo "generated assets/tap_source.mp3 and copied to ../static/tap.mp3"

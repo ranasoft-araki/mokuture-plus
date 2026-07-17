@@ -99,7 +99,7 @@ function cleanup() { CLEANUPS.forEach(f => f()); CLEANUPS = []; }
 // ─── Tap feedback (波紋エフェクト + 「ポン」音) ───────────────────────────────
 // 画面のどこをタップしても、その位置に波紋を広げて「ポン」という音を鳴らす。
 // 音は受付設定の「タップ操作音」(kiosk_snd_tap) と音量(kiosk_vol) に従う。波紋は常に表示。
-// タップ音は音源ファイル /tap.mp3(Business22-3 を参考に additive 合成したほわんとした淡いチャイム)を Web Audio で再生する。
+// タップ音は音源ファイル /tap.mp3(木琴の単音 C6。VSQ plus+ のフリー効果音を加工=商用利用可)を Web Audio で再生する。
 // 起動時に一度デコードしてバッファを使い回し、連打でも重ねて鳴らせる/低レイテンシ。
 let _tapAudioCtx = null;
 let _tapBuffer = null;      // デコード済みタップ音
@@ -124,24 +124,25 @@ function _ensureTapAudio() {
   }
   return _tapAudioCtx;
 }
-// mp3 が未ロード/未配信のときのフォールバック合成音。tap.mp3(ほわんとした淡いチャイム)
-// に寄せた 低域ボディ(325/650Hz)＋暖かい芯(975Hz)。高域を抑え、立ち上がりをより柔らかく淡く。
+// mp3 が未ロード/未配信のときのフォールバック合成音。tap.mp3(木琴 C6 の単音)に寄せた
+// 木琴風マレット: 基音1046Hz(C6)＋木琴特有の非整数倍音(≈3140Hz)＋低いボディ523Hz。
+// 速い立ち上がり＋短い減衰で乾いた木の打音(コツッ)を近似する。
 function _synthPon(ctx, level) {
   const t = ctx.currentTime;
   const master = ctx.createGain();
-  master.gain.value = 0.24 * level;
+  master.gain.value = 0.34 * level;
   master.connect(ctx.destination);
   [
-    { hz: 325,  gain: 0.40, dur: 0.85 },   // 低域ボディ
-    { hz: 650,  gain: 0.70, dur: 0.75 },   // 暖かい芯
-    { hz: 975,  gain: 0.52, dur: 0.62 },
-    { hz: 1300, gain: 0.10, dur: 0.40 },   // 控えめな上倍音
+    { hz: 523,  gain: 0.30, dur: 0.30 },   // 低いボディ(温かみ, C5)
+    { hz: 1046, gain: 0.85, dur: 0.28 },   // 基音 C6
+    { hz: 3140, gain: 0.28, dur: 0.16 },   // 木琴の非整数倍音(硬さ, ≈3倍)
+    { hz: 4400, gain: 0.10, dur: 0.10 },   // 当たりのきらめき
   ].forEach(p => {
     const osc = ctx.createOscillator(), g = ctx.createGain();
     osc.type = "sine"; osc.frequency.value = p.hz;
     osc.connect(g); g.connect(master);
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(p.gain, t + 0.05);    // さらにゆっくり柔らかく立ち上げる
+    g.gain.linearRampToValueAtTime(p.gain, t + 0.006);   // 速い立ち上がり=マレットの当たり
     g.gain.exponentialRampToValueAtTime(0.0001, t + p.dur);
     osc.start(t); osc.stop(t + p.dur + 0.03);
   });
