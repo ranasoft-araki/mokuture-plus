@@ -1,5 +1,6 @@
 """mokuture+ Local Kiosk Device Agent"""
 import asyncio
+import logging
 import os
 import platform
 import re
@@ -22,6 +23,8 @@ from gpio import DoorSensor, LockerController, PirSensor
 from state import get_device_name, get_device_token, is_registered, save_device_state
 from sync import find_media, heartbeat_loop, sync_loop
 from updater import updater, read_version
+
+logger = logging.getLogger(__name__)
 
 
 def _hardware_id() -> str:
