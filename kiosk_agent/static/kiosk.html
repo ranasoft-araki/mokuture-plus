@@ -1182,7 +1182,7 @@ function showLocker(mode) {
 
   async function load() {
     try {
-      const r = await deviceGet("/device/locker-list");
+      const r = await deviceGet("/device/locker-list", token);
       lockers = r.lockers || [];
       available = r.available_count ?? lockers.filter(l => !l.occupied).length;
       view = "grid"; render();
@@ -1356,7 +1356,7 @@ function showDelivery() {
 
   async function load() {
     try {
-      const r = await deviceGet("/device/locker-list");
+      const r = await deviceGet("/device/locker-list", token);
       lockers = r.lockers || [];
       available = r.available_count ?? lockers.filter(l => !l.occupied).length;
       view = "choose"; render();

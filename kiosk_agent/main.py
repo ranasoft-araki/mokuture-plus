@@ -910,9 +910,9 @@ async def set_locker_state(locker_id: str, body: LockerStateBody):
 _ROSTER_TTL_SEC = 60
 
 
-async def _sync_locker_roster() -> None:
+async def _sync_locker_roster(token_override: str = "") -> None:
     """台帳(id→name/door_number)を backend から best-effort 同期。占有/PIN は触らない。"""
-    token = get_device_token()
+    token = (token_override or "").strip() or get_device_token()
     if not token:
         return
     try:
@@ -927,9 +927,9 @@ async def _sync_locker_roster() -> None:
         pass  # オフライン等: 前回の台帳をそのまま使う
 
 
-async def _mirror_locker_state() -> None:
+async def _mirror_locker_state(token_override: str = "") -> None:
     """管理画面可視化用に occupied/has_pin を backend へ best-effort ミラー（PINは送らない）。"""
-    token = get_device_token()
+    token = (token_override or "").strip() or get_device_token()
     if not token:
         return
     try:
@@ -987,12 +987,15 @@ async def _flush_pending_notify() -> None:
 
 
 @app.get("/device/locker-list")
-async def device_locker_list():
+async def device_locker_list(request: Request):
     """kiosk グリッド用: 台帳＋ローカル状態。オンライン時のみ台帳を throttle 同期し、
     保留中の置き配通知も flush する。オフラインでも前回台帳＋ローカル状態を返す。"""
+    current_token = (request.headers.get("x-kiosk-token", "") or "").strip()
+    if current_token:
+        save_device_state(current_token, get_device_name())
     age = locker_store.roster_age_sec()
     if age is None or age > _ROSTER_TTL_SEC:
-        await _sync_locker_roster()
+        await _sync_locker_roster(current_token)
     await _flush_pending_notify()
     return locker_store.snapshot()
 
@@ -1019,6 +1022,8 @@ async def device_locker_occupy_delivery(locker_id: str, request: Request):
     except locker_store.LockerError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
     current_token = (request.headers.get("x-kiosk-token", "") or "").strip() or get_device_token()
+    if current_token:
+        save_device_state(current_token, get_device_name())
     item = {
         "id": str(locker_id),
         "pin": result["pin"],
@@ -1031,7 +1036,7 @@ async def device_locker_occupy_delivery(locker_id: str, request: Request):
         if not await _relay_delivery_notify(item):
             logger.warning("delivery notify queued for retry: locker=%s", item.get("id"))
             locker_store.enqueue_notify(item)
-        await _mirror_locker_state()
+        await _mirror_locker_state(current_token)
 
     _spawn(_notify())
     return {"ok": True, "door_number": result["door_number"]}
