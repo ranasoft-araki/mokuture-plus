@@ -942,7 +942,7 @@ async def _mirror_locker_state() -> None:
 
 async def _relay_delivery_notify(item: dict) -> bool:
     """置き配通知を backend 経由で発火（平文PIN＋ラベル）。item={id,pin,label,device}。"""
-    token = get_device_token()
+    token = (item.get("token") or "").strip() or get_device_token()
     if not token:
         return False
     try:
@@ -997,14 +997,21 @@ async def device_locker_occupy(locker_id: str, body: LockerPinBody):
 
 
 @app.post("/device/locker/{locker_id}/occupy-delivery")
-async def device_locker_occupy_delivery(locker_id: str):
+async def device_locker_occupy_delivery(locker_id: str, request: Request):
     """置き配: ローカルでランダム4桁PINを生成・保存し、通知は backend 経由で発火する
     （平文PINは通知にのみ使用）。オフライン時は通知をキューして再接続時に送る。"""
     try:
         result = locker_store.occupy_delivery(locker_id)
     except locker_store.LockerError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
-    item = {"id": str(locker_id), "pin": result["pin"], "label": result["name"], "device": get_device_name()}
+    current_token = (request.headers.get("x-kiosk-token", "") or "").strip() or get_device_token()
+    item = {
+        "id": str(locker_id),
+        "pin": result["pin"],
+        "label": result["name"],
+        "device": get_device_name(),
+        "token": current_token,
+    }
 
     async def _notify():
         if not await _relay_delivery_notify(item):
