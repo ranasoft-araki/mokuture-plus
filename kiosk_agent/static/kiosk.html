@@ -55,6 +55,20 @@ let TRANSITION_TYPE = "fade";
 let CLEANUPS = [];
 let CURRENT_SCREEN = "idle";
 
+function getMasterVolumeLevel() {
+  const raw = parseInt(localStorage.getItem("kiosk_vol") || "70", 10);
+  const pct = isNaN(raw) ? 70 : Math.max(0, Math.min(100, raw));
+  return pct / 100;
+}
+
+function applyMediaElementVolume(scope = document) {
+  const level = getMasterVolumeLevel();
+  scope.querySelectorAll("video.media-el").forEach(v => {
+    v.muted = false;
+    v.volume = level;
+  });
+}
+
 const sc = document.getElementById("sc");
 const TOKEN_KEY = "mokuture_kiosk_token";
 const NAME_KEY  = "mokuture_kiosk_name";
@@ -627,7 +641,10 @@ function showIdle() {
       const v = document.createElement("video");
       v.className = "media-el";
       v.src = url;
-      v.autoplay = v.muted = v.playsInline = true;
+      v.autoplay = true;
+      v.playsInline = true;
+      v.muted = false;
+      v.volume = getMasterVolumeLevel();
       v.loop = ITEMS.length === 1;
       v.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0";
       v.onended = nextItem;
@@ -2217,6 +2234,7 @@ function showKioskSettings() {
     if (fill)  fill.style.width = vol + "%";
     if (thumb) thumb.style.left = vol + "%";
     localStorage.setItem("kiosk_vol", String(vol));   // タップ音(playPon)が参照する
+    applyMediaElementVolume();
     clearTimeout(volDebounce);
     volDebounce = setTimeout(postVolume, 400);
   }
