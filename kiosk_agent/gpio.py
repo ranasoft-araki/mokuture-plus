@@ -25,15 +25,6 @@ class LockerController:
             for locker_id, pin in self._pin_map.items():
                 self._pins[locker_id] = _LED(pin)
 
-    def resolve_locker_id(self, locker_id: str) -> str | None:
-        lid = str(locker_id)
-        if lid in self._pin_map:
-            return lid
-        for key, pin in self._pin_map.items():
-            if str(pin) == lid:
-                return key
-        return None
-
     def configured_lockers(self) -> list[dict[str, int]]:
         return [
             {"locker_id": locker_id, "pin": pin}
@@ -41,7 +32,7 @@ class LockerController:
         ]
 
     def is_configured(self, locker_id: str) -> bool:
-        return self.resolve_locker_id(locker_id) is not None
+        return str(locker_id) in self._pin_map
 
     def status(self) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
@@ -56,9 +47,7 @@ class LockerController:
         return items
 
     def is_on(self, locker_id: str) -> bool:
-        lid = self.resolve_locker_id(locker_id)
-        if lid is None:
-            return False
+        lid = str(locker_id)
         if _MOCK:
             return self._mock_state.get(lid, False)
         relay = self._pins.get(lid)
@@ -67,8 +56,8 @@ class LockerController:
         return bool(relay.value)  # type: ignore[attr-defined]
 
     def set_state(self, locker_id: str, on: bool) -> bool:
-        lid = self.resolve_locker_id(locker_id)
-        if lid is None:
+        lid = str(locker_id)
+        if lid not in self._pin_map:
             return False
         if _MOCK:
             self._mock_state[lid] = on
@@ -84,9 +73,7 @@ class LockerController:
         return True
 
     async def open(self, locker_id: str, pulse_sec: float | None = None) -> bool:
-        lid = self.resolve_locker_id(locker_id)
-        if lid is None:
-            return False
+        lid = str(locker_id)
         if not self.set_state(lid, True):
             return False
         wait_sec = self._default_pulse_sec if pulse_sec is None else max(0.0, float(pulse_sec))

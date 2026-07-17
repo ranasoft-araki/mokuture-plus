@@ -117,25 +117,16 @@ def sync_roster(items: list[dict]) -> None:
     with _lock:
         data = _load()
         lockers = data["lockers"]
-        next_lockers = {}
         for it in items or []:
             lid = str(it.get("id") or "")
             if not lid:
                 continue
-            door_number = it.get("door_number")
-            e = lockers.get(lid)
-            if e is None and door_number is not None:
-                e = next((old for old in lockers.values() if old.get("door_number") == door_number), None)
-            if e is None:
-                e = {
-                    "door_number": None, "name": None, "occupied": False,
-                    "pin_salt": None, "pin_hash": None, "occupied_at": None, "kind": None,
-                }
-            e = dict(e)
-            e["door_number"] = door_number
+            e = lockers.setdefault(lid, {
+                "door_number": None, "name": None, "occupied": False,
+                "pin_salt": None, "pin_hash": None, "occupied_at": None, "kind": None,
+            })
+            e["door_number"] = it.get("door_number")
             e["name"] = it.get("name")
-            next_lockers[lid] = e
-        data["lockers"] = next_lockers
         data["roster_synced_at"] = _now_iso()
         _save(data)
 

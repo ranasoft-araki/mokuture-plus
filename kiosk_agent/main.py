@@ -1,6 +1,5 @@
 """mokuture+ Local Kiosk Device Agent"""
 import asyncio
-import logging
 import os
 import platform
 import re
@@ -23,8 +22,6 @@ from gpio import DoorSensor, LockerController, PirSensor
 from state import get_device_name, get_device_token, is_registered, save_device_state
 from sync import find_media, heartbeat_loop, sync_loop
 from updater import updater, read_version
-
-logger = logging.getLogger(__name__)
 
 
 def _hardware_id() -> str:
@@ -868,8 +865,8 @@ async def list_device_lockers():
 
 @app.post("/device/locker/{locker_id}/open")
 async def open_locker(locker_id: str):
-    lid = locker_ctrl.resolve_locker_id(locker_id)
-    if lid is None:
+    lid = str(locker_id)
+    if not locker_ctrl.is_configured(lid):
         raise HTTPException(status_code=404, detail=f"Locker {locker_id} not configured")
     door = doors.get(lid)
     if door is not None and door.configured:
@@ -910,11 +907,10 @@ async def set_locker_state(locker_id: str, body: LockerStateBody):
 _ROSTER_TTL_SEC = 60
 
 
-async def _sync_locker_roster(token_override: str = "") -> None:
+async def _sync_locker_roster() -> None:
     """台帳(id→name/door_number)を backend から best-effort 同期。占有/PIN は触らない。"""
-    token = (token_override or "").strip() or get_device_token()
+    token = get_device_token()
     if not token:
-        logger.warning("locker roster sync skipped: no kiosk token")
         return
     try:
         async with httpx.AsyncClient() as client:
@@ -923,16 +919,14 @@ async def _sync_locker_roster(token_override: str = "") -> None:
                 headers={"X-Kiosk-Token": token}, timeout=8,
             )
             resp.raise_for_status()
-            lockers = resp.json().get("lockers", [])
-            locker_store.sync_roster(lockers)
-            logger.info("locker roster synced: count=%s", len(lockers))
-    except Exception as e:
-        logger.warning("locker roster sync failed: error=%s", e)
+            locker_store.sync_roster(resp.json().get("lockers", []))
+    except Exception:
+        pass  # オフライン等: 前回の台帳をそのまま使う
 
 
-async def _mirror_locker_state(token_override: str = "") -> None:
+async def _mirror_locker_state() -> None:
     """管理画面可視化用に occupied/has_pin を backend へ best-effort ミラー（PINは送らない）。"""
-    token = (token_override or "").strip() or get_device_token()
+    token = get_device_token()
     if not token:
         return
     try:
@@ -948,9 +942,8 @@ async def _mirror_locker_state(token_override: str = "") -> None:
 
 async def _relay_delivery_notify(item: dict) -> bool:
     """置き配通知を backend 経由で発火（平文PIN＋ラベル）。item={id,pin,label,device}。"""
-    token = (item.get("token") or "").strip() or get_device_token()
+    token = get_device_token()
     if not token:
-        logger.warning("delivery notify skipped: no kiosk token (locker=%s)", item.get("id"))
         return False
     try:
         async with httpx.AsyncClient() as client:
@@ -964,18 +957,8 @@ async def _relay_delivery_notify(item: dict) -> bool:
                 },
                 timeout=10,
             )
-            if resp.status_code >= 400:
-                logger.warning(
-                    "delivery notify relay failed: status=%s locker=%s detail=%s",
-                    resp.status_code,
-                    item.get("id"),
-                    resp.text[:200],
-                )
-                return False
-            logger.info("delivery notify relayed: locker=%s", item.get("id"))
-            return True
-    except Exception as e:
-        logger.warning("delivery notify relay error: locker=%s error=%s", item.get("id"), e)
+            return resp.status_code < 400
+    except Exception:
         return False
 
 
@@ -990,19 +973,14 @@ async def _flush_pending_notify() -> None:
 
 
 @app.get("/device/locker-list")
-async def device_locker_list(request: Request):
+async def device_locker_list():
     """kiosk グリッド用: 台帳＋ローカル状態。オンライン時のみ台帳を throttle 同期し、
     保留中の置き配通知も flush する。オフラインでも前回台帳＋ローカル状態を返す。"""
-    current_token = (request.headers.get("x-kiosk-token", "") or "").strip()
-    if current_token:
-        save_device_state(current_token, get_device_name())
     age = locker_store.roster_age_sec()
     if age is None or age > _ROSTER_TTL_SEC:
-        await _sync_locker_roster(current_token)
+        await _sync_locker_roster()
     await _flush_pending_notify()
-    snap = locker_store.snapshot()
-    logger.info("device locker list: count=%s available=%s", len(snap.get("lockers", [])), snap.get("available_count"))
-    return snap
+    return locker_store.snapshot()
 
 
 @app.post("/device/locker/{locker_id}/occupy")
@@ -1019,29 +997,19 @@ async def device_locker_occupy(locker_id: str, body: LockerPinBody):
 
 
 @app.post("/device/locker/{locker_id}/occupy-delivery")
-async def device_locker_occupy_delivery(locker_id: str, request: Request):
+async def device_locker_occupy_delivery(locker_id: str):
     """置き配: ローカルでランダム4桁PINを生成・保存し、通知は backend 経由で発火する
     （平文PINは通知にのみ使用）。オフライン時は通知をキューして再接続時に送る。"""
     try:
         result = locker_store.occupy_delivery(locker_id)
     except locker_store.LockerError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
-    current_token = (request.headers.get("x-kiosk-token", "") or "").strip() or get_device_token()
-    if current_token:
-        save_device_state(current_token, get_device_name())
-    item = {
-        "id": str(locker_id),
-        "pin": result["pin"],
-        "label": result["name"],
-        "device": get_device_name(),
-        "token": current_token,
-    }
+    item = {"id": str(locker_id), "pin": result["pin"], "label": result["name"], "device": get_device_name()}
 
     async def _notify():
         if not await _relay_delivery_notify(item):
-            logger.warning("delivery notify queued for retry: locker=%s", item.get("id"))
             locker_store.enqueue_notify(item)
-        await _mirror_locker_state(current_token)
+        await _mirror_locker_state()
 
     _spawn(_notify())
     return {"ok": True, "door_number": result["door_number"]}
