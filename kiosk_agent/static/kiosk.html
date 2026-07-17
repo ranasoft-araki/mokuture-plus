@@ -2674,11 +2674,13 @@ function showKioskSettings() {
       fetch("/device/volume").then(r => r.json()),
       fetch("/device/wifi/networks").then(r => r.json()),
     ]);
-    if (volRes.status === "fulfilled") {
+    if (volRes.status === "fulfilled" && !volRes.value.error) {
       vol = volRes.value.level ?? 70;
       localStorage.setItem("kiosk_vol", String(vol));   // タップ音(playPon)が参照する
-      if (volRes.value.error) console.warn("[kiosk] volume:", volRes.value.error);
     } else {
+      if (volRes.status === "fulfilled" && volRes.value.error) {
+        console.warn("[kiosk] volume:", volRes.value.error);
+      }
       vol = getStoredVolumePercent();
     }
     if (wifiRes.status === "fulfilled") {
