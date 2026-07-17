@@ -2006,6 +2006,7 @@ function showKioskSettings() {
   let wifiOn = true;
   let networks = [];
   let wifiLoading = false;
+  let wifiError = "";
   let devTaps = 0, devTimer = null;
   let volDebounce = null;
 
@@ -2394,6 +2395,7 @@ function showKioskSettings() {
       ${(()=>{
         const connected = networks.find(n => n.connected);
         if (wifiLoading) return `<div style="padding:20px;text-align:center;color:${C.stone};font-size:16px">スキャン中…</div>`;
+        if (wifiError) return `<div style="background:#fff3f1;border:1.5px solid #ebc2bb;border-radius:16px;padding:18px 22px;color:#8d3d2f;font-size:14px;line-height:1.6;margin-bottom:20px">Wi-Fi一覧の取得に失敗しました<br>${escHtml(wifiError)}</div>`;
         if (connected) return `<div style="background:${C.mossSoft};border:1.5px solid ${C.moss};border-radius:16px;padding:20px 24px;display:flex;align-items:center;gap:18px;margin-bottom:20px">
           ${barsWrap(connected.level, C.mossDk)}
           <div style="flex:1">
@@ -2553,7 +2555,13 @@ function showKioskSettings() {
     try {
       const data = await fetch("/device/wifi/networks").then(r => r.json());
       networks = data.networks ?? [];
-    } catch(e) { networks = []; }
+      wifiError = data.error ?? "";
+      if (wifiError) console.warn("[kiosk] wifi:", wifiError);
+    } catch(e) {
+      networks = [];
+      wifiError = e && e.message ? e.message : "一覧取得に失敗しました";
+      console.warn("[kiosk] wifi:", wifiError);
+    }
     wifiLoading = false; render();
   }
 
@@ -2685,7 +2693,10 @@ function showKioskSettings() {
     }
     if (wifiRes.status === "fulfilled") {
       networks = wifiRes.value.networks ?? [];
+      wifiError = wifiRes.value.error ?? "";
       if (wifiRes.value.error) console.warn("[kiosk] wifi:", wifiRes.value.error);
+    } else {
+      wifiError = "一覧取得に失敗しました";
     }
     render();
   }

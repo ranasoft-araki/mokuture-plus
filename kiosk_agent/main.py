@@ -109,25 +109,26 @@ def _set_volume_linux(level: int) -> str | None:
     return " / ".join(errors)
 
 
-def _parse_nmcli_multiline(output: str) -> list[dict]:
-    """nmcli --mode multiline 出力をパース (SSIDに:が含まれても安全)。"""
+_NMCLI_WIFI_SEP = "\x1f"
+
+
+def _parse_nmcli_wifi_rows(output: str) -> list[dict]:
+    """nmcli terse 出力をパースする。人間向け multiline 出力の揺れを避ける。"""
     nets: list[dict] = []
     seen: set[str] = set()
-    for block in re.split(r'\n{2,}', output.strip()):
-        fields: dict[str, str] = {}
-        for line in block.splitlines():
-            key, sep, val = line.partition(':')
-            if sep:
-                fields[key.strip()] = val.strip()
-        ssid = fields.get("SSID", "").strip()
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(_NMCLI_WIFI_SEP)
+        if len(parts) != 4:
+            continue
+        in_use_raw, ssid, sig_str, security = (part.strip() for part in parts)
         if not ssid or ssid == "--" or ssid in seen:
             continue
         seen.add(ssid)
-        in_use  = fields.get("IN-USE", "").strip() == "*"
-        sig_str = fields.get("SIGNAL", "0").strip()
-        sig     = int(sig_str) if sig_str.isdigit() else 0
-        security = fields.get("SECURITY", "--").strip()
-        level   = 4 if sig >= 75 else 3 if sig >= 50 else 2 if sig >= 25 else 1
+        in_use = in_use_raw in ("*", "yes", "はい")
+        sig = int(sig_str) if sig_str.isdigit() else 0
+        level = 4 if sig >= 75 else 3 if sig >= 50 else 2 if sig >= 25 else 1
         nets.append({
             "ssid": ssid,
             "signal": sig,
@@ -143,13 +144,24 @@ def _wifi_networks() -> tuple[list[dict], str | None]:
     """(ネットワーク一覧, エラー文字列|None) を返す。"""
     try:
         r = _run(
-            ["nmcli", "--mode", "multiline", "-f", "IN-USE,SSID,SIGNAL,SECURITY",
-             "dev", "wifi", "list"],
+            [
+                "nmcli",
+                "--terse",
+                "--escape",
+                "no",
+                "--separator",
+                _NMCLI_WIFI_SEP,
+                "-f",
+                "IN-USE,SSID,SIGNAL,SECURITY",
+                "dev",
+                "wifi",
+                "list",
+            ],
             timeout=12,
         )
         if r.returncode != 0:
             return [], f"nmcli エラー: {r.stderr.strip()}"
-        nets = _parse_nmcli_multiline(r.stdout)
+        nets = _parse_nmcli_wifi_rows(r.stdout)
         return nets, None
     except FileNotFoundError:
         return [], "nmcli が見つかりません (NetworkManager がインストールされていますか?)"
