@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
+import kana_kanji
 import locker_store
 from config import settings
 from gpio import DoorSensor, LockerController, PirSensor
@@ -320,10 +321,17 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(sync_loop())
     update_task = asyncio.create_task(updater.run())
     heartbeat_task = asyncio.create_task(heartbeat_loop())
+    # かな漢字辞書: 無ければ取得→事前ロード(別スレッド)。OTA 更新の Pi でも自動で辞書を揃え、
+    # 初回変換の遅延も回避する。取得失敗(オフライン)時は同梱 kana_dict.tsv にフォールバック。
+    async def _prepare_convert_dict():
+        await asyncio.to_thread(kana_kanji.ensure_dict)
+        await asyncio.to_thread(kana_kanji.warmup)
+    warmup_task = asyncio.create_task(_prepare_convert_dict())
     yield
     task.cancel()
     update_task.cancel()
     heartbeat_task.cancel()
+    warmup_task.cancel()
     locker_ctrl.close()
     pir.close()
     for door in doors.values():
@@ -1029,6 +1037,16 @@ async def device_lockers_open_all():
 @app.get("/device/pir")
 async def get_pir():
     return {"motion_detected": pir.motion_detected}
+
+
+# ── かな漢字変換 (実験: experiment/kanji-ime) ─────────────────────────────────
+# 受付フォームの五十音キーボードで入力した読み(ひらがな)を漢字候補に変換する。
+# ローカル辞書ベースでオフライン動作(ハードウェア不要 = 開発機でも同じ経路)。
+@app.get("/device/convert")
+async def device_convert(kana: str = "", limit: int = 60):
+    limit = max(1, min(limit, 100))
+    candidates = await asyncio.to_thread(kana_kanji.convert, kana, limit)
+    return {"reading": kana, "candidates": candidates}
 
 
 @app.get("/update-status")

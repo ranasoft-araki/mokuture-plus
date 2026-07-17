@@ -15,6 +15,19 @@ python3 -m venv "$VENV"
 "$VENV/bin/pip" install --quiet -e ".[rpi]" 2>/dev/null \
   || "$VENV/bin/pip" install --quiet -e .
 
+# かな漢字変換の全面辞書(SKK-JISYO.L)を取得。無くても同梱 kana_dict.tsv で動くが、
+# 姓名・一般語を網羅するには推奨(実験: 漢字変換入力。IME-EXPERIMENT.md 参照)。
+if [ ! -f "$AGENT_DIR/SKK-JISYO.L" ]; then
+    echo "Fetching SKK-JISYO.L (kana→kanji dictionary)..."
+    if curl -fsSL -o "$AGENT_DIR/SKK-JISYO.L.gz" https://skk-dev.github.io/dict/SKK-JISYO.L.gz; then
+        gunzip -f "$AGENT_DIR/SKK-JISYO.L.gz" && echo "  -> SKK-JISYO.L ready" \
+            || echo "  -> gunzip failed (falling back to bundled kana_dict.tsv)"
+    else
+        echo "  -> download failed (falling back to bundled kana_dict.tsv)"
+        rm -f "$AGENT_DIR/SKK-JISYO.L.gz"
+    fi
+fi
+
 if [ ! -f "$AGENT_DIR/.env" ]; then
     cat > "$AGENT_DIR/.env" <<EOF
 REMOTE_API_URL=https://mokuture-plus-api.onrender.com/api

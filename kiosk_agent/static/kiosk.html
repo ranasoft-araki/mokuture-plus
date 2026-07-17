@@ -10,6 +10,10 @@ body{width:100vw;height:100vh;overflow:hidden;background:#0a0806;font-family:'No
 #sw{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
 #sc{width:1920px;height:1080px;transform-origin:center center;overflow:hidden;position:relative}
 button{font-family:inherit}
+/* 変換候補パネルのスクロールバー(タッチで分かりやすいよう太めに常時表示) */
+#kb-cand-grid::-webkit-scrollbar{width:16px}
+#kb-cand-grid::-webkit-scrollbar-thumb{background:#b9b3aa;border-radius:9px;border:4px solid transparent;background-clip:content-box}
+#kb-cand-grid::-webkit-scrollbar-track{background:#eceae4;border-radius:9px}
 
 @keyframes fade-in{from{opacity:0}to{opacity:1}}
 @keyframes ring-expand{0%{transform:scale(1);opacity:.4}100%{transform:scale(2.2);opacity:0}}
@@ -290,6 +294,12 @@ async function mockFetch(method, path, body) {
   if (path === "/proxy/lockers/open-all") return _mockOpenAll();
   return {};
 }
+// MOCK時のかな漢字変換スタブ(?mock=1 のUIプレビュー用の最小デモ辞書)。
+const _MOCK_CONV = { "やまだ":["山田"], "たろう":["太郎"], "さとう":["佐藤"], "すずき":["鈴木"], "いその":["磯野"], "かぶしきがいしゃ":["株式会社"] };
+function _mockConvert(kana) {
+  const hira = (kana || "").replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
+  return (_MOCK_CONV[hira] || []).slice();
+}
 // ローカルエージェント(/device/*)を叩く。MOCK時はローカルロッカー状態をスタブ。
 async function mockDeviceFetch(method, path, body) {
   await new Promise(r => setTimeout(r, 100));
@@ -301,6 +311,11 @@ async function mockDeviceFetch(method, path, body) {
   m = path.match(/^\/device\/locker\/([^/]+)\/release$/);
   if (m) return _mockRelease(m[1], body?.pin);
   if (path === "/device/lockers/open-all") return _mockOpenAll();
+  if (path.startsWith("/device/convert")) {
+    const q = path.split("?")[1] || "";
+    const kana = decodeURIComponent((q.match(/(?:^|&)kana=([^&]*)/) || ["", ""])[1] || "");
+    return { reading: kana, candidates: _mockConvert(kana) };
+  }
   return {};
 }
 async function deviceFetch(method, path, body) {
@@ -318,6 +333,15 @@ async function deviceFetch(method, path, body) {
 }
 const deviceGet  = (p)    => deviceFetch("GET",  p, null);
 const devicePost = (p, b) => deviceFetch("POST", p, b || null);
+// かな漢字変換(ローカルエージェント)。読み(ひらがな/カタカナ)→ 漢字候補。失敗時は空配列。
+async function deviceConvert(kana, limit) {
+  if (!kana) return [];
+  try {
+    const q = "/device/convert?kana=" + encodeURIComponent(kana) + (limit ? "&limit=" + limit : "");
+    const r = await deviceGet(q);
+    return Array.isArray(r?.candidates) ? r.candidates : [];
+  } catch { return []; }
+}
 // ロッカーのGPIO開錠(ローカルエージェント)。MOCK時はダミー。
 async function pulseLocker(door) {
   if (MOCK) { await new Promise(r => setTimeout(r, 120)); return { ok: true }; }
@@ -1356,6 +1380,7 @@ function showReception(initPurpose) {
   let submitting = false, errMsg = "";
   let form = { visitor_name: "", company: "", staff: "", purpose: initPurpose ?? "" };
   let idleId, kbMode = "kana", focusedField = null;
+  let cands = [];   // 現在表示中の漢字変換候補
   const KEY = { "f-name": "visitor_name", "f-company": "company", "f-staff": "staff" };
   // 五十音表レイアウト(列＝行: あ/か/さ…、下に あいうえお)。null=空きマス(や・わ行の欠け)。
   const HIRA_ROWS = [
@@ -1373,6 +1398,7 @@ function showReception(initPurpose) {
     ["Y","Z"],
   ];
   const hiraToKata = (s) => s.replace(/[ぁ-ゖ]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60));
+  const kataToHira = (s) => s.replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
   const withKata = (m) => { const r = { ...m }; for (const k in m) r[hiraToKata(k)] = hiraToKata(m[k]); return r; };
   // 濁点゛/半濁点゜/小文字 は「直前の1文字」を切り替える(ひらがな・カタカナ両対応)。
   const DAKUTEN = withKata({か:"が",き:"ぎ",く:"ぐ",け:"げ",こ:"ご",さ:"ざ",し:"じ",す:"ず",せ:"ぜ",そ:"ぞ",た:"だ",ち:"ぢ",つ:"づ",て:"で",と:"ど",は:"ば",ひ:"び",ふ:"ぶ",へ:"べ",ほ:"ぼ",が:"か",ぎ:"き",ぐ:"く",げ:"け",ご:"こ",ざ:"さ",じ:"し",ず:"す",ぜ:"せ",ぞ:"そ",だ:"た",ぢ:"ち",づ:"つ",で:"て",ど:"と",ば:"は",び:"ひ",ぶ:"ふ",べ:"へ",ぼ:"ほ",ぱ:"ば",ぴ:"び",ぷ:"ぶ",ぺ:"べ",ぽ:"ぼ"});
@@ -1399,6 +1425,64 @@ function showReception(initPurpose) {
     resetIdle();
   };
   const refocusField = () => { if (focusedField) setTimeout(() => g(focusedField)?.focus(), 0); };
+
+  // ── かな漢字変換の候補(フローティング一括表示) ───────────────────
+  // フィールド末尾の未確定「読み」(かなの連続)を取り出し、「変換」ボタンで
+  // ローカル変換API(/device/convert)に投げる。候補はキーボード上の横スクロール
+  // バーではなく、全画面のフローティングパネルに折り返しグリッドで一括表示する
+  // (候補数が多い読みでも横スクロールにならずタッチで選びやすい)。チップをタップ
+  // すると末尾の読みを選んだ漢字に置き換えてパネルを閉じる。ネット/agent 不通でも
+  // かな/カナ にフォールバックするので壊れない。SELECT(担当者)は対象外。
+  const KANA_RUN = /[ぁ-ゖァ-ヶー]+$/;
+  function pendingReading() {
+    if (!focusedField) return "";
+    const el = g(focusedField);
+    if (!el || el.tagName === "SELECT") return "";
+    const m = el.value.match(KANA_RUN);
+    return m ? m[0] : "";
+  }
+  function candChip(val, primary) {
+    const bg = primary ? ST.brand_color : T.canvas;
+    const col = primary ? "#fff" : T.ink;
+    const bd = primary ? ST.brand_color : T.borderStrong;
+    return `<button type="button" class="kb-cand" data-cand="${escHtml(val)}" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()" style="min-height:68px;padding:0 30px;background:${bg};border:2px solid ${bd};border-radius:14px;font-size:32px;font-weight:600;color:${col};cursor:pointer;font-family:inherit;white-space:nowrap">${escHtml(val)}</button>`;
+  }
+  // 候補バー(kb-pane 上部)は説明ラベルのみ。候補チップはフローティングパネルに出す。
+  function buildCandsHtml() {
+    return `<div style="display:flex;align-items:center;height:44px;padding:0 8px;color:${T.muted};font-size:18px">読みを入力して「変換」を押すと漢字候補が出ます</div>`;
+  }
+  function showCandPop(reading) {
+    const pop = g("kb-cand-pop"); if (!pop) return;
+    const grid = g("kb-cand-grid"), rd = g("kb-cand-reading");
+    if (rd) rd.textContent = "「" + reading + "」  " + cands.length + "件";
+    if (grid) { grid.innerHTML = cands.map((c, i) => candChip(c, i === 0)).join(""); grid.scrollTop = 0; }
+    pop.style.display = "flex";
+  }
+  function hideCandPop() { const pop = g("kb-cand-pop"); if (pop) pop.style.display = "none"; cands = []; }
+  // 文字編集キーが押されたら古い候補を捨てる(パネルは閉じる)。
+  function clearCandidates() { if (cands.length) hideCandPop(); }
+  async function doConvert() {
+    const run = pendingReading();
+    if (!run) return;
+    let list = await deviceConvert(run, 100);
+    // agent 不通でも最低限 かな/カナ は候補に出す(フォールバック)
+    const hira = kataToHira(run), kata = hiraToKata(hira);
+    for (const x of [hira, kata]) if (x && !list.includes(x)) list.push(x);
+    cands = [...new Set(list)].slice(0, 100);
+    if (!cands.length) return;
+    showCandPop(run);
+  }
+  function applyCandidate(text) {
+    if (!focusedField) { hideCandPop(); return; }
+    const el = g(focusedField);
+    if (!el || el.tagName === "SELECT") { hideCandPop(); return; }
+    const run = pendingReading();
+    if (run) el.value = el.value.slice(0, el.value.length - run.length);
+    el.value += text;
+    form[KEY[focusedField]] = el.value;
+    hideCandPop();
+    resetIdle(); refocusField();
+  }
 
   const inputStyle = `width:100%;height:64px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:14px;padding:0 18px;font-size:24px;color:${T.ink};outline:none;font-family:'Noto Sans JP',Inter,system-ui,sans-serif`;
   const selStyle = inputStyle + ";cursor:pointer";
@@ -1433,7 +1517,9 @@ function showReception(initPurpose) {
         ).join("")}
       </div>`).join("");
     const spaceBtn = `<button type="button" id="kb-space" ${btnPrevent} style="flex:1;height:${KH}px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:18px;color:${T.muted};cursor:pointer;font-family:inherit">スペース</button>`;
-    // コントロール行: かな時は 撥音ん・濁点゛・半濁点゜・小文字・長音ー＋スペース。ABC時はスペースのみ。
+    // 変換ボタン(かな時のみ)。末尾の読みを漢字候補に変換する。IME のスペース変換に相当。
+    const convBtn = `<button type="button" id="kb-convert" ${btnPrevent} style="min-width:${KW * 2 + GAP}px;height:${KH}px;background:${bc};border:1px solid ${bc};border-radius:8px;font-size:24px;font-weight:700;color:#fff;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;justify-content:center">変換</button>`;
+    // コントロール行: かな時は 撥音ん・濁点゛・半濁点゜・小文字・長音ー＋変換＋スペース。ABC時はスペースのみ。
     const ctrlRow = isKana
       ? `<div style="display:flex;gap:${GAP}px;margin-top:4px">
            <button type="button" id="kb-n" ${btnPrevent} style="${keyBtn}">${kata ? "ン" : "ん"}</button>
@@ -1441,10 +1527,12 @@ function showReception(initPurpose) {
            <button type="button" id="kb-handaku" ${btnPrevent} style="${ctrlBtn}">゜</button>
            <button type="button" id="kb-small" ${btnPrevent} style="${ctrlBtn}">小</button>
            <button type="button" id="kb-choon" ${btnPrevent} style="${ctrlBtn}">ー</button>
+           ${convBtn}
            ${spaceBtn}
          </div>`
       : `<div style="display:flex;gap:${GAP}px;margin-top:4px">${spaceBtn}</div>`;
     return `
+      <div id="kb-cands" style="margin-bottom:10px;border-bottom:1px solid ${T.border};padding-bottom:8px">${buildCandsHtml()}</div>
       <div id="kb-header" style="display:flex;gap:8px;margin-bottom:12px;justify-content:space-between">
         <button type="button" id="kb-kana" ${btnPrevent} style="flex:1;height:50px;background:${kbMode === "kana" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "kana" ? "#fff" : T.ink};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">ひらがな</button>
         <button type="button" id="kb-kata" ${btnPrevent} style="flex:1;height:50px;background:${kbMode === "kata" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "kata" ? "#fff" : T.ink};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">カタカナ</button>
@@ -1482,25 +1570,31 @@ function showReception(initPurpose) {
       if (!btn || !kbPane.contains(btn)) return;
       e.preventDefault();       // 入力欄からフォーカスを奪わない
       resetIdle();
-      const id = btn.id, key = btn.dataset.key;
-      if (id === "kb-kana") { kbMode = "kana"; updateKeyboard(); }
-      else if (id === "kb-kata") { kbMode = "kata"; updateKeyboard(); }
-      else if (id === "kb-abc") { kbMode = "abc"; updateKeyboard(); }
-      else if (id === "kb-company") { addKey("株式会社"); refocusField(); }
+      const id = btn.id, key = btn.dataset.key, cand = btn.dataset.cand;
+      // 変換候補チップ / 変換ボタン / モード切替 は個別処理(候補バーは維持 or 明示クリア)
+      if (cand != null) { applyCandidate(cand); return; }
+      if (id === "kb-convert") { doConvert(); return; }
+      if (id === "kb-kana") { clearCandidates(); kbMode = "kana"; updateKeyboard(); return; }
+      if (id === "kb-kata") { clearCandidates(); kbMode = "kata"; updateKeyboard(); return; }
+      if (id === "kb-abc")  { clearCandidates(); kbMode = "abc";  updateKeyboard(); return; }
+      // 以下は文字を編集するキー。新しい読みが始まるので古い候補は消す。
+      if (id === "kb-company") addKey("株式会社");
       else if (id === "kb-bs") {
         if (focusedField) {
           const el = g(focusedField);
           if (el) { el.value = el.value.slice(0, -1); form[KEY[focusedField]] = el.value; }
         }
-        refocusField();
       }
-      else if (id === "kb-space") { addKey("　"); refocusField(); }
-      else if (id === "kb-n") { addKey(kbMode === "kata" ? "ン" : "ん"); refocusField(); }
-      else if (id === "kb-dakuten") { modifyLast(DAKUTEN); refocusField(); }
-      else if (id === "kb-handaku") { modifyLast(HANDAKU); refocusField(); }
-      else if (id === "kb-small") { modifyLast(SMALL); refocusField(); }
-      else if (id === "kb-choon") { addKey("ー"); refocusField(); }
-      else if (key != null) { addKey(key); refocusField(); }
+      else if (id === "kb-space") addKey("　");
+      else if (id === "kb-n") addKey(kbMode === "kata" ? "ン" : "ん");
+      else if (id === "kb-dakuten") modifyLast(DAKUTEN);
+      else if (id === "kb-handaku") modifyLast(HANDAKU);
+      else if (id === "kb-small") modifyLast(SMALL);
+      else if (id === "kb-choon") addKey("ー");
+      else if (key != null) addKey(key);
+      else return;
+      clearCandidates();
+      refocusField();
     };
     kbPane.addEventListener("mousedown", kbAction);
     kbPane.addEventListener("touchstart", kbAction, { passive: false });
@@ -1515,7 +1609,7 @@ function showReception(initPurpose) {
         ${PURPOSE_OPTIONS.map(p => `<button type="button" data-purpose="${escHtml(p)}" style="${chipStyle(form.purpose === p)}">${escHtml(p)}</button>`).join("")}
       </div>
       <div style="margin-top:16px;border-top:1px solid ${T.border};padding-top:14px;font-size:22px;color:${T.sub}">※営業・セールス・勧誘等のご訪問はお受けしておりません。</div>`;
-    sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
+    sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;position:relative">
   <div style="padding:28px 40px 0;flex-shrink:0">
     <button id="rec-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button>
   </div>
@@ -1545,6 +1639,16 @@ function showReception(initPurpose) {
     <span style="flex:1"></span>
     <span style="font-family:'JetBrains Mono',monospace">${devName()}</span>
   </div>
+  <!-- 変換候補パネル(フローティング一括表示。背景タップ/閉じるで閉じる) -->
+  <div id="kb-cand-pop" style="display:none;position:absolute;inset:0;z-index:9500;background:rgba(20,18,14,0.45);align-items:center;justify-content:center">
+    <div style="width:1200px;max-width:92%;max-height:80%;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:20px;box-shadow:0 24px 70px rgba(0,0,0,.35);display:flex;flex-direction:column;overflow:hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:22px 30px;border-bottom:1px solid ${T.border};flex-shrink:0">
+        <div style="font-size:28px;font-weight:600;color:${T.ink}">変換候補 <span id="kb-cand-reading" style="color:${T.muted};font-size:24px;margin-left:8px"></span></div>
+        <button type="button" id="kb-cand-close" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()" style="min-height:60px;padding:0 34px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:14px;font-size:24px;font-weight:600;color:${T.sub};cursor:pointer">閉じる</button>
+      </div>
+      <div id="kb-cand-grid" style="padding:26px 30px;display:flex;flex-wrap:wrap;gap:16px;overflow-y:auto;align-content:flex-start"></div>
+    </div>
+  </div>
 </div>`;
     rescale();
     g("f-name").value = form.visitor_name;
@@ -1567,6 +1671,19 @@ function showReception(initPurpose) {
       chips.forEach(b => b.setAttribute("style", chipStyle(b.dataset.purpose === form.purpose)));
     }));
     g("rec-send").addEventListener("click", handleSubmit);
+
+    // 変換候補パネルの操作(候補タップ=確定 / 閉じる / 背景タップ=閉じる)。
+    const pop = g("kb-cand-pop");
+    if (pop) {
+      const popAction = (e) => {
+        const btn = e.target.closest("button");
+        if (btn && btn.id === "kb-cand-close") { e.preventDefault(); hideCandPop(); return; }
+        if (btn && btn.dataset.cand != null) { e.preventDefault(); applyCandidate(btn.dataset.cand); return; }
+        if (e.target === pop) { e.preventDefault(); hideCandPop(); }   // 背景(バックドロップ)タップ
+      };
+      pop.addEventListener("mousedown", popAction);
+      pop.addEventListener("touchstart", popAction, { passive: false });
+    }
 
     // キーボード初期化 + 操作ハンドラ登録（mousedown/touchstart 委譲）
     updateKeyboard();

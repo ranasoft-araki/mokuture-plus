@@ -158,7 +158,9 @@ mokuture/
     ├── main.py                ← メインループ (API ポーリング・GPIO 制御)
     ├── gpio.py                ← GPIO モック / 実機切り替え
     ├── sync.py                ← バックエンドとのデータ同期
-    └── state.py               ← デバイス状態管理
+    ├── state.py               ← デバイス状態管理
+    ├── kana_kanji.py          ← かな→漢字 変換(辞書ルックアップ+貪欲分割。GET /device/convert)
+    └── kana_dict.tsv          ← 同梱かな漢字辞書(受付語彙)。全面辞書 SKK-JISYO.L は起動時に自動DL
 ```
 
 ---
@@ -451,6 +453,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
     - **固定ダミーデータ**: `mockFetch` は管理画面設定を参照せず固定値を返す。`/proxy/appointment/*` は常に「（MOCK）商談ルーム A / 2階」＋組み込みSVG地図＝**管理画面の地図とは一致しない**（仕様。実データ確認は上記の実経路手順で）。
     - **MOCKバッジ**: `showMockBadge()`(`bootMock` で呼ぶ)が上部中央に固定の「MOCK モード…」バッジを常時表示し、ダミー表示だと一目で分かる（`body`直下・`pointer-events:none`で操作を妨げない）。通常起動(実経路)では出ない。
 - **reception（フォーム・`showReception`）**: 左=入力フォーム / 右=**画面内蔵の五十音ソフトキーボード**の1画面(OS標準キーボードは使わない)。お名前(必須)/会社名/担当者名。キーボードは**列＝行(あ/か/さ…)の五十音表**(`HIRA_ROWS`, null=や・わ行の空きマス)＋コントロール行(撥音**ん**・濁点**゛**・半濁点**゜**・**小**文字・長音**ー**・スペース)。濁点/半濁点/小文字は`modifyLast()`で直前1文字をトグル(ひら・カナ両対応の`DAKUTEN`/`HANDAKU`/`SMALL`マップ)。ひらがな/カタカナ(表を変換)/ABC(`ABC_ROWS`, A→Z)を切替＋「株式会社」「⌫」。**ご用件は5択の選択形式**(チップ: 管理画面 `purpose_list` があればそれ、無ければ既定「ご予約のあるお客様/お打ち合わせ/納品/採用面接/その他」)＋注記「※営業・セールス・勧誘等のご訪問はお受けしておりません」。チップ選択は `form.purpose` 更新＋チップのスタイルのみ差し替え（テキスト入力を再描画しない）。送信→`method:"form"` で `calling`。
+  - **漢字変換(かな→漢字)**: 五十音キーボードに「変換」ボタンがあり、入力欄末尾の「読み(かなの連続 `KANA_RUN`)」を漢字候補に変換する。候補は**フローティングの候補パネル**(`kb-cand-pop`)に折り返しグリッドで一括表示(横スクロールにしない。件数表示・太めスクロールバー・背景/「閉じる」/候補タップで確定)。段階変換対応(`やまだ`→山田、続けて`たろう`→太郎=山田太郎)。変換は**agentローカルの `GET /device/convert?kana=…&limit=`**(`kiosk_agent/kana_kanji.py`)で、同梱 `kana_dict.tsv`(約160語:姓名/会社/受付語彙。SKKより優先)＋任意の全面辞書 `SKK-JISYO.L`(約13万語, agentが起動時に無ければ自動DL・`.gitignore`)を辞書ルックアップ＋貪欲分割。**オフライン・OS IME不要**(fcitx5/mozc/squeekboard を入れない。approachがOS非依存)。**本実装は device版 `kiosk.html` のみ**(web版 `KioskFlow.tsx`/`JapaneseKeyboard.tsx` は別実装で未対応)。agent不通時は かな/カナ にフォールバック。上限は API 既定60/最大100、フロントは100要求。実装メモ: `kiosk_agent/IME-EXPERIMENT.md`。
 - **QR読取**: `welcome`(統合)に統合。`parseQR()` は **`appt:<token>` / `name` パラメータ付きURLのみ受付**、未対応/エラーは `pauseScan()` でメッセージ＋クールダウン。`scanLoop` は ≈8fps 間引き、`getUserMedia` は `disposed` フラグで teardown ガード。
 - **resultPhone（電話案内・`showResultPhone`）**: スタッフ「電話(対応不可)」応答時。`ST.kiosk_phone_number` を大きく表示（未設定時は「受付までお声がけください」）。一定時間で idle 復帰。
 - **resultDecline（営業お断り・`showResultDecline`）**: スタッフ「お断り」応答時。「営業・セールス等の…ご協力をお願いいたします」＋「お問い合わせフォームよりお願いいたします。受付でのお取次ぎは行っておりません」＋`ST.inquiry_qr`(SVG data URI, backend生成) の問い合わせフォールQRを表示。未生成時はURL文字列で代替。一定時間で idle 復帰。
