@@ -30,6 +30,10 @@ frontend/.netlify/
 # Kiosk agent local-first locker state (per-device, must not be committed)
 kiosk_agent/locker_state.json
 
+# Kiosk agent かな漢字変換の全面辞書(大きいので commit しない。install.sh が取得。IME-EXPERIMENT.md 参照)
+kiosk_agent/SKK-JISYO.L
+kiosk_agent/SKK-JISYO.L.gz
+
 # Misc
 .DS_Store
 *.log
