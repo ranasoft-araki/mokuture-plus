@@ -109,19 +109,42 @@ def _set_volume_linux(level: int) -> str | None:
     return " / ".join(errors)
 
 
-_NMCLI_WIFI_SEP = "\x1f"
 _wifi_last_debug: dict[str, object] = {}
 
 
+def _split_nmcli_terse(line: str) -> list[str]:
+    """nmcli -t の ':' 区切りを、バックスラッシュエスケープ込みで分解する。"""
+    parts: list[str] = []
+    buf: list[str] = []
+    escaped = False
+    for ch in line:
+        if escaped:
+            buf.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == ":":
+            parts.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    if escaped:
+        buf.append("\\")
+    parts.append("".join(buf))
+    return parts
+
+
 def _parse_nmcli_wifi_rows(output: str) -> list[dict]:
-    """nmcli terse 出力をパースする。人間向け multiline 出力の揺れを避ける。"""
+    """nmcli terse 出力をパースする。"""
     nets: list[dict] = []
     seen: set[str] = set()
     malformed = 0
     for line in output.splitlines():
         if not line.strip():
             continue
-        parts = line.split(_NMCLI_WIFI_SEP)
+        parts = _split_nmcli_terse(line)
         if len(parts) != 4:
             malformed += 1
             continue
@@ -152,11 +175,7 @@ def _wifi_networks() -> tuple[list[dict], str | None]:
         r = _run(
             [
                 "nmcli",
-                "--terse",
-                "--escape",
-                "no",
-                "--separator",
-                _NMCLI_WIFI_SEP,
+                "-t",
                 "-f",
                 "IN-USE,SSID,SIGNAL,SECURITY",
                 "dev",
