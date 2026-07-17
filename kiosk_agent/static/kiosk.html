@@ -321,11 +321,14 @@ async function mockDeviceFetch(method, path, body) {
   }
   return {};
 }
-async function deviceFetch(method, path, body) {
+async function deviceFetch(method, path, body, token) {
   if (MOCK) return mockDeviceFetch(method, path, body);
+  const headers = {};
+  if (body != null) headers["Content-Type"] = "application/json";
+  if (token) headers["X-Kiosk-Token"] = token;
   const r = await fetch(path, {
     method,
-    headers: body != null ? { "Content-Type": "application/json" } : undefined,
+    headers: Object.keys(headers).length ? headers : undefined,
     body: body != null ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) {
@@ -334,8 +337,8 @@ async function deviceFetch(method, path, body) {
   }
   return r.status === 204 ? null : r.json();
 }
-const deviceGet  = (p)    => deviceFetch("GET",  p, null);
-const devicePost = (p, b) => deviceFetch("POST", p, b || null);
+const deviceGet  = (p, tok)    => deviceFetch("GET",  p, null, tok);
+const devicePost = (p, b, tok) => deviceFetch("POST", p, b || null, tok);
 // かな漢字変換(ローカルエージェント)。読み(ひらがな/カタカナ)→ 漢字候補。失敗時は空配列。
 async function deviceConvert(kana, limit) {
   if (!kana) return [];
@@ -1332,7 +1335,7 @@ function showDelivery() {
     view = "sending"; render();
     await forceLockLocker(sel.door_number);   // 物理施錠(通常ロッカーの「扉を閉めました」と同経路)
     try {
-      await devicePost(`/device/locker/${encodeURIComponent(sel.id)}/occupy-delivery`);
+      await devicePost(`/device/locker/${encodeURIComponent(sel.id)}/occupy-delivery`, null, token);
       resultTitle = "お預け完了"; resultSub = "施錠しました。担当者がお受け取りします（暗証番号は不要です）。";
       view = "result"; render();
     } catch (e) {
