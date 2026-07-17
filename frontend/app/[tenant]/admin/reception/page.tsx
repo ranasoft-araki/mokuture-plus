@@ -310,13 +310,17 @@ function StatusSelect({ log, token, onUpdate }: { log: ReceptionLog; token: stri
   );
 }
 
+function isPendingReception(log: ReceptionLog) {
+  const state = log.state ?? "received";
+  return state === "received" || state === "notified";
+}
+
 // 受付応答ボタン（受付/電話/お断り。アプリ内。iOS PWA では通知アクションが出ないためのフォールバック兼・全端末共通）。
 // 応答結果はキオスクの待機画面に反映される（受付=参ります / 電話=電話番号表示 / お断り=営業お断り+問い合わせフォーム）。
 // 未応答(received/notified)の行にのみ表示する。QR予約(appointment)は お断り を出さず 受付/電話 の2択。
 function DecisionButtons({ log, token, onUpdate }: { log: ReceptionLog; token: string; onUpdate: (id: string, state: string) => void }) {
   const [busy, setBusy] = useState(false);
-  const state = log.state ?? "received";
-  if (state !== "received" && state !== "notified") return null;
+  if (!isPendingReception(log)) return null;
   // 配達呼び出し(delivery)・QR予約(appointment)は お断り を出さず 受付/電話 の2択。
   // 応答(受付/電話)はキオスクの待機画面に反映される。
   const hideDecline = log.method === "appointment" || log.method === "delivery";
@@ -786,7 +790,7 @@ export default function ReceptionLogsPage() {
                       style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#2d6a4f" }}
                     />
                   </th>
-                  {["日付", "時刻", "来訪者", "会社", "用件", "受付経路", "担当", ""].map((h) => (
+                  {["日付", "時刻", "来訪者", "会社", "用件", "受付経路", "担当", "状態", ""].map((h) => (
                     <th key={h} style={{ padding: "11px 14px", fontWeight: 600 }}>{h}</th>
                   ))}
                 </tr>
@@ -839,6 +843,13 @@ export default function ReceptionLogsPage() {
                         </span>
                       </td>
                       <td style={{ padding: "12px 14px", color: "#6b6559" }}>{r.staff || "—"}</td>
+                      <td style={{ padding: "12px 14px" }}>
+                        {isPendingReception(r) ? (
+                          <DecisionButtons log={r} token={token} onUpdate={handleStateUpdate} />
+                        ) : (
+                          <StatusSelect log={r} token={token} onUpdate={handleStateUpdate} />
+                        )}
+                      </td>
                       <td style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 4 }}>
                         <button
                           onClick={(e) => handleDeleteSingle(e, r.id)}
