@@ -726,18 +726,22 @@ async def kiosk_notify_delivery(
     body: DeliveryNotifyBody,
     background: BackgroundTasks,
     ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
-    db: AsyncSession = Depends(get_db),
 ):
     """ローカルファースト置き配の通知だけを担当者へ発火する(best-effort)。
 
-    施錠・PIN生成・照合は agent がローカルで行う(端末が権威)。ここでは占有状態を変更せず、
-    「どのロッカーにこのPINで置き配されたか」を通知するのみ。可視化は /lockers/mirror が担う。
-    旧経路 /lockers/{id}/occupy-delivery はサーバ側PIN生成のまま後方互換で残置。"""
+    施錠・PIN生成・照合・台帳(何口あるか)は agent がローカルで行う(端末が権威)。ここでは
+    DB の lockers 行に依存せず（管理画面でロッカーを作っていなくても動く）、agent が渡す
+    ラベル/PIN/端末名だけで「どのロッカーにこのPINで置き配されたか」を通知する。
+    locker_id は端末側の識別子(door_number)。旧経路 /lockers/{id}/occupy-delivery は
+    サーバ側PIN生成のまま後方互換で残置。"""
     tenant, device = ctx
-    locker = await _get_kiosk_locker(locker_id, tenant.id, db)  # 存在＋テナント越境チェック
     pin = (body.pin or "").strip()
-    locker_label = (body.locker_label or "").strip() or locker.name or f"ロッカー {locker.door_number}"
+    locker_label = (body.locker_label or "").strip() or f"ロッカー {locker_id}"
     device_label = (body.device_name or "").strip() or device.name or "受付端末"
+    try:
+        door_number: object = int(locker_id)
+    except (TypeError, ValueError):
+        door_number = locker_id
     title = "置き配のお知らせ"
     text = (
         f"📦 置き配がありました\n"
@@ -755,7 +759,7 @@ async def kiosk_notify_delivery(
             "tenant_id": tenant.id,
             "kind": "delivery",
             "locker": locker_label,
-            "door_number": locker.door_number,
+            "door_number": door_number,
             "pin": pin,
             "device": device_label,
             "created_at": datetime.now(timezone.utc).isoformat(),

@@ -90,45 +90,65 @@ def snapshot() -> dict:
         }
 
 
-def roster_age_sec() -> float | None:
-    """台帳の最終同期からの経過秒。未同期なら None。"""
-    with _lock:
-        ts = _load().get("roster_synced_at")
-    if not ts:
-        return None
-    try:
-        dt = datetime.fromisoformat(ts)
-        return (datetime.now(timezone.utc) - dt).total_seconds()
-    except Exception:
-        return None
-
-
 def door_of(locker_id: str) -> int | None:
     with _lock:
         e = _load()["lockers"].get(str(locker_id))
         return e.get("door_number") if e else None
 
 
-# ── 台帳同期（backend → ローカル。占有/PIN は触らない） ─────────────────────
+# ── 台帳生成（端末のドア構成が権威。占有/PIN は保持） ──────────────────────
 
-def sync_roster(items: list[dict]) -> None:
-    """backend の /kiosk/lockers 応答（[{id,name,door_number,...}]）で台帳を更新。
-    占有(occupied)・PIN 等のローカル状態は保持する。"""
+def ensure_local_roster(door_numbers: list[int]) -> None:
+    """端末のドア構成からロッカー台帳を生成・維持する（端末が真実の源）。
+
+    door_number をそのまま locker id に採用する。既存の占有(occupied)・PIN は保持し、
+    構成から外れたロッカーは未占有のものだけ掃除する（利用中は中身を失わないため残す）。
+    backend の lockers テーブルに依存しないので、管理画面でロッカーを作っていなくても
+    置き配/ロッカー機能が成立する。"""
+    wanted: list[int] = []
+    for d in door_numbers or []:
+        try:
+            wanted.append(int(d))
+        except (TypeError, ValueError):
+            continue
     with _lock:
         data = _load()
         lockers = data["lockers"]
-        for it in items or []:
-            lid = str(it.get("id") or "")
-            if not lid:
+        changed = False
+        # 占有中の旧台帳(id≠door_number＝旧UUID)が握っている door_number は、そのまま使わせる。
+        # 同じ door_number の正規エントリ(id=door_number)を新規に作らない＝物理扉の二重占有を防ぐ。
+        # 旧側を受取(release)して未占有になれば次回 ensure で掃除され、正規IDが生成される。
+        occupied_stale_doors = {
+            e.get("door_number")
+            for lid, e in lockers.items()
+            if e.get("occupied") and str(lid) != str(e.get("door_number"))
+        }
+        for dn in wanted:
+            lid = str(dn)
+            e = lockers.get(lid)
+            if e is None:
+                if dn in occupied_stale_doors:
+                    continue
+                lockers[lid] = {
+                    "door_number": dn, "name": f"ロッカー {dn}", "occupied": False,
+                    "pin_salt": None, "pin_hash": None, "occupied_at": None, "kind": None,
+                }
+                changed = True
                 continue
-            e = lockers.setdefault(lid, {
-                "door_number": None, "name": None, "occupied": False,
-                "pin_salt": None, "pin_hash": None, "occupied_at": None, "kind": None,
-            })
-            e["door_number"] = it.get("door_number")
-            e["name"] = it.get("name")
-        data["roster_synced_at"] = _now_iso()
-        _save(data)
+            if e.get("door_number") != dn:
+                e["door_number"] = dn
+                changed = True
+            if not e.get("name"):
+                e["name"] = f"ロッカー {dn}"
+                changed = True
+        wanted_ids = {str(d) for d in wanted}
+        for lid in list(lockers.keys()):
+            if lid not in wanted_ids and not lockers[lid].get("occupied"):
+                del lockers[lid]
+                changed = True
+        if changed:
+            data["roster_synced_at"] = _now_iso()
+            _save(data)
 
 
 # ── 書き込み（ローカルが権威） ─────────────────────────────────────────────

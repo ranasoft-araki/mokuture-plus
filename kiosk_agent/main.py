@@ -274,6 +274,23 @@ doors = {
     for door_id, pin in sorted(settings.door_pins.items(), key=lambda item: item[0])
 }
 
+
+def _configured_door_numbers() -> list[int]:
+    """ロッカー台帳の口数（＝置き配で使える口数）を決める。商品は3口/7口の2パターン。
+    モックは3口固定。実機は「接続ドアセンサー(DOOR_PINS_JSON)とロッカーリレー(LOCKER_PINS_JSON)
+    の和集合」で判断する。GPIO 開閉は LOCKER_PINS 起点なので、どちらか一方に増設漏れが
+    あってもロッカーが台帳から消えないよう、和集合で最大限に拾う。両方空なら3口フォールバック。"""
+    if _MOCK_DEVICE:
+        return [1, 2, 3]
+    nums: set[int] = set()
+    for src in (settings.door_pins, settings.locker_pins):
+        for key in (src or {}).keys():
+            try:
+                nums.add(int(key))
+            except (TypeError, ValueError):
+                continue
+    return sorted(nums) or [1, 2, 3]
+
 # ── ドアセンサー連動の自動施錠 ──────────────────────────────────────────────────
 # 電気ストライク(通電ON=解錠 / 無通電OFF=施錠位置)向け。解錠通電後、扉が開いたら即無通電に
 # 戻す。以後は閉扉でラッチ(ツノ)が自動施錠されるため、開錠パルス長や「扉を閉めました」操作の
@@ -318,6 +335,8 @@ _CONTROL_PANEL_HTML = Path(__file__).parent / "static" / "device-control.html"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.media_dir.mkdir(parents=True, exist_ok=True)
+    # ロッカー台帳は端末のドア構成から生成（端末が権威。backend 非依存で置き配が成立）
+    locker_store.ensure_local_roster(_configured_door_numbers())
     task = asyncio.create_task(sync_loop())
     update_task = asyncio.create_task(updater.run())
     heartbeat_task = asyncio.create_task(heartbeat_loop())
@@ -899,29 +918,11 @@ async def set_locker_state(locker_id: str, body: LockerStateBody):
     }
 
 
-# ── ローカルファースト・ロッカー状態（占有/PINは端末が権威／解錠はオフライン可） ──────
-# 状態系(list/occupy/occupy-delivery/release/open-all)はここ(agent)で完結し、backend へは
-# best-effort でミラー＋置き配通知の中継のみ行う。GPIO 開閉は従来どおり kiosk が
-# /device/locker/{door}/open・/state を叩く（この層は状態のみ扱う）。関連: locker_store.py
-
-_ROSTER_TTL_SEC = 60
-
-
-async def _sync_locker_roster() -> None:
-    """台帳(id→name/door_number)を backend から best-effort 同期。占有/PIN は触らない。"""
-    token = get_device_token()
-    if not token:
-        return
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{settings.remote_api_url}/kiosk/lockers",
-                headers={"X-Kiosk-Token": token}, timeout=8,
-            )
-            resp.raise_for_status()
-            locker_store.sync_roster(resp.json().get("lockers", []))
-    except Exception:
-        pass  # オフライン等: 前回の台帳をそのまま使う
+# ── ローカルファースト・ロッカー状態（台帳・占有・PINすべて端末が権威／解錠はオフライン可） ──
+# 台帳(何口あるか)は端末のドア構成から生成し(_configured_door_numbers)、状態系
+# (list/occupy/occupy-delivery/release/open-all)もここ(agent)で完結する。backend へは
+# best-effort でミラー＋置き配通知の中継のみ行い、台帳を backend へ問い合わせない。
+# GPIO 開閉は従来どおり kiosk が /device/locker/{door}/open・/state を叩く。関連: locker_store.py
 
 
 async def _mirror_locker_state() -> None:
@@ -974,11 +975,9 @@ async def _flush_pending_notify() -> None:
 
 @app.get("/device/locker-list")
 async def device_locker_list():
-    """kiosk グリッド用: 台帳＋ローカル状態。オンライン時のみ台帳を throttle 同期し、
-    保留中の置き配通知も flush する。オフラインでも前回台帳＋ローカル状態を返す。"""
-    age = locker_store.roster_age_sec()
-    if age is None or age > _ROSTER_TTL_SEC:
-        await _sync_locker_roster()
+    """kiosk グリッド用: 端末のドア構成から台帳を生成し、ローカル状態を返す。
+    保留中の置き配通知も flush する。完全オフラインでも成立（backend 非依存）。"""
+    locker_store.ensure_local_roster(_configured_door_numbers())
     await _flush_pending_notify()
     return locker_store.snapshot()
 
