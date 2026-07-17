@@ -1341,8 +1341,10 @@ function showDelivery() {
   load();
 }
 
-// ─── RECEPTION FORM (OS標準ソフトキーボードを使用) ────────────────────────────
-// 入力欄は上半分に2列配置＋送信ボタン。画面下半分はOSキーボード領域として空ける。
+// ─── RECEPTION FORM (画面内蔵の五十音ソフトキーボード) ────────────────────────────
+// 左=入力フォーム / 右=五十音表キーボード。列＝行(あ/か/さ…)の五十音表に、撥音ん・
+// 濁点゛・半濁点゜・小文字・長音ー・スペースのコントロール行を備える。ひらがな/カタカナ/ABC
+// を切替。OS標準キーボードは使わず(実機キオスクは非表示のため)、この内蔵キーボードで入力する。
 function showReception(initPurpose) {
   const bc = ST.brand_color;
   const STAFF_LIST = Array.isArray(ST.staff_list) ? ST.staff_list.filter(Boolean) : [];
@@ -1355,9 +1357,27 @@ function showReception(initPurpose) {
   let form = { visitor_name: "", company: "", staff: "", purpose: initPurpose ?? "" };
   let idleId, kbMode = "kana", focusedField = null;
   const KEY = { "f-name": "visitor_name", "f-company": "company", "f-staff": "staff" };
-  const KANA_KEYS = ["あ","い","う","え","お","か","き","く","け","こ","さ","し","す","せ","そ","た","ち","つ","て","と","な","に","ぬ","ね","の","は","ひ","ふ","へ","ほ","ま","み","む","め","も","や","ゆ","よ","ら","り","る","れ","ろ","わ","を","ん"];
-  const KATA_KEYS = ["ア","イ","ウ","エ","オ","カ","キ","ク","ケ","コ","サ","シ","ス","セ","ソ","タ","チ","ツ","テ","ト","ナ","ニ","ヌ","ネ","ノ","ハ","ヒ","フ","ヘ","ホ","マ","ミ","ム","メ","モ","ヤ","ユ","ヨ","ラ","リ","ル","レ","ロ","ワ","ヲ","ン"];
-  const ABC_KEYS = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"];
+  // 五十音表レイアウト(列＝行: あ/か/さ…、下に あいうえお)。null=空きマス(や・わ行の欠け)。
+  const HIRA_ROWS = [
+    ["あ","か","さ","た","な","は","ま","や","ら","わ"],
+    ["い","き","し","ち","に","ひ","み",null,"り",null],
+    ["う","く","す","つ","ぬ","ふ","む","ゆ","る",null],
+    ["え","け","せ","て","ね","へ","め",null,"れ",null],
+    ["お","こ","そ","と","の","ほ","も","よ","ろ","を"],
+  ];
+  // アルファベットは A→Z を1行8文字で分かりやすく。
+  const ABC_ROWS = [
+    ["A","B","C","D","E","F","G","H"],
+    ["I","J","K","L","M","N","O","P"],
+    ["Q","R","S","T","U","V","W","X"],
+    ["Y","Z"],
+  ];
+  const hiraToKata = (s) => s.replace(/[ぁ-ゖ]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60));
+  const withKata = (m) => { const r = { ...m }; for (const k in m) r[hiraToKata(k)] = hiraToKata(m[k]); return r; };
+  // 濁点゛/半濁点゜/小文字 は「直前の1文字」を切り替える(ひらがな・カタカナ両対応)。
+  const DAKUTEN = withKata({か:"が",き:"ぎ",く:"ぐ",け:"げ",こ:"ご",さ:"ざ",し:"じ",す:"ず",せ:"ぜ",そ:"ぞ",た:"だ",ち:"ぢ",つ:"づ",て:"で",と:"ど",は:"ば",ひ:"び",ふ:"ぶ",へ:"べ",ほ:"ぼ",が:"か",ぎ:"き",ぐ:"く",げ:"け",ご:"こ",ざ:"さ",じ:"し",ず:"す",ぜ:"せ",ぞ:"そ",だ:"た",ぢ:"ち",づ:"つ",で:"て",ど:"と",ば:"は",び:"ひ",ぶ:"ふ",べ:"へ",ぼ:"ほ",ぱ:"ば",ぴ:"び",ぷ:"ぶ",ぺ:"べ",ぽ:"ぼ"});
+  const HANDAKU = withKata({は:"ぱ",ひ:"ぴ",ふ:"ぷ",へ:"ぺ",ほ:"ぽ",ぱ:"は",ぴ:"ひ",ぷ:"ふ",ぺ:"へ",ぽ:"ほ",ば:"ぱ",び:"ぴ",ぶ:"ぷ",べ:"ぺ",ぼ:"ぽ"});
+  const SMALL = withKata({あ:"ぁ",い:"ぃ",う:"ぅ",え:"ぇ",お:"ぉ",つ:"っ",や:"ゃ",ゆ:"ゅ",よ:"ょ",わ:"ゎ",ぁ:"あ",ぃ:"い",ぅ:"う",ぇ:"え",ぉ:"お",っ:"つ",ゃ:"や",ゅ:"ゆ",ょ:"よ",ゎ:"わ"});
   const g = id => document.getElementById(id);
 
   function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
@@ -1368,6 +1388,15 @@ function showReception(initPurpose) {
     if (!focusedField) return;
     const el = g(focusedField); if (!el) return;
     el.value += key; form[KEY[focusedField]] = el.value; resetIdle();
+  };
+  // 直前の1文字を map で置き換える(濁点゛/半濁点゜/小文字 のトグル)。
+  const modifyLast = (map) => {
+    if (!focusedField) return;
+    const el = g(focusedField); if (!el) return;
+    const v = el.value; if (!v) return;
+    const last = v[v.length - 1];
+    if (map[last] !== undefined) { el.value = v.slice(0, -1) + map[last]; form[KEY[focusedField]] = el.value; }
+    resetIdle();
   };
   const refocusField = () => { if (focusedField) setTimeout(() => g(focusedField)?.focus(), 0); };
 
@@ -1384,29 +1413,48 @@ function showReception(initPurpose) {
     </div>`;
 
   function buildKeyboardHtml() {
-    const keys = kbMode === "kana" ? KANA_KEYS : kbMode === "kata" ? KATA_KEYS : ABC_KEYS;
-    const keyGroups = [];
-    for (let i = 0; i < keys.length; i += 10) keyGroups.push(keys.slice(i, i + 10));
-    const keyBtnStyle = `width:120px;height:56px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:20px;font-weight:600;color:${T.ink};cursor:pointer;font-family:inherit`;
     const btnPrevent = `onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()"`;
     const bc = ST.brand_color;
+    const KW = 78, KH = 62, GAP = 8;
+    const keyBtn  = `width:${KW}px;height:${KH}px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:26px;font-weight:600;color:${T.ink};cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;justify-content:center`;
+    const ctrlBtn = `width:${KW}px;height:${KH}px;background:#f4f1ea;border:1px solid ${T.borderStrong};border-radius:8px;font-size:24px;font-weight:600;color:${T.ink};cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;justify-content:center`;
+    const spacer  = `width:${KW}px;height:${KH}px;flex-shrink:0`;
+    const kata = kbMode === "kata";
+    const isKana = kbMode !== "abc";
+    // 五十音表(かな時)/アルファベット表(ABC時)。かなはモードでカタカナに変換。
+    const rows = kbMode === "abc"
+      ? ABC_ROWS
+      : HIRA_ROWS.map(r => r.map(c => c == null ? null : (kata ? hiraToKata(c) : c)));
+    const gridHtml = rows.map(row => `
+      <div style="display:flex;gap:${GAP}px">
+        ${row.map(k => k == null
+          ? `<div style="${spacer}"></div>`
+          : `<button type="button" class="kb-key" data-key="${escHtml(k)}" ${btnPrevent} style="${keyBtn}">${escHtml(k)}</button>`
+        ).join("")}
+      </div>`).join("");
+    const spaceBtn = `<button type="button" id="kb-space" ${btnPrevent} style="flex:1;height:${KH}px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:18px;color:${T.muted};cursor:pointer;font-family:inherit">スペース</button>`;
+    // コントロール行: かな時は 撥音ん・濁点゛・半濁点゜・小文字・長音ー＋スペース。ABC時はスペースのみ。
+    const ctrlRow = isKana
+      ? `<div style="display:flex;gap:${GAP}px;margin-top:4px">
+           <button type="button" id="kb-n" ${btnPrevent} style="${keyBtn}">${kata ? "ン" : "ん"}</button>
+           <button type="button" id="kb-dakuten" ${btnPrevent} style="${ctrlBtn}">゛</button>
+           <button type="button" id="kb-handaku" ${btnPrevent} style="${ctrlBtn}">゜</button>
+           <button type="button" id="kb-small" ${btnPrevent} style="${ctrlBtn}">小</button>
+           <button type="button" id="kb-choon" ${btnPrevent} style="${ctrlBtn}">ー</button>
+           ${spaceBtn}
+         </div>`
+      : `<div style="display:flex;gap:${GAP}px;margin-top:4px">${spaceBtn}</div>`;
     return `
       <div id="kb-header" style="display:flex;gap:8px;margin-bottom:12px;justify-content:space-between">
         <button type="button" id="kb-kana" ${btnPrevent} style="flex:1;height:50px;background:${kbMode === "kana" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "kana" ? "#fff" : T.ink};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">ひらがな</button>
         <button type="button" id="kb-kata" ${btnPrevent} style="flex:1;height:50px;background:${kbMode === "kata" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "kata" ? "#fff" : T.ink};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">カタカナ</button>
         <button type="button" id="kb-abc" ${btnPrevent} style="flex:1;height:50px;background:${kbMode === "abc" ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;color:${kbMode === "abc" ? "#fff" : T.ink};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">ABC</button>
         <button type="button" id="kb-company" ${btnPrevent} style="flex:1;height:50px;background:${T.canvas};border:1px solid ${bc};border-radius:8px;color:${bc};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">株式会社</button>
-        <button type="button" id="kb-bs" ${btnPrevent} style="width:120px;height:50px;background:#f4f1ea;border:1px solid ${T.borderStrong};border-radius:8px;color:${T.ink};font-size:20px;cursor:pointer">⌫</button>
+        <button type="button" id="kb-bs" ${btnPrevent} style="width:96px;height:50px;background:#f4f1ea;border:1px solid ${T.borderStrong};border-radius:8px;color:${T.ink};font-size:20px;cursor:pointer">⌫</button>
       </div>
-      <div id="kb-keys" style="display:flex;flex-direction:column;gap:8px">
-        ${keyGroups.map((row, ri) => `
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            ${row.map(k => `<button type="button" class="kb-key" data-key="${escHtml(k)}" ${btnPrevent} style="${keyBtnStyle}">${escHtml(k)}</button>`).join("")}
-          </div>
-        `).join("")}
-        <div style="display:flex;gap:8px;margin-top:6px">
-          <button type="button" id="kb-space" ${btnPrevent} style="flex:1;height:50px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:18px;color:${T.muted};cursor:pointer;font-family:inherit">スペース</button>
-        </div>
+      <div id="kb-keys" style="display:flex;flex-direction:column;gap:${GAP}px">
+        ${gridHtml}
+        ${ctrlRow}
       </div>
     `;
   }
@@ -1446,7 +1494,12 @@ function showReception(initPurpose) {
         }
         refocusField();
       }
-      else if (id === "kb-space") { addKey(" "); refocusField(); }
+      else if (id === "kb-space") { addKey("　"); refocusField(); }
+      else if (id === "kb-n") { addKey(kbMode === "kata" ? "ン" : "ん"); refocusField(); }
+      else if (id === "kb-dakuten") { modifyLast(DAKUTEN); refocusField(); }
+      else if (id === "kb-handaku") { modifyLast(HANDAKU); refocusField(); }
+      else if (id === "kb-small") { modifyLast(SMALL); refocusField(); }
+      else if (id === "kb-choon") { addKey("ー"); refocusField(); }
       else if (key != null) { addKey(key); refocusField(); }
     };
     kbPane.addEventListener("mousedown", kbAction);
