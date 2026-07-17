@@ -944,6 +944,7 @@ async def _relay_delivery_notify(item: dict) -> bool:
     """置き配通知を backend 経由で発火（平文PIN＋ラベル）。item={id,pin,label,device}。"""
     token = (item.get("token") or "").strip() or get_device_token()
     if not token:
+        logger.warning("delivery notify skipped: no kiosk token (locker=%s)", item.get("id"))
         return False
     try:
         async with httpx.AsyncClient() as client:
@@ -957,8 +958,18 @@ async def _relay_delivery_notify(item: dict) -> bool:
                 },
                 timeout=10,
             )
-            return resp.status_code < 400
-    except Exception:
+            if resp.status_code >= 400:
+                logger.warning(
+                    "delivery notify relay failed: status=%s locker=%s detail=%s",
+                    resp.status_code,
+                    item.get("id"),
+                    resp.text[:200],
+                )
+                return False
+            logger.info("delivery notify relayed: locker=%s", item.get("id"))
+            return True
+    except Exception as e:
+        logger.warning("delivery notify relay error: locker=%s error=%s", item.get("id"), e)
         return False
 
 
@@ -1015,6 +1026,7 @@ async def device_locker_occupy_delivery(locker_id: str, request: Request):
 
     async def _notify():
         if not await _relay_delivery_notify(item):
+            logger.warning("delivery notify queued for retry: locker=%s", item.get("id"))
             locker_store.enqueue_notify(item)
         await _mirror_locker_state()
 

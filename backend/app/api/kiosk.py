@@ -738,6 +738,14 @@ async def kiosk_notify_delivery(
     pin = (body.pin or "").strip()
     locker_label = (body.locker_label or "").strip() or locker.name or f"ロッカー {locker.door_number}"
     device_label = (body.device_name or "").strip() or device.name or "受付端末"
+    logger.info(
+        "delivery notify accepted (tenant=%s, locker=%s, door=%s, device=%s, has_pin=%s)",
+        tenant.id,
+        locker_id,
+        locker.door_number,
+        device_label,
+        bool(pin),
+    )
     title = "置き配のお知らせ"
     text = (
         f"📦 置き配がありました\n"
@@ -967,13 +975,18 @@ async def _notify_slack_text(
     then the normal reception destination as fallback)."""
     setting = await _first_configured_setting(tenant_id, types, db)
     if setting is None:
+        logger.info("delivery slack notify skipped: no configured destination (tenant=%s, types=%s)", tenant_id, ",".join(types))
         return
     try:
         config = decrypt_dict(setting.config_json)
         # Bot Token(chat.postMessage) と 旧Webhook のどちらの設定でも送れる。
-        await SlackNotifier.send_to_config(config, text)
-    except Exception:
-        pass
+        ok = await SlackNotifier.send_to_config(config, text)
+        if ok:
+            logger.info("delivery slack notify sent (tenant=%s, type=%s)", tenant_id, setting.type)
+        else:
+            logger.warning("delivery slack notify failed (tenant=%s, type=%s)", tenant_id, setting.type)
+    except Exception as e:
+        logger.warning("delivery slack notify error (tenant=%s, type=%s, error=%s)", tenant_id, setting.type, e)
 
 
 async def _push_delivery_enabled(tenant_id: str, db: AsyncSession) -> bool:
