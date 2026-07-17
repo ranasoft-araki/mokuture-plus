@@ -868,8 +868,8 @@ async def list_device_lockers():
 
 @app.post("/device/locker/{locker_id}/open")
 async def open_locker(locker_id: str):
-    lid = str(locker_id)
-    if not locker_ctrl.is_configured(lid):
+    lid = locker_ctrl.resolve_locker_id(locker_id)
+    if lid is None:
         raise HTTPException(status_code=404, detail=f"Locker {locker_id} not configured")
     door = doors.get(lid)
     if door is not None and door.configured:
