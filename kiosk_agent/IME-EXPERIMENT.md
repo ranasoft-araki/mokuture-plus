@@ -54,10 +54,12 @@ mozc のような文節解析ほどの精度は無いが、受付で必要な語
 EUC-JP/UTF-8 どちらでも読める。送り仮名ありエントリは自動除外。起動時に別スレッドで
 事前ロード（`kana_kanji.warmup` を lifespan で呼ぶ）するので初回変換も待たされない。
 
-- **取得**: `kiosk_agent/install.sh` が未取得なら自動 DL（`skk-dev.github.io/dict/SKK-JISYO.L.gz`）。
-- **リポジトリには commit しない**（約4.5MB。`.gitignore` 済み）。
-  → OTA で既存 Pi にも配りたい場合は commit するか、各 Pi で `install.sh` を再実行する。
-- ローカル(Windows)開発機には取得済みで、`あらき→荒木` を確認済み。
+- **リポジトリに同梱（資産として commit 済み・約4.5MB）**。`.gitattributes` で `-text -diff`
+  （EUC-JP を改行変換で壊さない・diff 肥大化防止）のバイナリ扱い。OTA でそのまま Pi に届く。
+- **自己修復**: 万一ファイルが欠けている環境では agent 起動時(`ensure_dict`)に自動 DL
+  （`skk-dev.github.io/dict/SKK-JISYO.L.gz`）、`install.sh` も未取得なら DL する。取得失敗
+  （オフライン）時のみ同梱 `kana_dict.tsv`(約160語)にフォールバック。
+- `あらき→荒木` を確認済み。
 
 ```bash
 # 手動で入れる場合(install.sh を使わないとき)

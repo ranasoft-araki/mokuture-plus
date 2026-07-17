@@ -151,10 +151,9 @@ def warmup() -> int:
 
 def ensure_dict(timeout: float = 30.0) -> bool:
     """全面辞書 SKK-JISYO.L が無ければ取得する(best-effort)。既存 or 取得成功で True。
-    失敗時は False で同梱 kana_dict.tsv(約160語)にフォールバック。
-    SKK-JISYO.L はリポジトリに含めない(大きいので .gitignore 済み)ため、OTA で
-    コードだけ更新された Pi でも起動時に自動で辞書を揃えるための保険。オフライン時は
-    取得に失敗するが同梱辞書で最低限は動く。"""
+    通常は SKK-JISYO.L をリポジトリに同梱(資産として commit 済み)しているので即 True。
+    これは万一ファイルが欠けている環境向けの自己修復フォールバック。取得失敗(オフライン)
+    時は False で同梱 kana_dict.tsv(約160語)にフォールバックする。"""
     if _SKK_LOCAL.exists():
         return True
     try:

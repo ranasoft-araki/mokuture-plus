@@ -1,0 +1,3 @@
+# かな漢字変換の全面辞書。EUC-JP のため改行変換(CRLF)や差分表示を無効化し、
+# バイナリ資産として扱う(破損防止・diff肥大化防止)。
+kiosk_agent/SKK-JISYO.L -text -diff
