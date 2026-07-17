@@ -34,9 +34,13 @@ body {
   background: #fffefb;
   border-right: 1px solid #efece5;
   transition: transform 0.24s ease;
+  min-height: 0;
 }
 .adm-sidebar-overlay { display: none; }
 .adm-hamburger       { display: none; }
+.adm-shell-root      { height: 100vh; height: 100dvh; }
+.adm-sidebar-nav     { overflow: auto; min-height: 0; -webkit-overflow-scrolling: touch; }
+.adm-sidebar-footer  { padding-bottom: max(16px, env(safe-area-inset-bottom, 0px)); background: #fffefb; }
 
 .adm-topbar  { padding: 22px 32px 18px; }
 .adm-content { padding: 24px 32px 40px; }
@@ -51,10 +55,20 @@ body {
 .adm-kpi-row   { display: flex; flex-wrap: wrap; }
 
 @media (max-width: 767px) {
+  .adm-shell-root {
+    height: 100vh;
+    height: 100svh;
+    height: 100dvh;
+  }
   .adm-sidebar {
     position: fixed;
     top: 0; left: 0;
     height: 100vh;
+    height: 100svh;
+    height: 100dvh;
+    max-height: 100vh;
+    max-height: 100svh;
+    max-height: 100dvh;
     z-index: 50;
     transform: translateX(-100%);
   }
@@ -82,6 +96,8 @@ body {
   .adm-topbar  { padding: 14px 16px 12px; flex-wrap: wrap !important; align-items: flex-start !important; }
   .adm-topbar > div:last-child { margin-top: 12px; width: 100%; display: flex; flex-direction: column; }
   .adm-content { padding: 16px 16px 32px; }
+  .adm-sidebar-nav { padding-bottom: 12px; }
+  .adm-sidebar-footer { padding-bottom: calc(max(16px, env(safe-area-inset-bottom, 0px)) + 8px); }
 
   .adm-grid-2     { grid-template-columns: 1fr; }
   .adm-grid-main  { grid-template-columns: 1fr; }

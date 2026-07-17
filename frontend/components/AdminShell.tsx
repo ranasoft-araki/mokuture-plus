@@ -66,16 +66,14 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: "#faf8f4", fontFamily: FONT_UI }}>
+    <div className="flex overflow-hidden adm-shell-root" style={{ background: "#faf8f4", fontFamily: FONT_UI }}>
       {/* ─ Overlay (mobile) ─────────────────────────────────── */}
       {sidebarOpen && (
         <div className="adm-sidebar-overlay" onClick={() => setSidebarOpen(false)} />
       )}
 
       {/* ─ Sidebar ──────────────────────────────────────────── */}
-      <aside
-        className={`adm-sidebar${sidebarOpen ? " open" : ""}`}
-      >
+      <aside className={`adm-sidebar${sidebarOpen ? " open" : ""}`}>
         {/* Brand */}
         <div style={{ padding: "22px 20px 18px", display: "flex", alignItems: "center", gap: 10, borderBottom: "1px solid #efece5" }}>
           <div style={{ width: 32, height: 32, borderRadius: 8, background: "#1d1a15", color: "#fffefb", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -126,7 +124,7 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
         </div>
 
         {/* Nav */}
-        <nav style={{ padding: "10px 10px", flex: 1, overflow: "auto" }}>
+        <nav className="adm-sidebar-nav" style={{ padding: "10px 10px", flex: 1 }}>
           <div style={{ fontSize: 10.5, color: "#a8a198", textTransform: "uppercase", letterSpacing: "0.6px", padding: "8px 10px 6px" }}>
             運用
           </div>
@@ -149,7 +147,7 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
         </nav>
 
         {/* User footer */}
-        <div style={{ borderTop: "1px solid #efece5", flexShrink: 0 }}>
+        <div className="adm-sidebar-footer" style={{ borderTop: "1px solid #efece5", flexShrink: 0 }}>
           <div style={{ padding: "12px 12px 8px", display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#f7ecd9", color: "#b8763a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
               {tenant[0]?.toUpperCase() ?? "A"}
