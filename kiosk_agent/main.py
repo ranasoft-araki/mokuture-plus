@@ -914,6 +914,7 @@ async def _sync_locker_roster(token_override: str = "") -> None:
     """台帳(id→name/door_number)を backend から best-effort 同期。占有/PIN は触らない。"""
     token = (token_override or "").strip() or get_device_token()
     if not token:
+        logger.warning("locker roster sync skipped: no kiosk token")
         return
     try:
         async with httpx.AsyncClient() as client:
@@ -922,9 +923,11 @@ async def _sync_locker_roster(token_override: str = "") -> None:
                 headers={"X-Kiosk-Token": token}, timeout=8,
             )
             resp.raise_for_status()
-            locker_store.sync_roster(resp.json().get("lockers", []))
-    except Exception:
-        pass  # オフライン等: 前回の台帳をそのまま使う
+            lockers = resp.json().get("lockers", [])
+            locker_store.sync_roster(lockers)
+            logger.info("locker roster synced: count=%s", len(lockers))
+    except Exception as e:
+        logger.warning("locker roster sync failed: error=%s", e)
 
 
 async def _mirror_locker_state(token_override: str = "") -> None:
@@ -997,7 +1000,9 @@ async def device_locker_list(request: Request):
     if age is None or age > _ROSTER_TTL_SEC:
         await _sync_locker_roster(current_token)
     await _flush_pending_notify()
-    return locker_store.snapshot()
+    snap = locker_store.snapshot()
+    logger.info("device locker list: count=%s available=%s", len(snap.get("lockers", [])), snap.get("available_count"))
+    return snap
 
 
 @app.post("/device/locker/{locker_id}/occupy")
