@@ -110,6 +110,7 @@ def _set_volume_linux(level: int) -> str | None:
 
 
 _NMCLI_WIFI_SEP = "\x1f"
+_wifi_last_debug: dict[str, object] = {}
 
 
 def _parse_nmcli_wifi_rows(output: str) -> list[dict]:
@@ -140,12 +141,13 @@ def _parse_nmcli_wifi_rows(output: str) -> list[dict]:
         })
     nets.sort(key=lambda n: (not n["connected"], -n["signal"]))
     if malformed:
-        print(f"[wifi] skipped malformed rows: {malformed}")
+        print(f"[wifi] skipped malformed rows: {malformed}", flush=True)
     return nets
 
 
 def _wifi_networks() -> tuple[list[dict], str | None]:
     """(ネットワーク一覧, エラー文字列|None) を返す。"""
+    global _wifi_last_debug
     try:
         r = _run(
             [
@@ -164,20 +166,38 @@ def _wifi_networks() -> tuple[list[dict], str | None]:
             timeout=12,
         )
         if r.returncode != 0:
+            _wifi_last_debug = {
+                "mode": "terse",
+                "returncode": r.returncode,
+                "stderr": r.stderr.strip(),
+                "stdout_sample": r.stdout.splitlines()[:8],
+            }
             return [], f"nmcli エラー: {r.stderr.strip()}"
         nets = _parse_nmcli_wifi_rows(r.stdout)
-        print(f"[wifi] nmcli rows={len([ln for ln in r.stdout.splitlines() if ln.strip()])} parsed={len(nets)}")
+        row_count = len([ln for ln in r.stdout.splitlines() if ln.strip()])
+        _wifi_last_debug = {
+            "mode": "terse",
+            "returncode": r.returncode,
+            "rows": row_count,
+            "parsed": len(nets),
+            "stdout_sample": r.stdout.splitlines()[:8],
+            "ssids": [n["ssid"] for n in nets[:8]],
+        }
+        print(f"[wifi] nmcli rows={row_count} parsed={len(nets)}", flush=True)
         if nets:
-            print(f"[wifi] ssids={[n['ssid'] for n in nets[:8]]}")
+            print(f"[wifi] ssids={[n['ssid'] for n in nets[:8]]}", flush=True)
         else:
             sample = r.stdout.splitlines()[:8]
-            print(f"[wifi] raw sample={sample}")
+            print(f"[wifi] raw sample={sample}", flush=True)
         return nets, None
     except FileNotFoundError:
+        _wifi_last_debug = {"mode": "terse", "error": "nmcli not found"}
         return [], "nmcli が見つかりません (NetworkManager がインストールされていますか?)"
     except subprocess.TimeoutExpired:
+        _wifi_last_debug = {"mode": "terse", "error": "timeout"}
         return [], "nmcli タイムアウト"
     except Exception as e:
+        _wifi_last_debug = {"mode": "terse", "error": str(e)}
         return [], str(e)
 
 
@@ -1126,7 +1146,7 @@ async def device_wifi_networks():
             {"ssid": "TP-LINK_8841",  "signal": 30, "level": 2, "lock": True,  "connected": False},
         ], "mock": True}
     nets, err = await asyncio.to_thread(_wifi_networks)
-    return {"networks": nets, "error": err}
+    return {"networks": nets, "error": err, "debug": _wifi_last_debug}
 
 
 class WifiConnectBody(BaseModel):

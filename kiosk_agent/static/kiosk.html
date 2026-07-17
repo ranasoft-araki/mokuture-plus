@@ -2556,6 +2556,7 @@ function showKioskSettings() {
       const data = await fetch("/device/wifi/networks").then(r => r.json());
       networks = data.networks ?? [];
       console.warn("[kiosk] wifi networks:", networks.length, networks.map(n => ({ssid:n.ssid, connected:n.connected, signal:n.signal})));
+      if (data.debug) console.warn("[kiosk] wifi debug:", data.debug);
       wifiError = data.error ?? "";
       if (wifiError) console.warn("[kiosk] wifi:", wifiError);
     } catch(e) {
@@ -2695,6 +2696,7 @@ function showKioskSettings() {
     if (wifiRes.status === "fulfilled") {
       networks = wifiRes.value.networks ?? [];
       console.warn("[kiosk] wifi init networks:", networks.length, networks.map(n => ({ssid:n.ssid, connected:n.connected, signal:n.signal})));
+      if (wifiRes.value.debug) console.warn("[kiosk] wifi init debug:", wifiRes.value.debug);
       wifiError = wifiRes.value.error ?? "";
       if (wifiRes.value.error) console.warn("[kiosk] wifi:", wifiRes.value.error);
     } else {
