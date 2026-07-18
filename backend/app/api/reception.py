@@ -63,13 +63,14 @@ async def _apply_decision(db: AsyncSession, log: ReceptionLog, decision: str) ->
 
 
 def decision_actions(log: ReceptionLog) -> list[dict]:
-    """受付応答ボタンの選択肢 [{action,title}]。QR予約(method=="appointment")は
-    お断り を出さず 受付/電話 の2択。Web Push と Slack で共用する。"""
+    """受付応答ボタンの選択肢 [{action,title}]。QR予約(appointment)・配達(delivery)は
+    お断り を出さず 受付/電話 の2択(配達をお断りすることは無い)。Web Push と Slack で共用。
+    フロントの DecisionButtons/RespondModal の hideDecline 条件と一致させる。"""
     actions = [
         {"action": "accept", "title": DECISION_ACCEPT_LABEL},
         {"action": "phone", "title": DECISION_PHONE_LABEL},
     ]
-    if (log.method or "") != "appointment":
+    if (log.method or "") not in ("appointment", "delivery"):
         actions.append({"action": "decline", "title": DECISION_DECLINE_LABEL})
     return actions
 

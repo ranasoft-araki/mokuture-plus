@@ -541,6 +541,7 @@ async def kiosk_call_staff(
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
         push_url,
+        log,  # decision_log: 受付/電話 の対応ボタンを Slack/Push に付ける
     )
 
     # id を返してキオスクの待機画面が応答(受付/電話)をポーリングできるようにする。
@@ -970,19 +971,27 @@ async def _first_configured_setting(
 
 
 async def _notify_slack_text(
-    tenant_id: str, text: str, db: AsyncSession, types: tuple[str, ...] = ("slack",)
+    tenant_id: str, text: str, db: AsyncSession, types: tuple[str, ...] = ("slack",),
+    decision: tuple[list[dict], str] | None = None,
 ) -> None:
     """Send a plain text message to the first configured Slack webhook among ``types``.
 
     Best-effort. ``types`` is an ordered preference (e.g. delivery-specific first,
-    then the normal reception destination as fallback)."""
+    then the normal reception destination as fallback). ``decision`` = (actions, token)
+    を渡すと、署名シークレット設定済み & Bot Token 経路のときだけ 受付/電話 の対応ボタン
+    (Block Kit)を付ける。押下は受付通知と同じ interactions エンドポイントで処理される。"""
     setting = await _first_configured_setting(tenant_id, types, db)
     if setting is None:
         return
     try:
         config = decrypt_dict(setting.config_json)
-        # Bot Token(chat.postMessage) と 旧Webhook のどちらの設定でも送れる。
-        await SlackNotifier.send_to_config(config, text)
+        blocks = None
+        if (decision is not None and settings.slack_signing_secret
+                and config.get("bot_access_token") and config.get("channel_id")):
+            actions, dtoken = decision
+            blocks = SlackNotifier.build_reception_blocks(text, actions, dtoken)
+        # Bot Token(chat.postMessage) と 旧Webhook のどちらの設定でも送れる(webhook はボタン無し)。
+        await SlackNotifier.send_to_config(config, text, blocks=blocks)
     except Exception:
         pass
 
@@ -1009,11 +1018,14 @@ async def _push_delivery_enabled(tenant_id: str, db: AsyncSession) -> bool:
 
 async def _notify_push_text(
     tenant_id: str, title: str, body: str, url_tenant_id: str, db: AsyncSession,
-    url: str | None = None,
+    url: str | None = None, data: dict | None = None, actions: list | None = None,
+    tag: str | None = None,
 ) -> None:
     """Fire Web Push with a plain title/body to all subscriptions. Best-effort.
 
-    ``url`` は通知タップ時に開くURL。未指定なら受付ログ一覧を開く。"""
+    ``url`` は通知タップ時に開くURL。未指定なら受付ログ一覧を開く。``data``/``actions``/``tag``
+    を渡すと、通知に 受付/電話 アクションボタン(SWが署名トークンで応答)を付けられる
+    (配達の呼び出し用。受付通知と同じ仕組み)。"""
     target_url = url or f"/{url_tenant_id}/admin/reception"
     try:
         vapid_result = await db.execute(
@@ -1053,6 +1065,9 @@ async def _notify_push_text(
                     url=target_url,
                     private_key=private_key,
                     subject=settings.vapid_subject,
+                    tag=tag or "reception",
+                    data=data,
+                    actions=actions,
                 )
             except Exception:
                 pass
@@ -1133,22 +1148,42 @@ async def _log_delivery_dropoff(
 
 
 async def _fire_delivery_notifications(
-    tenant_id: str, title: str, text: str, webhook_payload: dict, push_url: str | None = None
+    tenant_id: str, title: str, text: str, webhook_payload: dict, push_url: str | None = None,
+    decision_log: "ReceptionLog | None" = None,
 ) -> None:
     """置き配/呼び出しの通知を新しいDBセッションで並行送信する（BackgroundTasks 用）。
 
     レスポンス送出後に実行されるため、遅い/無効な通知先（例: 死んだ Web Push 購読）が
     あってもキオスクの受付・施錠をブロックせず、エージェント側の10秒タイムアウト
-    （= キオスクに出る「APIエラー」）を防ぐ。各チャネルは best-effort。"""
+    （= キオスクに出る「APIエラー」）を防ぐ。各チャネルは best-effort。
+
+    ``decision_log`` を渡すと（配達の呼び出し）、Slack/Web Push に 受付/電話 の対応ボタンを
+    付ける。スタッフが通知から直接応答→`_apply_decision` で state=accepted→キオスクの待機画面が
+    `GET /kiosk/reception/{id}` のポーリングで拾い「参ります」へ遷移する。置き配(decision_log=None)は
+    応答不要なのでボタンを付けない。log は呼び出し元で commit/refresh 済み（expire_on_commit=False
+    のため列値は失効せず、別セッションの本関数からも安全に読める）。"""
+    slack_decision = None
+    push_data = None
+    push_actions = None
+    push_tag = None
+    if decision_log is not None:
+        from app.api.reception import decision_actions, build_decision_push_extras
+        dtoken = create_decision_token(decision_log.id, tenant_id)
+        slack_decision = (decision_actions(decision_log), dtoken)
+        push_data, push_actions = build_decision_push_extras(tenant_id, decision_log)
+        push_tag = f"reception-{decision_log.id}"
     try:
         async with AsyncSessionLocal() as db:
             tasks = [
-                _notify_slack_text(tenant_id, text, db, types=("slack_delivery", "slack")),
+                _notify_slack_text(tenant_id, text, db, types=("slack_delivery", "slack"), decision=slack_decision),
                 _notify_webhook_event(tenant_id, webhook_payload, db, types=("webhook_delivery", "webhook")),
                 _notify_chatwork_text(tenant_id, text, db, types=("chatwork_delivery", "chatwork")),
             ]
             if await _push_delivery_enabled(tenant_id, db):
-                tasks.append(_notify_push_text(tenant_id, title, text, tenant_id, db, push_url))
+                tasks.append(_notify_push_text(
+                    tenant_id, title, text, tenant_id, db, push_url,
+                    data=push_data, actions=push_actions, tag=push_tag,
+                ))
             await asyncio.gather(*tasks, return_exceptions=True)
     except Exception:
         pass

@@ -110,10 +110,14 @@ function ReceptionDetailModal({ log, token, onClose, onNotesUpdate }: { log: Rec
 
   useEffect(() => {
     setVisitorHistory(null);
+    // 配達(delivery)・置き配(dropoff)は visitor_name が総称ラベル(「配達」「置き配」)に
+    // 潰れるため、来訪回数を数えると「4回目の来訪」等の無意味な表示になる。個人の来訪履歴では
+    // ないのでこの経路では履歴を取得・表示しない。
+    if (log.method === "delivery" || log.method === "dropoff") return;
     api.getVisitorHistory(token, log.visitor_name)
       .then((data) => setVisitorHistory(data))
       .catch(() => {});
-  }, [log.id, log.visitor_name, token]);
+  }, [log.id, log.visitor_name, log.method, token]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
