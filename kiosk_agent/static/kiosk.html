@@ -541,6 +541,20 @@ function applyContentStagger(root) {
   });
 }
 
+// 内部で sc.innerHTML を差し替える画面(locker/delivery)向けの控えめな立ち上がり。
+// これらは loading→本表示 などを render() 内で直接差し替え go() のクロス遷移を通らないため、
+// view 切替が「パッと切替」に見える。地色が透けないよう scale の沈め込み(=端に隙間が出ない
+// 拡大→等倍。opacity は変えない)で settle させ、go() と揃った上質感にする。
+function softEnter(el) {
+  if (REDUCE_MOTION || !el) return;
+  try {
+    el.animate(
+      [{ transform: "scale(1.025)" }, { transform: "none" }],
+      { duration: MOT.dur.enter, easing: MOT.ease.decel, fill: "both" }
+    );
+  } catch {}
+}
+
 function go(screen, data = {}) {
   finishPendingTransition();
   // ブランド色を CSS 変数へ(フォーカスリング等の <style> ルールが参照)。テナント変更にも追従。
@@ -1189,7 +1203,7 @@ function showLocker(mode) {
   let lockers = [], available = 0, shownLockers = [];
   let view = "loading";      // loading | grid | openwait | pinset | pininput | result | error
   let sel = null, pin = "", err = "", busy = false, resultTitle = "", resultSub = "";
-  let idleId, resultTimer = null;
+  let idleId, resultTimer = null, lastView = "loading";
 
   function resetIdle() {
     clearTimeout(idleId);
@@ -1274,6 +1288,7 @@ function showLocker(mode) {
       </div>`);
     }
     rescale();
+    if (view !== lastView) { lastView = view; softEnter(sc.firstElementChild); }  // view切替時のみ立ち上げ(PIN連打では動かさない)
 
     const back = document.getElementById("lk-back");
     // モード指定時(store/pickup)はロッカーモード選択へ、旧allは受付メニューへ戻る。
@@ -1367,7 +1382,7 @@ function showDelivery() {
   let lockers = [], available = 0;
   let view = "loading";  // loading | choose | pick | openwait | sending | result | error
   let sel = null, err = "", resultTitle = "", resultSub = "";
-  let idleId, resultTimer = null, callId = null;
+  let idleId, resultTimer = null, callId = null, lastView = "loading";
   function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
   CLEANUPS.push(() => { clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); });
 
@@ -1441,6 +1456,7 @@ function showDelivery() {
       </div>`);
     }
     rescale();
+    if (view !== lastView) { lastView = view; softEnter(sc.firstElementChild); }  // view切替時のみ立ち上げ
 
     const back = document.getElementById("dl-back");
     if (back) back.addEventListener("click", () => {
