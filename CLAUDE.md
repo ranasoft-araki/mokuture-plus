@@ -433,7 +433,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
   - **電話(phone)** → `showResultPhone`。管理画面設定の電話番号(`ST.kiosk_phone_number`)を大きく表示し「対応不可のため、こちらへお電話ください」。
   - **お断り(declined)** → `showResultDecline`「営業・セールス等のご訪問はご遠慮…」＋問い合わせフォールQR(`ST.inquiry_qr`)を表示。
 - **通知ボタンは method 別**: QR予約(`method="appointment"`)は 受付/電話 の2択、非QR(form/qr)は 受付/電話/お断り の3択(`build_decision_push_extras`)。push は `sw.js` が `accept`/`phone`/`decline` を署名トークンで `POST /reception/decision`。
-- **無応答フォールバック**: 90s で中立の歓迎画面(`showComplete`)→idle に復帰。受付ID が無い旧経路は数秒で `complete`。
+- **無応答フォールバック（全パターン共通＝時間切れは電話案内へ）**: スタッフ通知の応答が時間切れになった場合は**どの受付パターンでも `showResultPhone`(電話番号表示)へ流す**→自動で idle 復帰。`showCalling`(来客: form/qr/appointment)は 90s、`showDelivery` の呼び出しwaitも 90s(受付ID無しの旧経路も一定時間後に `resultPhone`)。**`showComplete`(歓迎/会議室マップ)はスタッフが「受付」を押した成功時のみ**(QR予約で `room.map_image_url` がある場合、`showResultOk`→`showComplete`)＝時間切れでは出さない。電話番号未設定時の `showResultPhone` は「受付までお声がけください」を表示。
 - MOCK: `mockFetch` は受付ごとに `accepted`→`phone`→`declined` を巡回して返し、3つの結果画面をオフラインで確認できる。
 
 - **idle**: 人感センサー（`GET /device/pir` を 700ms ポーリング）で来訪検知 → `welcome`(統合QR画面) へ自動遷移。タッチCTAは非表示（PIR非搭載/開発環境向けに画面タップでも遷移可）。画面は屋号(ロゴ/welcome_message)・タグラインのみ。signage メディアがあれば再生。

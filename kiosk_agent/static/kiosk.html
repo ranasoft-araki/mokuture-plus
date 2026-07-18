@@ -1313,8 +1313,8 @@ function showDelivery() {
         // 無応答フォールバック: 90秒で電話案内へ(配達員が電話できるように)。
         later(90000, () => finish("resultPhone"));
       } else {
-        // 受付IDが無い旧経路: 一定時間で待機画面へ復帰。
-        resultTimer = setTimeout(() => { cleanup(); go("idle"); }, Math.max(30, ST.kiosk_complete_timeout_sec * 3) * 1000);
+        // 受付IDが無く応答をポーリングできない場合: 一定時間で電話案内へ(応答不明時も電話で呼び出せるように)。
+        resultTimer = setTimeout(() => { cleanup(); go("resultPhone", {}); }, Math.max(30, ST.kiosk_complete_timeout_sec * 3) * 1000);
       }
     } else if (view === "result") {
       document.getElementById("dl-done").addEventListener("click", () => { cleanup(); go("idle"); });
@@ -1760,8 +1760,8 @@ function showCalling(data) {
   const token = localStorage.getItem(TOKEN_KEY);
   const rid = data.receptionId;
   if (!rid) {
-    // 受付IDが無い旧経路: 従来どおり数秒で歓迎画面へ。
-    later(4000, () => { cleanup(); go("complete", data); });
+    // 受付IDが無く応答をポーリングできない場合: 少し待って電話案内へ(応答不明時も電話で呼び出せるように)。
+    later(4000, () => { cleanup(); go("resultPhone", data); });
     return;
   }
   let done = false;
@@ -1774,8 +1774,8 @@ function showCalling(data) {
       else if (r && r.state === "declined") { done = true; cleanup(); go("resultDecline", data); }
     } catch (_) { /* 通信不調は無視。下のタイムアウトで必ず離脱する */ }
   });
-  // 無応答フォールバック: 一定時間で中立の歓迎画面へ→idle復帰(来客を固まらせない)。
-  later(90000, () => { if (done) return; done = true; cleanup(); go("complete", data); });
+  // 無応答フォールバック: 通知の応答が時間切れなら電話案内へ(来訪者が電話で呼び出せる)→自動でidle復帰。
+  later(90000, () => { if (done) return; done = true; cleanup(); go("resultPhone", data); });
 }
 
 // ─── RESULT: OK (スタッフが「すぐ伺います」) ─────────────────────────────────
