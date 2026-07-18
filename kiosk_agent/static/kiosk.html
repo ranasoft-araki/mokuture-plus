@@ -122,8 +122,16 @@ function every(ms, fn) {
   return id;
 }
 function onSc(event, fn) {
-  sc.addEventListener(event, fn);
-  CLEANUPS.push(() => sc.removeEventListener(event, fn));
+  // このハンドラ登録より前に発火したイベントは無視する。go() は showScreen を同期実行するため、
+  // 遷移を起こしたクリック(例: ようこそ「戻る」)がバブリングで新画面の sc リスナ(例: idle の
+  // タップ→welcome 前進)に拾われ、即座に遷移が跳ね返る問題を防ぐ。timeStamp は performance.now と同基準。
+  const bornAt = (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const wrapped = (e) => {
+    if (e && typeof e.timeStamp === "number" && e.timeStamp < bornAt) return;
+    fn(e);
+  };
+  sc.addEventListener(event, wrapped);
+  CLEANUPS.push(() => sc.removeEventListener(event, wrapped));
 }
 function cleanup() { CLEANUPS.forEach(f => f()); CLEANUPS = []; }
 
