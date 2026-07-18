@@ -204,6 +204,44 @@ document.addEventListener("pointerdown", e => {
   playPon();
 }, { passive: true, capture: true });
 
+// ─── Button press micro-interaction (委譲・全ボタン共通。ripple/pon と共存) ──────
+// タップ中は微かに沈み込み(scale)、離すと軽いオーバーシュートで戻す。個別ボタン改修不要。
+const PRESS_SEL = "button,[data-ti],[data-pk],[role=button],[data-press]";
+let _pressEl = null;
+function _pressRelease() {
+  if (!_pressEl) return;
+  const el = _pressEl; _pressEl = null;
+  el.style.transition = `transform ${MOT.dur.base}ms ${MOT.ease.spring}`;
+  el.style.transform = "scale(1)";
+  setTimeout(() => {
+    if (el.style.transform === "scale(1)") {   // その後さらに押されていなければ後始末
+      el.style.removeProperty("transform");
+      el.style.removeProperty("transition");
+    }
+  }, MOT.dur.base + 40);
+}
+document.addEventListener("pointerdown", e => {
+  if (REDUCE_MOTION) return;
+  const el = e.target && e.target.closest && e.target.closest(PRESS_SEL);
+  if (!el) return;
+  // transform を扱う入場アニメ(タイルの slide-in-up 等)との競合回避:
+  // 実行中なら見送り、終了済み(fill保持)なら解除して inline を効かせる。
+  try {
+    for (const a of (el.getAnimations ? el.getAnimations() : [])) {
+      const kfs = a.effect && a.effect.getKeyframes ? a.effect.getKeyframes() : [];
+      if (!kfs.some(k => k.transform !== undefined)) continue;
+      if (a.playState === "running") return;
+      try { a.cancel(); } catch {}
+    }
+  } catch {}
+  _pressEl = el;
+  el.style.transition = `transform ${MOT.dur.fast}ms ${MOT.ease.standard}`;
+  el.style.transform = "scale(.97)";
+}, { passive: true, capture: true });
+["pointerup", "pointercancel", "pointerleave", "lostpointercapture"].forEach(ev =>
+  document.addEventListener(ev, _pressRelease, { passive: true, capture: true })
+);
+
 // ─── MOCK MODE ───────────────────────────────────────────────────────────────
 // ?mock=1 を付けるとエージェント/バックエンドAPIをスタブ化し、Windows等のブラウザで
 // 全画面フロー(ロッカー含む)を実機・バックエンド無しで確認できる。
@@ -447,9 +485,43 @@ const ICO = {
 };
 
 // ─── Navigate ─────────────────────────────────────────────────────────────────
+// 画面遷移は「新画面を旧画面の上に重ねてフェードインし、旧画面は不透明のまま背後に残す」
+// オーバーラップ・クロス遷移。旧来の「旧画面を完全に消してから新画面を作る(=中間で暗転)」を廃す。
+// #sc 自身は rescale() の transform:scale() を持つためアニメさせず、子要素だけを動かす。
+let _pendingTransition = null;   // 進行中の遷移 { prevEl, newEl, anims, timer, finalize }
+
+// 進行中の遷移を即座に確定させ、#sc を「新画面が唯一の子」の通常状態へ落ち着かせる。
+// 連打で遷移が重なってもレイヤが孤児化しないようにする。
+function finishPendingTransition() {
+  const p = _pendingTransition;
+  if (!p) return;
+  _pendingTransition = null;
+  if (p.timer) clearTimeout(p.timer);
+  try { p.anims.forEach(a => a.cancel()); } catch {}
+  // 新画面自身のCSSアニメ(showComplete の slide-in-up 等)は終端へ送って不透明を保証
+  try { p.newEl.getAnimations().forEach(a => { if (a.playState !== "finished") a.finish(); }); } catch {}
+  p.finalize();
+}
+
+// [data-stagger] を持つ要素の直下childを順に立ち上げる(オプトイン・非破壊。属性が無ければ何もしない)。
+function applyContentStagger(root) {
+  if (REDUCE_MOTION) return;
+  const host = root.querySelector("[data-stagger]");
+  if (!host) return;
+  Array.from(host.children).forEach((el, i) => {
+    try {
+      el.animate(
+        [{ opacity: 0, transform: "translateY(14px)" }, { opacity: 1, transform: "none" }],
+        { duration: MOT.dur.slow, easing: MOT.ease.decel, delay: i * MOT.stagger, fill: "both" }
+      );
+    } catch {}
+  });
+}
+
 function go(screen, data = {}) {
-  const outEl = sc.firstElementChild;
-  const shouldAnimate = !!outEl && CURRENT_SCREEN !== screen;
+  finishPendingTransition();
+  const prevEl = sc.firstElementChild;
+  const animate = !REDUCE_MOTION && !!prevEl && CURRENT_SCREEN !== screen;
   CURRENT_SCREEN = screen;
   cleanup();
 
@@ -470,12 +542,57 @@ function go(screen, data = {}) {
     else if (screen === "kiosk-settings") showKioskSettings();
   }
 
-  if (shouldAnimate) {
-    outEl.style.animation = "fade-out .5s ease-in forwards";
-    setTimeout(showScreen, 540);
-  } else {
-    showScreen();
+  if (!animate) { showScreen(); return; }
+
+  // 旧画面をJS参照で保持したまま一旦外し、新画面を「唯一の子」として構築する
+  // (show* 内の sc.firstElementChild / getElementById は新要素に解決される)。
+  prevEl.remove();
+  showScreen();
+  const newEl = sc.firstElementChild;
+  if (!newEl) return;   // 万一何も描画されなければ何もしない(旧画面は破棄済)
+
+  // 旧画面を最後の子として戻す → #sc = [newEl, prevEl](DOM順で新が先=共有idは新に解決)。
+  sc.appendChild(prevEl);
+
+  // 両者を重ねる。旧は不透明のまま背後(=地色が透けず暗転しない)、新をその上に。
+  // 新画面 root が元々持つ inline position/inset は保存し、確定時に復元する
+  // (idle/top/reception は position:relative 前提=絶対配置子の基準を壊さない)。
+  const origPos = newEl.style.position, origInset = newEl.style.inset;
+  prevEl.style.cssText += ";position:absolute;inset:0;z-index:1;pointer-events:none";
+  newEl.style.position = "absolute";
+  newEl.style.inset = "0";
+  newEl.style.zIndex = "2";
+  newEl.style.willChange = "opacity,transform";
+
+  applyContentStagger(newEl);   // [data-stagger] があれば子をカスケード(オプトイン)
+
+  // 新画面がroot自身にアニメを持つ(showComplete の slide-in-up)場合は、それに任せて
+  // 二重移動を避ける(コンテナ変形をしない=opacityは自前アニメが担う)。
+  const selfAnim = !!newEl.style.animation && newEl.style.animation !== "none";
+  const anims = [];
+  if (!selfAnim) {
+    anims.push(newEl.animate(
+      [{ opacity: 0, transform: "translateY(10px) scale(1.008)" },
+       { opacity: 1, transform: "none" }],
+      { duration: MOT.dur.enter, easing: MOT.ease.decel, fill: "both" }
+    ));
   }
+
+  const finalize = () => {
+    if (prevEl.parentNode) prevEl.remove();
+    ["z-index", "opacity", "transform", "will-change", "pointer-events"]
+      .forEach(k => newEl.style.removeProperty(k));
+    // position/inset は元の inline 値へ戻す(無ければ削除=既定に戻す)
+    origPos   ? (newEl.style.position = origPos)   : newEl.style.removeProperty("position");
+    origInset ? (newEl.style.inset = origInset)    : newEl.style.removeProperty("inset");
+  };
+
+  // 完了検知: 新画面の入場(WAAPI もしくは自前CSSアニメ)の終了で旧を除去。保険タイマー付き。
+  const waiters = (selfAnim ? newEl.getAnimations() : anims).map(a => a.finished);
+  const timer = setTimeout(finishPendingTransition, (selfAnim ? 1300 : MOT.dur.enter + 120));
+  _pendingTransition = { prevEl, newEl, anims, timer, finalize };
+  Promise.allSettled(waiters.length ? waiters : [Promise.resolve()])
+    .then(() => { if (_pendingTransition && _pendingTransition.newEl === newEl) finishPendingTransition(); });
 }
 
 // ─── PENDING (承認待ち) ────────────────────────────────────────────────────────
@@ -553,6 +670,24 @@ const T = {
   dark: "#1d1a15", idleBg: "#14110d",
   urgent: "#a84238", urgentBg: "#f6e0dc",
 };
+
+// ─── Motion tokens (画面遷移・押下フィードバックの上質化。イージング/尺を一元化) ────
+// 既存 @keyframes は据え置き。新規の JS 駆動アニメ(WAAPI)はこのトークンに揃える。
+const MOT = {
+  dur:  { fast: 150, base: 240, slow: 420, enter: 460 },
+  ease: {
+    standard: "cubic-bezier(.2,0,0,1)",
+    decel:    "cubic-bezier(.05,.7,.1,1)",   // 入り(entering)
+    accel:    "cubic-bezier(.3,0,.8,.15)",   // 抜け(leaving)
+    spring:   "cubic-bezier(.2,.9,.3,1.12)", // 軽いオーバーシュート
+  },
+  stagger: 55,
+};
+// 端末が prefers-reduced-motion を要求している場合はアニメを抑制する。
+const REDUCE_MOTION = (() => {
+  try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; }
+  catch { return false; }
+})();
 function devName() { return escHtml(localStorage.getItem(NAME_KEY) ?? "kiosk"); }
 // 管理画面での端末名変更をスケジュール応答から反映。変更があり待機画面表示中なら再描画してフッターを更新。
 function syncDeviceName(name) {
@@ -988,7 +1123,7 @@ function showLockerMode() {
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
   <div style="padding:28px 80px 0;flex-shrink:0"><button id="lm-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button></div>
   <div style="padding:14px 80px 0;flex-shrink:0"><div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">ロッカーのご利用</div><div style="font-size:36px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Lockers</div></div>
-  <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:44px;padding:0 80px;min-height:0">
+  <div data-stagger style="flex:1;display:flex;align-items:center;justify-content:center;gap:44px;padding:0 80px;min-height:0">
     <button id="lm-store" style="width:620px;height:520px;border-radius:32px;border:3px solid ${bc};background:#eef4ee;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;cursor:pointer;text-align:center;padding:0 40px">
       <div style="width:150px;height:150px;border-radius:34px;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.3)">${ICO.locker}</div></div>
       <div><div style="font-size:54px;font-weight:700;color:${T.ink}">手荷物一時保管</div><div style="font-size:34px;color:${T.sub};font-family:Inter,system-ui,sans-serif;margin-top:6px">Store your belongings</div></div>
