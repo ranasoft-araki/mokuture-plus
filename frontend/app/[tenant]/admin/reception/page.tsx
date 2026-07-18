@@ -89,6 +89,7 @@ const METHOD_LABEL: Record<string, string> = {
   form: "フォーム入力",
   qr: "QR読取",
   delivery: "配達呼出",
+  dropoff: "置き配",
 };
 
 function translateMethod(method: string | null | undefined): string {
@@ -694,6 +695,8 @@ export default function ReceptionLogsPage() {
           <option value="">受付経路: 全て</option>
           <option value="form">フォーム</option>
           <option value="qr">QR</option>
+          <option value="delivery">配達呼出</option>
+          <option value="dropoff">置き配</option>
           <option value="phone">電話</option>
           <option value="other">その他</option>
         </select>

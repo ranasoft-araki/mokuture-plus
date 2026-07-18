@@ -52,6 +52,7 @@ const METHOD_LABEL: Record<string, string> = {
   form: "フォーム入力",
   qr: "QR読取",
   delivery: "配達呼出",
+  dropoff: "置き配",
 };
 
 function translateMethod(method: string | null | undefined): string {

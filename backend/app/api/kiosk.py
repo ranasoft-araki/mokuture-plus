@@ -655,6 +655,7 @@ async def kiosk_occupy_locker_delivery(
     await db.commit()
 
     locker_label = locker.name or f"ロッカー {locker.door_number}"
+    door_number = locker.door_number  # ORM属性はここで退避（下の _log_delivery_dropoff が rollback すると失効するため）
     device_label = device.name or "受付端末"
     title = "置き配のお知らせ"
     text = (
@@ -663,6 +664,9 @@ async def kiosk_occupy_locker_delivery(
         f"解錠パスワード: {pin}\n"
         f"(受付端末: {device_label})"
     )
+
+    # 通知を見逃しても後からPINを確認できるよう受付ログにも残す（best-effort）
+    await _log_delivery_dropoff(db, tenant.id, locker_label, pin, device_label)
 
     # 通知はレスポンス送出後にバックグラウンドで送る（遅い/失敗するチャネルで施錠フローを止めない）
     background.add_task(
@@ -675,7 +679,7 @@ async def kiosk_occupy_locker_delivery(
             "tenant_id": tenant.id,
             "kind": "delivery",
             "locker": locker_label,
-            "door_number": locker.door_number,
+            "door_number": door_number,
             "pin": pin,
             "device": device_label,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -726,6 +730,7 @@ async def kiosk_notify_delivery(
     body: DeliveryNotifyBody,
     background: BackgroundTasks,
     ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
 ):
     """ローカルファースト置き配の通知だけを担当者へ発火する(best-effort)。
 
@@ -749,6 +754,8 @@ async def kiosk_notify_delivery(
         f"解錠パスワード: {pin}\n"
         f"(受付端末: {device_label})"
     )
+    # 通知を見逃しても後からPINを確認できるよう受付ログにも残す（best-effort）
+    await _log_delivery_dropoff(db, tenant.id, locker_label, pin, device_label)
     background.add_task(
         _fire_delivery_notifications,
         tenant.id,
@@ -1096,6 +1103,33 @@ async def _notify_chatwork_text(
             )
     except Exception:
         pass
+
+
+async def _log_delivery_dropoff(
+    db: AsyncSession, tenant_id: str, locker_label: str, pin: str, device_label: str
+) -> None:
+    """置き配を受付ログに記録する（best-effort）。
+
+    スタッフがプッシュ/Slack 等の通知を見逃しても、管理画面「受付ログ」から解錠PINを
+    後追いで確認できるようにするための履歴。PINは一時的（受取時に端末側が破棄し、その番号は
+    もう解錠に使えなくなる）ため、通知本文と同じく平文で残す。誰かの応答を待つ受付ではないので
+    state=completed（受付/電話ボタンは出さない）。method="dropoff"（表示ラベル「置き配」）で
+    配達の呼び出し(delivery)と区別する。DB書き込みが失敗しても通知・施錠フローは止めない。"""
+    try:
+        db.add(ReceptionLog(
+            tenant_id=tenant_id,
+            visitor_name="置き配",
+            company=locker_label or None,
+            purpose=f"解錠PIN: {pin}" + (f"（受付端末: {device_label}）" if device_label else ""),
+            method="dropoff",
+            state="completed",
+        ))
+        await db.commit()
+    except Exception:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 
 async def _fire_delivery_notifications(

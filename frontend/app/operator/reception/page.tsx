@@ -53,6 +53,7 @@ const METHOD_LABEL: Record<string, string> = {
   form: "フォーム入力",
   qr: "QR読取",
   delivery: "配達呼出",
+  dropoff: "置き配",
 };
 
 function translateMethod(method: string | null | undefined): string {
@@ -707,7 +708,7 @@ export default function OperatorReceptionPage() {
                       <td style={{ padding: "10px 14px", color: "#6b6559", cursor: "pointer" }} onClick={() => setSelectedLog(log)}>{log.company ?? "—"}</td>
                       <td style={{ padding: "10px 14px", color: "#6b6559", cursor: "pointer" }} onClick={() => setSelectedLog(log)}>{log.staff ?? "—"}</td>
                       <td style={{ padding: "10px 14px", color: "#6b6559", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, cursor: "pointer" }} onClick={() => setSelectedLog(log)}>{log.purpose ?? "—"}</td>
-                      <td style={{ padding: "10px 14px", color: "#a8a198", cursor: "pointer" }} onClick={() => setSelectedLog(log)}>{log.method ?? "—"}</td>
+                      <td style={{ padding: "10px 14px", color: "#a8a198", cursor: "pointer" }} onClick={() => setSelectedLog(log)}>{translateMethod(log.method)}</td>
                       <td style={{ padding: "10px 14px", cursor: "pointer" }} onClick={() => setSelectedLog(log)}><StatusPill state={log.state} /></td>
                       <td style={{ padding: "10px 14px", color: "#a8a198", whiteSpace: "nowrap" as const, cursor: "pointer" }} onClick={() => setSelectedLog(log)}>{new Date(log.created_at).toLocaleString("ja-JP")}</td>
                     </RowWithHover>
