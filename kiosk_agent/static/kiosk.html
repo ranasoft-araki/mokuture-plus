@@ -29,6 +29,29 @@ button{font-family:inherit}
 @keyframes pop-in{from{opacity:0;transform:scale(0.85)}to{opacity:1;transform:scale(1)}}
 @keyframes water-ring{0%{transform:scale(0);opacity:0}12%{opacity:.5}100%{transform:scale(1);opacity:0}}
 @keyframes water-splash{0%{transform:scale(.2);opacity:.4}100%{transform:scale(1.6);opacity:0}}
+@keyframes line-draw{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+
+/* ── さりげない画面効果(モーション刷新の続き) ───────────────────────────────── */
+/* ① 和紙のかすかな地の質感: ステージ(#sc)全面に極薄グレインを soft-light で重ねる。
+      静的(無アニメ)・pointer-events:none。#sc は transform でスタックコンテキストを作るため
+      z-index はこのコンテキスト内に閉じる(レターボックスの黒帯には乗らない)。 */
+#sc::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:3;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size:140px 140px;opacity:.30;mix-blend-mode:soft-light}
+
+/* ② カードの静かな浮き: 選択タイル/カードにごく淡い陰影で奥行き(押下の沈み込みと連動)。 */
+#tiles [data-ti],#lm-store,#lm-pickup,#dl-locker,#dl-call{
+  box-shadow:0 2px 5px rgba(29,26,21,.05),0 14px 36px rgba(29,26,21,.08)}
+
+/* ③ フォーカスリング: 受付フォームの入力欄がアクティブ時にブランド色の淡いリング。 */
+#f-name:focus,#f-company:focus,#f-staff:focus{
+  border-color:var(--brand,#4a7c4e)!important;
+  box-shadow:0 0 0 4px var(--brand-ring,rgba(74,124,78,.2));
+  transition:border-color .18s,box-shadow .18s}
+
+@media (prefers-reduced-motion:reduce){
+  [style*="line-draw"]{animation:none!important;transform:none!important}
+}
 </style>
 <script src="/jsqr.min.js"></script>
 </head>
@@ -520,6 +543,12 @@ function applyContentStagger(root) {
 
 function go(screen, data = {}) {
   finishPendingTransition();
+  // ブランド色を CSS 変数へ(フォーカスリング等の <style> ルールが参照)。テナント変更にも追従。
+  try {
+    const bcv = ST.brand_color || "#4a7c4e", de = document.documentElement.style;
+    de.setProperty("--brand", bcv);
+    de.setProperty("--brand-ring", bcv + "33");
+  } catch {}
   const prevEl = sc.firstElementChild;
   const animate = !REDUCE_MOTION && !!prevEl && CURRENT_SCREEN !== screen;
   CURRENT_SCREEN = screen;
@@ -709,7 +738,7 @@ function showIdle() {
   sc.innerHTML = `<div id="idle-root" style="width:1920px;height:1080px;position:relative;overflow:hidden;background:${T.idleBg};cursor:none;user-select:none">
   <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:38px;text-align:center;padding:0 140px">
     ${brand}
-    <div style="width:84px;height:2px;background:${bc};opacity:.9"></div>
+    <div style="width:84px;height:2px;background:${bc};opacity:.9;transform-origin:left;animation:line-draw .7s .25s cubic-bezier(.2,.9,.3,1) both"></div>
     <div style="font-size:34px;color:rgba(245,239,227,.7);letter-spacing:3px;font-weight:300">${escHtml(ST.kiosk_sub_message)}</div>
   </div>
   <div style="position:absolute;inset:0;z-index:10;pointer-events:none"></div>
@@ -1057,6 +1086,7 @@ function showTop() {
     <div>
       <div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px;line-height:1.1">${escHtml(ST.kiosk_menu_title || "ご用件をお選びください")}</div>
       <div style="font-size:38px;color:${T.muted};font-family:Inter,system-ui,sans-serif;letter-spacing:1px;margin-top:8px">Please select</div>
+      <div style="width:72px;height:3px;background:${bc};border-radius:2px;margin-top:16px;transform-origin:left;animation:line-draw .7s .15s cubic-bezier(.2,.9,.3,1) both"></div>
     </div>
   </div>
   <div id="tiles" style="flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:28px;padding:44px 80px;min-height:0">
