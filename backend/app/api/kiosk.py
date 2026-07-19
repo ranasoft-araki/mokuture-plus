@@ -667,7 +667,7 @@ async def kiosk_occupy_locker_delivery(
     )
 
     # 通知を見逃しても後からPINを確認できるよう受付ログにも残す（best-effort）
-    await _log_delivery_dropoff(db, tenant.id, locker_label, pin, device_label)
+    dropoff_log_id = await _log_delivery_dropoff(db, tenant.id, locker_label, pin, device_label)
 
     # 通知はレスポンス送出後にバックグラウンドで送る（遅い/失敗するチャネルで施錠フローを止めない）
     background.add_task(
@@ -685,6 +685,7 @@ async def kiosk_occupy_locker_delivery(
             "device": device_label,
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
+        dropoff_log_id=dropoff_log_id,
     )
 
     return {"ok": True}
@@ -756,7 +757,7 @@ async def kiosk_notify_delivery(
         f"(受付端末: {device_label})"
     )
     # 通知を見逃しても後からPINを確認できるよう受付ログにも残す（best-effort）
-    await _log_delivery_dropoff(db, tenant.id, locker_label, pin, device_label)
+    dropoff_log_id = await _log_delivery_dropoff(db, tenant.id, locker_label, pin, device_label)
     background.add_task(
         _fire_delivery_notifications,
         tenant.id,
@@ -772,6 +773,7 @@ async def kiosk_notify_delivery(
             "device": device_label,
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
+        dropoff_log_id=dropoff_log_id,
     )
     return {"ok": True}
 
@@ -1122,34 +1124,40 @@ async def _notify_chatwork_text(
 
 async def _log_delivery_dropoff(
     db: AsyncSession, tenant_id: str, locker_label: str, pin: str, device_label: str
-) -> None:
-    """置き配を受付ログに記録する（best-effort）。
+) -> str | None:
+    """置き配を受付ログに記録する（best-effort）。記録できたら受付ログの id を返す。
 
     スタッフがプッシュ/Slack 等の通知を見逃しても、管理画面「受付ログ」から解錠PINを
     後追いで確認できるようにするための履歴。PINは一時的（受取時に端末側が破棄し、その番号は
     もう解錠に使えなくなる）ため、通知本文と同じく平文で残す。誰かの応答を待つ受付ではないので
     state=completed（受付/電話ボタンは出さない）。method="dropoff"（表示ラベル「置き配」）で
-    配達の呼び出し(delivery)と区別する。DB書き込みが失敗しても通知・施錠フローは止めない。"""
+    配達の呼び出し(delivery)と区別する。DB書き込みが失敗しても通知・施錠フローは止めない。
+
+    返す id は置き配プッシュの通知タップ先（?detail=<id>）に使い、受付ログ画面で該当置き配の
+    詳細モーダル（解錠PINを大きく表示）を直接開かせる（受付応答通知の ?respond= と同じ導線）。"""
     try:
-        db.add(ReceptionLog(
+        log = ReceptionLog(
             tenant_id=tenant_id,
             visitor_name="置き配",
             company=locker_label or None,
             purpose=f"解錠PIN: {pin}" + (f"（受付端末: {device_label}）" if device_label else ""),
             method="dropoff",
             state="completed",
-        ))
+        )
+        db.add(log)
         await db.commit()
+        return log.id
     except Exception:
         try:
             await db.rollback()
         except Exception:
             pass
+        return None
 
 
 async def _fire_delivery_notifications(
     tenant_id: str, title: str, text: str, webhook_payload: dict, push_url: str | None = None,
-    decision_log: "ReceptionLog | None" = None,
+    decision_log: "ReceptionLog | None" = None, dropoff_log_id: str | None = None,
 ) -> None:
     """置き配/呼び出しの通知を新しいDBセッションで並行送信する（BackgroundTasks 用）。
 
@@ -1159,9 +1167,12 @@ async def _fire_delivery_notifications(
 
     ``decision_log`` を渡すと（配達の呼び出し）、Slack/Web Push に 受付/電話 の対応ボタンを
     付ける。スタッフが通知から直接応答→`_apply_decision` で state=accepted→キオスクの待機画面が
-    `GET /kiosk/reception/{id}` のポーリングで拾い「参ります」へ遷移する。置き配(decision_log=None)は
-    応答不要なのでボタンを付けない。log は呼び出し元で commit/refresh 済み（expire_on_commit=False
-    のため列値は失効せず、別セッションの本関数からも安全に読める）。"""
+    `GET /kiosk/reception/{id}` のポーリングで拾い「参ります」へ遷移する。log は呼び出し元で
+    commit/refresh 済み（expire_on_commit=False のため列値は失効せず、別セッションの本関数からも安全に読める）。
+
+    ``dropoff_log_id`` を渡すと（置き配）、応答ボタンは付けず、代わりに Web Push へ
+    `kind=delivery_dropoff` / `logId` を載せる。通知本体タップで受付ログ画面の詳細モーダル
+    （解錠PINを大きく表示）を直接開かせる（受付応答通知が対応モーダルを開くのと同じ導線）。"""
     slack_decision = None
     push_data = None
     push_actions = None
@@ -1172,6 +1183,12 @@ async def _fire_delivery_notifications(
         slack_decision = (decision_actions(decision_log), dtoken)
         push_data, push_actions = build_decision_push_extras(tenant_id, decision_log)
         push_tag = f"reception-{decision_log.id}"
+    elif dropoff_log_id is not None:
+        # 置き配: 応答不要なので受付/電話ボタンは付けない。通知タップで詳細モーダルを開く。
+        push_data = {"kind": "delivery_dropoff", "logId": dropoff_log_id}
+        push_tag = f"dropoff-{dropoff_log_id}"
+        if push_url is None:
+            push_url = f"/{tenant_id}/admin/reception?detail={dropoff_log_id}"
     try:
         async with AsyncSessionLocal() as db:
             tasks = [

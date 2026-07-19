@@ -1,5 +1,5 @@
 /* mokuture+ Service Worker — push notifications & offline shell cache */
-const CACHE = 'mokuture-v4';
+const CACHE = 'mokuture-v5';
 const SHELL = ['/', '/icons/icon.svg', '/manifest.json'];
 
 // 受付 OK/NG 応答の送信先フォールバック（プッシュ payload に decisionEndpoint が無い場合）
@@ -112,19 +112,23 @@ self.addEventListener('notificationclick', (e) => {
     return;
   }
 
-  // 通知本体タップ: 該当受付の対応モーダルを開く。
-  // 既に受付ログ画面が開いていればフォーカスして postMessage(FOCUS_RECEPTION) でモーダルを開かせ、
-  // 無ければ ?respond=<id> 付き URL で新規に開く（画面側が query を読んでモーダルを自動表示）。
-  // 受付応答通知の url はテナントUUIDをパスに含むが、管理者が実際に開くタブはスラッグURLのため、
+  // 通知本体タップ: 該当受付のモーダルを開く。
+  // ・受付応答(reception_decision) → 対応モーダル(受付/電話/お断り)。postMessage(FOCUS_RECEPTION)。
+  // ・置き配(delivery_dropoff)     → 詳細モーダル(解錠PINを大きく表示)。postMessage(FOCUS_DETAIL)。
+  // 既に受付ログ画面が開いていればフォーカスして postMessage でモーダルを開かせ、無ければ
+  // ?respond=/?detail=<id> 付き URL で新規に開く（画面側が query を読んでモーダルを自動表示）。
+  // これらの通知の url はテナントUUIDをパスに含むが、管理者が実際に開くタブはスラッグURLのため、
   // /admin/reception サフィックスで既存タブを捕捉する（スラッグ/UUID どちらでもフォーカス＝新規タブ重複を防ぐ）。
   const targetUrl = data.url ?? '/';
   const logId = data.logId;
-  const matchKey = data.kind === 'reception_decision' ? '/admin/reception' : targetUrl.split('?')[0];
+  const opensReception = data.kind === 'reception_decision' || data.kind === 'delivery_dropoff';
+  const matchKey = opensReception ? '/admin/reception' : targetUrl.split('?')[0];
+  const focusMsgType = data.kind === 'delivery_dropoff' ? 'FOCUS_DETAIL' : 'FOCUS_RECEPTION';
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       const match = list.find((c) => c.url.includes(matchKey) && 'focus' in c);
       if (match) {
-        if (logId) match.postMessage({ type: 'FOCUS_RECEPTION', logId });
+        if (logId) match.postMessage({ type: focusMsgType, logId });
         return match.focus();
       }
       if (self.clients.openWindow) return self.clients.openWindow(targetUrl);

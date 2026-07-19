@@ -131,6 +131,11 @@ function ReceptionDetailModal({ log, token, onClose, onNotesUpdate }: { log: Rec
   const statusColor = STATUS_COLOR[log.state] ?? "#9ca3af";
   const statusLabel = STATUS_LABEL[log.state] ?? log.state;
 
+  // 置き配は解錠PINが最重要情報なので purpose（「解錠PIN: 1234（受付端末: …）」）から取り出し、
+  // 詳細モーダル上部に大きく表示する。プッシュ通知タップで開いたスタッフがすぐ番号を読める。
+  const isDropoff = log.method === "dropoff";
+  const dropoffPin = isDropoff ? (log.purpose?.match(/解錠PIN[:：]\s*([0-9]+)/)?.[1] ?? null) : null;
+
   const labelStyle: React.CSSProperties = {
     fontSize: 11,
     fontWeight: 600,
@@ -184,8 +189,8 @@ function ReceptionDetailModal({ log, token, onClose, onNotesUpdate }: { log: Rec
           ✕
         </button>
         <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 11, color: "#a8a198", letterSpacing: "0.4px", textTransform: "uppercase", marginBottom: 6 }}>受付詳細</div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: "#1d1a15" }}>{log.visitor_name}</div>
+          <div style={{ fontSize: 11, color: "#a8a198", letterSpacing: "0.4px", textTransform: "uppercase", marginBottom: 6 }}>{isDropoff ? "置き配 詳細" : "受付詳細"}</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "#1d1a15" }}>{isDropoff ? "📦 置き配" : log.visitor_name}</div>
           <div style={{ fontSize: 13, color: "#6b6559", marginTop: 4 }}>{dateStr} {timeStr}</div>
           {visitorHistory !== null && visitorHistory.count > 1 && (
             <div style={{ marginTop: 10, display: "inline-flex", flexDirection: "column", background: "#fdf6e3", border: "1px solid #e8d5a3", borderRadius: 8, padding: "7px 12px" }}>
@@ -205,6 +210,19 @@ function ReceptionDetailModal({ log, token, onClose, onNotesUpdate }: { log: Rec
             </span>
           </div>
         </div>
+        {isDropoff && (
+          <div style={{ marginBottom: 20, background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 12, padding: "16px 18px" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#047857", letterSpacing: "0.4px", textTransform: "uppercase", marginBottom: 6 }}>解錠パスワード</div>
+            {dropoffPin ? (
+              <div style={{ fontSize: 36, fontWeight: 800, letterSpacing: "0.16em", color: "#065f46", fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>{dropoffPin}</div>
+            ) : (
+              <div style={{ fontSize: 14, color: "#4b7c68" }}>{log.purpose || "—"}</div>
+            )}
+            <div style={{ fontSize: 12.5, color: "#4b7c68", marginTop: 8 }}>
+              {log.company ? `保管先: ${log.company}` : "保管先: —"}
+            </div>
+          </div>
+        )}
         <div className="adm-cols-2" style={{ marginTop: 20 }}>
           <div>
             <div style={labelStyle}>訪問者名</div>
@@ -442,6 +460,7 @@ export default function ReceptionLogsPage() {
   const [methodFilter, setMethodFilter] = useState("");
   const [stateFilter, setStateFilter] = useState("");
   const [respondId, setRespondId] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   useEffect(() => {
     const t = getAccessToken();
@@ -454,18 +473,22 @@ export default function ReceptionLogsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // プッシュ通知タップ経由で対応モーダルを開く。
-  // ・新規に開かれた場合 → URL の ?respond=<id> を読む
-  // ・既に画面が開いている場合 → Service Worker からの postMessage(FOCUS_RECEPTION) を受ける
+  // プッシュ通知タップ経由でモーダルを開く。
+  // ・受付応答通知 → 対応モーダル(受付/電話/お断り)。?respond=<id> / postMessage(FOCUS_RECEPTION)。
+  // ・置き配通知   → 詳細モーダル(解錠PINを大きく表示)。?detail=<id> / postMessage(FOCUS_DETAIL)。
+  // 新規に開かれた場合は URL のクエリを、既に画面が開いている場合は SW の postMessage を受ける。
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const rid = params.get("respond");
-    if (rid) {
-      setRespondId(rid);
+    const did = params.get("detail");
+    if (rid) setRespondId(rid);
+    if (did) setDetailId(did);
+    if (rid || did) {
       window.history.replaceState(null, "", window.location.pathname); // クエリを消して履歴を汚さない
     }
     const onMsg = (e: MessageEvent) => {
       if (e.data?.type === "FOCUS_RECEPTION" && e.data.logId) setRespondId(e.data.logId);
+      if (e.data?.type === "FOCUS_DETAIL" && e.data.logId) setDetailId(e.data.logId);
     };
     navigator.serviceWorker?.addEventListener("message", onMsg);
     return () => navigator.serviceWorker?.removeEventListener("message", onMsg);
@@ -473,14 +496,15 @@ export default function ReceptionLogsPage() {
 
   // 通知直後は一覧が古い可能性があるため、対象が手元に無ければ即時リフレッシュ
   useEffect(() => {
-    if (!respondId || !token) return;
-    if (!logs.some((l) => l.id === respondId)) {
+    const wantId = respondId ?? detailId;
+    if (!wantId || !token) return;
+    if (!logs.some((l) => l.id === wantId)) {
       api.listReception(token)
         .then((data) => { setLogs(data); setLastRefreshed(new Date()); })
         .catch(() => {});
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [respondId, token]);
+  }, [respondId, detailId, token]);
 
   useEffect(() => {
     if (!autoRefresh || !token) return;
@@ -579,6 +603,12 @@ export default function ReceptionLogsPage() {
     [respondId, logs],
   );
 
+  // 置き配通知タップで開く詳細対象。行クリックの selectedLog と同じ ReceptionDetailModal を使う。
+  const detailLog = useMemo(
+    () => (detailId ? logs.find((l) => l.id === detailId) ?? null : null),
+    [detailId, logs],
+  );
+
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
@@ -655,8 +685,13 @@ export default function ReceptionLogsPage() {
       }
     >
       <style>{`@keyframes mk-pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
-      {selectedLog && (
-        <ReceptionDetailModal log={selectedLog} token={token} onClose={() => setSelectedLog(null)} onNotesUpdate={handleNotesUpdate} />
+      {(selectedLog || detailLog) && (
+        <ReceptionDetailModal
+          log={(selectedLog ?? detailLog)!}
+          token={token}
+          onClose={() => { setSelectedLog(null); setDetailId(null); }}
+          onNotesUpdate={handleNotesUpdate}
+        />
       )}
       {respondLog && (
         <RespondModal log={respondLog} token={token} onClose={() => setRespondId(null)} onUpdate={handleStateUpdate} />
