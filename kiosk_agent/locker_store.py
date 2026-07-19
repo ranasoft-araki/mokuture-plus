@@ -51,10 +51,11 @@ def _load() -> dict:
                 data.setdefault("lockers", {})
                 data.setdefault("pending_notify", [])
                 data.setdefault("roster_synced_at", None)
+                data.setdefault("locker_count", None)
                 return data
         except Exception:
             pass
-    return {"lockers": {}, "pending_notify": [], "roster_synced_at": None}
+    return {"lockers": {}, "pending_notify": [], "roster_synced_at": None, "locker_count": None}
 
 
 def _save(data: dict) -> None:
@@ -94,6 +95,22 @@ def door_of(locker_id: str) -> int | None:
     with _lock:
         e = _load()["lockers"].get(str(locker_id))
         return e.get("door_number") if e else None
+
+
+# ── 口数（設置者がキオスク設定画面でタッチ選択・ローカル永続化） ───────────────
+
+def get_locker_count() -> int | None:
+    """設置者が選んだ口数。未設定（初回）は None を返し、呼び出し側が既定にフォールバック。"""
+    with _lock:
+        v = _load().get("locker_count")
+        return v if isinstance(v, int) else None
+
+
+def set_locker_count(count: int) -> None:
+    with _lock:
+        data = _load()
+        data["locker_count"] = int(count)
+        _save(data)
 
 
 # ── 台帳生成（端末のドア構成が権威。占有/PIN は保持） ──────────────────────

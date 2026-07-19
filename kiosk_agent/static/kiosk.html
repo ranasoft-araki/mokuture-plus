@@ -301,6 +301,7 @@ const MOCK_LOCKERS = [
   { id: "B", name: "B（中段）", door_number: 18, occupied: true,  _pin: "1234" },
   { id: "C", name: "C（下段）", door_number: 19, occupied: false, _pin: null },
 ];
+let _MOCK_LOCKER_COUNT = 3;   // ?mock=1 の口数選択(設定画面のトグル確認用。実グリッドは MOCK_LOCKERS 固定)
 function _mockLockerList() {
   return {
     lockers: MOCK_LOCKERS.map(l => ({ id: l.id, name: l.name, door_number: l.door_number, occupied: l.occupied, has_pin: !!l._pin })),
@@ -383,6 +384,10 @@ async function mockDeviceFetch(method, path, body) {
   m = path.match(/^\/device\/locker\/([^/]+)\/release$/);
   if (m) return _mockRelease(m[1], body?.pin);
   if (path === "/device/lockers/open-all") return _mockOpenAll();
+  if (path === "/device/locker-config") {
+    if (method === "POST" && body && body.count) _MOCK_LOCKER_COUNT = body.count;
+    return { count: _MOCK_LOCKER_COUNT, options: [{count:3}, {count:7}] };
+  }
   if (path.startsWith("/device/convert")) {
     const q = path.split("?")[1] || "";
     const kana = decodeURIComponent((q.match(/(?:^|&)kana=([^&]*)/) || ["", ""])[1] || "");
@@ -415,10 +420,14 @@ async function deviceConvert(kana, limit) {
   } catch { return []; }
 }
 // ロッカーのGPIO開錠(ローカルエージェント)。MOCK時はダミー。
+// 非ok(404=口数変更で未構成 等)を握りつぶして成功扱いにしない＝呼び出し側で開錠失敗を検知できる。
 async function pulseLocker(door) {
   if (MOCK) { await new Promise(r => setTimeout(r, 120)); return { ok: true }; }
-  try { return await (await fetch(`/device/locker/${encodeURIComponent(door)}/open`, { method: "POST" })).json(); }
-  catch { return { ok: false }; }
+  try {
+    const r = await fetch(`/device/locker/${encodeURIComponent(door)}/open`, { method: "POST" });
+    if (!r.ok) return { ok: false };
+    return await r.json();
+  } catch { return { ok: false }; }
 }
 
 async function forceLockLocker(door) {
@@ -2197,6 +2206,7 @@ function showKioskSettings() {
   let wifiLoading = false;
   let devTaps = 0, devTimer = null;
   let volDebounce = null;
+  let lockerCfg = null;   // {count, options:[{count}]} — /device/locker-config から取得
 
   // ─── tab + device-check state ──
   let activeTab = "settings";              // "settings" | "devices"
@@ -2526,7 +2536,7 @@ function showKioskSettings() {
 
   ${isDev ? devicesBodyHTML() : settingsBodyHTML()}
 
-  ${isDev ? '' : lockerCardHTML()}
+  ${isDev ? '' : lockerConfigCardHTML() + lockerCardHTML()}
 
   <div style="display:flex;align-items:center;padding:16px 80px 24px;font-size:14px;color:${C.stone}">
     ${isDev ? 'ハードウェアの接続状態をこの画面で確認できます' : '設定の変更はスタッフのみ操作できます'}
@@ -2615,6 +2625,29 @@ function showKioskSettings() {
   </div>`;
   }
 
+  function lockerConfigCardHTML() {
+    const cur  = lockerCfg && lockerCfg.count;
+    const opts = (lockerCfg && lockerCfg.options) || [{count:3}, {count:7}];
+    const btns = opts.map(o => {
+      const active = o.count === cur;
+      return `<button data-lcount="${o.count}" style="flex:1;display:flex;align-items:center;justify-content:center;gap:10px;padding:24px 0;border-radius:16px;border:2px solid ${active?C.moss:C.ash};background:${active?C.mossSoft:C.canvas};color:${active?C.mossDk:C.ink};font-size:30px;font-weight:700;cursor:pointer;font-family:inherit">${o.count}口${active?SVG.check:''}</button>`;
+    }).join('');
+    return `<div style="padding:0 80px 4px;flex-shrink:0">
+    <div style="background:${C.canvas};border:1px solid ${C.chalk};border-radius:22px;padding:22px 40px;box-shadow:0 4px 24px rgba(29,26,21,.08)">
+      <div style="display:flex;align-items:center;gap:20px;margin-bottom:16px">
+        <div style="width:54px;height:54px;border-radius:14px;background:${C.mossSoft};color:${C.moss};display:flex;align-items:center;justify-content:center;flex-shrink:0">${SVG.lock}</div>
+        <div style="flex:1">
+          <div style="font-size:24px;font-weight:600;color:${C.sumi}">ロッカーの口数</div>
+          <div style="font-size:12px;color:${C.stone};letter-spacing:2.5px;margin-top:3px;font-family:ui-monospace,monospace">LOCKER SLOTS</div>
+          <div style="font-size:14px;color:${C.graphite};margin-top:6px">設置したロッカーの口数を選びます。増設したときはここで切り替えてください</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:16px">${btns}</div>
+      <div id="ks-lcount-msg" style="font-size:14px;color:${C.graphite};min-height:20px;margin-top:12px"></div>
+    </div>
+  </div>`;
+  }
+
   function lockerCardHTML() {
     return `<div style="padding:0 80px 4px;flex-shrink:0">
     <div style="background:${C.canvas};border:1px solid ${C.chalk};border-radius:22px;padding:22px 40px;display:flex;align-items:center;gap:20px;box-shadow:0 4px 24px rgba(29,26,21,.08)">
@@ -2627,6 +2660,19 @@ function showKioskSettings() {
       <button id="ks-locker-all" style="padding:16px 32px;border-radius:14px;border:2px solid ${C.amber};background:${C.canvas};color:${C.amber};font-size:18px;font-weight:600;cursor:pointer;font-family:inherit;flex-shrink:0">全解除</button>
     </div>
   </div>`;
+  }
+
+  async function setLockerCount(count) {
+    const msg = document.getElementById("ks-lcount-msg");
+    if (msg) { msg.style.color = C.graphite; msg.textContent = "変更中…"; }
+    try {
+      lockerCfg = await devicePost("/device/locker-config", { count });
+      render();
+      const m2 = document.getElementById("ks-lcount-msg");
+      if (m2) { m2.style.color = C.mossDk; m2.textContent = `${count}口に設定しました。`; }
+    } catch (e) {
+      if (msg) { msg.style.color = C.red; msg.textContent = "変更に失敗しました：" + ((e && e.message) || "もう一度お試しください"); }
+    }
   }
 
   function updateVol() {
@@ -2770,6 +2816,13 @@ function showKioskSettings() {
     const lockerAll = document.getElementById("ks-locker-all");
     if (lockerAll) lockerAll.addEventListener("click", showLockerUnlockAllDialog);
 
+    document.querySelectorAll("[data-lcount]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const c = parseInt(btn.getAttribute("data-lcount"), 10);
+        if (c && c !== (lockerCfg && lockerCfg.count)) setLockerCount(c);
+      });
+    });
+
     document.getElementById("ks-vol-minus").addEventListener("click", () => {
       vol = Math.max(0, vol - 5); updateVol();
     });
@@ -2859,10 +2912,14 @@ function showKioskSettings() {
 
   // Initial load: fetch volume + wifi from backend, then render
   async function init() {
-    const [volRes, wifiRes] = await Promise.allSettled([
+    const [volRes, wifiRes, lockRes] = await Promise.allSettled([
       fetch("/device/volume").then(r => r.json()),
       fetch("/device/wifi/networks").then(r => r.json()),
+      deviceGet("/device/locker-config"),
     ]);
+    if (lockRes.status === "fulfilled" && lockRes.value && typeof lockRes.value.count === "number") {
+      lockerCfg = lockRes.value;
+    }
     if (volRes.status === "fulfilled" && !volRes.value.error) {
       vol = volRes.value.level ?? 70;
       localStorage.setItem("kiosk_vol", String(vol));   // タップ音(playPon)が参照する

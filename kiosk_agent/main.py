@@ -264,24 +264,46 @@ def _microphone_status() -> dict[str, object]:
     return status
 
 
-locker_ctrl = LockerController(
-    settings.locker_pins,
-    default_pulse_sec=settings.locker_pulse_sec,
-)
-pir = PirSensor(settings.pir_pin)
-doors = {
-    door_id: DoorSensor(pin)
-    for door_id, pin in sorted(settings.door_pins.items(), key=lambda item: item[0])
-}
+# ── ロッカーの口数プリセット（3口/7口。設置者がキオスク設定画面でタッチ選択） ──────
+# 商品ラインナップは 3口/7口 の2パターンで、増設分の電気錠リレー/ドアセンサーの配線は
+# 標準化されている＝ピンマップは既知の定数。よって「口数」の選択だけで台帳・GPIO が決まり、
+# 現場では JSON を触らせずタッチUIで 3口↔7口 を切り替えられる（選択は locker_store に
+# ローカル永続化）。GPIO の物理検出では口数を自動判定できない（リードスイッチは pull_up で
+# 「未接続」と「開扉」が同じHIGH、リレーは出力でフィードバック無し）ため、この明示選択を採る。
+#
+# 1〜3口のベースは env(LOCKER_PINS_JSON/DOOR_PINS_JSON)を優先（後方互換）。7口の増設4口は
+# 下記の既定ピンで補う。※実機ハーネスに合わせて確定すること（配線は標準化＝固定値）。env に
+# 7口ぶん書けばそちらが優先されるので、既定ピンが実配線と違う場合は env で上書きも可能。
+LOCKER_COUNTS = [3, 7]
+DEFAULT_LOCKER_COUNT = 3
+_EXTRA_LOCKER_PINS = {"4": 23, "5": 24, "6": 25, "7": 8}   # 増設4口の電子錠リレー(BCM)
+_EXTRA_DOOR_PINS = {"4": 5, "5": 6, "6": 13, "7": 19}       # 増設4口のドアセンサー(BCM)
 
 
-def _configured_door_numbers() -> list[int]:
-    """ロッカー台帳の口数（＝置き配で使える口数）を決める。商品は3口/7口の2パターン。
-    モックは3口固定。実機は「接続ドアセンサー(DOOR_PINS_JSON)とロッカーリレー(LOCKER_PINS_JSON)
-    の和集合」で判断する。GPIO 開閉は LOCKER_PINS 起点なので、どちらか一方に増設漏れが
-    あってもロッカーが台帳から消えないよう、和集合で最大限に拾う。両方空なら3口フォールバック。"""
-    if _MOCK_DEVICE:
-        return [1, 2, 3]
+def _pins_for_count(base: dict[str, int], extra: dict[str, int], count: int) -> dict[str, int]:
+    """口数 count 分のピンマップを作る。base(env優先)に無い口は extra(既定ピン)で補う。"""
+    out: dict[str, int] = {}
+    for i in range(1, count + 1):
+        k = str(i)
+        if k in base:
+            out[k] = int(base[k])
+        elif k in extra:
+            out[k] = int(extra[k])
+    return out
+
+
+def _locker_pins_for(count: int) -> dict[str, int]:
+    return _pins_for_count(settings.locker_pins, _EXTRA_LOCKER_PINS, count)
+
+
+def _door_pins_for(count: int) -> dict[str, int]:
+    return _pins_for_count(settings.door_pins, _EXTRA_DOOR_PINS, count)
+
+
+def _env_default_locker_count() -> int:
+    """未選択時の既定口数を env のピン構成から推定する。既存の実機端末が env(7口ぶんの
+    *_PINS_JSON)で運用されていた場合に、この変更で 3口 へ勝手に縮小しないための後方互換。
+    env のスロット数を満たす最大の許可口数（無ければ 3）を返す。"""
     nums: set[int] = set()
     for src in (settings.door_pins, settings.locker_pins):
         for key in (src or {}).keys():
@@ -289,7 +311,60 @@ def _configured_door_numbers() -> list[int]:
                 nums.add(int(key))
             except (TypeError, ValueError):
                 continue
-    return sorted(nums) or [1, 2, 3]
+    n = len(nums)
+    best = DEFAULT_LOCKER_COUNT
+    for c in sorted(LOCKER_COUNTS):
+        if n >= c:
+            best = c
+    return best
+
+
+def _current_locker_count() -> int:
+    """設置者が選んだ口数。未選択(初回/既存端末)は env 構成から既定を推定、不正値は既定3。"""
+    c = locker_store.get_locker_count()
+    if c in LOCKER_COUNTS:
+        return c
+    return _env_default_locker_count()
+
+
+locker_ctrl = LockerController(
+    _locker_pins_for(DEFAULT_LOCKER_COUNT),
+    default_pulse_sec=settings.locker_pulse_sec,
+)
+pir = PirSensor(settings.pir_pin)
+doors = {
+    door_id: DoorSensor(pin)
+    for door_id, pin in sorted(_door_pins_for(DEFAULT_LOCKER_COUNT).items(), key=lambda item: item[0])
+}
+
+
+def _apply_locker_count(count: int) -> None:
+    """選択された口数に合わせて GPIO コントローラ（リレー/ドアセンサー）を作り直す。"""
+    global locker_ctrl, doors
+    try:
+        locker_ctrl.close()
+    except Exception:
+        pass
+    for d in doors.values():
+        try:
+            d.close()
+        except Exception:
+            pass
+    locker_ctrl = LockerController(
+        _locker_pins_for(count),
+        default_pulse_sec=settings.locker_pulse_sec,
+    )
+    doors = {
+        door_id: DoorSensor(pin)
+        for door_id, pin in sorted(_door_pins_for(count).items(), key=lambda item: item[0])
+    }
+
+
+def _configured_door_numbers() -> list[int]:
+    """ロッカー台帳の口数（＝置き配で使える口数）を返す。設置者が選んだ口数（3 or 7）を
+    そのまま台帳のドア番号 [1..N] にする。GPIO の物理検出では口数を自動判定できないため、
+    キオスク設定画面のタッチ選択（locker_store に永続化）を真実の源とする。"""
+    return list(range(1, _current_locker_count() + 1))
 
 # ── ドアセンサー連動の自動施錠 ──────────────────────────────────────────────────
 # 電気ストライク(通電ON=解錠 / 無通電OFF=施錠位置)向け。解錠通電後、扉が開いたら即無通電に
@@ -335,7 +410,8 @@ _CONTROL_PANEL_HTML = Path(__file__).parent / "static" / "device-control.html"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.media_dir.mkdir(parents=True, exist_ok=True)
-    # ロッカー台帳は端末のドア構成から生成（端末が権威。backend 非依存で置き配が成立）
+    # ロッカー台帳は端末が権威。設置者が選んだ口数(永続化)に合わせて GPIO を組み、台帳を生成
+    _apply_locker_count(_current_locker_count())
     locker_store.ensure_local_roster(_configured_door_numbers())
     task = asyncio.create_task(sync_loop())
     update_task = asyncio.create_task(updater.run())
@@ -386,6 +462,10 @@ class CallStaffBody(BaseModel):
 
 class LockerStateBody(BaseModel):
     on: bool
+
+
+class LockerConfigBody(BaseModel):
+    count: int
 
 
 @app.get("/", include_in_schema=False)
@@ -980,6 +1060,42 @@ async def device_locker_list():
     locker_store.ensure_local_roster(_configured_door_numbers())
     await _flush_pending_notify()
     return locker_store.snapshot()
+
+
+@app.get("/device/locker-config")
+async def get_locker_config():
+    """設置者が選んだロッカーの口数と、選べる口数の候補を返す（キオスク設定画面のタッチUI用）。"""
+    return {
+        "count": _current_locker_count(),
+        "options": [{"count": c} for c in LOCKER_COUNTS],
+    }
+
+
+@app.post("/device/locker-config")
+async def set_locker_config(body: LockerConfigBody):
+    """口数を切り替える（3口↔7口）。GPIO を組み直し台帳を再生成、backend へ best-effort ミラー。
+    増設時に設置者がタッチで選ぶための経路。占有中のロッカーは縮小時も台帳に残す（中身を失わない）。"""
+    if body.count not in LOCKER_COUNTS:
+        raise HTTPException(status_code=422, detail=f"count must be one of {LOCKER_COUNTS}")
+    # 縮小で台帳から外れる口に利用中があれば拒否。台帳には残せても GPIO を落とすと解錠できず
+    # 中身が取り出せなくなる（物理的にも占有中の増設部は外せない）。先に解錠させる。
+    wanted = set(range(1, body.count + 1))
+    occupied_out = sorted(
+        it.get("door_number")
+        for it in locker_store.snapshot().get("lockers", [])
+        if it.get("occupied") and it.get("door_number") not in wanted
+    )
+    if occupied_out:
+        labels = "・".join(str(d) for d in occupied_out)
+        raise HTTPException(
+            status_code=409,
+            detail=f"利用中のロッカー（{labels}番）があります。先に解錠してから口数を変更してください。",
+        )
+    locker_store.set_locker_count(body.count)
+    _apply_locker_count(body.count)
+    locker_store.ensure_local_roster(_configured_door_numbers())
+    _spawn(_mirror_locker_state())
+    return await get_locker_config()
 
 
 @app.post("/device/locker/{locker_id}/occupy")
