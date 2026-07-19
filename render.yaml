@@ -4,7 +4,10 @@ services:
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     healthCheckPath: /health
-    plan: free
+    region: oregon
+    # NOTE: 本番は starter（コールドスタート回避のため有料化済み）。free に戻すと 15分無アクセスで
+    # スリープ→起動待ちが再発するので下げないこと。DB(Neon)を us-west-2 に同居させており region も固定。
+    plan: starter
     envVars:
       - key: DATABASE_URL
         sync: false

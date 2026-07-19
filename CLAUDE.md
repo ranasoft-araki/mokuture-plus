@@ -15,7 +15,7 @@
 | リポジトリ | https://github.com/ranasoft-araki/mokuture-plus |
 | フロントエンド本番 | https://mokuture-plus.netlify.app |
 | バックエンド本番 | https://mokuture-plus-api.onrender.com |
-| DB 本番 | Neon PostgreSQL (Project ID: `broad-moon-06415649`, us-east-1) |
+| DB 本番 | Neon PostgreSQL (Project ID: `bitter-firefly-65136362` = mokuture-plus-usw2, **us-west-2** / Render(oregon)と同居しレイテンシ最小化。2026-07-19 に us-east-1 の旧 `broad-moon-06415649` から pg_dump/restore で移行。旧プロジェクトは切戻し用に当面保持) |
 
 ---
 
