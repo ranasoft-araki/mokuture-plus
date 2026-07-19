@@ -427,6 +427,7 @@ async def kiosk_get_appointment(
 @router.post("/reception", status_code=201)
 async def kiosk_reception(
     body: ReceptionCreate,
+    background: BackgroundTasks,
     ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     db: AsyncSession = Depends(get_db),
 ):
@@ -458,9 +459,10 @@ async def kiosk_reception(
     await db.commit()
     await db.refresh(log)
 
-    await _notify_slack(tenant.id, log, db)
-    await _notify_push(tenant.id, log, db)
-    await _notify_webhook(tenant.id, log, db)
+    # 通知はレスポンス送出後にバックグラウンドで送る（Slack / Web Push / Webhook, best-effort）。
+    # inline で await すると通知の往復ぶんキオスク(agent)の応答待ちが延び、10秒プロキシタイムアウトを
+    # 超えてキオスクに「リモートAPIに接続できません」が出る（配達系と同じ理由で非ブロック化する）。
+    background.add_task(_fire_reception_notifications, tenant.id, log)
 
     return {
         "id": log.id,
@@ -948,6 +950,23 @@ async def _notify_webhook(tenant_id: str, log: ReceptionLog, db: AsyncSession) -
                 "created_at": log.created_at.isoformat() if log.created_at else None,
             }
             await _send_webhook(webhook_url, payload)
+    except Exception:
+        pass
+
+
+async def _fire_reception_notifications(tenant_id: str, log: ReceptionLog) -> None:
+    """受付通知(Slack / Web Push / Webhook)をレスポンス送出後に新しいDBセッションで送る（BackgroundTasks 用）。
+
+    inline で await すると通知の往復時間ぶんキオスク(agent)の応答待ちが延び、10秒プロキシタイムアウトを
+    超えて「リモートAPIに接続できません」を招く（Slack chat.postMessage は未参加chの join+retry で最大
+    ~30s、Web Push は死んだ購読を逐次送信）。配達系(_fire_delivery_notifications)と同様に非ブロック化する。
+    log は呼び出し元で commit 済み（AsyncSessionLocal は expire_on_commit=False なので列値は失効せず、
+    別セッションの本関数からも安全に読める）。各チャネルは best-effort（失敗しても受付は成立済み）。"""
+    try:
+        async with AsyncSessionLocal() as db:
+            await _notify_slack(tenant_id, log, db)
+            await _notify_push(tenant_id, log, db)
+            await _notify_webhook(tenant_id, log, db)
     except Exception:
         pass
 
