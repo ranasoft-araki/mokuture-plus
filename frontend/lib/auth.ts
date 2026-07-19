@@ -34,6 +34,14 @@ export function clearTokens() {
     localStorage.removeItem(k);
     sessionStorage.removeItem(k);
   });
+  // ダッシュボードのキャッシュ即描画用データ(mk_stats_*)も消す
+  // (共有端末で前ユーザーの集計値が一瞬でも残らないように)
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("mk_stats_")) localStorage.removeItem(k);
+    }
+  } catch {}
 }
 
 export function refreshSaveTokens(access: string, refresh: string) {

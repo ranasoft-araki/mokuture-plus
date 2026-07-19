@@ -20,9 +20,15 @@ export default function DashboardPage() {
     try {
       const s = await api.getTenantStats(token);
       setStats(s);
-    } catch {
-      clearTokens();
-      router.push("/login");
+      // 次回起動の「キャッシュ即描画」用に前回統計を保存
+      try { localStorage.setItem(`mk_stats_${params.tenant}`, JSON.stringify(s)); } catch {}
+    } catch (e) {
+      // セッション切れ(refresh失敗)のみログインへ。ネットワーク一時失敗ではキャッシュ表示を維持する。
+      const msg = e instanceof Error ? e.message : "";
+      if (msg.includes("セッション")) {
+        clearTokens();
+        router.push("/login");
+      }
     } finally {
       setLoading(false);
       if (showSpinner) setRefreshing(false);
@@ -49,6 +55,12 @@ export default function DashboardPage() {
     }
     const token = getAccessToken();
     if (!token) { router.push("/login"); return; }
+    // キャッシュ即描画(stale-while-revalidate): 前回統計があれば先に見せてから最新化する。
+    // 起動時の「読み込み中…」空白＋米国サーバー往復待ちを体感上ゼロにする狙い。
+    try {
+      const cached = localStorage.getItem(`mk_stats_${params.tenant}`);
+      if (cached) { setStats(JSON.parse(cached)); setLoading(false); }
+    } catch {}
     void loadData(token);
     void loadPublicSettings(params.tenant);
     api.getReceptionDailyStats(token)

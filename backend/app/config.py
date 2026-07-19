@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # JWT (RS256 would need key files; use HS256 for Phase 0 simplicity, upgrade to RS256 in Phase 1)
     jwt_secret_key: str = "change-me-in-production-use-256bit-random"
     jwt_algorithm: str = "HS256"
-    jwt_access_expire_minutes: int = 15
+    jwt_access_expire_minutes: int = 60  # 15→60: ホーム画面起動(間隔が空きがち)での refresh 往復頻度を削減。失効時は lib/api.ts の先読みrefreshで無駄な401往復も省く
     jwt_refresh_expire_days: int = 30  # 「ログイン状態を保持」= localStorage の refresh token でこの期間ログインを維持
 
     # Cloudflare R2 / MinIO (S3-compatible)

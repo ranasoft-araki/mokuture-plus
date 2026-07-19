@@ -26,10 +26,38 @@ async function _doRefresh(): Promise<string | null> {
   return null;
 }
 
+// アクセストークン(JWT)の exp をローカルで確認し、失効(間近)なら true を返す。
+// 起動時の「叩く→401→refresh→再叩き」の無駄な1往復を省くための先読み判定。
+function _isAccessTokenExpired(token: string): boolean {
+  try {
+    const part = token.split(".")[1];
+    if (!part) return false;
+    // base64url → base64 変換 + パディング補正(atob が環境問わず確実に解けるように)
+    let b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    b64 += "=".repeat((4 - (b64.length % 4)) % 4);
+    const json = JSON.parse(atob(b64));
+    if (typeof json.exp !== "number") return false;
+    return Date.now() >= json.exp * 1000 - 30_000; // 30秒スキュー(失効直前も先に更新)
+  } catch {
+    return false; // 解析不能なら従来どおり叩いて401ハンドリングに委ねる
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+  // 先読みリフレッシュ: 失効が判明していれば先にトークンを更新し、無駄な401往復を省く。
+  // (ホーム画面ショートカット起動時は15分超で失効している事が多く、ここが効く)
+  if (token && _isAccessTokenExpired(token)) {
+    if (!_pendingRefresh) {
+      _pendingRefresh = _doRefresh().finally(() => { _pendingRefresh = null; });
+    }
+    const proactive = await _pendingRefresh;
+    if (proactive) token = proactive;
+  }
+
   let res = await _fetch(path, init, token);
 
   if (res.status === 401 && token) {
+    // 保険: 先読みで漏れた失効(端末/サーバ時刻ずれ等)にも従来どおり対応。
     // All concurrent 401s share one refresh attempt — prevents refresh token rotation conflict
     if (!_pendingRefresh) {
       _pendingRefresh = _doRefresh().finally(() => { _pendingRefresh = null; });
