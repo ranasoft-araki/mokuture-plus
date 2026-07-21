@@ -2722,7 +2722,7 @@ function showKioskSettings() {
     try {
       const data = await fetch("/device/wifi/networks").then(r => r.json());
       networks = data.networks ?? [];
-      console.warn("[kiosk] wifi networks:", networks.length, networks.map(n => ({ssid:n.ssid, connected:n.connected, signal:n.signal})));
+      console.warn("[kiosk] wifi networks:", networks.length, networks.map(n => ({ssid:n.ssid, connected:n.connected, signal:n.signal, known:n.known})));
       if (data.debug) console.warn("[kiosk] wifi debug:", data.debug);
       wifiError = data.error ?? "";
       if (wifiError) console.warn("[kiosk] wifi:", wifiError);
@@ -2830,6 +2830,11 @@ function showKioskSettings() {
         if (!net) return;
         row.style.opacity = "0.5";
         try {
+          if (net.lock && !net.known) {
+            row.style.opacity = "1";
+            showWifiPasswordDialog(net);
+            return;
+          }
           const result = await tryWifiConnect(net, "");
           if (result.ok) {
             await loadNetworks();
@@ -2867,7 +2872,7 @@ function showKioskSettings() {
     }
     if (wifiRes.status === "fulfilled") {
       networks = wifiRes.value.networks ?? [];
-      console.warn("[kiosk] wifi init networks:", networks.length, networks.map(n => ({ssid:n.ssid, connected:n.connected, signal:n.signal})));
+      console.warn("[kiosk] wifi init networks:", networks.length, networks.map(n => ({ssid:n.ssid, connected:n.connected, signal:n.signal, known:n.known})));
       if (wifiRes.value.debug) console.warn("[kiosk] wifi init debug:", wifiRes.value.debug);
       wifiError = wifiRes.value.error ?? "";
       if (wifiRes.value.error) console.warn("[kiosk] wifi:", wifiRes.value.error);
