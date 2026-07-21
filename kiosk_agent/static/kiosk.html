@@ -231,16 +231,6 @@ function showRipple(x, y) {
   setTimeout(() => host.remove(), 1620);
 }
 document.addEventListener("pointerdown", e => {
-  try {
-    console.log("[ripple-debug] pointerdown", {
-      pointerType: e.pointerType,
-      pointerId: e.pointerId,
-      isPrimary: e.isPrimary,
-      x: e.clientX,
-      y: e.clientY,
-      time: Date.now(),
-    });
-  } catch {}
   showRipple(e.clientX, e.clientY);
   playPon();
 }, { passive: true, capture: true });
@@ -3145,21 +3135,6 @@ function showKioskSettings() {
 (function() {
   let lastTriggered = 0;
   document.addEventListener("touchstart", function(e) {
-    try {
-      console.log("[ripple-debug] touchstart", {
-        touches: Array.from(e.touches).map(t => ({
-          id: t.identifier,
-          x: t.clientX,
-          y: t.clientY,
-        })),
-        changedTouches: Array.from(e.changedTouches).map(t => ({
-          id: t.identifier,
-          x: t.clientX,
-          y: t.clientY,
-        })),
-        time: Date.now(),
-      });
-    } catch {}
     if (CURRENT_SCREEN === "kiosk-settings") return;
     const now = Date.now();
     if (now - lastTriggered < 2000) return;
