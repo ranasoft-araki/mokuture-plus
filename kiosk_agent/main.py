@@ -109,25 +109,52 @@ def _set_volume_linux(level: int) -> str | None:
     return " / ".join(errors)
 
 
-def _parse_nmcli_multiline(output: str) -> list[dict]:
-    """nmcli --mode multiline 出力をパース (SSIDに:が含まれても安全)。"""
+_wifi_last_debug: dict[str, object] = {}
+
+
+def _split_nmcli_terse(line: str) -> list[str]:
+    """nmcli -t の ':' 区切りを、バックスラッシュエスケープ込みで分解する。"""
+    parts: list[str] = []
+    buf: list[str] = []
+    escaped = False
+    for ch in line:
+        if escaped:
+            buf.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == ":":
+            parts.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    if escaped:
+        buf.append("\\")
+    parts.append("".join(buf))
+    return parts
+
+
+def _parse_nmcli_wifi_rows(output: str) -> list[dict]:
+    """nmcli terse 出力をパースする。"""
     nets: list[dict] = []
     seen: set[str] = set()
-    for block in re.split(r'\n{2,}', output.strip()):
-        fields: dict[str, str] = {}
-        for line in block.splitlines():
-            key, sep, val = line.partition(':')
-            if sep:
-                fields[key.strip()] = val.strip()
-        ssid = fields.get("SSID", "").strip()
+    malformed = 0
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        parts = _split_nmcli_terse(line)
+        if len(parts) != 4:
+            malformed += 1
+            continue
+        in_use_raw, ssid, sig_str, security = (part.strip() for part in parts)
         if not ssid or ssid == "--" or ssid in seen:
             continue
         seen.add(ssid)
-        in_use  = fields.get("IN-USE", "").strip() == "*"
-        sig_str = fields.get("SIGNAL", "0").strip()
-        sig     = int(sig_str) if sig_str.isdigit() else 0
-        security = fields.get("SECURITY", "--").strip()
-        level   = 4 if sig >= 75 else 3 if sig >= 50 else 2 if sig >= 25 else 1
+        in_use = in_use_raw in ("*", "yes", "はい")
+        sig = int(sig_str) if sig_str.isdigit() else 0
+        level = 4 if sig >= 75 else 3 if sig >= 50 else 2 if sig >= 25 else 1
         nets.append({
             "ssid": ssid,
             "signal": sig,
@@ -136,26 +163,94 @@ def _parse_nmcli_multiline(output: str) -> list[dict]:
             "connected": in_use,
         })
     nets.sort(key=lambda n: (not n["connected"], -n["signal"]))
+    if malformed:
+        print(f"[wifi] skipped malformed rows: {malformed}", flush=True)
     return nets
+
+
+def _wifi_saved_ssids() -> tuple[set[str], str | None]:
+    """保存済みのWi-Fi接続プロファイル名(=通常はSSID)を返す。"""
+    try:
+        r = _run(
+            ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
+            timeout=12,
+        )
+        if r.returncode != 0:
+            return set(), r.stderr.strip() or r.stdout.strip() or "saved profiles lookup failed"
+        names: set[str] = set()
+        for line in r.stdout.splitlines():
+            if not line.strip():
+                continue
+            parts = _split_nmcli_terse(line)
+            if len(parts) != 2:
+                continue
+            name, conn_type = (part.strip() for part in parts)
+            if conn_type == "802-11-wireless" and name:
+                names.add(name)
+        return names, None
+    except FileNotFoundError:
+        return set(), "nmcli が見つかりません"
+    except subprocess.TimeoutExpired:
+        return set(), "saved profiles lookup timeout"
+    except Exception as e:
+        return set(), str(e)
 
 
 def _wifi_networks() -> tuple[list[dict], str | None]:
     """(ネットワーク一覧, エラー文字列|None) を返す。"""
+    global _wifi_last_debug
     try:
         r = _run(
-            ["nmcli", "--mode", "multiline", "-f", "IN-USE,SSID,SIGNAL,SECURITY",
-             "dev", "wifi", "list"],
+            [
+                "nmcli",
+                "-t",
+                "-f",
+                "IN-USE,SSID,SIGNAL,SECURITY",
+                "dev",
+                "wifi",
+                "list",
+            ],
             timeout=12,
         )
         if r.returncode != 0:
+            _wifi_last_debug = {
+                "mode": "terse",
+                "returncode": r.returncode,
+                "stderr": r.stderr.strip(),
+                "stdout_sample": r.stdout.splitlines()[:8],
+            }
             return [], f"nmcli エラー: {r.stderr.strip()}"
-        nets = _parse_nmcli_multiline(r.stdout)
+        nets = _parse_nmcli_wifi_rows(r.stdout)
+        saved_ssids, saved_err = _wifi_saved_ssids()
+        for net in nets:
+            net["known"] = net["ssid"] in saved_ssids
+        row_count = len([ln for ln in r.stdout.splitlines() if ln.strip()])
+        _wifi_last_debug = {
+            "mode": "terse",
+            "returncode": r.returncode,
+            "rows": row_count,
+            "parsed": len(nets),
+            "stdout_sample": r.stdout.splitlines()[:8],
+            "ssids": [n["ssid"] for n in nets[:8]],
+            "saved_profiles": len(saved_ssids),
+        }
+        if saved_err:
+            _wifi_last_debug["saved_profiles_error"] = saved_err
+        print(f"[wifi] nmcli rows={row_count} parsed={len(nets)}", flush=True)
+        if nets:
+            print(f"[wifi] ssids={[n['ssid'] for n in nets[:8]]}", flush=True)
+        else:
+            sample = r.stdout.splitlines()[:8]
+            print(f"[wifi] raw sample={sample}", flush=True)
         return nets, None
     except FileNotFoundError:
+        _wifi_last_debug = {"mode": "terse", "error": "nmcli not found"}
         return [], "nmcli が見つかりません (NetworkManager がインストールされていますか?)"
     except subprocess.TimeoutExpired:
+        _wifi_last_debug = {"mode": "terse", "error": "timeout"}
         return [], "nmcli タイムアウト"
     except Exception as e:
+        _wifi_last_debug = {"mode": "terse", "error": str(e)}
         return [], str(e)
 
 
@@ -1213,13 +1308,13 @@ async def device_set_volume(body: VolumeBody):
 async def device_wifi_networks():
     if _MOCK_DEVICE:
         return {"networks": [
-            {"ssid": "mokuture-5G",   "signal": 82, "level": 4, "lock": True,  "connected": True},
-            {"ssid": "mokuture-2G",   "signal": 75, "level": 4, "lock": True,  "connected": False},
-            {"ssid": "GUEST-FREE",    "signal": 60, "level": 3, "lock": False, "connected": False},
-            {"ssid": "TP-LINK_8841",  "signal": 30, "level": 2, "lock": True,  "connected": False},
+            {"ssid": "mokuture-5G",   "signal": 82, "level": 4, "lock": True,  "connected": True,  "known": True},
+            {"ssid": "mokuture-2G",   "signal": 75, "level": 4, "lock": True,  "connected": False, "known": True},
+            {"ssid": "GUEST-FREE",    "signal": 60, "level": 3, "lock": False, "connected": False, "known": False},
+            {"ssid": "TP-LINK_8841",  "signal": 30, "level": 2, "lock": True,  "connected": False, "known": False},
         ], "mock": True}
     nets, err = await asyncio.to_thread(_wifi_networks)
-    return {"networks": nets, "error": err}
+    return {"networks": nets, "error": err, "debug": _wifi_last_debug}
 
 
 class WifiConnectBody(BaseModel):
