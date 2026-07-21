@@ -2205,6 +2205,7 @@ function showKioskSettings() {
   let networks = [];
   let wifiLoading = false;
   let wifiError = "";
+  let settingsInitLoading = true;
   let devTaps = 0, devTimer = null;
   let volDebounce = null;
   let lockerCfg = null;   // {count, options:[{count}]} — /device/locker-config から取得
@@ -2539,6 +2540,12 @@ function showKioskSettings() {
 
   ${isDev ? '' : lockerConfigCardHTML() + lockerCardHTML()}
 
+  ${!isDev && settingsInitLoading ? `
+  <div style="position:absolute;top:132px;right:80px;display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:999px;background:${C.paper};border:1px solid ${C.chalk};color:${C.graphite};font-size:13px;font-weight:600;box-shadow:0 4px 16px rgba(29,26,21,.06)">
+    <span style="width:10px;height:10px;border-radius:50%;background:${C.moss};animation:dot-pulse 1.2s ease-in-out infinite"></span>
+    読み込み中
+  </div>` : ''}
+
   <div style="display:flex;align-items:center;padding:16px 80px 24px;font-size:14px;color:${C.stone}">
     ${isDev ? 'ハードウェアの接続状態をこの画面で確認できます' : '設定の変更はスタッフのみ操作できます'}
     <span style="flex:1"></span>
@@ -2645,7 +2652,7 @@ function showKioskSettings() {
         </div>
       </div>
       <div style="display:flex;gap:16px">${btns}</div>
-      <div id="ks-lcount-msg" style="font-size:14px;color:${C.graphite};min-height:20px;margin-top:12px"></div>
+      <div id="ks-lcount-msg" style="font-size:14px;color:${C.graphite};min-height:20px;margin-top:12px">${settingsInitLoading ? "設定を読み込み中..." : ""}</div>
     </div>
   </div>`;
   }
@@ -3099,6 +3106,10 @@ function showKioskSettings() {
 
   // Initial load: fetch volume + wifi from backend, then render
   async function init() {
+    wifiLoading = true;
+    settingsInitLoading = true;
+    render();
+
     const [volRes, wifiRes, lockRes] = await Promise.allSettled([
       fetch("/device/volume").then(r => r.json()),
       fetch("/device/wifi/networks").then(r => r.json()),
@@ -3125,6 +3136,8 @@ function showKioskSettings() {
     } else {
       wifiError = "一覧取得に失敗しました";
     }
+    wifiLoading = false;
+    settingsInitLoading = false;
     render();
   }
 
