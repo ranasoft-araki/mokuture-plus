@@ -2472,31 +2472,169 @@ function showKioskSettings() {
   function showWifiPasswordDialog(net) {
     const overlay = document.createElement("div");
     overlay.style.cssText = `position:absolute;inset:0;background:rgba(29,26,21,.6);display:flex;align-items:center;justify-content:center;z-index:99`;
-    overlay.innerHTML = `<div style="background:#fffefb;border-radius:20px;padding:48px 56px;width:640px;box-shadow:0 24px 64px rgba(0,0,0,.3)">
-      <div style="font-size:24px;font-weight:600;color:#1d1a15;margin-bottom:6px">${escHtml(net.ssid)}</div>
-      <div style="font-size:14px;color:#8a8276;margin-bottom:28px">パスワードを入力してください</div>
-      <input id="ks-pw-input" type="password" placeholder="Wi-Fiパスワード"
-        style="width:100%;padding:16px 18px;border-radius:12px;border:2px solid #d4cfc7;background:#f5f3ee;font-size:20px;font-family:ui-monospace,monospace;outline:none;margin-bottom:8px;box-sizing:border-box">
-      <div id="ks-pw-err" style="font-size:13px;color:#c0392b;min-height:20px;margin-bottom:16px"></div>
+    overlay.innerHTML = `<div style="background:#fffefb;border-radius:24px;padding:36px 40px;width:1180px;max-width:92vw;box-shadow:0 24px 64px rgba(0,0,0,.3);display:flex;flex-direction:column;gap:22px">
+      <div style="display:flex;align-items:flex-start;gap:20px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:28px;font-weight:600;color:#1d1a15;margin-bottom:6px;word-break:break-all">${escHtml(net.ssid)}</div>
+          <div style="font-size:14px;color:#8a8276">Wi-Fiパスワードを入力してください</div>
+        </div>
+        <button id="ks-pw-visibility" style="padding:12px 18px;border-radius:12px;border:2px solid #d4cfc7;background:transparent;font-size:15px;color:#5a5249;cursor:pointer;font-family:inherit;flex-shrink:0">表示</button>
+      </div>
+      <input id="ks-pw-input" type="password" placeholder="Wi-Fiパスワード" readonly
+        style="width:100%;padding:18px 20px;border-radius:14px;border:2px solid #d4cfc7;background:#f5f3ee;font-size:28px;font-family:ui-monospace,monospace;outline:none;box-sizing:border-box;letter-spacing:1px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div id="ks-pw-meta" style="font-size:13px;color:#8a8276;min-height:20px;flex:1">タッチキーボードで入力できます</div>
+        <div id="ks-pw-err" style="font-size:13px;color:#c0392b;min-height:20px;flex:1;text-align:right"></div>
+      </div>
+      <div id="ks-pw-kb" style="display:flex;flex-direction:column;gap:8px;background:#fffefb;border:2px solid #d8d3c7;border-radius:18px;padding:18px"></div>
       <div style="display:flex;gap:14px">
-        <button id="ks-pw-cancel" style="flex:1;padding:16px;border-radius:12px;border:2px solid #d4cfc7;background:transparent;font-size:16px;color:#5a5249;cursor:pointer;font-family:inherit">キャンセル</button>
-        <button id="ks-pw-ok" style="flex:1;padding:16px;border-radius:12px;border:none;background:#4a7c4e;color:#fffefb;font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">接続する</button>
+        <button id="ks-pw-cancel" style="flex:1;padding:18px;border-radius:14px;border:2px solid #d4cfc7;background:transparent;font-size:18px;color:#5a5249;cursor:pointer;font-family:inherit">キャンセル</button>
+        <button id="ks-pw-ok" style="flex:1;padding:18px;border-radius:14px;border:none;background:#4a7c4e;color:#fffefb;font-size:18px;font-weight:600;cursor:pointer;font-family:inherit">接続する</button>
       </div>
     </div>`;
     document.getElementById("ks-root").appendChild(overlay);
     const input  = document.getElementById("ks-pw-input");
     const errDiv = document.getElementById("ks-pw-err");
+    const metaDiv = document.getElementById("ks-pw-meta");
     const okBtn  = document.getElementById("ks-pw-ok");
+    const visBtn = document.getElementById("ks-pw-visibility");
+    const kbRoot = document.getElementById("ks-pw-kb");
+    let password = "";
+    let visible = false;
+    let kbMode = "lower";
+    const btnPrevent = `onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()"`;
+    const keyStyle = `height:62px;min-width:62px;padding:0 12px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:10px;font-size:24px;font-weight:600;color:${T.ink};cursor:pointer;font-family:ui-monospace,monospace;display:inline-flex;align-items:center;justify-content:center`;
+    const ctrlStyle = `height:62px;min-width:88px;padding:0 16px;background:#f4f1ea;border:1px solid ${T.borderStrong};border-radius:10px;font-size:20px;font-weight:600;color:${T.ink};cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;justify-content:center`;
+    const modeStyle = (active) => `flex:1;height:48px;background:${active ? C.moss : T.canvas};border:1px solid ${active ? C.moss : T.borderStrong};border-radius:10px;color:${active ? "#fff" : T.ink};font-size:16px;font-weight:600;cursor:pointer;font-family:inherit`;
+    const WIFI_KB_ROWS = {
+      lower: [
+        ["q","w","e","r","t","y","u","i","o","p"],
+        ["a","s","d","f","g","h","j","k","l"],
+        ["z","x","c","v","b","n","m"],
+      ],
+      upper: [
+        ["Q","W","E","R","T","Y","U","I","O","P"],
+        ["A","S","D","F","G","H","J","K","L"],
+        ["Z","X","C","V","B","N","M"],
+      ],
+      num: [
+        ["1","2","3","4","5","6","7","8","9","0"],
+        ["-","/",";",":","(",")","$","&","@","\""],
+        [".",",","?","!","'","#","%"],
+      ],
+      sym: [
+        ["[","]","{","}","<",">","=","+","_","\\"],
+        ["|","`","~","^","*","€","£","¥","•"],
+        [".",",","?","!","'","#","%"],
+      ],
+    };
+
+    function syncInput() {
+      input.value = password;
+      metaDiv.textContent = password ? `${password.length} 文字入力中` : "タッチキーボードで入力できます";
+    }
+
+    function addChars(chars) {
+      if (!chars) return;
+      password += chars;
+      errDiv.textContent = "";
+      syncInput();
+    }
+
+    function backspace() {
+      if (!password) return;
+      password = password.slice(0, -1);
+      errDiv.textContent = "";
+      syncInput();
+    }
+
+    function buildWifiKeyboardHtml() {
+      const rows = WIFI_KB_ROWS[kbMode];
+      const rowHtml = rows.map((row, idx) => {
+        const keys = row.map((key) => `<button type="button" data-kb-key="${escHtml(key)}" ${btnPrevent} style="${keyStyle}">${escHtml(key)}</button>`).join("");
+        if (idx === 2) {
+          return `<div style="display:flex;gap:8px;justify-content:center">
+            <button type="button" data-kb-action="shift" ${btnPrevent} style="${ctrlStyle};min-width:112px">${kbMode === "upper" ? "小文字" : "大文字"}</button>
+            ${keys}
+            <button type="button" data-kb-action="backspace" ${btnPrevent} style="${ctrlStyle};min-width:112px">⌫</button>
+          </div>`;
+        }
+        return `<div style="display:flex;gap:8px;justify-content:center">${keys}</div>`;
+      }).join("");
+      return `
+        <div style="display:flex;gap:8px;margin-bottom:4px">
+          <button type="button" data-kb-mode="lower" ${btnPrevent} style="${modeStyle(kbMode === "lower")}">abc</button>
+          <button type="button" data-kb-mode="upper" ${btnPrevent} style="${modeStyle(kbMode === "upper")}">ABC</button>
+          <button type="button" data-kb-mode="num" ${btnPrevent} style="${modeStyle(kbMode === "num")}">123</button>
+          <button type="button" data-kb-mode="sym" ${btnPrevent} style="${modeStyle(kbMode === "sym")}">#+=</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${rowHtml}
+          <div style="display:flex;gap:8px;justify-content:center">
+            <button type="button" data-kb-action="clear" ${btnPrevent} style="${ctrlStyle};min-width:112px">クリア</button>
+            <button type="button" data-kb-action="space" ${btnPrevent} style="${ctrlStyle};flex:1;max-width:520px">スペース</button>
+            <button type="button" data-kb-action="done" ${btnPrevent} style="${ctrlStyle};min-width:112px;background:${C.mossSoft};border-color:${C.moss};color:${C.mossDk}">入力完了</button>
+          </div>
+        </div>`;
+    }
+
+    function renderWifiKeyboard() {
+      kbRoot.innerHTML = buildWifiKeyboardHtml();
+    }
+
+    function toggleVisibility() {
+      visible = !visible;
+      input.type = visible ? "text" : "password";
+      visBtn.textContent = visible ? "非表示" : "表示";
+    }
+
+    const kbAction = (e) => {
+      const btn = e.target.closest("button");
+      if (!btn || !kbRoot.contains(btn)) return;
+      e.preventDefault();
+      const key = btn.getAttribute("data-kb-key");
+      const mode = btn.getAttribute("data-kb-mode");
+      const action = btn.getAttribute("data-kb-action");
+      if (key != null) { addChars(key); return; }
+      if (mode) { kbMode = mode; renderWifiKeyboard(); return; }
+      if (action === "shift") {
+        kbMode = kbMode === "upper" ? "lower" : "upper";
+        renderWifiKeyboard();
+        return;
+      }
+      if (action === "backspace") { backspace(); return; }
+      if (action === "clear") {
+        password = "";
+        errDiv.textContent = "";
+        syncInput();
+        return;
+      }
+      if (action === "space") { addChars(" "); return; }
+      if (action === "done") {
+        okBtn.focus();
+        return;
+      }
+    };
+
+    renderWifiKeyboard();
+    syncInput();
     input.focus();
     document.getElementById("ks-pw-cancel").addEventListener("click", () => overlay.remove());
+    visBtn.addEventListener("click", toggleVisibility);
+    kbRoot.addEventListener("mousedown", kbAction);
+    kbRoot.addEventListener("touchstart", kbAction, { passive: false });
     async function doConnect() {
+      if (!password) {
+        errDiv.textContent = "パスワードを入力してください";
+        return;
+      }
       okBtn.disabled = true; okBtn.textContent = "接続中…";
       errDiv.textContent = "";
       try {
         const resp = await fetch("/device/wifi/connect", {
           method: "POST",
           headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({ssid: net.ssid, password: input.value}),
+          body: JSON.stringify({ssid: net.ssid, password}),
         });
         if (!resp.ok) {
           const data = await resp.json().catch(() => ({}));
@@ -2513,6 +2651,35 @@ function showKioskSettings() {
     }
     okBtn.addEventListener("click", doConnect);
     input.addEventListener("keydown", e => { if (e.key === "Enter") doConnect(); });
+  }
+
+  async function tryWifiConnect(net, password) {
+    const resp = await fetch("/device/wifi/connect", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ssid: net.ssid, password: password || ""}),
+    });
+    if (resp.ok) return { ok: true, data: await resp.json().catch(() => ({})) };
+    const data = await resp.json().catch(() => ({}));
+    return {
+      ok: false,
+      status: resp.status,
+      detail: data.detail ?? "接続に失敗しました",
+    };
+  }
+
+  function wifiNeedsPassword(detail) {
+    const msg = String(detail || "").toLowerCase();
+    return [
+      "secrets were required",
+      "no secrets were provided",
+      "password",
+      "psk",
+      "passphrase",
+      "802-11-wireless-security",
+      "wifi network could not be found",
+      "insufficient privileges to complete the operation",
+    ].some(t => msg.includes(t));
   }
 
   function showLockerUnlockAllDialog() {
@@ -2661,18 +2828,23 @@ function showKioskSettings() {
         const idx = parseInt(row.getAttribute("data-net"));
         const net = otherNets[idx];
         if (!net) return;
-        if (net.lock) {
-          showWifiPasswordDialog(net);
-        } else {
-          row.style.opacity = "0.5";
-          try {
-            await fetch("/device/wifi/connect", {
-              method: "POST",
-              headers: {"Content-Type":"application/json"},
-              body: JSON.stringify({ssid: net.ssid, password: ""}),
-            });
+        row.style.opacity = "0.5";
+        try {
+          const result = await tryWifiConnect(net, "");
+          if (result.ok) {
             await loadNetworks();
-          } catch(e) { row.style.opacity = "1"; }
+            return;
+          }
+          if (net.lock && wifiNeedsPassword(result.detail)) {
+            row.style.opacity = "1";
+            showWifiPasswordDialog(net);
+            return;
+          }
+          console.warn("[kiosk] wifi connect failed:", result.detail);
+          row.style.opacity = "1";
+        } catch(e) {
+          console.warn("[kiosk] wifi connect error:", e);
+          row.style.opacity = "1";
         }
       });
     });
