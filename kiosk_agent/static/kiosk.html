@@ -3134,20 +3134,34 @@ function showKioskSettings() {
 // ─── Corner gesture: simultaneous top-left + top-right touch → kiosk settings ─
 (function() {
   let lastTriggered = 0;
-  document.addEventListener("touchstart", function(e) {
+  const activePointers = new Map();
+
+  function syncPointer(e) {
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  }
+
+  function clearPointer(e) {
+    activePointers.delete(e.pointerId);
+  }
+
+  document.addEventListener("pointerdown", function(e) {
     if (CURRENT_SCREEN === "kiosk-settings") return;
     const now = Date.now();
     if (now - lastTriggered < 2000) return;
-    const touches = Array.from(e.touches);
-    if (touches.length < 2) return;
+    syncPointer(e);
+    const pointers = Array.from(activePointers.values());
+    if (pointers.length < 2) return;
     const W = window.innerWidth, EDGE = 160, TOP = 130;
-    const hasTL = touches.some(t => t.clientX < EDGE && t.clientY < TOP);
-    const hasTR = touches.some(t => t.clientX > W - EDGE && t.clientY < TOP);
+    const hasTL = pointers.some(p => p.x < EDGE && p.y < TOP);
+    const hasTR = pointers.some(p => p.x > W - EDGE && p.y < TOP);
     if (hasTL && hasTR) {
       lastTriggered = now;
       showKioskSettings();
     }
   }, { passive: true });
+  ["pointerup", "pointercancel", "pointerleave", "lostpointercapture"].forEach((eventName) => {
+    document.addEventListener(eventName, clearPointer, { passive: true });
+  });
 })();
 
 // Ctrl+Shift+M → kiosk settings
@@ -3275,6 +3289,179 @@ async function boot() {
 }
 
 boot();
+
+// Kiosk settings entry gestures / shortcuts.
+// 追加・変更・削除しやすいよう、トリガー定義をここに集約する。
+const KIOSK_SETTINGS_ENTRY = {
+  cooldownMs: 2000,
+  cornerZoneRatio: 0.10,
+  sequenceWindowMs: 5000,
+  triggers: [
+    {
+      id: "two-finger-top-corners",
+      type: "simultaneous-corners",
+      corners: ["top-left", "top-right"],
+    },
+    {
+      id: "clockwise-corners",
+      type: "corner-sequence",
+      corners: ["top-left", "top-right", "bottom-right", "bottom-left"],
+      allowRotation: true,
+    },
+    {
+      id: "ctrl-shift-m",
+      type: "key-chord",
+      key: "m",
+      ctrlKey: true,
+      shiftKey: true,
+    },
+  ],
+};
+
+(function() {
+  let lastTriggered = 0;
+  const sequenceStates = new Map();
+  const activePointers = new Map();
+
+  function canOpenSettings(now = Date.now()) {
+    return CURRENT_SCREEN !== "kiosk-settings" && (now - lastTriggered) >= KIOSK_SETTINGS_ENTRY.cooldownMs;
+  }
+
+  function resetSequenceStates() {
+    sequenceStates.clear();
+  }
+
+  function openKioskSettings() {
+    lastTriggered = Date.now();
+    resetSequenceStates();
+    activePointers.clear();
+    showKioskSettings();
+  }
+
+  function syncPointer(e) {
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  }
+
+  function clearPointer(e) {
+    activePointers.delete(e.pointerId);
+  }
+
+  function getCornerFromPoint(x, y, zoneRatio = KIOSK_SETTINGS_ENTRY.cornerZoneRatio) {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const edgeX = w * zoneRatio;
+    const edgeY = h * zoneRatio;
+    const left = x <= edgeX;
+    const right = x >= w - edgeX;
+    const top = y <= edgeY;
+    const bottom = y >= h - edgeY;
+
+    if (left && top) return "top-left";
+    if (right && top) return "top-right";
+    if (right && bottom) return "bottom-right";
+    if (left && bottom) return "bottom-left";
+    return null;
+  }
+
+  function buildSequences(trigger) {
+    const base = trigger.corners;
+    if (!trigger.allowRotation) return [base];
+    return base.map((_, idx) => base.slice(idx).concat(base.slice(0, idx)));
+  }
+
+  function isPrefix(progress, sequence) {
+    return progress.every((corner, idx) => sequence[idx] === corner);
+  }
+
+  function advanceSequenceTrigger(trigger, touchedCorner, now) {
+    const windowMs = trigger.windowMs ?? KIOSK_SETTINGS_ENTRY.sequenceWindowMs;
+    const sequences = buildSequences(trigger);
+    const current = sequenceStates.get(trigger.id);
+    let state = current && (now - current.startedAt) <= windowMs
+      ? current
+      : { startedAt: now, progress: [] };
+
+    let progress = state.progress.concat(touchedCorner);
+    let matched = sequences.some((sequence) => isPrefix(progress, sequence));
+
+    if (!matched) {
+      progress = [touchedCorner];
+      matched = sequences.some((sequence) => isPrefix(progress, sequence));
+      if (!matched) progress = [];
+    }
+
+    if (progress.length === 1) state.startedAt = now;
+    state.progress = progress;
+
+    const completed = sequences.some((sequence) =>
+      progress.length === sequence.length && isPrefix(progress, sequence)
+    );
+    if (completed) {
+      openKioskSettings();
+      return true;
+    }
+
+    if (progress.length > 0) sequenceStates.set(trigger.id, state);
+    else sequenceStates.delete(trigger.id);
+    return false;
+  }
+
+  document.addEventListener("pointerdown", function(e) {
+    const now = Date.now();
+    if (!canOpenSettings(now)) return;
+    syncPointer(e);
+
+    const touchTriggers = KIOSK_SETTINGS_ENTRY.triggers.filter((trigger) =>
+      trigger.type === "simultaneous-corners" || trigger.type === "corner-sequence"
+    );
+
+    for (const trigger of touchTriggers) {
+      if (trigger.type !== "simultaneous-corners") continue;
+      const activeCorners = new Set(
+        Array.from(activePointers.values())
+          .map((pointer) => getCornerFromPoint(pointer.x, pointer.y, trigger.zoneRatio))
+          .filter(Boolean)
+      );
+      const matched = trigger.corners.every((corner) => activeCorners.has(corner));
+      if (matched) {
+        e.stopImmediatePropagation();
+        openKioskSettings();
+        return;
+      }
+    }
+
+    const touchedCorner = getCornerFromPoint(e.clientX, e.clientY);
+
+    if (!touchedCorner) return;
+
+    for (const trigger of touchTriggers) {
+      if (trigger.type !== "corner-sequence") continue;
+      if (advanceSequenceTrigger(trigger, touchedCorner, now)) {
+        e.stopImmediatePropagation();
+        return;
+      }
+    }
+  }, { passive: true, capture: true });
+
+  ["pointerup", "pointercancel", "pointerleave", "lostpointercapture"].forEach((eventName) => {
+    document.addEventListener(eventName, clearPointer, { passive: true, capture: true });
+  });
+
+  document.addEventListener("keydown", function(e) {
+    if (!canOpenSettings()) return;
+    const matched = KIOSK_SETTINGS_ENTRY.triggers.some((trigger) =>
+      trigger.type === "key-chord" &&
+      (e.key || "").toLowerCase() === trigger.key.toLowerCase() &&
+      (!!trigger.ctrlKey === e.ctrlKey) &&
+      (!!trigger.shiftKey === e.shiftKey) &&
+      (!!trigger.altKey === e.altKey) &&
+      (!!trigger.metaKey === e.metaKey)
+    );
+    if (!matched) return;
+    e.stopImmediatePropagation();
+    openKioskSettings();
+  }, true);
+})();
 </script>
 </body>
 </html>
