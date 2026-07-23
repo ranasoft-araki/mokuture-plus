@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import random
 import re
 import secrets
 import zoneinfo
@@ -42,6 +43,42 @@ from app.services.auth import hash_password, verify_password, create_decision_to
 from app.config import settings
 
 _PIN_RE = re.compile(r"^\d{4}$")
+
+# 審査用デモモードの自動返信タスク参照(fire-and-forget の GC 回避に保持)。
+_demo_auto_tasks: set[asyncio.Task] = set()
+
+
+async def _demo_auto_accept(tenant_id: str, log_id: str) -> None:
+    """審査用デモ: 実通知の後に担当者の「受付(参ります)」応答を自動再現する。
+
+    展示・審査ではスマホ側で担当者が返信する人手が無いので、3〜5秒待ってから accepted を
+    確定させる＝キオスクは本番と同じ `GET /kiosk/reception/{id}` ポーリングで結果画面へ遷移する。
+    `_apply_decision` は idempotent(確定後は上書き不可)なので、万一実担当者が先に押しても衝突しない。
+    通知タスク(Slack join 等で最大〜30s)と別の task にして、体感タイミングを本番同様に保つ。"""
+    lo = settings.demo_auto_reply_min_sec
+    hi = max(lo, settings.demo_auto_reply_max_sec)
+    await asyncio.sleep(random.uniform(lo, hi))
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(ReceptionLog).where(
+                    ReceptionLog.id == log_id,
+                    ReceptionLog.tenant_id == tenant_id,
+                )
+            )
+            log = result.scalar_one_or_none()
+            if log is None:
+                return
+            from app.api.reception import _apply_decision
+            await _apply_decision(db, log, "accept")
+    except Exception:
+        logger.warning("demo auto-accept failed (tenant=%s, reception=%s)", tenant_id, log_id)
+
+
+def _spawn_demo_auto_accept(tenant_id: str, log_id: str) -> None:
+    task = asyncio.create_task(_demo_auto_accept(tenant_id, log_id))
+    _demo_auto_tasks.add(task)
+    task.add_done_callback(_demo_auto_tasks.discard)
 
 
 def _generate_delivery_pin() -> str:
@@ -475,6 +512,11 @@ async def kiosk_reception(
     # inline で await すると通知の往復ぶんキオスク(agent)の応答待ちが延び、10秒プロキシタイムアウトを
     # 超えてキオスクに「リモートAPIに接続できません」が出る（配達系と同じ理由で非ブロック化する）。
     background.add_task(_fire_reception_notifications, tenant.id, log)
+
+    # 審査用デモモード: 実通知の後、担当者返信「受付(参ります)」をサーバ側で自動再現する。
+    # 通知は上の BackgroundTasks で即送信し、こちらは別 task で 3〜5 秒後に accepted を確定させる。
+    if getattr(tenant, "is_demo", False):
+        _spawn_demo_auto_accept(tenant.id, log.id)
 
     return {
         "id": log.id,

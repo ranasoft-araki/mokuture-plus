@@ -77,6 +77,8 @@ let ST = {
   kiosk_phone_number: "",   // 受付応答「電話(対応不可)」時に表示する電話番号
   inquiry_url: "",          // 営業お断り画面で案内する問い合わせフォールURL(解決済み)
   inquiry_qr: null,         // 上記URLのQR(SVG data URI)。バックエンドが生成
+  is_demo: false,           // 審査用デモモード(バックエンドの is_demo テナントのみ true)
+  demo_locker_pin: "",      // デモ時の手荷物預かり固定PIN(バックエンド .env DEMO_LOCKER_PIN)
 };
 let ITEMS = [];
 let TRANSITION_TYPE = "fade";
@@ -1192,6 +1194,8 @@ function showTop() {
     const btn = e.target.closest("[data-ti]"); if (!btn) return;
     resetIdle();
     const t = TILES[+btn.dataset.ti];
+    // 審査用デモ: 荷物の配達は本デモでは利用不可。案内だけ出して導線には進ませない。
+    if (ST.is_demo && t.screen === "delivery") { showDemoNotice("本デモでは利用出来ません"); return; }
     btn.style.transform = "scale(.98)";
     later(140, () => { cleanup(); go(t.screen); });
   });
@@ -1381,7 +1385,9 @@ function showLocker(mode) {
     busy = true; render();
     try {
       if (view === "pinset") {
-        await devicePost(`/device/locker/${encodeURIComponent(sel.id)}/occupy`, { pin });
+        // 審査用デモ: 入力/完了表示は本番のまま、内部の保存PINだけ固定値へ差し替える(受取もこれで解錠)。
+        const pinToSet = ST.is_demo ? (ST.demo_locker_pin || "1111") : pin;
+        await devicePost(`/device/locker/${encodeURIComponent(sel.id)}/occupy`, { pin: pinToSet });
         resultTitle = "お預け完了"; resultSub = "暗証番号を設定しました。お受け取りの際に入力してください。";
       } else {
         const r = await devicePost(`/device/locker/${encodeURIComponent(sel.id)}/release`, { pin });
@@ -3231,6 +3237,28 @@ function showMockBadge() {
   document.body.appendChild(b);
 }
 
+// 審査用デモモード(ST.is_demo)のとき、画面下部に小さく常時バッジを出す。
+// 上部は MOCK バッジと競合するため下部中央に置く。設定ロード後に呼ぶ。
+function showDemoBadge() {
+  const existing = document.getElementById("demo-badge");
+  if (!ST.is_demo) { if (existing) existing.remove(); return; }
+  if (existing) return;
+  const b = document.createElement("div");
+  b.id = "demo-badge";
+  b.innerHTML = "審査用デモモード<span style='opacity:.82;font-weight:500;margin-left:8px'>担当者の返信操作を自動で再現しています</span>";
+  b.style.cssText = "position:fixed;bottom:0;left:50%;transform:translateX(-50%);z-index:2147483647;pointer-events:none;background:rgba(20,18,15,.82);color:#fff;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;font-size:13px;font-weight:700;letter-spacing:.3px;padding:6px 20px;border-radius:12px 12px 0 0;box-shadow:0 -2px 8px rgba(0,0,0,.28);white-space:nowrap;opacity:.95";
+  document.body.appendChild(b);
+}
+
+// 中央に約2.5秒表示して自動消去する軽量トースト(デモの「利用不可」案内などに使用)。
+function showDemoNotice(msg) {
+  const o = document.createElement("div");
+  o.style.cssText = "position:fixed;inset:0;z-index:2147483646;display:flex;align-items:center;justify-content:center;pointer-events:none";
+  o.innerHTML = `<div style="background:rgba(20,18,15,.92);color:#fff;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;font-size:44px;font-weight:700;padding:44px 72px;border-radius:26px;box-shadow:0 12px 48px rgba(0,0,0,.45);animation:fade-in .18s ease-out both">${escHtml(msg)}</div>`;
+  document.body.appendChild(o);
+  setTimeout(() => o.remove(), 2500);
+}
+
 // モック起動: エージェント/バックエンド無しで待機画面から起動(Windows開発機・静的配信での確認用)
 async function bootMock() {
   showMockBadge();
@@ -3241,6 +3269,7 @@ async function bootMock() {
   if (!localStorage.getItem(TOKEN_KEY)) localStorage.setItem(TOKEN_KEY, "mock-token");
   localStorage.setItem(NAME_KEY, (CFG && CFG.device_name) || "MOCK-KIOSK");
   Object.assign(ST, await apiGet("/proxy/settings"));
+  showDemoBadge();
   ITEMS = [];
   go("idle");
 }
@@ -3284,6 +3313,7 @@ async function boot() {
     // トークンが無効化された(承認前に削除された等) → 登録からやり直す
     if (!localStorage.getItem(TOKEN_KEY)) { return boot(); }
     if (settings) Object.assign(ST, settings);
+    showDemoBadge();
     if (sched?.device_name) localStorage.setItem(NAME_KEY, sched.device_name);
     if (sched?.pending) {
       showPending(sched?.device_name);

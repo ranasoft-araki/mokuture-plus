@@ -31,6 +31,8 @@ _ENSURE_COLUMNS = {
         "kiosk_welcome_form_label": "VARCHAR(255) DEFAULT 'QRをお持ちでない方はこちら'",
         # 来訪者が受付フォームで選べる訪問先部署のリスト(カンマ区切り)。
         "department_list": "TEXT",
+        # 審査用デモモード。既存行は FALSE。demo1/demo2 は下でバックフィルして有効化。
+        "is_demo": "BOOLEAN DEFAULT FALSE",
     },
     "lockers": {
         "name": "VARCHAR(255)",
@@ -64,6 +66,17 @@ def _ensure_schema(sync_conn) -> None:
         for col, ddl_type in cols.items():
             if col not in existing:
                 sync_conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl_type}"))
+
+    # 審査用デモモード: 作成済みの展示デモ用テナント(demo1/demo2)を有効化する冪等バックフィル。
+    # 他テナントをデモ化する場合はこの slug リストに追記するか SQL で is_demo を立てる。
+    if "tenants" in tables:
+        try:
+            sync_conn.execute(text(
+                "UPDATE tenants SET is_demo = TRUE "
+                "WHERE slug IN ('demo1','demo2') AND (is_demo = FALSE OR is_demo IS NULL)"
+            ))
+        except Exception:
+            pass  # 列未追加/型差異などがあっても致命的ではない
 
     # 承認フロー: (tenant_id, hardware_id) の重複登録を防ぐ一意インデックス。
     # hardware_id が NULL の行(手動作成端末)は Postgres/SQLite とも「相異なる」扱いのため衝突しない。

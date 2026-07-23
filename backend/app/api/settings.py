@@ -101,6 +101,9 @@ class PublicTenantSettingsOut(BaseModel):
     # 営業お断り画面で案内する問い合わせフォールの解決済みURL(外部設定 or 共通フォーム)と、その QR(data URI)。
     inquiry_url: str
     inquiry_qr: str | None
+    # 審査用デモモード。デモテナントのときだけ true + 固定PIN を返す(非デモは false / None)。
+    is_demo: bool = False
+    demo_locker_pin: str | None = None
 
 
 class TenantSettingsPatch(BaseModel):
@@ -194,6 +197,7 @@ def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
     raw_dept = getattr(tenant, "department_list", None) or ""
     department_list = [d.strip() for d in raw_dept.split(",") if d.strip()]
     inquiry_url = _resolve_inquiry_url(tenant)
+    is_demo = bool(getattr(tenant, "is_demo", False))
     return PublicTenantSettingsOut(
         brand_color=tenant.brand_color,
         logo_url=tenant.logo_url,
@@ -218,6 +222,8 @@ def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
         kiosk_phone_number=getattr(tenant, "kiosk_phone_number", None),
         inquiry_url=inquiry_url,
         inquiry_qr=_inquiry_qr_data_uri(inquiry_url),
+        is_demo=is_demo,
+        demo_locker_pin=(app_settings.demo_locker_pin if is_demo else None),
     )
 
 

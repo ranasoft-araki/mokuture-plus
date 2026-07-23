@@ -215,6 +215,9 @@ export const api = {
     request<{ access_token: string; tenant_slug: string; tenant_name: string }>(`/operator/tenants/${tenantId}/proxy-login`, { method: "POST" }, token),
   suspendTenant: (token: string, tenantId: string, suspended: boolean) =>
     request<{ ok: boolean; tenant_id: string; is_suspended: boolean }>(`/operator/tenants/${tenantId}/suspend`, { method: "PATCH", body: JSON.stringify({ suspended }) }, token),
+
+  setDemoTenant: (token: string, tenantId: string, demo: boolean) =>
+    request<{ ok: boolean; tenant_id: string; is_demo: boolean }>(`/operator/tenants/${tenantId}/demo`, { method: "PATCH", body: JSON.stringify({ demo }) }, token),
   updateTenantNotes: (token: string, tenantId: string, notes: string): Promise<void> =>
     request(`/operator/tenants/${tenantId}/notes`, { method: "PATCH", body: JSON.stringify({ notes }) }, token),
   updateTenantReseller: (token: string, tenantId: string, resellerId: string | null) =>
@@ -652,6 +655,7 @@ export interface OperatorTenant {
   reseller_id?: string | null;
   brand_color?: string;
   is_suspended: boolean;
+  is_demo?: boolean;
   created_at: string | null;
   operator_notes: string | null;
   device_count?: number;

@@ -181,6 +181,7 @@ async def list_tenants(
                 "reseller_id": t.reseller_id,
                 "brand_color": t.brand_color,
                 "is_suspended": t.is_suspended,
+                "is_demo": bool(getattr(t, "is_demo", False)),
                 "created_at": t.created_at.isoformat() if t.created_at else None,
                 "operator_notes": t.operator_notes,
                 "device_count": device_counts.get(t.id, 0),
@@ -279,6 +280,28 @@ async def suspend_tenant(
     tenant.is_suspended = body.suspended
     await db.commit()
     return {"ok": True, "tenant_id": tenant_id, "is_suspended": tenant.is_suspended}
+
+
+class DemoTenantRequest(BaseModel):
+    demo: bool
+
+
+@router.patch("/tenants/{tenant_id}/demo")
+async def set_tenant_demo(
+    tenant_id: str,
+    body: DemoTenantRequest,
+    _: User = Depends(require_operator()),
+    db: AsyncSession = Depends(get_db),
+):
+    """審査用デモモードの ON/OFF。true のテナントは受付通知後に担当者返信を自動再現し、
+    キオスクにデモバッジ表示・配達導線の無効化・手荷物預かりの固定PIN化が有効になる。"""
+    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    tenant.is_demo = body.demo
+    await db.commit()
+    return {"ok": True, "tenant_id": tenant_id, "is_demo": tenant.is_demo}
 
 
 class UpdateNotesRequest(BaseModel):

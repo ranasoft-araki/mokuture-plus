@@ -44,6 +44,11 @@ class Tenant(Base):
     # Suspension flag — set by operator to block kiosk access
     is_suspended: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # 審査用デモモード — 展示・審査向けの demo テナント(demo1/demo2)に立てる。
+    # true のとき: 受付通知は実送信しつつ担当者返信をサーバが自動再現し、キオスクに
+    # デモバッジ表示・配達導線の無効化・手荷物預かりの固定PIN化を行う(非デモは一切不変)。
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # OTA: timestamp set by admin to trigger force-push to all devices of this tenant
     kiosk_force_update_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
