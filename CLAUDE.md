@@ -490,6 +490,14 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 </div>
 ```
 
+**キオスク「最初の画面に戻る」ボタン（全画面共通・`kiosk.html`）**: 「← 戻る」(一つ前へ戻る)とは**別に**、どの画面からでも待機画面(`idle`)へ即戻れる導線を**来訪者向け全画面の右上に統一配置**する。共通ヘルパで生成・配線する（個別に書かない）:
+- 生成: `homeBtnHtml(id)` … ラベル「最初の画面に戻る」＋`ICO.home`。スタイルは戻るボタンと同系の中立ピル（`padding:24px 44px;font-size:30px;border-radius:999px;background:${T.canvas};border:2px solid ${T.borderStrong};color:${T.sub}`）。
+- ヘッダの無い画面（呼び出し中/結果/完了）は `homeBtnCornerHtml(id)`（画面ルートを`position:relative`にし `top:28px;right:80px;z-index:5` で右上に絶対配置）。
+- 配線: `render()`/描画直後に `bindHomeBtn(id)` を呼ぶ（`cleanup(); go("idle")`。各画面は自身の後始末を`CLEANUPS`に積むので teardown は cleanup 任せでよい。welcome のカメラ停止等も網羅）。
+- 配置済み画面と id: welcome=`wel-home` / top=`top-home` / reception=`rec-home` / lockerMode=`lm-home` / locker(shell)=`lk-home` / delivery(shell)=`dl-home` / calling=`cal-home` / resultOk=`ok-home` / resultPhone=`ph-home` / resultDecline=`dc-home` / complete=`cmp-home`。**新画面を足したら同様に右上へ追加すること。**
+- ヘッダのある画面（welcome/top/reception/lockerMode/locker/delivery）は既存のヘッダ行を `display:flex;align-items:center` にして `<div style="flex:1"></div>` のスペーサ後に置く（左＝「← 戻る」、右＝「最初の画面に戻る」）。
+- **対象外**: `idle`(=最初の画面自身)・`pending`(承認待ち)・`suspended`(停止中)・`kiosk-settings`(スタッフ設定)。
+
 **管理画面 (`AdminShell`)**: ページ内に「一覧へ戻る」などのナビゲーションが必要な場合は、**必ず `AdminShell` の `actions` props** に `MkBtn` で配置する（コンテンツエリア内には置かない）。
 ```tsx
 // ✅ 正しい配置

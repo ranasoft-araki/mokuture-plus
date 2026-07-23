@@ -524,7 +524,23 @@ const ICO = {
   clock:     `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>`,
   locker:    `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="1.5"/><line x1="4" y1="8.5" x2="20" y2="8.5"/><line x1="4" y1="15" x2="20" y2="15"/><circle cx="16" cy="5.5" r="0.6"/><circle cx="16" cy="11.5" r="0.6"/><circle cx="16" cy="18" r="0.6"/></svg>`,
   pin:       `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
+  home:      `<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5"/></svg>`,
 };
+
+// ─── 「最初の画面に戻る」共通ボタン ────────────────────────────────────────────
+// 待機画面(idle)へ即戻す導線。各画面の「← 戻る」(一つ前へ戻る)とは別に、どの画面からでも
+// 最初の状態へ戻れるよう全画面の右上へ統一配置する(タッチ操作用に大型)。
+function homeBtnHtml(id) {
+  return `<button id="${id}" style="display:inline-flex;align-items:center;gap:12px;padding:24px 44px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:30px;font-weight:600;color:${T.sub};cursor:pointer;white-space:nowrap">${ICO.home}<span>最初の画面に戻る</span></button>`;
+}
+// ヘッダの無い画面(呼び出し中/結果/完了)向け: 画面ルート(position:relative)の右上へ絶対配置する。
+function homeBtnCornerHtml(id) {
+  return `<div style="position:absolute;top:28px;right:80px;z-index:5">${homeBtnHtml(id)}</div>`;
+}
+function bindHomeBtn(id) {
+  const b = document.getElementById(id);
+  if (b) b.addEventListener("click", () => { cleanup(); go("idle"); });
+}
 
 // ─── Navigate ─────────────────────────────────────────────────────────────────
 // 画面遷移は「新画面を旧画面の上に重ねてフェードインし、旧画面は不透明のまま背後に残す」
@@ -957,6 +973,8 @@ ${errBanner}
       <div style="font-size:16px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;font-family:Inter,system-ui,sans-serif">WELCOME</div>
       <div style="font-size:56px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.05">${escHtml(ST.kiosk_welcome_message || "ようこそ")}</div>
     </div>
+    <div style="flex:1"></div>
+    ${homeBtnHtml("wel-home")}
   </div>
   <div style="flex:1;padding:12px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center;min-height:0">
     <div id="cam-box" style="background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;width:100%;height:640px;max-height:100%">${camContent()}</div>
@@ -981,6 +999,7 @@ ${errBanner}
     rescale();
     document.getElementById("qr-clk").textContent = fmtClock();
     document.getElementById("wel-back").addEventListener("click", () => { stopStream(); cleanup(); go("idle"); });
+    bindHomeBtn("wel-home");
     document.getElementById("wel-form").addEventListener("click", () => { stopStream(); cleanup(); go("top"); });
     if (MOCK) { const mb = document.getElementById("qr-mock"); if (mb) mb.addEventListener("click", () => { stopStream(); handleQR("appt:mock"); }); }
     onSc("click", resetIdle);
@@ -1121,6 +1140,8 @@ function showTop() {
       <div style="font-size:38px;color:${T.muted};font-family:Inter,system-ui,sans-serif;letter-spacing:1px;margin-top:8px">Please select</div>
       <div style="width:72px;height:3px;background:${bc};border-radius:2px;margin-top:16px;transform-origin:left;animation:line-draw .7s .15s cubic-bezier(.2,.9,.3,1) both"></div>
     </div>
+    <div style="flex:1"></div>
+    <div style="align-self:flex-start">${homeBtnHtml("top-home")}</div>
   </div>
   <div id="tiles" style="flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:28px;padding:44px 80px;min-height:0">
     ${TILES.map((t, i) => `<button data-ti="${i}" style="background:${t.primary ? T.dark : T.canvas};color:${t.primary ? "#fff" : T.ink};border:2px solid ${t.primary ? T.dark : T.border};border-radius:28px;padding:56px 44px;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;position:relative;cursor:pointer;text-align:left;overflow:hidden">
@@ -1146,6 +1167,7 @@ function showTop() {
   document.querySelectorAll("#tiles [data-ti]").forEach((btn, i) => { btn.style.animation = `slide-in-up 1.0s cubic-bezier(.2,.9,.3,1) ${i * 0.12}s both`; });
   document.getElementById("top-clk").textContent = fmtClock();
   every(30000, () => { const c = document.getElementById("top-clk"); if (c) c.textContent = fmtClock(); });
+  bindHomeBtn("top-home");
 
   let idleId, countId;
   function resetIdle() {
@@ -1184,7 +1206,7 @@ function showLockerMode() {
   function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
   CLEANUPS.push(() => clearTimeout(idleId));
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0"><button id="lm-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button></div>
+  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center"><button id="lm-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button><div style="flex:1"></div>${homeBtnHtml("lm-home")}</div>
   <div style="padding:14px 80px 0;flex-shrink:0"><div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">ロッカーのご利用</div><div style="font-size:36px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Lockers</div></div>
   <div data-stagger style="flex:1;display:flex;align-items:center;justify-content:center;gap:44px;padding:0 80px;min-height:0">
     <button id="lm-store" style="width:620px;height:520px;border-radius:32px;border:3px solid ${bc};background:#eef4ee;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;cursor:pointer;text-align:center;padding:0 40px">
@@ -1203,6 +1225,7 @@ function showLockerMode() {
   resetIdle();
   onSc("click", resetIdle);
   document.getElementById("lm-back").addEventListener("click", () => { cleanup(); go("top"); });
+  bindHomeBtn("lm-home");
   document.getElementById("lm-store").addEventListener("click", () => { cleanup(); go("locker", { mode: "store" }); });
   document.getElementById("lm-pickup").addEventListener("click", () => { cleanup(); go("locker", { mode: "pickup" }); });
 }
@@ -1231,7 +1254,7 @@ function showLocker(mode) {
   CLEANUPS.push(() => { clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); });
 
   const shell = (inner, backTo) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0"><button id="lk-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button></div>
+  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center"><button id="lk-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button><div style="flex:1"></div>${homeBtnHtml("lk-home")}</div>
   ${inner}
 </div>`;
 
@@ -1312,6 +1335,7 @@ function showLocker(mode) {
     const back = document.getElementById("lk-back");
     // モード指定時(store/pickup)はロッカーモード選択へ、旧allは受付メニューへ戻る。
     if (back) back.addEventListener("click", () => { cleanup(); go(mode === "all" ? "top" : "lockerMode"); });
+    bindHomeBtn("lk-home");
 
     if (view === "grid") {
       const doors = document.getElementById("lk-doors");
@@ -1406,7 +1430,7 @@ function showDelivery() {
   CLEANUPS.push(() => { clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); });
 
   const shell = (inner) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0"><button id="dl-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button></div>
+  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center"><button id="dl-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button><div style="flex:1"></div>${homeBtnHtml("dl-home")}</div>
   ${inner}
 </div>`;
 
@@ -1482,6 +1506,7 @@ function showDelivery() {
       if (view === "pick" || view === "openwait") { view = "choose"; render(); }
       else { cleanup(); go("top"); }
     });
+    bindHomeBtn("dl-home");
 
     if (view === "choose") {
       const lk = document.getElementById("dl-locker");
@@ -1819,8 +1844,10 @@ function showReception(initPurpose) {
       </div>
       <div style="margin-top:16px;border-top:1px solid ${T.border};padding-top:14px;font-size:22px;color:${T.sub}">※営業・セールス・勧誘等のご訪問はお受けしておりません。</div>`;
     sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;position:relative">
-  <div style="padding:28px 40px 0;flex-shrink:0">
+  <div style="padding:28px 40px 0;flex-shrink:0;display:flex;align-items:center;gap:20px">
     <button id="rec-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button>
+    <div style="flex:1"></div>
+    ${homeBtnHtml("rec-home")}
   </div>
   <div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px 32px;overflow:hidden">
     <!-- 左側：入力フォーム -->
@@ -1869,6 +1896,7 @@ function showReception(initPurpose) {
     const deptEl = g("f-dept");
     if (deptEl) deptEl.addEventListener("change", () => { form.department = deptEl.value; resetIdle(); });
     g("rec-back").addEventListener("click", () => { cleanup(); go("top"); });
+    bindHomeBtn("rec-home");
     Object.keys(KEY).forEach(id => {
       const el = g(id); if (!el) return;
       const ev = el.tagName === "SELECT" ? "change" : "input";
@@ -1940,7 +1968,8 @@ function showCalling(data) {
   const callingMsg = ST.kiosk_calling_message;
   const logo = ST.logo_url ? `<img src="${escHtml(ST.logo_url)}" style="height:48px;object-fit:contain;margin-bottom:32px" alt="logo">` : "";
   sc.innerHTML = `<style>.cal-dot{width:16px;height:16px;border-radius:50%;background:${bc};animation:dot-bounce 1.5s ease-in-out infinite}.cal-dot:nth-child(2){animation-delay:.18s}.cal-dot:nth-child(3){animation-delay:.36s}</style>
-<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
+<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;position:relative">
+  ${homeBtnCornerHtml("cal-home")}
   <div style="flex:1;display:grid;grid-template-columns:auto 1fr;gap:90px;padding:0 110px;align-items:center;min-height:0">
     <div style="position:relative;width:380px;height:380px;flex-shrink:0">
       ${[1,.7,.4].map((s,i) => `<div style="position:absolute;inset:${(1-s)*40}%;border:2px solid ${bc};border-radius:50%;opacity:${.15+i*.18};animation:ring-expand 2.6s ease-in-out ${i*.25}s infinite"></div>`).join("")}
@@ -1966,6 +1995,7 @@ function showCalling(data) {
   </div>
 </div>`;
   rescale();
+  bindHomeBtn("cal-home");
   const clk = document.getElementById("cal-clk"); if (clk) clk.textContent = fmtClock();
   every(30000, () => { const c = document.getElementById("cal-clk"); if (c) c.textContent = fmtClock(); });
 
@@ -2004,7 +2034,8 @@ function showResultOk(data) {
   const returnSec = Math.max(ST.kiosk_complete_timeout_sec || 10, 10);
   let count = returnSec;
   sc.innerHTML = `
-<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;text-align:center;padding:0 160px">
+<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;text-align:center;padding:0 160px;position:relative">
+  ${homeBtnCornerHtml("ok-home")}
   <div style="width:150px;height:150px;border-radius:50%;background:${bc};color:#fff;display:flex;align-items:center;justify-content:center;margin-bottom:44px;box-shadow:0 12px 40px ${bc}55;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
   ${logo}
   <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:20px;font-family:Inter,system-ui,sans-serif">STAFF IS COMING</div>
@@ -2015,6 +2046,7 @@ function showResultOk(data) {
   <div style="margin-top:54px;display:flex;align-items:center;gap:14px;color:${T.muted};font-size:18px">${ICO.clock}<span>待機画面に戻るまで</span><span id="ok-cnt" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${bc}">${count}</span><span>秒</span></div>
 </div>`;
   rescale();
+  bindHomeBtn("ok-home");
   every(1000, () => {
     count--;
     if (count <= 0) { cleanup(); go("idle"); return; }
@@ -2038,7 +2070,8 @@ function showResultPhone(data) {
        <div style="display:inline-flex;align-items:center;gap:22px;background:${T.canvas};border:2px solid ${bc};border-radius:22px;padding:26px 52px"><span style="font-size:34px;color:${T.sub}">お電話番号</span><span style="font-size:72px;font-weight:700;color:${T.ink};font-family:'JetBrains Mono',monospace;letter-spacing:1px">${escHtml(phone)}</span></div>`
     : `<div style="font-size:32px;color:${T.sub};line-height:1.6">恐れ入りますが、受付までお声がけ<br>くださいますようお願いいたします。</div>`;
   sc.innerHTML = `
-<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;text-align:center;padding:0 160px">
+<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;text-align:center;padding:0 160px;position:relative">
+  ${homeBtnCornerHtml("ph-home")}
   <div style="width:150px;height:150px;border-radius:50%;background:${bc}1a;color:${bc};display:flex;align-items:center;justify-content:center;margin-bottom:40px;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${phoneIco}</div>
   ${logo}
   <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:20px;font-family:Inter,system-ui,sans-serif">PLEASE CALL</div>
@@ -2048,6 +2081,7 @@ function showResultPhone(data) {
   <div style="margin-top:50px;display:flex;align-items:center;gap:14px;color:${T.muted};font-size:18px">${ICO.clock}<span>待機画面に戻るまで</span><span id="ph-cnt" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${bc}">${count}</span><span>秒</span></div>
 </div>`;
   rescale();
+  bindHomeBtn("ph-home");
   every(1000, () => {
     count--;
     if (count <= 0) { cleanup(); go("idle"); return; }
@@ -2077,7 +2111,8 @@ function showResultDecline(data) {
          <div style="font-size:22px;color:${T.sub};word-break:break-all;text-align:center">${escHtml(url || "受付までお問い合わせください")}</div>
        </div>`;
   sc.innerHTML = `
-<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;padding:0 120px;justify-content:center">
+<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;padding:0 120px;justify-content:center;position:relative">
+  ${homeBtnCornerHtml("dc-home")}
   <div style="display:grid;grid-template-columns:1.15fr 0.85fr;gap:64px;align-items:center">
     <div>
       <div style="width:110px;height:110px;border-radius:50%;background:${accentBg};color:${accent};display:flex;align-items:center;justify-content:center;margin-bottom:34px;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${infoIco}</div>
@@ -2090,6 +2125,7 @@ function showResultDecline(data) {
   </div>
 </div>`;
   rescale();
+  bindHomeBtn("dc-home");
   every(1000, () => {
     count--;
     if (count <= 0) { cleanup(); go("idle"); return; }
@@ -2145,7 +2181,8 @@ function showComplete(data) {
 
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
   <div style="height:6px;background:linear-gradient(90deg,${bc},#b8763a,#2e6b8e);flex-shrink:0"></div>
-  <div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:56px;padding:48px 80px;min-height:0">
+  <div style="padding:20px 80px 0;flex-shrink:0;display:flex;justify-content:flex-end">${homeBtnHtml("cmp-home")}</div>
+  <div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:56px;padding:20px 80px 40px;min-height:0">
     <div style="display:flex;flex-direction:column;justify-content:center">
       <div style="width:96px;height:96px;border-radius:24px;background:${bc}1a;color:${bc};display:flex;align-items:center;justify-content:center;margin-bottom:28px;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
       <div style="font-size:18px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;font-family:Inter,system-ui,sans-serif;margin-bottom:14px">WELCOME</div>
@@ -2163,6 +2200,7 @@ function showComplete(data) {
   </div>
 </div>`;
   rescale();
+  bindHomeBtn("cmp-home");
   const cmpEl = sc.firstElementChild;
   if (cmpEl) cmpEl.style.animation = "slide-in-up 1.2s cubic-bezier(.2,.9,.3,1) both";
   every(1000, () => {
