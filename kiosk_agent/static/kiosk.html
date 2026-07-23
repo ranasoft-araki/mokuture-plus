@@ -1834,9 +1834,12 @@ function showReception(initPurpose) {
     const staffInner = STAFF_LIST.length
       ? `<select id="f-staff" style="${selStyle}"><option value="">選択してください</option>${STAFF_LIST.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join("")}</select>`
       : `<input id="f-staff" type="text" placeholder="担当者のお名前" style="${inputStyle}">`;
-    // 部署は登録があるときだけドロップダウンで表示(未登録なら欄ごと出さない)。
+    // 部署は登録があるときだけ表示(未登録なら欄ごと出さない)。ご用件と同じくボタン(チップ)選択。
     const deptField = DEPARTMENT_LIST.length
-      ? fieldWrap("部署", "Department", false, `<select id="f-dept" style="${selStyle}"><option value="">選択してください</option>${DEPARTMENT_LIST.map(d => `<option value="${escHtml(d)}">${escHtml(d)}</option>`).join("")}</select>`)
+      ? fieldWrap("部署", "Department", false, `
+        <div id="f-dept-chips" style="display:flex;flex-wrap:wrap;gap:8px">
+          ${DEPARTMENT_LIST.map(d => `<button type="button" data-dept="${escHtml(d)}" style="${chipStyle(form.department === d)}">${escHtml(d)}</button>`).join("")}
+        </div>`)
       : "";
     const purposeInner = `
       <div id="f-purpose-chips" style="display:flex;flex-wrap:wrap;gap:8px">
@@ -1891,10 +1894,6 @@ function showReception(initPurpose) {
     g("f-name").value = form.visitor_name;
     g("f-company").value = form.company;
     if (g("f-staff")) g("f-staff").value = form.staff;
-    if (g("f-dept")) g("f-dept").value = form.department;
-    // 部署ドロップダウンはキーボード対象外(KEY に含めない)。選択のみ反映する。
-    const deptEl = g("f-dept");
-    if (deptEl) deptEl.addEventListener("change", () => { form.department = deptEl.value; resetIdle(); });
     g("rec-back").addEventListener("click", () => { cleanup(); go("top"); });
     bindHomeBtn("rec-home");
     Object.keys(KEY).forEach(id => {
@@ -1906,6 +1905,13 @@ function showReception(initPurpose) {
       // タッチイベントで強制フォーカス
       el.addEventListener("touchstart", (e) => { e.preventDefault(); focusedField = id; el.focus(); });
     });
+    // 部署チップ: ご用件と同じく、選択で form.department を更新しチップのスタイルのみ差し替える。
+    // 同じチップを再タップで選択解除(任意項目のため)。キーボード対象外。
+    const deptChips = sc.querySelectorAll("#f-dept-chips [data-dept]");
+    deptChips.forEach(btn => btn.addEventListener("click", () => {
+      form.department = form.department === btn.dataset.dept ? "" : btn.dataset.dept; resetIdle();
+      deptChips.forEach(b => b.setAttribute("style", chipStyle(b.dataset.dept === form.department)));
+    }));
     // ご用件チップ: 選択で form.purpose を更新し、全チップのスタイルのみ更新(テキスト入力を再描画しない)。
     const chips = sc.querySelectorAll("#f-purpose-chips [data-purpose]");
     chips.forEach(btn => btn.addEventListener("click", () => {
