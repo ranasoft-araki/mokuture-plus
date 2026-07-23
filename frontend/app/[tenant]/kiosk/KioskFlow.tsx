@@ -168,9 +168,12 @@ const KEYBOARD_HEIGHT = 390;
 function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSettings; kioskToken: string }) {
   const staffList = settings.staff_list ?? [];
   const useDropdown = staffList.length > 0;
+  // 訪問先部署。管理画面で登録があるときだけチップで選択させる(未登録なら欄を出さない)。
+  const departmentList = settings.department_list ?? [];
 
   const [visitorName, setVisitorName] = useState("");
   const [company, setCompany] = useState("");
+  const [department, setDepartment] = useState("");
   const [staff, setStaff] = useState("");
   const [staffMode, setStaffMode] = useState<"dropdown" | "freetext">(
     useDropdown ? "dropdown" : "freetext"
@@ -212,6 +215,7 @@ function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSetting
         company: company || undefined,
         purpose: purpose || undefined,
         staff: staff || undefined,
+        department: department || undefined,
         method: "form",
       });
       setSubmitted(true);
@@ -331,6 +335,43 @@ function ReceptionForm({ settings, kioskToken }: { settings: PublicTenantSetting
                   />
                 </FormField>
               </motion.div>
+
+              {/* Department (登録があるときだけ表示) */}
+              {departmentList.length > 0 && (
+                <motion.div variants={fieldVariants}>
+                  <FormField label="部署">
+                    <motion.div
+                      style={{ display: "flex", flexWrap: "wrap", gap: 8 }}
+                      variants={containerVariants}
+                      initial="hidden"
+                      animate="visible"
+                    >
+                      {departmentList.map((name) => (
+                        <motion.button
+                          key={name}
+                          type="button"
+                          onClick={() => { closeKeyboard(); setDepartment((prev) => (prev === name ? "" : name)); }}
+                          variants={fieldVariants}
+                          whileHover={{ scale: 1.04 }}
+                          whileTap={{ scale: 0.96 }}
+                          transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                          style={{
+                            padding: "8px 16px",
+                            borderRadius: 999,
+                            border: `2px solid ${department === name ? bc : "#d8d3c7"}`,
+                            background: department === name ? bc : "transparent",
+                            color: department === name ? "#fff" : "#2d2a24",
+                            fontSize: 14,
+                            cursor: "pointer",
+                          }}
+                        >
+                          {name}
+                        </motion.button>
+                      ))}
+                    </motion.div>
+                  </FormField>
+                </motion.div>
+              )}
 
               {/* Staff */}
               <motion.div variants={fieldVariants}>

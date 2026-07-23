@@ -97,7 +97,16 @@ class ReceptionCreate(BaseModel):
     company: str | None = None
     purpose: str | None = None
     staff: str | None = None
+    department: str | None = None
     method: str = "form"
+
+    @field_validator("department")
+    @classmethod
+    def department_len(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        return v[:255] if v else None
 
     @field_validator("visitor_name")
     @classmethod
@@ -123,6 +132,7 @@ class ReceptionOut(BaseModel):
     company: str | None
     purpose: str | None
     staff: str | None
+    department: str | None
     method: str
     state: str
     staff_notes: str | None
@@ -224,12 +234,13 @@ async def export_reception_csv(
     output = io.StringIO()
     output.write("﻿")
     writer = csv.writer(output)
-    writer.writerow(["日時", "訪問者名", "会社名", "担当者", "目的", "受付方法", "ステータス", "スタッフメモ"])
+    writer.writerow(["日時", "訪問者名", "会社名", "部署", "担当者", "目的", "受付方法", "ステータス", "スタッフメモ"])
     for r in logs:
         writer.writerow([
             r.created_at.isoformat() if r.created_at else "",
             r.visitor_name,
             r.company or "",
+            r.department or "",
             r.staff or "",
             r.purpose or "",
             r.method,
@@ -501,6 +512,8 @@ async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> N
 
     title = "来客のお知らせ"
     body = f"{log.visitor_name}様（{log.company or '—'}）が受付を完了しました。"
+    if log.department:
+        body += f" 部署：{log.department}"
     if log.purpose:
         body += f" 用件：{log.purpose}"
 
@@ -542,6 +555,7 @@ async def _notify_slack(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> 
             company=log.company,
             host_name=log.staff,
             when=log.created_at,
+            department=log.department,
         )
         ok = await SlackNotifier.send_to_config(config, msg)
         if not ok:
@@ -558,6 +572,7 @@ def _log_out(r: ReceptionLog) -> dict:
         "company": r.company,
         "purpose": r.purpose,
         "staff": r.staff,
+        "department": r.department,
         "method": r.method,
         "state": r.state,
         "staff_notes": r.staff_notes,

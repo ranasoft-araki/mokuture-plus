@@ -293,6 +293,7 @@ export const api = {
     kiosk_idle_timeout_sec?: number; kiosk_complete_timeout_sec?: number;
     logo_pos_x?: number; logo_pos_y?: number; logo_width_pct?: number;
     kiosk_style?: string; staff_list?: string | null; purpose_list?: string | null;
+    department_list?: string | null;
     kiosk_phone_number?: string | null; inquiry_form_url?: string | null;
   }) =>
     request<TenantSettings>("/settings", { method: "PATCH", body: JSON.stringify(body) }, token),
@@ -685,6 +686,7 @@ export interface OperatorReceptionItem {
   visitor_name: string;
   company: string | null;
   staff: string | null;
+  department: string | null;
   purpose: string | null;
   method: string | null;
   state: string | null;
@@ -699,6 +701,7 @@ export interface ResellerReceptionItem {
   visitor_name: string;
   company: string | null;
   staff: string | null;
+  department: string | null;
   purpose: string | null;
   method: string | null;
   state: string | null;
@@ -743,6 +746,7 @@ export interface ReceptionCreate {
   company?: string;
   purpose?: string;
   staff?: string;
+  department?: string | null;
   method?: string;
 }
 
@@ -842,6 +846,7 @@ export interface TenantSettings {
   kiosk_style: string;
   staff_list?: string | null;
   purpose_list?: string | null;
+  department_list?: string | null;
   kiosk_phone_number?: string | null;
   inquiry_form_url?: string | null;
 }
@@ -877,6 +882,7 @@ export interface PublicTenantSettings {
   is_suspended: boolean;
   staff_list?: string[];
   purpose_list?: string[];
+  department_list?: string[];
   kiosk_phone_number?: string | null;
   inquiry_url?: string;
   inquiry_qr?: string | null;

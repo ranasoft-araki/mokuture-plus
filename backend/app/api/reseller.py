@@ -380,6 +380,7 @@ class ResellerReceptionItem(BaseModel):
     visitor_name: str
     company: str | None
     staff: str | None
+    department: str | None
     purpose: str | None
     method: str | None
     state: str | None
@@ -444,6 +445,7 @@ async def list_reseller_reception(
             visitor_name=log.visitor_name,
             company=log.company,
             staff=log.staff,
+            department=log.department,
             purpose=log.purpose,
             method=log.method,
             state=log.state,
@@ -481,7 +483,7 @@ async def export_reseller_reception_csv(
         output = io.StringIO()
         output.write("﻿")
         writer = csv.writer(output)
-        writer.writerow(["日時", "テナント名", "訪問者名", "会社名", "担当者", "目的", "受付方法", "ステータス", "スタッフメモ"])
+        writer.writerow(["日時", "テナント名", "訪問者名", "会社名", "部署", "担当者", "目的", "受付方法", "ステータス", "スタッフメモ"])
         output.seek(0)
         filename = f"reception_{datetime.today().strftime('%Y-%m-%d')}.csv"
         return StreamingResponse(
@@ -519,6 +521,7 @@ async def export_reseller_reception_csv(
             tenant_name,
             log.visitor_name,
             log.company or "",
+            log.department or "",
             log.staff or "",
             log.purpose or "",
             log.method or "",

@@ -233,6 +233,10 @@ function ReceptionDetailModal({ log, token, onClose, onNotesUpdate }: { log: Rec
             <div style={valueStyle}>{log.company || "—"}</div>
           </div>
           <div>
+            <div style={labelStyle}>部署</div>
+            <div style={valueStyle}>{log.department || "—"}</div>
+          </div>
+          <div>
             <div style={labelStyle}>担当者</div>
             <div style={valueStyle}>{log.staff || "—"}</div>
           </div>
@@ -819,7 +823,7 @@ export default function ReceptionLogsPage() {
         ) : (
           <>
             <div className="adm-scroll-x">
-            <table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", minWidth: 850, borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "#f4f1ea", fontSize: 10.5, color: "#a8a198", textAlign: "left", letterSpacing: "0.3px" }}>
                   <th style={{ padding: "11px 14px", fontWeight: 600 }}>
@@ -832,7 +836,7 @@ export default function ReceptionLogsPage() {
                       style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#2d6a4f" }}
                     />
                   </th>
-                  {["日付", "時刻", "来訪者", "会社", "用件", "受付経路", "担当", "状態", ""].map((h) => (
+                  {["日付", "時刻", "来訪者", "会社", "用件", "受付経路", "部署", "担当", "状態", ""].map((h) => (
                     <th key={h} style={{ padding: "11px 14px", fontWeight: 600 }}>{h}</th>
                   ))}
                 </tr>
@@ -884,6 +888,7 @@ export default function ReceptionLogsPage() {
                           {r.method ? (METHOD_LABEL[r.method] ?? r.method) : "フォーム"}
                         </span>
                       </td>
+                      <td style={{ padding: "12px 14px", color: "#6b6559" }}>{r.department || "—"}</td>
                       <td style={{ padding: "12px 14px", color: "#6b6559" }}>{r.staff || "—"}</td>
                       <td style={{ padding: "12px 14px" }}>
                         {isPendingReception(r) ? (

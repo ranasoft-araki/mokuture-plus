@@ -53,6 +53,7 @@ export default function KioskSettingsPage() {
   const [inquiryFormUrl, setInquiryFormUrl] = useState("");
   const [staffListText, setStaffListText] = useState("");
   const [purposeListText, setPurposeListText] = useState("");
+  const [departmentListText, setDepartmentListText] = useState("");
 
   // ── ロゴ ──
   const [brandColor, setBrandColor] = useState("#4a7c4e");
@@ -94,6 +95,9 @@ export default function KioskSettingsPage() {
     setPurposeListText(
       s.purpose_list ? s.purpose_list.split(",").map((p) => p.trim()).filter(Boolean).join("\n") : ""
     );
+    setDepartmentListText(
+      s.department_list ? s.department_list.split(",").map((d) => d.trim()).filter(Boolean).join("\n") : ""
+    );
   }
 
   const handleSave = async () => {
@@ -104,6 +108,7 @@ export default function KioskSettingsPage() {
     try {
       const staffCsv = staffListText.split("\n").map((n) => n.trim()).filter(Boolean).join(",");
       const purposeCsv = purposeListText.split("\n").map((p) => p.trim()).filter(Boolean).join(",");
+      const departmentCsv = departmentListText.split("\n").map((d) => d.trim()).filter(Boolean).join(",");
       const updated = await api.updateTenantSettings(token, {
         kiosk_welcome_message: kioskWelcome,
         kiosk_sub_message: kioskSub,
@@ -121,6 +126,7 @@ export default function KioskSettingsPage() {
         logo_width_pct: logoWidthPct,
         staff_list: staffCsv || null,
         purpose_list: purposeCsv || null,
+        department_list: departmentCsv || null,
       });
       setSettings(updated);
       setSaved(true);
@@ -290,6 +296,13 @@ export default function KioskSettingsPage() {
           <MkSectionTitle title="来訪目的リスト" subtitle="受付フォームで訪問目的を選択肢にします" />
           <Field label="来訪目的" hint="1行ずつ入力。空の場合は既定の選択肢になります">
             <Textarea value={purposeListText} onChange={setPurposeListText} rows={6} placeholder={"ご予約のあるお客様\nお打ち合わせ\n納品\n採用面接\nその他"} />
+          </Field>
+        </MkCard>
+
+        <MkCard>
+          <MkSectionTitle title="部署リスト" subtitle="受付フォームで訪問先の部署をドロップダウンから選択できるようにします" />
+          <Field label="部署名" hint="1行ずつ入力。空の場合は受付フォームに部署欄を表示しません">
+            <Textarea value={departmentListText} onChange={setDepartmentListText} rows={5} placeholder={"営業部\n総務部\n開発部\n製造部"} />
           </Field>
         </MkCard>
       </div>

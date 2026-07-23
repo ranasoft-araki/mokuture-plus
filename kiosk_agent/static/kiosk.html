@@ -73,6 +73,7 @@ let ST = {
   kiosk_complete_timeout_sec: 10,
   kiosk_style: "default",
   purpose_list: [],
+  department_list: [],      // 来訪者が受付フォームで選べる訪問先部署(管理画面で登録)
   kiosk_phone_number: "",   // 受付応答「電話(対応不可)」時に表示する電話番号
   inquiry_url: "",          // 営業お断り画面で案内する問い合わせフォールURL(解決済み)
   inquiry_qr: null,         // 上記URLのQR(SVG data URI)。バックエンドが生成
@@ -328,6 +329,7 @@ async function mockFetch(method, path, body) {
     kiosk_welcome_form_label: "QRをお持ちでない方はこちら",
     kiosk_idle_timeout_sec: 60, kiosk_complete_timeout_sec: 10,
     staff_list: ["山田 太郎", "佐藤 花子", "鈴木 一郎"], purpose_list: [],
+    department_list: ["営業部", "総務部", "開発部"],
     kiosk_phone_number: "03-1234-5678",
     inquiry_url: "https://example.com/contact",
     inquiry_qr: "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 29 29' shape-rendering='crispEdges'><rect width='29' height='29' fill='#fff'/><g fill='#000'>${Array.from({length:29},(_,y)=>Array.from({length:29},(_,x)=>((x*7+y*13+((x^y)&3))%3===0)?`<rect x='${x}' y='${y}' width='1' height='1'/>`:"").join("")).join("")}<rect x='2' y='2' width='7' height='7' fill='none' stroke='#000'/><rect x='4' y='4' width='3' height='3'/><rect x='20' y='2' width='7' height='7' fill='none' stroke='#000'/><rect x='22' y='4' width='3' height='3'/><rect x='2' y='20' width='7' height='7' fill='none' stroke='#000'/><rect x='4' y='22' width='3' height='3'/></g></svg>`),
@@ -1574,12 +1576,14 @@ function showReception(initPurpose) {
   const bc = ST.brand_color;
   const STAFF_LIST = Array.isArray(ST.staff_list) ? ST.staff_list.filter(Boolean) : [];
   const PURPOSE_LIST = Array.isArray(ST.purpose_list) ? ST.purpose_list.filter(Boolean) : [];
+  // 訪問先部署。管理画面「受付設定」で登録された部署のみ選択肢に出す。未登録なら部署欄は表示しない。
+  const DEPARTMENT_LIST = Array.isArray(ST.department_list) ? ST.department_list.filter(Boolean) : [];
   // ご用件は選択形式。管理画面の来訪目的リストがあればそれを、無ければ既定の5択を使う。
   const PURPOSE_OPTIONS = PURPOSE_LIST.length ? PURPOSE_LIST
     : ["ご予約のあるお客様", "お打ち合わせ", "納品", "採用面接", "その他"];
   const chipStyle = (sel) => `padding:16px 24px;border-radius:14px;border:2px solid ${sel ? bc : T.borderStrong};background:${sel ? bc : T.canvas};color:${sel ? "#fff" : T.ink};font-size:26px;font-weight:600;cursor:pointer;font-family:inherit;min-height:60px;display:flex;align-items:center;justify-content:center`;
   let submitting = false, errMsg = "";
-  let form = { visitor_name: "", company: "", staff: "", purpose: initPurpose ?? "" };
+  let form = { visitor_name: "", company: "", department: "", staff: "", purpose: initPurpose ?? "" };
   let idleId, kbMode = "kana", focusedField = null;
   let cands = [];   // 現在表示中の漢字変換候補
   const KEY = { "f-name": "visitor_name", "f-company": "company", "f-staff": "staff" };
@@ -1805,6 +1809,10 @@ function showReception(initPurpose) {
     const staffInner = STAFF_LIST.length
       ? `<select id="f-staff" style="${selStyle}"><option value="">選択してください</option>${STAFF_LIST.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join("")}</select>`
       : `<input id="f-staff" type="text" placeholder="担当者のお名前" style="${inputStyle}">`;
+    // 部署は登録があるときだけドロップダウンで表示(未登録なら欄ごと出さない)。
+    const deptField = DEPARTMENT_LIST.length
+      ? fieldWrap("部署", "Department", false, `<select id="f-dept" style="${selStyle}"><option value="">選択してください</option>${DEPARTMENT_LIST.map(d => `<option value="${escHtml(d)}">${escHtml(d)}</option>`).join("")}</select>`)
+      : "";
     const purposeInner = `
       <div id="f-purpose-chips" style="display:flex;flex-wrap:wrap;gap:8px">
         ${PURPOSE_OPTIONS.map(p => `<button type="button" data-purpose="${escHtml(p)}" style="${chipStyle(form.purpose === p)}">${escHtml(p)}</button>`).join("")}
@@ -1825,6 +1833,7 @@ function showReception(initPurpose) {
       <div style="display:flex;flex-direction:column;gap:12px;flex:1">
         ${fieldWrap("お名前", "Name", true, `<input id="f-name" type="text" autocomplete="off" placeholder="山田 太郎" style="${inputStyle}">`)}
         ${fieldWrap("会社名", "Company", false, `<input id="f-company" type="text" autocomplete="off" placeholder="株式会社 〇〇" style="${inputStyle}">`)}
+        ${deptField}
         ${fieldWrap("担当者名", "Host", false, staffInner)}
         <div>${fieldWrap("ご用件を選択してください", "Purpose", false, purposeInner)}</div>
       </div>
@@ -1855,6 +1864,10 @@ function showReception(initPurpose) {
     g("f-name").value = form.visitor_name;
     g("f-company").value = form.company;
     if (g("f-staff")) g("f-staff").value = form.staff;
+    if (g("f-dept")) g("f-dept").value = form.department;
+    // 部署ドロップダウンはキーボード対象外(KEY に含めない)。選択のみ反映する。
+    const deptEl = g("f-dept");
+    if (deptEl) deptEl.addEventListener("change", () => { form.department = deptEl.value; resetIdle(); });
     g("rec-back").addEventListener("click", () => { cleanup(); go("top"); });
     Object.keys(KEY).forEach(id => {
       const el = g(id); if (!el) return;
@@ -1905,9 +1918,9 @@ function showReception(initPurpose) {
     if (!token) { cleanup(); boot(); return; }
     submitting = true; render();
     try {
-      const res = await apiPost("/proxy/reception", { visitor_name: form.visitor_name, company: form.company, purpose: form.purpose, staff: form.staff, method: "form" }, token);
+      const res = await apiPost("/proxy/reception", { visitor_name: form.visitor_name, company: form.company, purpose: form.purpose, staff: form.staff, department: form.department, method: "form" }, token);
       cleanup();
-      go("calling", { name: form.visitor_name, staff: form.staff, method: "form", receptionId: res?.id });
+      go("calling", { name: form.visitor_name, staff: form.staff, department: form.department, method: "form", receptionId: res?.id });
     } catch (e) {
       errMsg = e.message || "受付に失敗しました";
       submitting = false; render();
@@ -1923,6 +1936,7 @@ function showCalling(data) {
   const bc = ST.brand_color;
   const vName = data.name || "";
   const staff = data.staff || "";
+  const dept = data.department || "";
   const callingMsg = ST.kiosk_calling_message;
   const logo = ST.logo_url ? `<img src="${escHtml(ST.logo_url)}" style="height:48px;object-fit:contain;margin-bottom:32px" alt="logo">` : "";
   sc.innerHTML = `<style>.cal-dot{width:16px;height:16px;border-radius:50%;background:${bc};animation:dot-bounce 1.5s ease-in-out infinite}.cal-dot:nth-child(2){animation-delay:.18s}.cal-dot:nth-child(3){animation-delay:.36s}</style>
@@ -1937,6 +1951,7 @@ function showCalling(data) {
       <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:18px;font-family:Inter,system-ui,sans-serif">PLEASE WAIT</div>
       <div style="font-size:92px;font-weight:600;color:${T.ink};letter-spacing:-3px;line-height:1.04;margin-bottom:24px">お待ちください</div>
       ${vName ? `<div style="font-size:34px;color:${T.sub};margin-bottom:10px">${escHtml(vName)} 様</div>` : ""}
+      ${dept ? `<div style="font-size:24px;color:${T.muted};margin-bottom:6px">部署：${escHtml(dept)}</div>` : ""}
       ${staff ? `<div style="font-size:24px;color:${T.muted};margin-bottom:22px">ご担当：${escHtml(staff)}</div>` : ""}
       <div style="font-size:24px;color:${T.sub};line-height:1.7;margin-bottom:30px">${escHtml(callingMsg || "担当者が確認しています。少々お待ちください。")}</div>
       <div style="display:flex;gap:14px"><div class="cal-dot"></div><div class="cal-dot"></div><div class="cal-dot"></div></div>

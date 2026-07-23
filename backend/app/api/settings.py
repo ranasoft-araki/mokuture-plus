@@ -71,6 +71,7 @@ class TenantSettingsOut(BaseModel):
     kiosk_style: str
     staff_list: str | None
     purpose_list: str | None
+    department_list: str | None
     kiosk_phone_number: str | None
     inquiry_form_url: str | None
 
@@ -95,6 +96,7 @@ class PublicTenantSettingsOut(BaseModel):
     is_suspended: bool
     staff_list: list[str]
     purpose_list: list[str]
+    department_list: list[str]
     kiosk_phone_number: str | None
     # 営業お断り画面で案内する問い合わせフォールの解決済みURL(外部設定 or 共通フォーム)と、その QR(data URI)。
     inquiry_url: str
@@ -120,6 +122,7 @@ class TenantSettingsPatch(BaseModel):
     kiosk_style: str | None = None
     staff_list: str | None = None
     purpose_list: str | None = None
+    department_list: str | None = None
     kiosk_phone_number: str | None = None
     inquiry_form_url: str | None = None
 
@@ -177,6 +180,7 @@ def _out(tenant: Tenant) -> TenantSettingsOut:
         kiosk_style=getattr(tenant, "kiosk_style", "default"),
         staff_list=getattr(tenant, "staff_list", None),
         purpose_list=getattr(tenant, "purpose_list", None),
+        department_list=getattr(tenant, "department_list", None),
         kiosk_phone_number=getattr(tenant, "kiosk_phone_number", None),
         inquiry_form_url=getattr(tenant, "inquiry_form_url", None),
     )
@@ -187,6 +191,8 @@ def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
     staff_list = [n.strip() for n in raw_staff.split(",") if n.strip()]
     raw_purpose = getattr(tenant, "purpose_list", None) or ""
     purpose_list = [p.strip() for p in raw_purpose.split(",") if p.strip()]
+    raw_dept = getattr(tenant, "department_list", None) or ""
+    department_list = [d.strip() for d in raw_dept.split(",") if d.strip()]
     inquiry_url = _resolve_inquiry_url(tenant)
     return PublicTenantSettingsOut(
         brand_color=tenant.brand_color,
@@ -208,6 +214,7 @@ def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
         is_suspended=getattr(tenant, "is_suspended", False),
         staff_list=staff_list,
         purpose_list=purpose_list,
+        department_list=department_list,
         kiosk_phone_number=getattr(tenant, "kiosk_phone_number", None),
         inquiry_url=inquiry_url,
         inquiry_qr=_inquiry_qr_data_uri(inquiry_url),
@@ -341,6 +348,8 @@ async def patch_settings(
         tenant.staff_list = body.staff_list
     if "purpose_list" in body.model_fields_set:
         tenant.purpose_list = body.purpose_list
+    if "department_list" in body.model_fields_set:
+        tenant.department_list = body.department_list
     if "kiosk_phone_number" in body.model_fields_set:
         phone = (body.kiosk_phone_number or "").strip()
         if phone and not _PHONE_RE.match(phone):

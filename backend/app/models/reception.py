@@ -17,6 +17,7 @@ class ReceptionLog(Base):
     company: Mapped[str | None] = mapped_column(String(255), nullable=True)
     purpose: Mapped[str | None] = mapped_column(String(512), nullable=True)
     staff: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    department: Mapped[str | None] = mapped_column(String(255), nullable=True)  # 来訪者が選んだ訪問先部署
     method: Mapped[str] = mapped_column(String(32), default="form")  # form | qr | calendar
     state: Mapped[str] = mapped_column(String(32), default="received")  # received | notified | accepted(受付) | phone(電話) | declined(お断り) | completed | cancelled
     staff_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

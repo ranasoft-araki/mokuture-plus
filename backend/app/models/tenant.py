@@ -55,6 +55,9 @@ class Tenant(Base):
     # Purpose list — comma-separated visit purposes for kiosk dropdown (e.g. "商談・打合せ,採用面接,配送・搬入")
     purpose_list: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Department list — comma-separated departments visitors can pick on the kiosk (e.g. "営業部,総務部,開発部")
+    department_list: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # Kiosk phone number — shown to visitors when staff responds "電話"(対応不可) on a reception notification.
     kiosk_phone_number: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 

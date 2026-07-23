@@ -357,8 +357,19 @@ class ReceptionCreate(BaseModel):
     company: str | None = None
     purpose: str | None = None
     staff: str | None = None
+    department: str | None = None
     method: str = "form"
     appointment_id: str | None = None
+
+    @field_validator("department")
+    @classmethod
+    def department_len(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        return v[:255]
 
     @field_validator("visitor_name")
     @classmethod
@@ -439,6 +450,7 @@ async def kiosk_reception(
         company=body.company,
         purpose=body.purpose,
         staff=body.staff,
+        department=body.department,
         method=body.method,
         appointment_id=body.appointment_id,
     )
@@ -848,6 +860,7 @@ async def _notify_slack(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> 
             company=log.company,
             host_name=log.staff,
             when=log.created_at,
+            department=log.department,
         )
         # 署名シークレット設定時のみ、受付/電話/お断りの対応ボタン(Block Kit)を付ける。
         # Bot Token 経路のときだけ(webhook はインタラクション不可)。押下は署名トークンで検証。
@@ -896,6 +909,8 @@ async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> N
 
     title = "来客のお知らせ"
     body = f"{log.visitor_name}様（{log.company or '—'}）が受付を完了しました。"
+    if log.department:
+        body += f" 部署：{log.department}"
     if log.purpose:
         body += f" 用件：{log.purpose}"
 
@@ -945,6 +960,7 @@ async def _notify_webhook(tenant_id: str, log: ReceptionLog, db: AsyncSession) -
                 "visitor_name": log.visitor_name,
                 "company": log.company,
                 "staff": log.staff,
+                "department": log.department,
                 "purpose": log.purpose,
                 "method": log.method,
                 "created_at": log.created_at.isoformat() if log.created_at else None,

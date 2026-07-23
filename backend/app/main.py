@@ -29,6 +29,8 @@ _ENSURE_COLUMNS = {
         "kiosk_menu_title": "VARCHAR(255) DEFAULT 'ご用件をお選びください'",
         "kiosk_welcome_qr_guide": "VARCHAR(255) DEFAULT 'ご予約QRをお持ちの方はカメラへかざしてください'",
         "kiosk_welcome_form_label": "VARCHAR(255) DEFAULT 'QRをお持ちでない方はこちら'",
+        # 来訪者が受付フォームで選べる訪問先部署のリスト(カンマ区切り)。
+        "department_list": "TEXT",
     },
     "lockers": {
         "name": "VARCHAR(255)",
@@ -38,6 +40,8 @@ _ENSURE_COLUMNS = {
     },
     "reception_logs": {
         "decided_at": "TIMESTAMP",
+        # 来訪者が選んだ訪問先部署。
+        "department": "VARCHAR(255)",
     },
     "devices": {
         # 承認フロー。既存端末は 'active' で埋めて後方互換を保つ。

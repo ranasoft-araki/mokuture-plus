@@ -313,13 +313,16 @@ class SlackNotifier:
         company: str | None = None,
         host_name: str | None = None,
         when: datetime | None = None,
+        department: str | None = None,
     ) -> str:
-        """Reception notification text. Company / host lines are omitted when blank;
-        name + time are always present (see 作業指示 §7)."""
+        """Reception notification text. Company / department / host lines are omitted when
+        blank; name + time are always present (see 作業指示 §7)."""
         lines = [":bell: 来客がありました", ""]
         if (company or "").strip():
             lines.append(f"会社名：{company.strip()}")
         lines.append(f"お名前：{visitor_name.strip()} 様")
+        if (department or "").strip():
+            lines.append(f"訪問先部署：{department.strip()}")
         if (host_name or "").strip():
             lines.append(f"訪問先：{host_name.strip()}")
         lines.append(f"時刻：{_format_jst(when)}")
