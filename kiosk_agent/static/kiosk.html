@@ -106,6 +106,44 @@ function applyMediaElementVolume(scope = document) {
 const sc = document.getElementById("sc");
 const TOKEN_KEY = "mokuture_kiosk_token";
 const NAME_KEY  = "mokuture_kiosk_name";
+let _kioskHeartbeatTimer = null;
+
+function kioskHeartbeatPayload() {
+  return {
+    screen: CURRENT_SCREEN,
+    hidden: !!document.hidden,
+    focused: document.hasFocus ? !!document.hasFocus() : true,
+    href: location.pathname + location.search,
+    ts: Date.now(),
+  };
+}
+
+function sendKioskHeartbeat(useBeacon = false) {
+  const payload = kioskHeartbeatPayload();
+  if (useBeacon && navigator.sendBeacon) {
+    try {
+      const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+      if (navigator.sendBeacon("/device/kiosk-heartbeat", blob)) return;
+    } catch (e) {}
+  }
+  fetch("/device/kiosk-heartbeat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+function startKioskHeartbeat() {
+  if (_kioskHeartbeatTimer) clearInterval(_kioskHeartbeatTimer);
+  sendKioskHeartbeat();
+  _kioskHeartbeatTimer = setInterval(() => sendKioskHeartbeat(), 15000);
+  window.addEventListener("pageshow", () => sendKioskHeartbeat());
+  window.addEventListener("focus", () => sendKioskHeartbeat());
+  window.addEventListener("online", () => sendKioskHeartbeat());
+  document.addEventListener("visibilitychange", () => sendKioskHeartbeat(document.hidden));
+  window.addEventListener("pagehide", () => sendKioskHeartbeat(true));
+}
 
 // ─── Scale ────────────────────────────────────────────────────────────────────
 function rescale() {
@@ -113,6 +151,7 @@ function rescale() {
 }
 window.addEventListener("resize", rescale);
 rescale();
+startKioskHeartbeat();
 
 // ─── Cleanup helpers ─────────────────────────────────────────────────────────
 function later(ms, fn) {
