@@ -74,6 +74,7 @@ class TenantSettingsOut(BaseModel):
     department_list: str | None
     kiosk_phone_number: str | None
     inquiry_form_url: str | None
+    is_demo: bool = False
 
 
 class PublicTenantSettingsOut(BaseModel):
@@ -186,6 +187,7 @@ def _out(tenant: Tenant) -> TenantSettingsOut:
         department_list=getattr(tenant, "department_list", None),
         kiosk_phone_number=getattr(tenant, "kiosk_phone_number", None),
         inquiry_form_url=getattr(tenant, "inquiry_form_url", None),
+        is_demo=bool(getattr(tenant, "is_demo", False)),
     )
 
 

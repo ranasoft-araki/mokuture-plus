@@ -695,6 +695,7 @@ export default function AppointmentsPage() {
   const [staffList,   setStaffList]   = useState<string[]>([]);
   const [purposeList, setPurposeList] = useState<string[]>([]);
   const [rooms, setRooms] = useState<MeetingRoom[]>([]);
+  const [isDemo, setIsDemo] = useState(false);   // 審査用デモモード店舗（QR発行の初期値プリフィル）
 
   // QR
   const [qrAppt, setQrAppt] = useState<VisitorAppointment | null>(null);
@@ -725,6 +726,7 @@ export default function AppointmentsPage() {
     api.getTenantSettings(token).then((s: TenantSettings) => {
       if (s.staff_list)   setStaffList(s.staff_list.split(",").map(v => v.trim()).filter(Boolean));
       if (s.purpose_list) setPurposeList(s.purpose_list.split(",").map(v => v.trim()).filter(Boolean));
+      setIsDemo(!!s.is_demo);
     }).catch(() => {});
     api.listMeetingRooms(token).then(setRooms).catch(() => {});
   }, []);
@@ -778,11 +780,31 @@ export default function AppointmentsPage() {
     return {};
   }
 
+  // 審査用デモモード店舗では QR発行(来局予定)の初期値を入力済みにする。
+  // 案内先(会議室)はシード済みの「審査会場」の id を解決して充てる。空欄項目のみ補完する。
+  function applyDemoDefaults(base: AppointmentCreate): AppointmentCreate {
+    if (!isDemo) return base;
+    const room = rooms.find(r => r.name === "審査会場");
+    return {
+      ...base,
+      visitor_name: base.visitor_name || "審査員様",
+      purpose: base.purpose || "製品体験",
+      staff: base.staff || "mokuture⁺担当者",
+      meeting_room_id: base.meeting_room_id ?? room?.id,
+    };
+  }
+
   function resetForm() {
     const now = new Date();
-    now.setMinutes(0, 0, 0);
-    now.setHours(now.getHours() + 1);
-    setFormData({ visitor_name: "", scheduled_at: `${now.getFullYear()}-${padZ(now.getMonth() + 1)}-${padZ(now.getDate())}T${padZ(now.getHours())}:00`, duration_minutes: 60 });
+    let scheduled: string;
+    if (isDemo) {
+      scheduled = `${now.getFullYear()}-${padZ(now.getMonth() + 1)}-${padZ(now.getDate())}T${padZ(now.getHours())}:${padZ(now.getMinutes())}`;  // 現在時刻
+    } else {
+      now.setMinutes(0, 0, 0);
+      now.setHours(now.getHours() + 1);
+      scheduled = `${now.getFullYear()}-${padZ(now.getMonth() + 1)}-${padZ(now.getDate())}T${padZ(now.getHours())}:00`;
+    }
+    setFormData(applyDemoDefaults({ visitor_name: "", scheduled_at: scheduled, duration_minutes: 60 }));
     setFormError(null);
   }
 
@@ -791,7 +813,7 @@ export default function AppointmentsPage() {
     const [sh, sm] = slotToHM(startSlot);
     const d = timelineDate;
     const ds = `${d.getFullYear()}-${padZ(d.getMonth() + 1)}-${padZ(d.getDate())}`;
-    setFormData({ visitor_name: "", scheduled_at: `${ds}T${padZ(sh)}:${padZ(sm)}`, meeting_room_id: roomId, duration_minutes: Math.max(SLOT_MIN, slotsToMin(endSlot - startSlot)) });
+    setFormData(applyDemoDefaults({ visitor_name: "", scheduled_at: `${ds}T${padZ(sh)}:${padZ(sm)}`, meeting_room_id: roomId, duration_minutes: Math.max(SLOT_MIN, slotsToMin(endSlot - startSlot)) }));
     setFormError(null);
     setShowForm(true);
   }
@@ -800,7 +822,7 @@ export default function AppointmentsPage() {
   function handleWeekCellClick(roomId: string, day: Date) {
     const h = Math.max(DAY_START, Math.min(DAY_END - 1, new Date().getHours() + 1));
     const ds = `${day.getFullYear()}-${padZ(day.getMonth() + 1)}-${padZ(day.getDate())}`;
-    setFormData({ visitor_name: "", scheduled_at: `${ds}T${padZ(h)}:00`, meeting_room_id: roomId, duration_minutes: 60 });
+    setFormData(applyDemoDefaults({ visitor_name: "", scheduled_at: `${ds}T${padZ(h)}:00`, meeting_room_id: roomId, duration_minutes: 60 }));
     setFormError(null);
     setShowForm(true);
   }
@@ -1234,6 +1256,11 @@ export default function AppointmentsPage() {
           <div style={{ background: "#fffefb", borderRadius: 20, padding: isMobile ? "24px 20px" : "32px 36px", maxWidth: 580, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)", maxHeight: "90vh", overflowY: "auto" }}
             onClick={e => e.stopPropagation()}>
             <MkSectionTitle title="来社予定を追加" style={{ marginBottom: 20 }} />
+            {isDemo && (
+              <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: "#ede9fe", border: "1px solid #8b5cf6", color: "#6d28d9", fontSize: 12.5, fontFamily: FONT_JP, lineHeight: 1.6 }}>
+                デモモードのため、審査用の初期値を入力済みです（内容は自由に変更できます）
+              </div>
+            )}
             <AppointmentForm data={formData} onChange={setFormData} onSubmit={handleCreate}
               onCancel={() => { setShowForm(false); setFormError(null); }}
               saving={formSaving} error={formError} submitLabel="作成"
