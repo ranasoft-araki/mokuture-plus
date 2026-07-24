@@ -919,9 +919,56 @@ function showIdle() {
 
   showItem();
 }
+// ─── カメラ位置ガイド (什器イラスト) ─────────────────────────────────────────
+// 什器(office-entrance-fixture-front-lineart-v8.png)を忠実に再現したSVGで、
+// 「中央右の穴＝カメラ」の位置を利用者に一目で示す。QR読み取り画面に表示する。
+// 座標系は元画像(1100×1600)の実測値=viewBox。カメラ穴は中央列の右のドット(658,762)。
+// 左のドット(625,762)は別センサーなので中立色で描く。什器を差し替えたら実測し直すこと。
+function camGuideCard() {
+  const bc = ST.brand_color;
+  const svg = `<svg viewBox="65 45 970 1445" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="display:block" aria-hidden="true">
+    <!-- 什器フレーム -->
+    <rect x="81" y="61" width="937" height="1411" rx="18" fill="${T.canvas}" stroke="${T.borderStrong}" stroke-width="6"/>
+    <rect x="111" y="83" width="878" height="1340" rx="8" fill="none" stroke="${T.border}" stroke-width="3"/>
+    <!-- 上部ディスプレイ -->
+    <rect x="250" y="207" width="600" height="358" rx="12" fill="${T.dark}"/>
+    <rect x="272" y="229" width="556" height="314" rx="8" fill="none" stroke="rgba(255,255,255,.14)" stroke-width="3"/>
+    <!-- レール/仕切り(下部キャビネット) -->
+    <line x1="111" y1="688" x2="989" y2="688" stroke="${T.border}" stroke-width="3"/>
+    <line x1="111" y1="718" x2="989" y2="718" stroke="${T.border}" stroke-width="3"/>
+    <line x1="467" y1="718" x2="467" y2="1423" stroke="${T.border}" stroke-width="3"/>
+    <line x1="817" y1="718" x2="817" y2="1423" stroke="${T.border}" stroke-width="3"/>
+    <line x1="111" y1="920" x2="989" y2="920" stroke="${T.border}" stroke-width="3"/>
+    <line x1="111" y1="1123" x2="467" y2="1123" stroke="${T.border}" stroke-width="3"/>
+    <!-- 右列: 投入口 -->
+    <rect x="870" y="747" width="66" height="15" rx="7" fill="${T.muted}"/>
+    <!-- 左のセンサー穴(カメラではない) -->
+    <circle cx="625" cy="762" r="8" fill="${T.muted}"/>
+    <!-- ★カメラ穴(中央右) -->
+    <circle cx="658" cy="762" r="44" fill="${bc}" opacity="0.13"/>
+    <circle cx="658" cy="762" r="11" fill="${bc}"/>
+    <circle cx="658" cy="762" r="27" fill="none" stroke="${bc}" stroke-width="8"/>
+    <circle cx="658" cy="762" r="27" fill="none" stroke="${bc}" stroke-width="5" opacity="0.55">
+      <animate attributeName="r" values="27;78" dur="1.8s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.55;0" dur="1.8s" repeatCount="indefinite"/>
+    </circle>
+    <!-- 指示矢印(上から穴を指す) -->
+    <path d="M658 632 v100 M634 708 l24 24 24 -24" fill="none" stroke="${bc}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+  return `<div style="flex-shrink:0;display:flex;align-items:center;gap:26px;background:${T.canvas};border:2px solid ${bc}44;border-radius:26px;padding:22px 30px;height:236px;box-shadow:0 2px 5px rgba(29,26,21,.05),0 14px 36px rgba(29,26,21,.08)">
+    <div style="height:190px;width:152px;flex-shrink:0;display:flex;align-items:center;justify-content:center">${svg}</div>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:19px;letter-spacing:3px;color:${bc};font-weight:700;font-family:Inter,system-ui,sans-serif">カメラの位置 / CAMERA</div>
+      <div style="font-size:33px;font-weight:700;color:${T.ink};line-height:1.28;margin-top:8px">画面下・中央右の<br>この穴がカメラです</div>
+      <div style="font-size:21px;color:${T.sub};margin-top:12px;line-height:1.5">QRコードをこのカメラにかざしてください</div>
+      <div style="font-size:15px;color:${T.muted};margin-top:4px;font-family:Inter,system-ui,sans-serif">Hold your QR code up to this camera</div>
+    </div>
+  </div>`;
+}
+
 // ─── WELCOME + QR (統合ようこそ画面) ─────────────────────────────────────────
 // 待機解除後の最初の画面。左=QRカメラ常時スキャン(予約QRを自動検出→受付)、
-// 右=案内＋「ご予約のない方はこちら」ボタン(受付メニューへ)。
+// 右=カメラ位置ガイド(什器イラスト)＋「ご予約のない方はこちら」ボタン(受付メニューへ)。
 // 旧・独立QR画面(showQr)は本画面に統合済み。
 function showWelcome() {
   const bc = ST.brand_color;
@@ -979,17 +1026,18 @@ ${errBanner}
     ${homeBtnHtml("wel-home")}
   </div>
   <div style="flex:1;padding:12px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center;min-height:0">
-    <div id="cam-box" style="background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;width:100%;height:640px;max-height:100%">${camContent()}</div>
-    <div style="display:flex;flex-direction:column;height:640px;max-height:100%">
-      <button id="wel-form" style="flex:1;width:100%;background:${T.dark};border:none;border-radius:28px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:30px;text-align:center;padding:40px 24px">
-        <div style="width:150px;height:150px;border-radius:36px;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.6)">${ICO.reception}</div></div>
+    <div id="cam-box" style="background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;width:100%;height:760px;max-height:100%">${camContent()}</div>
+    <div style="display:flex;flex-direction:column;height:760px;max-height:100%;gap:20px">
+      ${camGuideCard()}
+      <button id="wel-form" style="flex:1;width:100%;background:${T.dark};border:none;border-radius:28px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;text-align:center;padding:32px 24px">
+        <div style="width:132px;height:132px;border-radius:32px;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.3)">${ICO.reception}</div></div>
         <div>
-          <div style="font-size:56px;font-weight:700;color:#fff;line-height:1.15;white-space:nowrap">${escHtml(ST.kiosk_welcome_form_label || "QRをお持ちでない方はこちら")}</div>
-          <div style="font-size:27px;color:rgba(255,255,255,.74);margin-top:18px;line-height:1.6">ご予約の無い方・お荷物の配達、<br>ロッカーのご利用</div>
+          <div style="font-size:50px;font-weight:700;color:#fff;line-height:1.15;white-space:nowrap">${escHtml(ST.kiosk_welcome_form_label || "QRをお持ちでない方はこちら")}</div>
+          <div style="font-size:25px;color:rgba(255,255,255,.74);margin-top:14px;line-height:1.55">ご予約の無い方・お荷物の配達、<br>ロッカーのご利用</div>
         </div>
-        <div style="color:rgba(255,255,255,.55);transform:scale(1.7)">${ICO.arrow_lg}</div>
+        <div style="color:rgba(255,255,255,.55);transform:scale(1.6)">${ICO.arrow_lg}</div>
       </button>
-      ${MOCK ? `<button id="qr-mock" style="margin-top:16px;padding:14px;background:transparent;border:1.5px dashed ${T.muted};border-radius:12px;font-size:16px;color:${T.muted};cursor:pointer;flex-shrink:0">（MOCK）予約QRを読み取ったことにする</button>` : ""}
+      ${MOCK ? `<button id="qr-mock" style="margin-top:4px;padding:14px;background:transparent;border:1.5px dashed ${T.muted};border-radius:12px;font-size:16px;color:${T.muted};cursor:pointer;flex-shrink:0">（MOCK）予約QRを読み取ったことにする</button>` : ""}
     </div>
   </div>
   <div style="padding:16px 80px 28px;display:flex;align-items:center;color:${T.muted};font-size:22px;flex-shrink:0">
