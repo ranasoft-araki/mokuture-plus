@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 
+import locker_store
 from config import settings
 from state import get_device_name, get_device_token, save_device_state
 
@@ -142,8 +143,26 @@ async def sync_loop() -> None:
 _HEARTBEAT_INTERVAL_SEC = 60
 
 
+async def _mirror_lockers(client: httpx.AsyncClient, token: str) -> None:
+    """管理画面「ロッカー状況」表示用に占有スナップショットを best-effort でミラーする。
+
+    ロッカーは端末が真実の源。操作(占有/解錠)が無くても定期的に送るので、再起動/デプロイ
+    直後や無操作の端末でも管理画面がロッカーを表示できる（PIN 本体は送らない）。失敗しても
+    解錠フローには一切影響しない。占有変化時の即時ミラー(main.py)とは独立の保険。"""
+    try:
+        await client.post(
+            f"{settings.remote_api_url}/kiosk/lockers/mirror",
+            headers={"X-Kiosk-Token": token},
+            json=locker_store.mirror_payload(),
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"[heartbeat] locker mirror failed: {e}")
+
+
 async def heartbeat_loop() -> None:
-    """60秒ごとに /kiosk/heartbeat を送信。コンテンツ同期とは独立して動作。"""
+    """60秒ごとに /kiosk/heartbeat を送信。コンテンツ同期とは独立して動作。
+    併せてロッカー占有スナップショットを best-effort でミラーする（管理画面の表示用）。"""
     async with httpx.AsyncClient() as client:
         while True:
             token = get_device_token()
@@ -158,4 +177,5 @@ async def heartbeat_loop() -> None:
                         print(f"[heartbeat] unexpected status {resp.status_code}")
                 except Exception as e:
                     print(f"[heartbeat] failed: {e}")
+                await _mirror_lockers(client, token)
             await asyncio.sleep(_HEARTBEAT_INTERVAL_SEC)

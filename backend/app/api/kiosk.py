@@ -116,6 +116,7 @@ BUNDLE_FILES = [
     "sync.py",
     "state.py",
     "config.py",
+    "locker_store.py",  # ロッカーのローカル状態・ミラーペイロード生成。agent の MANAGED_FILES と一致させる
 ]
 _FORCE_WINDOW_SEC = 7200  # force flag stays active for 2 hours after trigger
 

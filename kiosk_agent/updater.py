@@ -38,10 +38,11 @@ MANAGED_FILES = [
     "sync.py",
     "state.py",
     "config.py",
+    "locker_store.py",  # ロッカーのローカル状態・ミラーペイロード生成。実機へ確実に届ける
 ]
 
 # Changing these files requires a service restart to take effect.
-RESTART_FILES = {"main.py", "updater.py", "gpio.py", "sync.py", "state.py", "config.py"}
+RESTART_FILES = {"main.py", "updater.py", "gpio.py", "sync.py", "state.py", "config.py", "locker_store.py"}
 
 NORMAL_INTERVAL = 1800   # 30 min between normal checks
 FORCE_INTERVAL  = 60     # 1 min when a force-flagged update is pending
