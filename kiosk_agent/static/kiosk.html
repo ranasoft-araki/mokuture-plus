@@ -926,61 +926,45 @@ function showIdle() {
 // 左のドット(625,762)は別センサーなので中立色で描く。什器を差し替えたら実測し直すこと。
 function camGuideCard() {
   const bc = ST.brand_color;
-  // 什器サムネイル(左)＋カメラ穴の接写ルーペ(右)の「引き出し拡大」構図。
-  // 実寸だとカメラ穴は什器全体の約1%で見えないため、ルーペで大写しにして
-  // 「画面のすぐ下・中央右の穴＝カメラ」を一目で分からせる。座標は v8 実測。
-  const svg = `<svg viewBox="0 0 1400 620" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="display:block" aria-hidden="true">
-    <defs><clipPath id="camMagClip"><circle cx="1015" cy="310" r="266"/></clipPath></defs>
-    <!-- 引き出し線(什器の穴 → ルーペ) -->
-    <polygon points="306,296 758,164 758,456 306,324" fill="${bc}" opacity="0.10"/>
-    <line x1="306" y1="296" x2="758" y2="164" stroke="${bc}" stroke-width="2.5" opacity="0.45"/>
-    <line x1="306" y1="324" x2="758" y2="456" stroke="${bc}" stroke-width="2.5" opacity="0.45"/>
-    <!-- 什器サムネイル(v8実測を縮小) -->
-    <g transform="translate(46 34) scale(0.35)">
-      <rect x="81" y="61" width="937" height="1411" rx="20" fill="${T.canvas}" stroke="${T.borderStrong}" stroke-width="16"/>
-      <rect x="250" y="207" width="600" height="358" rx="16" fill="${T.dark}"/>
-      <line x1="111" y1="700" x2="989" y2="700" stroke="${T.border}" stroke-width="9"/>
-      <line x1="467" y1="700" x2="467" y2="1423" stroke="${T.border}" stroke-width="9"/>
-      <line x1="817" y1="700" x2="817" y2="1423" stroke="${T.border}" stroke-width="9"/>
-      <line x1="111" y1="920" x2="989" y2="920" stroke="${T.border}" stroke-width="9"/>
-      <line x1="111" y1="1123" x2="467" y2="1123" stroke="${T.border}" stroke-width="9"/>
-      <rect x="870" y="747" width="66" height="18" rx="9" fill="${T.muted}"/>
-    </g>
-    <text x="233" y="176" text-anchor="middle" font-size="36" font-weight="700" fill="rgba(255,255,255,.9)" font-family="'Noto Sans JP',sans-serif">画面</text>
-    <!-- 什器上の穴マーカー＋矢印 -->
-    <circle cx="270" cy="310" r="13" fill="${bc}"/>
-    <circle cx="270" cy="310" r="35" fill="none" stroke="${bc}" stroke-width="8"/>
-    <path d="M270 246 v24 M256 258 l14 14 14 -14" fill="none" stroke="${bc}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
-    <!-- ルーペ(カメラ穴の接写) -->
-    <circle cx="1015" cy="310" r="266" fill="${T.panel}"/>
-    <g clip-path="url(#camMagClip)">
-      <rect x="749" y="44" width="532" height="532" fill="${T.canvas}"/>
-      <!-- 左のセンサー(カメラではない) -->
-      <circle cx="890" cy="300" r="30" fill="${T.muted}"/>
-      <!-- カメラレンズ -->
-      <circle cx="1058" cy="300" r="152" fill="${bc}" opacity="0.15"/>
-      <circle cx="1058" cy="300" r="120" fill="#221f1a"/>
-      <circle cx="1058" cy="300" r="120" fill="none" stroke="${bc}" stroke-width="15"/>
-      <circle cx="1058" cy="300" r="86" fill="#0c0c0e"/>
-      <circle cx="1058" cy="300" r="50" fill="#13251a"/>
-      <circle cx="1058" cy="300" r="50" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="5"/>
-      <ellipse cx="1024" cy="262" rx="22" ry="13" fill="rgba(255,255,255,.55)"/>
-    </g>
-    <circle cx="1058" cy="300" r="120" fill="none" stroke="${bc}" stroke-width="8" opacity="0.55">
-      <animate attributeName="r" values="120;178" dur="1.8s" repeatCount="indefinite"/>
+  // 什器サムネイル(左)＋「画面のすぐ下がカメラです」の説明(右)。カメラ穴(v8実測
+  // 658,762)を画面直下にリング＋矢印で示す。左のドット(625,762)は別センサー。
+  const svg = `<svg viewBox="65 45 970 1445" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="display:block" aria-hidden="true">
+    <!-- 什器フレーム -->
+    <rect x="81" y="61" width="937" height="1411" rx="18" fill="${T.canvas}" stroke="${T.borderStrong}" stroke-width="6"/>
+    <rect x="111" y="83" width="878" height="1340" rx="8" fill="none" stroke="${T.border}" stroke-width="3"/>
+    <!-- 上部ディスプレイ＋「画面」ラベル -->
+    <rect x="250" y="207" width="600" height="358" rx="12" fill="${T.dark}"/>
+    <text x="550" y="428" text-anchor="middle" font-size="118" font-weight="700" fill="rgba(255,255,255,.9)" font-family="'Noto Sans JP',sans-serif">画面</text>
+    <!-- レール/仕切り(下部キャビネット) -->
+    <line x1="111" y1="688" x2="989" y2="688" stroke="${T.border}" stroke-width="3"/>
+    <line x1="111" y1="718" x2="989" y2="718" stroke="${T.border}" stroke-width="3"/>
+    <line x1="467" y1="718" x2="467" y2="1423" stroke="${T.border}" stroke-width="3"/>
+    <line x1="817" y1="718" x2="817" y2="1423" stroke="${T.border}" stroke-width="3"/>
+    <line x1="111" y1="920" x2="989" y2="920" stroke="${T.border}" stroke-width="3"/>
+    <line x1="111" y1="1123" x2="467" y2="1123" stroke="${T.border}" stroke-width="3"/>
+    <!-- 右列: 投入口 -->
+    <rect x="870" y="747" width="66" height="15" rx="7" fill="${T.muted}"/>
+    <!-- 左のセンサー穴(カメラではない) -->
+    <circle cx="625" cy="762" r="8" fill="${T.muted}"/>
+    <!-- ★カメラ穴(画面のすぐ下・中央右) -->
+    <circle cx="658" cy="762" r="46" fill="${bc}" opacity="0.13"/>
+    <circle cx="658" cy="762" r="12" fill="${bc}"/>
+    <circle cx="658" cy="762" r="28" fill="none" stroke="${bc}" stroke-width="9"/>
+    <circle cx="658" cy="762" r="28" fill="none" stroke="${bc}" stroke-width="6" opacity="0.55">
+      <animate attributeName="r" values="28;82" dur="1.8s" repeatCount="indefinite"/>
       <animate attributeName="opacity" values="0.55;0" dur="1.8s" repeatCount="indefinite"/>
     </circle>
-    <circle cx="1015" cy="310" r="266" fill="none" stroke="#3a3630" stroke-width="10"/>
-    <!-- カメラ ラベル(ルーペ下端のバッジ) -->
-    <rect x="912" y="516" width="206" height="70" rx="35" fill="${bc}"/>
-    <text x="1015" y="563" text-anchor="middle" font-size="42" font-weight="800" fill="#fff" font-family="'Noto Sans JP',sans-serif">カメラ</text>
+    <!-- 指示矢印(画面直下→穴) -->
+    <path d="M658 622 v96 M634 700 l24 24 24 -24" fill="none" stroke="${bc}" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>`;
-  return `<div style="flex:1;min-height:0;display:flex;flex-direction:column;background:${T.canvas};border:2.5px solid ${bc}66;border-radius:26px;padding:22px 30px 24px;gap:10px;box-shadow:0 2px 5px rgba(29,26,21,.05),0 14px 36px rgba(29,26,21,.08)">
+  return `<div style="flex:1;min-height:0;display:flex;flex-direction:column;background:${T.canvas};border:2.5px solid ${bc}66;border-radius:26px;padding:24px 34px;gap:12px;box-shadow:0 2px 5px rgba(29,26,21,.05),0 14px 36px rgba(29,26,21,.08)">
     <div style="flex-shrink:0;font-size:19px;letter-spacing:3px;color:${bc};font-weight:700;font-family:Inter,system-ui,sans-serif">カメラの位置 / CAMERA</div>
-    <div style="flex:1;min-height:0">${svg}</div>
-    <div style="flex-shrink:0">
-      <div style="font-size:30px;font-weight:700;color:${T.ink};line-height:1.25">画面のすぐ下・中央右の穴がカメラです</div>
-      <div style="font-size:20px;color:${T.sub};margin-top:6px;line-height:1.45">QRコードをこのカメラにかざしてください</div>
+    <div style="flex:1;min-height:0;display:flex;align-items:center;gap:34px">
+      <div style="flex-shrink:0;height:100%;width:210px;display:flex;align-items:center;justify-content:center">${svg}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:44px;font-weight:700;color:${T.ink};line-height:1.25">画面のすぐ下が<br>カメラです</div>
+        <div style="font-size:22px;color:${T.sub};margin-top:16px;line-height:1.5">QRコードをこのカメラにかざしてください</div>
+      </div>
     </div>
   </div>`;
 }
@@ -1048,13 +1032,13 @@ ${errBanner}
     <div id="cam-box" style="background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;width:100%;height:760px;max-height:100%">${camContent()}</div>
     <div style="display:flex;flex-direction:column;height:760px;max-height:100%;gap:20px">
       ${camGuideCard()}
-      <button id="wel-form" style="height:216px;flex-shrink:0;width:100%;background:${T.dark};border:none;border-radius:28px;cursor:pointer;display:flex;flex-direction:row;align-items:center;gap:34px;text-align:left;padding:0 48px">
-        <div style="width:104px;height:104px;flex-shrink:0;border-radius:28px;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.0)">${ICO.reception}</div></div>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:40px;font-weight:700;color:#fff;line-height:1.15">${escHtml(ST.kiosk_welcome_form_label || "QRをお持ちでない方はこちら")}</div>
-          <div style="font-size:22px;color:rgba(255,255,255,.74);margin-top:10px;line-height:1.45">ご予約の無い方・お荷物の配達、ロッカーのご利用</div>
+      <button id="wel-form" style="flex:1;min-height:0;width:100%;background:${T.dark};border:none;border-radius:28px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center;padding:28px 24px">
+        <div style="width:112px;height:112px;flex-shrink:0;border-radius:30px;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.1)">${ICO.reception}</div></div>
+        <div>
+          <div style="font-size:44px;font-weight:700;color:#fff;line-height:1.15;white-space:nowrap">${escHtml(ST.kiosk_welcome_form_label || "QRをお持ちでない方はこちら")}</div>
+          <div style="font-size:23px;color:rgba(255,255,255,.74);margin-top:12px;line-height:1.5">ご予約の無い方・お荷物の配達、ロッカーのご利用</div>
         </div>
-        <div style="color:rgba(255,255,255,.55);flex-shrink:0;transform:scale(1.6)">${ICO.arrow_lg}</div>
+        <div style="color:rgba(255,255,255,.55);transform:scale(1.6)">${ICO.arrow_lg}</div>
       </button>
       ${MOCK ? `<button id="qr-mock" style="margin-top:0;padding:12px;background:transparent;border:1.5px dashed ${T.muted};border-radius:12px;font-size:16px;color:${T.muted};cursor:pointer;flex-shrink:0">（MOCK）予約QRを読み取ったことにする</button>` : ""}
     </div>
