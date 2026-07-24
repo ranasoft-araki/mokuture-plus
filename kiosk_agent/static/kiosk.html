@@ -929,23 +929,23 @@ function camGuideCard() {
   // 什器サムネイル(左)＋「画面のすぐ下がカメラです」の説明(右)。カメラ穴(v8実測
   // 658,762)を画面直下にリング＋矢印で示す。左のドット(625,762)は別センサー。
   const svg = `<svg viewBox="65 45 970 1445" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="display:block" aria-hidden="true">
-    <!-- 什器フレーム -->
-    <rect x="81" y="61" width="937" height="1411" rx="18" fill="${T.canvas}" stroke="${T.borderStrong}" stroke-width="6"/>
-    <rect x="111" y="83" width="878" height="1340" rx="8" fill="none" stroke="${T.border}" stroke-width="3"/>
+    <!-- 什器フレーム(細く見えないよう太線＋濃色) -->
+    <rect x="81" y="61" width="937" height="1411" rx="18" fill="${T.canvas}" stroke="${T.sub}" stroke-width="17"/>
+    <rect x="111" y="83" width="878" height="1340" rx="8" fill="none" stroke="${T.muted}" stroke-width="9"/>
     <!-- 上部ディスプレイ＋「画面」ラベル -->
     <rect x="250" y="207" width="600" height="358" rx="12" fill="${T.dark}"/>
     <text x="550" y="428" text-anchor="middle" font-size="118" font-weight="700" fill="rgba(255,255,255,.9)" font-family="'Noto Sans JP',sans-serif">画面</text>
     <!-- レール/仕切り(下部キャビネット) -->
-    <line x1="111" y1="688" x2="989" y2="688" stroke="${T.border}" stroke-width="3"/>
-    <line x1="111" y1="718" x2="989" y2="718" stroke="${T.border}" stroke-width="3"/>
-    <line x1="467" y1="718" x2="467" y2="1423" stroke="${T.border}" stroke-width="3"/>
-    <line x1="817" y1="718" x2="817" y2="1423" stroke="${T.border}" stroke-width="3"/>
-    <line x1="111" y1="920" x2="989" y2="920" stroke="${T.border}" stroke-width="3"/>
-    <line x1="111" y1="1123" x2="467" y2="1123" stroke="${T.border}" stroke-width="3"/>
+    <line x1="111" y1="688" x2="989" y2="688" stroke="${T.muted}" stroke-width="10"/>
+    <line x1="111" y1="718" x2="989" y2="718" stroke="${T.muted}" stroke-width="10"/>
+    <line x1="467" y1="718" x2="467" y2="1423" stroke="${T.muted}" stroke-width="11"/>
+    <line x1="817" y1="718" x2="817" y2="1423" stroke="${T.muted}" stroke-width="11"/>
+    <line x1="111" y1="920" x2="989" y2="920" stroke="${T.muted}" stroke-width="11"/>
+    <line x1="111" y1="1123" x2="467" y2="1123" stroke="${T.muted}" stroke-width="11"/>
     <!-- 右列: 投入口 -->
-    <rect x="870" y="747" width="66" height="15" rx="7" fill="${T.muted}"/>
+    <rect x="870" y="747" width="66" height="16" rx="8" fill="${T.sub}"/>
     <!-- 左のセンサー穴(カメラではない) -->
-    <circle cx="625" cy="762" r="8" fill="${T.muted}"/>
+    <circle cx="625" cy="762" r="11" fill="${T.sub}"/>
     <!-- ★カメラ穴(画面のすぐ下・中央右) -->
     <circle cx="658" cy="762" r="46" fill="${bc}" opacity="0.13"/>
     <circle cx="658" cy="762" r="12" fill="${bc}"/>
