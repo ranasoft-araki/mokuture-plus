@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, DateTime, Integer, ForeignKey, func, Boolean, UniqueConstraint
+from sqlalchemy import String, DateTime, Integer, ForeignKey, func, Boolean, UniqueConstraint, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -26,6 +26,12 @@ class Device(Base):
     hardware_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     force_update_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # ローカルファースト・ロッカーの占有スナップショット（管理画面の表示専用）。
+    # ロッカーは各端末の GPIO 直結＝端末が真実の源なので、agent が best-effort で
+    # 全件スナップショット（occupied/has_pin のブールのみ・PIN 本体は含まない）を
+    # ここへミラーする。管理画面は GET /lockers/status で端末ごとに表示する。
+    locker_state_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    locker_state_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     tenant = relationship("Tenant", back_populates="devices")
 

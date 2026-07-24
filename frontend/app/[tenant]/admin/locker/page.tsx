@@ -1,161 +1,142 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { AdminShell, MkBtn, MkSectionTitle } from "@/components/AdminShell";
-import { ConfirmModal } from "@/components/ConfirmModal";
-import { api, Locker } from "@/lib/api";
+import { AdminShell } from "@/components/AdminShell";
+import { api, LockerDeviceStatus, LockerStatusItem } from "@/lib/api";
 import { getAccessToken, clearTokens } from "@/lib/auth";
 
 const FONT_MONO = '"JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace';
 
-// ─── Input style helper ────────────────────────────────────────────────────
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  border: "1px solid #d8d3c7",
-  borderRadius: 7,
-  padding: "0 12px",
-  height: 34,
-  fontSize: 12.5,
-  color: "#2d2a24",
-  outline: "none",
-  boxSizing: "border-box",
-  background: "#fffefb",
-};
+// ─── time helpers（naive UTC を "Z" 補完して解釈） ───────────────────────────
+function utcDate(value: string): Date {
+  return new Date(/[Z+]/.test(value) ? value : value + "Z");
+}
+function formatRelative(value: string | null): string {
+  if (!value) return "—";
+  const diff = Date.now() - utcDate(value).getTime();
+  const sec = Math.floor(diff / 1000);
+  if (sec < 5) return "たった今";
+  if (sec < 60) return `${sec}秒前`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}分前`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}時間前`;
+  return `${Math.floor(hr / 24)}日前`;
+}
 
-const labelStyle: React.CSSProperties = {
-  display: "block",
-  fontSize: 11.5,
-  fontWeight: 600,
-  color: "#2d2a24",
-  marginBottom: 6,
-};
-
-// ─── Locker Card ───────────────────────────────────────────────────────────
-function LockerCard({
-  locker,
-  onOpen,
-  onClose,
-  onDelete,
-}: {
-  locker: Locker;
-  onOpen: () => void;
-  onClose: () => void;
-  onDelete: () => void;
-}) {
-  const isOpen = locker.state === "open";
-
+// ─── Locker cell（表示専用） ────────────────────────────────────────────────
+function LockerCell({ locker }: { locker: LockerStatusItem }) {
+  const occupied = locker.occupied;
+  const isDelivery = occupied && locker.kind === "delivery";
   return (
     <div
       style={{
         background: "#fffefb",
-        border: "1px solid #d8d3c7",
+        border: `1px solid ${occupied ? "#e4cfa0" : "#d8d3c7"}`,
         borderRadius: 10,
-        padding: "16px 14px",
-        position: "relative",
+        padding: "14px 14px",
         display: "flex",
         flexDirection: "column",
-        gap: 10,
+        gap: 8,
       }}
     >
-      {/* Delete button (×) */}
-      <button
-        onClick={onDelete}
-        title="削除"
-        style={{
-          position: "absolute",
-          top: 8,
-          right: 8,
-          width: 22,
-          height: 22,
-          borderRadius: "50%",
-          border: "1px solid #d8d3c7",
-          background: "#f4f1ea",
-          color: "#a8a198",
-          fontSize: 12,
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          lineHeight: 1,
-          padding: 0,
-        }}
-      >
-        ×
-      </button>
-
-      {/* Name */}
-      <div style={{ fontSize: 15, fontWeight: 700, color: "#1d1a15", paddingRight: 24 }}>
-        {locker.name}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#1d1a15", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {locker.name}
+        </div>
+        {locker.door_number != null && (
+          <div style={{ fontSize: 11, fontFamily: FONT_MONO, color: "#a8a198", flexShrink: 0 }}>
+            #{locker.door_number}
+          </div>
+        )}
       </div>
-
-      {/* GPIO Pin */}
-      <div
-        style={{
-          fontSize: 12,
-          fontFamily: FONT_MONO,
-          color: "#a8a198",
-        }}
-      >
-        Pin #{locker.gpio_pin}
-      </div>
-
-      {/* State badge */}
-      <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
         <span
           style={{
-            display: "inline-block",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
             padding: "3px 10px",
             borderRadius: 999,
             fontSize: 11.5,
             fontWeight: 600,
-            background: isOpen ? "#dc2626" : "#4a7c4e",
-            color: "#fffefb",
+            background: occupied ? "#f3e2c0" : "#dcecdd",
+            color: occupied ? "#8a5a1a" : "#3a6240",
           }}
         >
-          {isOpen ? "開錠中" : "施錠中"}
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: occupied ? "#c8862a" : "#4a7c4e" }} />
+          {occupied ? "利用中" : "空き"}
         </span>
+        {isDelivery && (
+          <span
+            style={{
+              display: "inline-block",
+              padding: "3px 8px",
+              borderRadius: 999,
+              fontSize: 11,
+              fontWeight: 600,
+              background: "#e6eef6",
+              color: "#3a5a7c",
+            }}
+          >
+            置き配
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Device section ─────────────────────────────────────────────────────────
+function DeviceSection({ device }: { device: LockerDeviceStatus }) {
+  return (
+    <div
+      style={{
+        background: "#fbf9f5",
+        border: "1px solid #e6e2d9",
+        borderRadius: 12,
+        padding: 18,
+        marginBottom: 16,
+      }}
+    >
+      {/* header */}
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#1d1a15" }}>{device.device_name}</div>
+          <div style={{ fontSize: 12, color: "#a8a198" }}>
+            {device.location ?? "場所未設定"} · 更新 {formatRelative(device.updated_at)}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ padding: "4px 12px", borderRadius: 999, fontSize: 12, fontWeight: 600, background: "#dcecdd", color: "#3a6240" }}>
+            空き {device.available_count}
+          </span>
+          <span style={{ padding: "4px 12px", borderRadius: 999, fontSize: 12, fontWeight: 600, background: "#f3e2c0", color: "#8a5a1a" }}>
+            利用中 {device.occupied_count}
+          </span>
+          <span style={{ padding: "4px 12px", borderRadius: 999, fontSize: 12, fontWeight: 600, background: "#efece5", color: "#6b6559" }}>
+            全 {device.total}
+          </span>
+        </div>
       </div>
 
-      {/* Action buttons */}
-      <div style={{ display: "flex", gap: 6 }}>
-        <button
-          onClick={onOpen}
-          disabled={isOpen}
+      {/* grid */}
+      {device.lockers.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: "#a8a198", padding: "8px 0" }}>ロッカーがありません。</div>
+      ) : (
+        <div
           style={{
-            flex: 1,
-            padding: "7px 0",
-            borderRadius: 7,
-            border: "none",
-            background: isOpen ? "#e8e4dc" : "#c8a96e",
-            color: isOpen ? "#a8a198" : "#fffefb",
-            fontSize: 12.5,
-            fontWeight: 600,
-            cursor: isOpen ? "not-allowed" : "pointer",
-            opacity: isOpen ? 0.6 : 1,
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+            gap: 12,
           }}
         >
-          開錠
-        </button>
-        <button
-          onClick={onClose}
-          disabled={!isOpen}
-          style={{
-            flex: 1,
-            padding: "7px 0",
-            borderRadius: 7,
-            border: "none",
-            background: !isOpen ? "#e8e4dc" : "#6b6559",
-            color: !isOpen ? "#a8a198" : "#fffefb",
-            fontSize: 12.5,
-            fontWeight: 600,
-            cursor: !isOpen ? "not-allowed" : "pointer",
-            opacity: !isOpen ? 0.6 : 1,
-          }}
-        >
-          施錠
-        </button>
-      </div>
+          {device.lockers.map((l) => (
+            <LockerCell key={l.id} locker={l} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -163,260 +144,105 @@ function LockerCard({
 // ─── Main Page ─────────────────────────────────────────────────────────────
 export default function AdminLockerPage() {
   const router = useRouter();
-  const [lockers, setLockers] = useState<Locker[]>([]);
+  const [devices, setDevices] = useState<LockerDeviceStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Create form state
-  const [modal, setModal] = useState<{ msg: string; action: () => Promise<void> } | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  const [formName, setFormName] = useState("");
-  const [formGpioPin, setFormGpioPin] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-
-  useEffect(() => {
+  const load = useCallback(async (silent: boolean) => {
     const token = getAccessToken();
     if (!token) { clearTokens(); router.push("/login"); return; }
-    api.listLockers(token)
-      .then((data) => setLockers(data))
-      .catch(() => { clearTokens(); router.push("/login"); })
-      .finally(() => setLoading(false));
+    try {
+      const data = await api.getLockerStatus(token);
+      setDevices(data.devices);
+      setError(null);
+    } catch (err: unknown) {
+      // 認証切れは初回のみログインへ。自動更新中のネットワーク一時失敗では画面を保持。
+      if (!silent) { clearTokens(); router.push("/login"); return; }
+      setError(err instanceof Error ? err.message : "取得に失敗しました");
+    } finally {
+      if (!silent) setLoading(false);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
-    const token = getAccessToken();
-    if (!token) return;
-    const pin = parseInt(formGpioPin, 10);
-    if (!formName.trim()) { setFormError("名前を入力してください"); return; }
-    if (isNaN(pin) || pin < 0) { setFormError("GPIOピン番号を正しく入力してください"); return; }
-    setCreating(true);
-    setFormError(null);
-    try {
-      const created = await api.createLocker(token, { name: formName.trim(), gpio_pin: pin });
-      setLockers((prev) => [...prev, created]);
-      setFormName("");
-      setFormGpioPin("");
-      setShowForm(false);
-    } catch (err: unknown) {
-      setFormError(err instanceof Error ? err.message : "追加に失敗しました");
-    } finally {
-      setCreating(false);
+  useEffect(() => {
+    load(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (autoRefresh) {
+      timerRef.current = setInterval(() => load(true), 15000);
     }
-  }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRefresh]);
 
-  async function handleOpen(lockerId: string) {
-    const token = getAccessToken();
-    if (!token) return;
-    // Optimistic update
-    setLockers((prev) =>
-      prev.map((l) => (l.id === lockerId ? { ...l, state: "open" } : l))
-    );
-    try {
-      await api.openLocker(token, lockerId);
-    } catch (err: unknown) {
-      // Revert on failure
-      setLockers((prev) =>
-        prev.map((l) => (l.id === lockerId ? { ...l, state: "closed" } : l))
-      );
-      setError(err instanceof Error ? err.message : "開錠に失敗しました");
-    }
-  }
-
-  async function handleClose(lockerId: string) {
-    const token = getAccessToken();
-    if (!token) return;
-    // Optimistic update
-    setLockers((prev) =>
-      prev.map((l) => (l.id === lockerId ? { ...l, state: "closed" } : l))
-    );
-    try {
-      await api.closeLocker(token, lockerId);
-    } catch (err: unknown) {
-      // Revert on failure
-      setLockers((prev) =>
-        prev.map((l) => (l.id === lockerId ? { ...l, state: "open" } : l))
-      );
-      setError(err instanceof Error ? err.message : "施錠に失敗しました");
-    }
-  }
-
-  function handleDelete(lockerId: string) {
-    setModal({
-      msg: "このロッカーを削除しますか？",
-      action: async () => {
-        const token = getAccessToken();
-        if (!token) return;
-        await api.deleteLocker(token, lockerId);
-        setLockers((prev) => prev.filter((l) => l.id !== lockerId));
-      },
-    });
-  }
-
-  if (loading) {
-    return (
-      <AdminShell active="locker" title="ロッカー管理" breadcrumb="ホーム / ロッカー">
-        <div style={{ textAlign: "center", color: "#a8a198", fontSize: 13, padding: "60px 0" }}>
-          読み込み中...
-        </div>
-      </AdminShell>
-    );
-  }
+  const totalLockers = devices.reduce((n, d) => n + d.total, 0);
+  const totalOccupied = devices.reduce((n, d) => n + d.occupied_count, 0);
 
   return (
-    <>
-    {modal && (
-      <ConfirmModal
-        message={modal.msg}
-        onConfirm={async () => {
-          const action = modal.action;
-          setModal(null);
-          try { await action(); } catch (err: unknown) { setError(err instanceof Error ? err.message : "削除に失敗しました"); }
-        }}
-        onCancel={() => setModal(null)}
-      />
-    )}
     <AdminShell
       active="locker"
-      title="ロッカー管理"
+      title="ロッカー状況"
       breadcrumb="ホーム / ロッカー"
-      subtitle={`${lockers.length} 台`}
+      subtitle={loading ? undefined : `${devices.length} 台 · 空き ${totalLockers - totalOccupied} / 全 ${totalLockers}`}
       actions={
-        <MkBtn
-          variant={showForm ? "default" : "primary"}
-          size="sm"
-          onClick={() => { setShowForm((v) => !v); setFormError(null); }}
-        >
-          {showForm ? "キャンセル" : "＋ ロッカーを追加"}
-        </MkBtn>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, color: "#6b6559", cursor: "pointer" }}>
+          <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
+          自動更新
+        </label>
       }
     >
-      {/* Error banner */}
+      {/* Error banner (自動更新中のみ表示・非致命) */}
       {error && (
         <div
           style={{
-            marginBottom: 16,
-            padding: "10px 14px",
-            borderRadius: 7,
-            background: "#f6e0dc",
-            border: "1px solid #a84238",
-            color: "#a84238",
-            fontSize: 13,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
+            marginBottom: 16, padding: "10px 14px", borderRadius: 7,
+            background: "#f6e0dc", border: "1px solid #a84238", color: "#a84238",
+            fontSize: 13, display: "flex", alignItems: "center", gap: 8,
           }}
         >
           <span style={{ flex: 1 }}>{error}</span>
-          <button
-            onClick={() => setError(null)}
-            style={{ background: "none", border: "none", cursor: "pointer", color: "#a84238", fontSize: 14 }}
-          >
-            ×
-          </button>
+          <button onClick={() => setError(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#a84238", fontSize: 14 }}>×</button>
         </div>
       )}
 
-      {/* Create form panel */}
-      {showForm && (
-        <div
-          style={{
-            marginBottom: 20,
-            background: "#fffefb",
-            border: "1px solid #d8d3c7",
-            borderRadius: 10,
-            padding: 20,
-          }}
-        >
-          <MkSectionTitle title="ロッカーを追加" />
-          <form onSubmit={handleCreate}>
-            <div className="adm-cols-2" style={{ marginBottom: 16 }}>
-              <div>
-                <label style={labelStyle}>ロッカー名</label>
-                <input
-                  type="text"
-                  value={formName}
-                  onChange={(e) => setFormName(e.target.value)}
-                  placeholder="例: ロッカー A1"
-                  style={inputStyle}
-                  required
-                />
-              </div>
-              <div>
-                <label style={labelStyle}>GPIO ピン番号</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={formGpioPin}
-                  onChange={(e) => setFormGpioPin(e.target.value)}
-                  placeholder="例: 18"
-                  style={inputStyle}
-                  required
-                />
-              </div>
-            </div>
-            {formError && (
-              <div
-                style={{
-                  marginBottom: 12,
-                  padding: "8px 12px",
-                  background: "#f6e0dc",
-                  border: "1px solid rgba(168,66,56,0.3)",
-                  borderRadius: 7,
-                  color: "#a84238",
-                  fontSize: 12,
-                }}
-              >
-                {formError}
-              </div>
-            )}
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              <MkBtn variant="primary" size="sm" disabled={creating}>
-                {creating ? "追加中…" : "追加"}
-              </MkBtn>
-            </div>
-          </form>
-        </div>
-      )}
+      {/* 説明: ロッカーはローカル管理・ここは表示専用 */}
+      <div
+        style={{
+          marginBottom: 18, padding: "12px 16px", borderRadius: 10,
+          background: "#f4f6f2", border: "1px solid #dfe6da", color: "#4d5a48",
+          fontSize: 12.5, lineHeight: 1.7,
+        }}
+      >
+        ロッカーの施錠・解錠・暗証番号は各キオスク端末で管理されます（オフラインでも動作）。この画面は端末が報告した<strong>占有状況の表示専用</strong>です。
+      </div>
 
-      {/* Locker grid */}
-      {lockers.length === 0 ? (
+      {loading ? (
+        <div style={{ textAlign: "center", color: "#a8a198", fontSize: 13, padding: "60px 0" }}>
+          読み込み中...
+        </div>
+      ) : devices.length === 0 ? (
         <div
           style={{
-            background: "#fffefb",
-            border: "1px solid #d8d3c7",
-            borderRadius: 10,
-            padding: "48px 0",
-            textAlign: "center",
-            color: "#a8a198",
-            fontSize: 13,
+            background: "#fffefb", border: "1px solid #d8d3c7", borderRadius: 10,
+            padding: "48px 24px", textAlign: "center", color: "#a8a198", fontSize: 13, lineHeight: 1.8,
           }}
         >
-          ロッカーが登録されていません。<br />
-          「＋ ロッカーを追加」ボタンで追加してください。
+          ロッカーの状況はまだありません。<br />
+          ロッカーを備えたキオスク端末が状況を送信すると、ここに端末ごとに表示されます。
         </div>
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-            gap: 14,
-          }}
-        >
-          {lockers.map((locker) => (
-            <LockerCard
-              key={locker.id}
-              locker={locker}
-              onOpen={() => handleOpen(locker.id)}
-              onClose={() => handleClose(locker.id)}
-              onDelete={() => handleDelete(locker.id)}
-            />
+        <div>
+          {devices.map((d) => (
+            <DeviceSection key={d.device_id} device={d} />
           ))}
         </div>
       )}
     </AdminShell>
-    </>
   );
 }

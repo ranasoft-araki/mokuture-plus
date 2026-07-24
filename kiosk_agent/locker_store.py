@@ -260,13 +260,22 @@ def release_all() -> dict:
         return {"ok": True, "door_numbers": doors, "count": len(doors)}
 
 
-# ── ミラー用スナップショット（occupied/has_pin のみ・PIN は出さない） ───────
+# ── ミラー用スナップショット（表示用メタ＋occupied/has_pin・PIN は出さない） ───
 
 def mirror_payload() -> dict:
+    """管理画面の状況表示用に端末のロッカー状態をミラーする。占有/PIN 有無に加え、
+    表示に使う name/door_number/kind を含める（PIN 本体は決して含めない）。"""
     with _lock:
         data = _load()
         return {"lockers": [
-            {"id": lid, "occupied": bool(e.get("occupied")), "has_pin": bool(e.get("pin_hash"))}
+            {
+                "id": lid,
+                "door_number": e.get("door_number"),
+                "name": e.get("name") or f"ロッカー {e.get('door_number')}",
+                "occupied": bool(e.get("occupied")),
+                "has_pin": bool(e.get("pin_hash")),
+                "kind": e.get("kind"),
+            }
             for lid, e in data["lockers"].items()
         ]}
 

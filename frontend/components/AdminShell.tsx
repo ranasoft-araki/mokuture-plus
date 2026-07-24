@@ -27,6 +27,7 @@ const NAV_OPS: { id: NavId; label: string }[] = [
   { id: "inquiries",     label: "問い合わせ" },
   { id: "appointments",  label: "来社予定" },
   { id: "meeting_rooms", label: "会議室管理" },
+  { id: "locker",        label: "ロッカー" },
 ];
 
 const NAV_SETTINGS: { id: NavId; label: string }[] = [

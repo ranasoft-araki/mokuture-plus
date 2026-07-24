@@ -5,6 +5,7 @@ the X-Kiosk-Token header. It identifies both the device and the tenant.
 """
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import random
@@ -86,16 +87,12 @@ def _generate_delivery_pin() -> str:
     return f"{secrets.randbelow(10000):04d}"
 
 
-# ローカルファースト構成では PIN を端末(agent)が保持する。管理画面の has_pin 表示のためだけに、
-# backend 側には「照合不能な実bcryptハッシュ」を1つだけ使い回す(誰のPINにも一致しない)。
-_mirror_sentinel_cache: str | None = None
-
-
-def _mirror_pin_sentinel() -> str:
-    global _mirror_sentinel_cache
-    if _mirror_sentinel_cache is None:
-        _mirror_sentinel_cache = hash_password(secrets.token_hex(16))
-    return _mirror_sentinel_cache
+def _mirror_int(v) -> int | None:
+    """ミラー item の door_number/id を安全に int 化（数値でなければ None）。"""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 router = APIRouter(prefix="/kiosk", tags=["kiosk"])
@@ -838,6 +835,10 @@ class LockerMirrorItem(BaseModel):
     id: str
     occupied: bool = False
     has_pin: bool = False
+    # 新 agent は表示用に name/door_number/kind も送る（旧 agent は id/occupied/has_pin のみ）。
+    name: str | None = None
+    door_number: int | None = None
+    kind: str | None = None
 
 
 class LockerMirrorBody(BaseModel):
@@ -850,35 +851,28 @@ async def kiosk_mirror_lockers(
     ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     db: AsyncSession = Depends(get_db),
 ):
-    """ローカルファースト構成の agent から占有状態を best-effort ミラーする(管理画面表示用)。
+    """ローカルファースト構成の agent から占有状態を best-effort ミラーする(管理画面の表示専用)。
 
-    PIN 本体は受け取らない。occupied を反映し、has_pin は照合不能な表示専用センチネルで表す
-    (置き配で実PINハッシュを既に持つ行は上書きしない)。agent が権威なので全件スナップショット
-    を冪等に適用する。"""
-    tenant, _ = ctx
-    if not body.lockers:
-        return {"ok": True, "updated": 0}
-    ids = [str(it.id) for it in body.lockers]
-    result = await db.execute(
-        select(Locker).where(Locker.tenant_id == tenant.id, Locker.id.in_(ids))
-    )
-    by_id = {l.id: l for l in result.scalars().all()}
-    updated = 0
+    ロッカーは各端末の GPIO 直結＝端末が真実の源。PIN 本体は受け取らず、occupied/has_pin の
+    ブール値のみを**端末ごとの全件スナップショット**として devices 行(locker_state_json)に保存する。
+    DB の lockers 台帳には依存しない（管理画面でロッカーを作っていなくても状況が見える）。
+    管理画面は GET /lockers/status で端末ごとに表示する。agent が権威なので冪等に丸ごと置換。"""
+    _, device = ctx
+    items = []
     for it in body.lockers:
-        locker = by_id.get(str(it.id))
-        if locker is None:
-            continue
-        if it.occupied:
-            locker.occupied = True
-            if it.has_pin and not locker.pin_hash:
-                locker.pin_hash = _mirror_pin_sentinel()
-        else:
-            locker.occupied = False
-            locker.pin_hash = None
-            locker.occupied_at = None
-        updated += 1
+        door = it.door_number if it.door_number is not None else _mirror_int(it.id)
+        items.append({
+            "id": str(it.id),
+            "door_number": door,
+            "name": it.name or f"ロッカー {door if door is not None else it.id}",
+            "occupied": bool(it.occupied),
+            "has_pin": bool(it.has_pin),
+            "kind": it.kind,
+        })
+    device.locker_state_json = json.dumps(items, ensure_ascii=False)
+    device.locker_state_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
-    return {"ok": True, "updated": updated}
+    return {"ok": True, "updated": len(items)}
 
 
 async def _notify_slack(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:

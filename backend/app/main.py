@@ -5,10 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, select, text
 
 from app.config import settings
-from app.database import engine, Base
+from app.database import engine, Base, AsyncSessionLocal
 from app.api import api_router
 
 
@@ -49,6 +49,9 @@ _ENSURE_COLUMNS = {
         # 承認フロー。既存端末は 'active' で埋めて後方互換を保つ。
         "status": "VARCHAR(16) DEFAULT 'active'",
         "hardware_id": "VARCHAR(128)",
+        # ローカルファースト・ロッカーの占有スナップショット（管理画面の表示専用）。
+        "locker_state_json": "TEXT",
+        "locker_state_at": "TIMESTAMP",
     },
 }
 
@@ -90,12 +93,60 @@ def _ensure_schema(sync_conn) -> None:
             pass  # 既存の重複データ等で作成できなくても致命的ではない
 
 
+# 審査用デモモードの既定マスタ。QR発行(来局予定)の初期値プリフィルが有効な選択肢になるよう、
+# demo テナントに担当者(訪問先)・目的(用件)・会議室(案内先)を冪等にシードする。
+_DEMO_SLUGS = ("demo1", "demo2")
+_DEMO_STAFF = "mokuture⁺担当者"     # 訪問先(担当者)
+_DEMO_PURPOSE = "製品体験"          # 用件(目的)
+_DEMO_ROOM = "審査会場"             # 案内先(会議室)
+
+
+async def _seed_demo_master_data() -> None:
+    """demo テナント(demo1/demo2)に、デモ来局予定の初期値に対応するマスタを冪等登録する。
+    既存の値は壊さず、無い項目だけ追加する（best-effort・失敗しても起動は継続）。"""
+    from app.models.tenant import Tenant
+    from app.models.room import MeetingRoom
+    try:
+        async with AsyncSessionLocal() as db:
+            tenants = (await db.execute(
+                select(Tenant).where(Tenant.slug.in_(_DEMO_SLUGS))
+            )).scalars().all()
+            changed = False
+            for t in tenants:
+                staff = [s.strip() for s in (t.staff_list or "").split(",") if s.strip()]
+                if _DEMO_STAFF not in staff:
+                    staff.append(_DEMO_STAFF)
+                    t.staff_list = ",".join(staff)
+                    changed = True
+                purposes = [p.strip() for p in (t.purpose_list or "").split(",") if p.strip()]
+                if _DEMO_PURPOSE not in purposes:
+                    purposes.append(_DEMO_PURPOSE)
+                    t.purpose_list = ",".join(purposes)
+                    changed = True
+                room = (await db.execute(
+                    select(MeetingRoom).where(
+                        MeetingRoom.tenant_id == t.id, MeetingRoom.name == _DEMO_ROOM
+                    )
+                )).scalar_one_or_none()
+                if room is None:
+                    db.add(MeetingRoom(
+                        tenant_id=t.id, name=_DEMO_ROOM, location="デモ会場",
+                        color="#7c3aed", is_active=True,
+                    ))
+                    changed = True
+            if changed:
+                await db.commit()
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create all tables on startup (dev only; use Alembic for production)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_ensure_schema)
+    await _seed_demo_master_data()
     yield
 
 

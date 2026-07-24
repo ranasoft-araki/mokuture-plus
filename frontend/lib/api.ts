@@ -427,6 +427,9 @@ export const api = {
   // Lockers
   listLockers: (token: string) =>
     request<Locker[]>("/lockers", {}, token),
+  // ロッカー状況（表示専用・端末ごとの占有スナップショット）
+  getLockerStatus: (token: string) =>
+    request<{ devices: LockerDeviceStatus[] }>("/lockers/status", {}, token),
   unlockLocker: (token: string, id: string) =>
     request(`/lockers/${id}/unlock`, { method: "POST" }, token),
   lockLocker: (token: string, id: string) =>
@@ -775,6 +778,28 @@ export interface Locker {
   auto_relock_sec: number;
 }
 
+// ロッカーはローカルファースト化で各キオスク端末の GPIO 直結＝端末が真実の源。
+// 管理画面は端末がミラーした占有スナップショット(GET /lockers/status)を表示専用で見る。
+export interface LockerStatusItem {
+  id: string;
+  door_number: number | null;
+  name: string;
+  occupied: boolean;
+  has_pin: boolean;
+  kind: string | null;
+}
+
+export interface LockerDeviceStatus {
+  device_id: string;
+  device_name: string;
+  location: string | null;
+  updated_at: string | null;
+  lockers: LockerStatusItem[];
+  total: number;
+  occupied_count: number;
+  available_count: number;
+}
+
 export interface Schedule {
   id: string;
   playlist_id: string;
@@ -853,6 +878,7 @@ export interface TenantSettings {
   department_list?: string | null;
   kiosk_phone_number?: string | null;
   inquiry_form_url?: string | null;
+  is_demo?: boolean;
 }
 
 export interface Inquiry {

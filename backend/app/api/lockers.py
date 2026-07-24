@@ -1,4 +1,5 @@
 """Locker control API – manages state in DB; Phase 2: wire up GPIO bridge."""
+import json
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -9,7 +10,7 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.middleware.tenant import get_current_user, require_roles
-from app.models.device import Locker
+from app.models.device import Device, Locker
 from app.models.user import User
 
 router = APIRouter(prefix="/lockers", tags=["lockers"])
@@ -28,6 +29,59 @@ class CreateLockerRequest(BaseModel):
 async def list_lockers(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Locker).where(Locker.tenant_id == user.tenant_id).order_by(Locker.door_number))
     return [_locker_out(l) for l in result.scalars()]
+
+
+@router.get("/status")
+async def locker_status(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """管理画面のロッカー状況（**表示専用**）。
+
+    ロッカーはローカルファースト化で各キオスク端末の GPIO 直結＝端末が真実の源。
+    各端末が best-effort でミラーした占有スナップショット(devices.locker_state_json)を
+    端末ごとに集計して返す。ここでは管理・解錠操作は行わない（操作は端末側で完結）。"""
+    result = await db.execute(
+        select(Device)
+        .where(Device.tenant_id == user.tenant_id, Device.locker_state_json.isnot(None))
+        .order_by(Device.name)
+    )
+    devices_out = []
+    for d in result.scalars():
+        try:
+            raw = json.loads(d.locker_state_json) or []
+        except (TypeError, ValueError):
+            raw = []
+        if not isinstance(raw, list) or not raw:
+            continue
+        lockers = []
+        for l in raw:
+            if not isinstance(l, dict):
+                continue
+            door = l.get("door_number")
+            lockers.append({
+                "id": str(l.get("id")),
+                "door_number": door,
+                "name": l.get("name") or f"ロッカー {door if door is not None else l.get('id')}",
+                "occupied": bool(l.get("occupied")),
+                "has_pin": bool(l.get("has_pin")),
+                "kind": l.get("kind"),
+            })
+        if not lockers:
+            continue
+        lockers.sort(key=lambda x: (x["door_number"] is None, x["door_number"] or 0, x["id"]))
+        occupied_count = sum(1 for l in lockers if l["occupied"])
+        devices_out.append({
+            "device_id": d.id,
+            "device_name": d.name,
+            "location": d.location,
+            "updated_at": d.locker_state_at.isoformat() if d.locker_state_at else None,
+            "lockers": lockers,
+            "total": len(lockers),
+            "occupied_count": occupied_count,
+            "available_count": len(lockers) - occupied_count,
+        })
+    return {"devices": devices_out}
 
 
 @router.post("", status_code=201)
