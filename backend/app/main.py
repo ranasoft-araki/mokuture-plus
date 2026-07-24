@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -195,3 +195,51 @@ app.include_router(api_router, prefix=settings.api_prefix)
 @app.get("/health")
 async def health():
     return {"status": "ok", "app": settings.app_name}
+
+
+# ── 一時診断（キー保護・読み取り専用）。原因特定後に撤去する。 ──────────────────
+_DIAG_KEY = "mk-diag-7Xq2kP9z"
+
+
+@app.get("/_diag/orphans")
+async def _diag_orphans(key: str = ""):
+    if key != _DIAG_KEY:
+        raise HTTPException(status_code=404, detail="Not found")
+    from app.models.tenant import Tenant
+    from app.models.user import User
+    from app.models.room import MeetingRoom
+    async with AsyncSessionLocal() as db:
+        tids = set((await db.execute(select(Tenant.id))).scalars().all())
+        users = (await db.execute(select(User))).scalars().all()
+        orphans = [
+            {"email": u.email, "role": u.role, "tenant_id": u.tenant_id}
+            for u in users if u.tenant_id not in tids
+        ]
+        demo = {}
+        for slug in ("demo1", "demo2"):
+            t = (await db.execute(select(Tenant).where(Tenant.slug == slug))).scalar_one_or_none()
+            if t is None:
+                demo[slug] = None
+                continue
+            rc = len((await db.execute(
+                select(MeetingRoom.id).where(MeetingRoom.tenant_id == t.id)
+            )).scalars().all())
+            admins = (await db.execute(select(User).where(User.tenant_id == t.id))).scalars().all()
+            demo[slug] = {
+                "tenant_id": t.id, "rooms": rc,
+                "users": [{"email": a.email, "role": a.role} for a in admins],
+            }
+        lookup = {}
+        for em in ("demo1@ranasoft.co.jp", "demo2@ranasoft.co.jp"):
+            us = (await db.execute(select(User).where(User.email == em))).scalars().all()
+            lookup[em] = [
+                {"tenant_id": u.tenant_id, "tenant_exists": u.tenant_id in tids, "role": u.role}
+                for u in us
+            ]
+        return {
+            "total_tenants": len(tids),
+            "total_users": len(users),
+            "orphan_users": orphans,
+            "demo_tenants": demo,
+            "demo_admin_lookup": lookup,
+        }
