@@ -99,6 +99,10 @@ _DEMO_SLUGS = ("demo1", "demo2")
 _DEMO_STAFF = "mokuture⁺担当者"     # 訪問先(担当者)
 _DEMO_PURPOSE = "製品体験"          # 用件(目的)
 _DEMO_ROOM = "審査会場"             # 案内先(会議室)
+# デモ管理者アカウント（slug→email）。テナントの削除→再作成等で管理者ユーザーの tenant_id が
+# 現デモテナントから外れて孤児化すると、会議室作成などの書込が FK 違反で 500 になる。
+# シードで現デモテナントへ確実に再リンクして自己修復する。
+_DEMO_ADMIN_EMAILS = {"demo1": "demo1@ranasoft.co.jp", "demo2": "demo2@ranasoft.co.jp"}
 
 
 async def _seed_demo_master_data() -> None:
@@ -106,6 +110,7 @@ async def _seed_demo_master_data() -> None:
     既存の値は壊さず、無い項目だけ追加する（best-effort・失敗しても起動は継続）。"""
     from app.models.tenant import Tenant
     from app.models.room import MeetingRoom
+    from app.models.user import User
     try:
         async with AsyncSessionLocal() as db:
             tenants = (await db.execute(
@@ -113,6 +118,19 @@ async def _seed_demo_master_data() -> None:
             )).scalars().all()
             changed = False
             for t in tenants:
+                # デモ管理者アカウントを現デモテナントへ確実に再リンク（孤児化＝tenant_id が
+                # 削除済みテナントを指す状態を修復。会議室作成等の書込 500 の原因を除去）。
+                # get_current_user は毎回 DB のユーザー行を読むので再ログイン不要で即反映される。
+                admin_email = _DEMO_ADMIN_EMAILS.get(t.slug)
+                if admin_email:
+                    admins = (await db.execute(
+                        select(User).where(User.email == admin_email)
+                    )).scalars().all()
+                    for u in admins:
+                        if u.tenant_id != t.id or u.role != "admin":
+                            u.tenant_id = t.id
+                            u.role = "admin"
+                            changed = True
                 staff = [s.strip() for s in (t.staff_list or "").split(",") if s.strip()]
                 if _DEMO_STAFF not in staff:
                     staff.append(_DEMO_STAFF)
