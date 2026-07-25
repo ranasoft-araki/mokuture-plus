@@ -27,7 +27,9 @@ frontend/.netlify/
 *.db-shm
 *.db-wal
 
-# Kiosk agent local-first locker state (per-device, must not be committed)
+# Kiosk agent per-device state (端末ごとのローカル状態・実トークンを含む。コミット禁止)
+# フォーマットは device_state.json.example を参照。実体は /register 時に agent が自動生成する。
+kiosk_agent/device_state.json
 kiosk_agent/locker_state.json
 
 # Kiosk agent かな漢字辞書のダウンロード中間物(SKK-JISYO.L 本体は資産として commit 済み)
