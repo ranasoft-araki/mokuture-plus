@@ -388,6 +388,7 @@ async function mockDeviceFetch(method, path, body) {
   m = path.match(/^\/device\/locker\/([^/]+)\/release$/);
   if (m) return _mockRelease(m[1], body?.pin);
   if (path === "/device/lockers/open-all") return _mockOpenAll();
+  if (path === "/device/unregister") return { ok: true };
   if (path === "/device/locker-config") {
     if (method === "POST" && body && body.count) _MOCK_LOCKER_COUNT = body.count;
     return { count: _MOCK_LOCKER_COUNT, options: [{count:3}, {count:7}] };
@@ -2599,7 +2600,41 @@ function showKioskSettings() {
     handleRelay(el.getAttribute("data-relay-id"), el.getAttribute("data-relay-action"));
   });
 
-  // デバイス情報フッターの 5 連タップで再登録(両タブ共通)
+  // 端末の紐づけ解除の実体: agent の device_state.json を削除(サーバ側トークン) + ブラウザの
+  // localStorage トークンを削除 → boot() で TENANT_SLUG による新規登録をやり直す。
+  // 両方消さないと boot 時に agent が旧トークンを返し、元テナントへ戻ってしまう(別テナント移動不可)。
+  async function doUnbindAndReboot() {
+    try { await devicePost("/device/unregister", {}); } catch (e) { /* agent未到達でも続行し再登録を試みる */ }
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(NAME_KEY);
+    cleanup();
+    boot();
+  }
+
+  // 「端末の紐づけを解除」メニュー(設定タブのフッターボタン)。確認してから完全解除する。
+  function unbindDevice() {
+    const slug = (CFG && CFG.tenant_slug) || "";
+    const overlay = document.createElement("div");
+    overlay.style.cssText = `position:absolute;inset:0;background:rgba(29,26,21,.6);display:flex;align-items:center;justify-content:center;z-index:99`;
+    overlay.innerHTML = `<div style="background:#fffefb;border-radius:20px;padding:48px 56px;width:620px;text-align:center;box-shadow:0 24px 64px rgba(0,0,0,.3)">
+      <div style="font-size:28px;font-weight:600;color:#1d1a15;margin-bottom:12px">端末の紐づけを解除しますか？</div>
+      <div style="font-size:16px;color:#8a8276;line-height:1.7;margin-bottom:30px">保存済みの端末トークンを削除し、${slug ? `<b>${escHtml(slug)}</b>（TENANT_SLUG）` : "TENANT_SLUG"} で登録し直します。<br>解除後は管理画面「キオスク端末」での<b>承認</b>が必要になります。</div>
+      <div id="ks-unbind-err" style="color:#c0392b;font-size:14px;min-height:18px;margin-bottom:14px"></div>
+      <div style="display:flex;gap:14px">
+        <button id="ks-unbind-cancel" style="flex:1;padding:16px;border-radius:12px;border:2px solid #d4cfc7;background:transparent;font-size:16px;color:#5a5249;cursor:pointer;font-family:inherit">キャンセル</button>
+        <button id="ks-unbind-ok" style="flex:1;padding:16px;border-radius:12px;border:none;background:#c0392b;color:#fffefb;font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">解除して再登録</button>
+      </div>
+    </div>`;
+    document.getElementById("ks-root").appendChild(overlay);
+    document.getElementById("ks-unbind-cancel").addEventListener("click", () => overlay.remove());
+    document.getElementById("ks-unbind-ok").addEventListener("click", () => {
+      const ok = document.getElementById("ks-unbind-ok");
+      ok.disabled = true; ok.textContent = "解除中…";
+      doUnbindAndReboot();  // boot() が画面ごと差し替えるので overlay は自然に消える
+    });
+  }
+
+  // デバイス情報フッターの 5 連タップでも同じ完全解除を行う(隠しショートカット)
   function handleDevTap() {
     devTaps++;
     clearTimeout(devTimer);
@@ -2617,12 +2652,7 @@ function showKioskSettings() {
       </div>`;
       document.getElementById("ks-root").appendChild(overlay);
       document.getElementById("ks-rereg-cancel").addEventListener("click", () => overlay.remove());
-      document.getElementById("ks-rereg-ok").addEventListener("click", () => {
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(NAME_KEY);
-        cleanup();
-        boot();
-      });
+      document.getElementById("ks-rereg-ok").addEventListener("click", () => doUnbindAndReboot());
     } else {
       devTimer = setTimeout(() => { devTaps = 0; }, 3000);
     }
@@ -2665,6 +2695,7 @@ function showKioskSettings() {
   <div style="display:flex;align-items:center;padding:16px 80px 24px;font-size:14px;color:${C.stone}">
     ${isDev ? 'ハードウェアの接続状態をこの画面で確認できます' : '設定の変更はスタッフのみ操作できます'}
     <span style="flex:1"></span>
+    ${isDev ? '' : `<button id="ks-unbind" style="margin-right:24px;padding:11px 22px;border-radius:11px;border:1.5px solid ${C.red};background:transparent;color:${C.redDk};font-size:15px;font-weight:600;cursor:pointer;font-family:inherit">端末の紐づけを解除</button>`}
     <span id="ks-dev" style="font-family:ui-monospace,monospace;cursor:default" title="">${devName} · FW v2.4.1</span>
   </div>
 </div>`;
@@ -3113,6 +3144,9 @@ function showKioskSettings() {
     // ここから先は設定タブのみのバインド
     if (activeTab !== "settings") return;
 
+    const unbindBtn = document.getElementById("ks-unbind");
+    if (unbindBtn) unbindBtn.addEventListener("click", unbindDevice);
+
     const lockerAll = document.getElementById("ks-locker-all");
     if (lockerAll) lockerAll.addEventListener("click", showLockerUnlockAllDialog);
 
@@ -3315,16 +3349,16 @@ function showMockBadge() {
   document.body.appendChild(b);
 }
 
-// 審査用デモモード(ST.is_demo)のとき、画面下部に小さく常時バッジを出す。
-// 上部は MOCK バッジと競合するため下部中央に置く。設定ロード後に呼ぶ。
+// デモモード(ST.is_demo)のとき、画面上部中央に小さく常時バッジを出す。設定ロード後に呼ぶ。
+// (MOCK バッジも上部中央だが ?mock=1 の開発時のみ・デモ実運用では出ないので競合しない)
 function showDemoBadge() {
   const existing = document.getElementById("demo-badge");
   if (!ST.is_demo) { if (existing) existing.remove(); return; }
   if (existing) return;
   const b = document.createElement("div");
   b.id = "demo-badge";
-  b.innerHTML = "審査用デモモード<span style='opacity:.82;font-weight:500;margin-left:8px'>担当者の返信操作を自動で再現しています</span>";
-  b.style.cssText = "position:fixed;bottom:0;left:50%;transform:translateX(-50%);z-index:2147483647;pointer-events:none;background:rgba(20,18,15,.82);color:#fff;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;font-size:13px;font-weight:700;letter-spacing:.3px;padding:6px 20px;border-radius:12px 12px 0 0;box-shadow:0 -2px 8px rgba(0,0,0,.28);white-space:nowrap;opacity:.95";
+  b.innerHTML = "デモモード<span style='opacity:.82;font-weight:500;margin-left:8px'>担当者の返信操作を自動で再現しています</span>";
+  b.style.cssText = "position:fixed;top:0;left:50%;transform:translateX(-50%);z-index:2147483647;pointer-events:none;background:rgba(20,18,15,.82);color:#fff;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;font-size:13px;font-weight:700;letter-spacing:.3px;padding:6px 20px;border-radius:0 0 12px 12px;box-shadow:0 2px 8px rgba(0,0,0,.28);white-space:nowrap;opacity:.95";
   document.body.appendChild(b);
 }
 

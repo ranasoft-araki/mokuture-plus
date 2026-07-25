@@ -19,7 +19,7 @@ import kana_kanji
 import locker_store
 from config import settings
 from gpio import DoorSensor, LockerController, PirSensor
-from state import get_device_name, get_device_token, is_registered, save_device_state
+from state import clear_device_state, get_device_name, get_device_token, is_registered, save_device_state
 from sync import find_media, heartbeat_loop, sync_loop
 from updater import updater, read_version
 
@@ -657,6 +657,15 @@ async def register_device():
         "device_name": data["device_name"],
         "device_token": data["device_token"],
     }
+
+
+@app.post("/device/unregister")
+async def device_unregister():
+    """端末の紐づけを解除する。保存済みトークン(device_state.json)を削除し、次回 /register で
+    TENANT_SLUG による新規登録をやり直せるようにする（別テナントへの付け替え・再登録用）。
+    ブラウザ側の localStorage トークン削除はキオスク UI が別途行う。"""
+    clear_device_state()
+    return {"ok": True}
 
 
 _STATUS_UNREACHABLE = "__unreachable__"
