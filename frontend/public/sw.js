@@ -1,5 +1,5 @@
 /* mokuture+ Service Worker — push notifications & offline shell cache */
-const CACHE = 'mokuture-v5';
+const CACHE = 'mokuture-v6';
 const SHELL = ['/', '/icons/icon.svg', '/manifest.json'];
 
 // 受付 OK/NG 応答の送信先フォールバック（プッシュ payload に decisionEndpoint が無い場合）
@@ -33,6 +33,23 @@ self.addEventListener('fetch', (e) => {
   if (url.pathname.startsWith('/icons/') || url.pathname === '/manifest.json') {
     e.respondWith(
       caches.match(e.request).then((cached) => cached ?? fetch(e.request))
+    );
+    return;
+  }
+  // 起動ゲート(/) は cache-first + 背景更新（stale-while-revalidate）。
+  // / はインライン script で即 location.replace する軽量ゲートで、React を hydrate せず
+  // 離脱するため、古いHTMLでもチャンクを実行せず＝ stale でも安全。起動時のネット往復を消す。
+  // （遷移先の /login・/{tenant}/admin は下の network-first で常に fresh を取る＝チャンク不整合を防ぐ）
+  if (url.pathname === '/') {
+    e.respondWith(
+      caches.open(CACHE).then(async (cache) => {
+        const cached = await cache.match('/');
+        const network = fetch(e.request).then((res) => {
+          if (res && res.ok) cache.put('/', res.clone());
+          return res;
+        }).catch(() => null);
+        return cached || (await network) || Response.error();
+      })
     );
     return;
   }
