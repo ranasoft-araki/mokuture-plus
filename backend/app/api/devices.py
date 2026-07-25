@@ -11,6 +11,7 @@ from app.database import get_db
 from app.middleware.tenant import get_current_user
 from app.models.device import Device
 from app.models.user import User
+from app.services.timeutil import iso_z
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
@@ -152,6 +153,6 @@ def _out(d: Device) -> dict:
         "name": d.name,
         "location": d.location,
         "status": d.status or "active",
-        "last_seen_at": d.last_seen_at.isoformat() + "Z" if d.last_seen_at else None,
-        "created_at": d.created_at.isoformat() + "Z" if d.created_at else "",
+        "last_seen_at": iso_z(d.last_seen_at),
+        "created_at": iso_z(d.created_at) or "",
     }

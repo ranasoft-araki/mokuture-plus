@@ -16,6 +16,7 @@ from app.models.user import User
 from app.models.device import Device
 from app.models.reception import ReceptionLog
 from app.services.auth import hash_password, create_access_token, create_refresh_token
+from app.services.timeutil import iso_z
 
 router = APIRouter(prefix="/operator", tags=["operator"])
 
@@ -765,7 +766,7 @@ async def list_all_devices(
             "tenant_id": d.tenant_id,
             "tenant_name": t_name,
             "reseller_name": r_name,
-            "last_seen_at": d.last_seen_at.isoformat() + "Z" if d.last_seen_at else None,
+            "last_seen_at": iso_z(d.last_seen_at),
             "is_online": is_online,
             "status": getattr(d, "status", "active") or "active",
         })

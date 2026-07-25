@@ -168,7 +168,7 @@ async def register_device(request: Request, body: RegisterRequest, db: AsyncSess
         )
         existing = existing_result.scalar_one_or_none()
         if existing is not None:
-            existing.last_seen_at = datetime.now(_JST).replace(tzinfo=None)
+            existing.last_seen_at = datetime.now(timezone.utc).replace(tzinfo=None)
             await db.commit()
             return {
                 "device_token": existing.token,
@@ -187,7 +187,7 @@ async def register_device(request: Request, body: RegisterRequest, db: AsyncSess
         token=secrets.token_hex(32),  # 64-char hex, cryptographically secure
         status="pending",
         hardware_id=hardware_id,
-        last_seen_at=datetime.now(_JST).replace(tzinfo=None),
+        last_seen_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
     db.add(device)
     try:
@@ -223,7 +223,7 @@ async def get_kiosk_device(
     if device is None:
         raise HTTPException(status_code=401, detail="Invalid kiosk token")
 
-    device.last_seen_at = datetime.now(_JST).replace(tzinfo=None)
+    device.last_seen_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
 
     tenant_result = await db.execute(select(Tenant).where(Tenant.id == device.tenant_id))
