@@ -428,13 +428,11 @@ export default function AdminKioskPage() {
                       marginTop: 18, paddingTop: 14, borderTop: "1px solid #efece5",
                     }}>
                       {[
-                        { label: "IPアドレス",        value: "—",                    mono: true },
-                        { label: "MAC",               value: "—",                    mono: true },
-                        { label: "バージョン",         value: "—",                    mono: true },
+                        { label: "IPアドレス",        value: d.ip_address ?? "—",    mono: true },
+                        { label: "バージョン",         value: d.agent_version ?? "—", mono: true },
                         { label: "最終同期",           value: d.last_seen_at ? formatRelative(d.last_seen_at) : "未接続", mono: false },
-                        { label: "連続稼働",           value: "—",                    mono: false },
-                        { label: "現在のプレイリスト", value: "—",                    mono: false },
-                        { label: "配信スロット",       value: "—",                    mono: true },
+                        { label: "連続稼働",           value: online && d.online_since ? formatDuration(d.online_since) : "—", mono: false },
+                        { label: "現在のプレイリスト", value: d.current_playlist_name ?? "—", mono: false },
                         { label: "発行日",             value: formatDate(d.created_at), mono: false },
                       ].map(({ label, value, mono }) => (
                         <div key={label}>
@@ -528,4 +526,16 @@ function formatRelative(value: string) {
   const hr = Math.floor(min / 60);
   if (hr < 24) return `${hr}時間前`;
   return `${Math.floor(hr / 24)}日前`;
+}
+
+// 連続稼働時間（online_since からの経過）を「N日N時間」「N時間N分」等に整形する。
+function formatDuration(value: string) {
+  const sec = Math.floor((Date.now() - utcDate(value).getTime()) / 1000);
+  if (sec < 60) return "1分未満";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}分`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}時間${min % 60}分`;
+  const day = Math.floor(hr / 24);
+  return `${day}日${hr % 24}時間`;
 }

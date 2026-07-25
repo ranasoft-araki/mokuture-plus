@@ -26,6 +26,12 @@ class Device(Base):
     hardware_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     force_update_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # 端末テレメトリ（heartbeat で受信・管理画面の端末詳細に表示）。
+    agent_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)   # エージェント版数
+    ip_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)      # 端末が報告する LAN IP
+    # 連続オンライン開始時刻（UTC naive）。heartbeat/各キオスクAPIのたびに get_kiosk_device が
+    # 「3分超の空白があればリセット」して維持する＝連続稼働時間 = now - online_since。
+    online_since: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     # ローカルファースト・ロッカーの占有スナップショット（管理画面の表示専用）。
     # ロッカーは各端末の GPIO 直結＝端末が真実の源なので、agent が best-effort で
     # 全件スナップショット（occupied/has_pin のブールのみ・PIN 本体は含まない）を

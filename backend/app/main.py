@@ -52,6 +52,12 @@ _ENSURE_COLUMNS = {
         # ローカルファースト・ロッカーの占有スナップショット（管理画面の表示専用）。
         "locker_state_json": "TEXT",
         "locker_state_at": "TIMESTAMP",
+        # 現在配信中プレイリスト（モデルには当初から存在するが、古い本番テーブルにも確実に揃える防御）。
+        "current_playlist_id": "VARCHAR(36)",
+        # 端末テレメトリ（heartbeat 受信・管理画面表示）。
+        "agent_version": "VARCHAR(32)",
+        "ip_address": "VARCHAR(64)",
+        "online_since": "TIMESTAMP",
     },
 }
 

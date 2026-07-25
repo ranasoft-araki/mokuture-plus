@@ -815,6 +815,10 @@ export interface Device {
   status: string; // "pending" | "active"
   last_seen_at: string | null;
   created_at: string;
+  agent_version?: string | null;
+  ip_address?: string | null;
+  online_since?: string | null;
+  current_playlist_name?: string | null;
 }
 
 export interface PushSubscriptionInfo {

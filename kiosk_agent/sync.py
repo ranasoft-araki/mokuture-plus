@@ -2,6 +2,7 @@
 import asyncio
 import json
 import mimetypes
+import socket
 from pathlib import Path
 
 import httpx
@@ -9,6 +10,7 @@ import httpx
 import locker_store
 from config import settings
 from state import get_device_name, get_device_token, save_device_state
+from updater import read_version
 
 # Last known force_update_at value — used to detect remote force-refresh signals
 _last_force_update_at: str | None = None
@@ -160,8 +162,21 @@ async def _mirror_lockers(client: httpx.AsyncClient, token: str) -> None:
         print(f"[heartbeat] locker mirror failed: {e}")
 
 
+def _lan_ip() -> str:
+    """端末の LAN IP を推定する。外部へパケットは送らず、経路上のローカルIPを得るだけ。"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:
+        return ""
+    finally:
+        s.close()
+
+
 async def heartbeat_loop() -> None:
     """60秒ごとに /kiosk/heartbeat を送信。コンテンツ同期とは独立して動作。
+    端末テレメトリ（エージェント版数・LAN IP）を載せ、管理画面の端末詳細に表示させる。
     併せてロッカー占有スナップショットを best-effort でミラーする（管理画面の表示用）。"""
     async with httpx.AsyncClient() as client:
         while True:
@@ -171,6 +186,7 @@ async def heartbeat_loop() -> None:
                     resp = await client.post(
                         f"{settings.remote_api_url}/kiosk/heartbeat",
                         headers={"X-Kiosk-Token": token},
+                        json={"version": read_version(), "ip": _lan_ip()},
                         timeout=10,
                     )
                     if resp.status_code not in (200, 204):

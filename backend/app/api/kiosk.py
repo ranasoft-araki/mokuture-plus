@@ -12,7 +12,7 @@ import random
 import re
 import secrets
 import zoneinfo
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _JST = zoneinfo.ZoneInfo("Asia/Tokyo")
@@ -223,7 +223,17 @@ async def get_kiosk_device(
     if device is None:
         raise HTTPException(status_code=401, detail="Invalid kiosk token")
 
-    device.last_seen_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # 連続オンライン開始時刻(online_since)を維持する。前回接続から3分超の空白があれば
+    # 「一度オフラインになった」とみなしてリセット。連続稼働時間 = now - online_since。
+    # 注: 本番Neonの日時列は timestamptz で aware に読み戻るため、naive の now と引き算する前に
+    # naive-UTC へ揃える（揃えないと aware/naive 混在で TypeError→500。SQLite開発では naive で素通り）。
+    prev = device.last_seen_at
+    if prev is not None and prev.tzinfo is not None:
+        prev = prev.astimezone(timezone.utc).replace(tzinfo=None)
+    if device.online_since is None or prev is None or (now - prev) > timedelta(minutes=3):
+        device.online_since = now
+    device.last_seen_at = now
     await db.commit()
 
     tenant_result = await db.execute(select(Tenant).where(Tenant.id == device.tenant_id))
@@ -234,9 +244,32 @@ async def get_kiosk_device(
     return tenant, device
 
 
+class HeartbeatBody(BaseModel):
+    version: str | None = None
+    ip: str | None = None
+
+
 @router.post("/heartbeat", status_code=200)
-async def kiosk_heartbeat(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device)):
-    """軽量生存確認。get_kiosk_device が last_seen_at を更新するためここでの追加処理不要。"""
+async def kiosk_heartbeat(
+    body: HeartbeatBody | None = None,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """軽量生存確認。last_seen_at/online_since は get_kiosk_device が更新する。
+    エージェントが版数/IP を body で送ってきたら端末テレメトリとして保存する(任意・後方互換)。"""
+    _, device = ctx
+    changed = False
+    if body is not None:
+        v = (body.version or "").strip()
+        if v and v != device.agent_version:
+            device.agent_version = v[:32]
+            changed = True
+        ip = (body.ip or "").strip()
+        if ip and ip != device.ip_address:
+            device.ip_address = ip[:64]
+            changed = True
+    if changed:
+        await db.commit()
     return {"ok": True}
 
 
@@ -253,12 +286,20 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     """Return the current scheduled playlist with embedded media data."""
     tenant, device = ctx
 
+    async def _set_current_playlist(pid: str | None) -> None:
+        """現在配信中のプレイリストを端末行に記録する（管理画面の「現在のプレイリスト」表示用）。変化時のみ commit。"""
+        if device.current_playlist_id != pid:
+            device.current_playlist_id = pid
+            await db.commit()
+
     # 承認待ち端末はスケジュールを返さない — キオスクは承認待ち画面を表示する
     if (device.status or "active") == "pending":
+        await _set_current_playlist(None)
         return {"pending": True, "playlist": None, "force_update_at": None, "device_name": device.name}
 
     # Return suspension status immediately — kiosk handles UI
     if tenant.is_suspended:
+        await _set_current_playlist(None)
         return {"suspended": True, "message": "このテナントは現在停止中です", "playlist": None, "force_update_at": None, "device_name": device.name}
 
     now = datetime.now(_JST)
@@ -277,12 +318,16 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     force_update_at = device.force_update_at.isoformat() if device.force_update_at else None
 
     if schedule is None:
+        await _set_current_playlist(None)
         return {"playlist": None, "force_update_at": force_update_at, "device_name": device.name}
 
     pl_result = await db.execute(select(Playlist).where(Playlist.id == schedule.playlist_id))
     pl = pl_result.scalar_one_or_none()
     if pl is None:
+        await _set_current_playlist(None)
         return {"playlist": None, "force_update_at": force_update_at, "device_name": device.name}
+
+    await _set_current_playlist(pl.id)
 
     items_result = await db.execute(
         select(PlaylistItem)

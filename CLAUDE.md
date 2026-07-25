@@ -314,6 +314,12 @@ mokuture/
 | force_update_at | TIMESTAMP | 強制更新フラグ（NULLでない場合キオスクがリロード）|
 | locker_state_json | TEXT | ローカルファースト・ロッカーの占有スナップショット(端末ごと・表示専用)。agent が best-effort でミラーした `[{id,door_number,name,occupied,has_pin,kind}]`。PIN本体は含まない。管理画面 `GET /lockers/status` の表示元 |
 | locker_state_at | TIMESTAMP | 上記スナップショットの最終ミラー時刻(UTC naive) |
+| current_playlist_id | VARCHAR(36) | 現在配信中のプレイリストID。`GET /kiosk/schedule` が配信解決時に記録(変化時のみ)。管理画面「キオスク端末」詳細の「現在のプレイリスト」に名前解決して表示。停止/承認待ち/スケジュール無しでは NULL にクリア |
+| agent_version | VARCHAR(32) | 端末エージェント版数。`POST /kiosk/heartbeat` の body で受信し保存(管理画面詳細の「バージョン」) |
+| ip_address | VARCHAR(64) | 端末が報告する LAN IP。heartbeat body で受信(管理画面詳細の「IPアドレス」) |
+| online_since | TIMESTAMP(UTC naive) | 連続オンライン開始時刻。`get_kiosk_device` が last_seen 更新時に維持(前回接続から3分超の空白でリセット)。管理画面の「連続稼働」= now − online_since(online な端末のみ表示) |
+
+> 上記のうち `current_playlist_id`(当初からモデルに存在)・`agent_version`・`ip_address`・`online_since` は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS.devices`)で追加。**heartbeat は任意 body**(`{version, ip}`)で、旧エージェント(body 無し)とも後方互換(422 にならない)。日時列は本番 Neon で timestamptz として aware に読み戻るため、シリアライズは `iso_z()` で単一 Z 化、`online_since` の差分計算は naive-UTC へ揃えてから行う(→[[naive-timestamp-tz-gotcha]] 相当)。
 
 ### その他テーブル
 - **users** — email / password_hash / role / tenant_id
