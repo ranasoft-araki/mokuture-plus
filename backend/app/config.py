@@ -61,9 +61,10 @@ class Settings(BaseSettings):
     # 審査用デモモード(demo テナント: tenants.is_demo=true)向け設定。
     # DEMO_LOCKER_PIN: 手荷物預かりで来訪者が何を入力しても内部的に施錠する固定PIN(受取もこれ)。既定 0805。
     # DEMO_AUTO_REPLY_MIN/MAX_SEC: 受付通知後、担当者返信「受付(参ります)」を自動再現するまでの待機秒。
+    # スマホへの実プッシュ通知が届く前に画面が遷移しないよう、2026-07-27に 3〜5 → 5〜7 秒へ延長。
     demo_locker_pin: str = "0805"
-    demo_auto_reply_min_sec: float = 3.0
-    demo_auto_reply_max_sec: float = 5.0
+    demo_auto_reply_min_sec: float = 5.0
+    demo_auto_reply_max_sec: float = 7.0
 
     @property
     def slack_oauth_enabled(self) -> bool:

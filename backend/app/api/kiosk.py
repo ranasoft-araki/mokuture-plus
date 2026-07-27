@@ -52,8 +52,9 @@ _demo_auto_tasks: set[asyncio.Task] = set()
 async def _demo_auto_accept(tenant_id: str, log_id: str) -> None:
     """審査用デモ: 実通知の後に担当者の「受付(参ります)」応答を自動再現する。
 
-    展示・審査ではスマホ側で担当者が返信する人手が無いので、3〜5秒待ってから accepted を
+    展示・審査ではスマホ側で担当者が返信する人手が無いので、5〜7秒待ってから accepted を
     確定させる＝キオスクは本番と同じ `GET /kiosk/reception/{id}` ポーリングで結果画面へ遷移する。
+    (待機はスマホへの実プッシュ通知が届く前に画面が遷移しないための猶予でもある)
     `_apply_decision` は idempotent(確定後は上書き不可)なので、万一実担当者が先に押しても衝突しない。
     通知タスク(Slack join 等で最大〜30s)と別の task にして、体感タイミングを本番同様に保つ。"""
     lo = settings.demo_auto_reply_min_sec
@@ -557,7 +558,7 @@ async def kiosk_reception(
     background.add_task(_fire_reception_notifications, tenant.id, log)
 
     # 審査用デモモード: 実通知の後、担当者返信「受付(参ります)」をサーバ側で自動再現する。
-    # 通知は上の BackgroundTasks で即送信し、こちらは別 task で 3〜5 秒後に accepted を確定させる。
+    # 通知は上の BackgroundTasks で即送信し、こちらは別 task で 5〜7 秒後に accepted を確定させる。
     if getattr(tenant, "is_demo", False):
         _spawn_demo_auto_accept(tenant.id, log.id)
 
