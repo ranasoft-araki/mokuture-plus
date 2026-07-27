@@ -129,7 +129,6 @@ async def sync_once(client: httpx.AsyncClient) -> None:
                 stale.unlink(missing_ok=True)
             del manifest[mid]
     _save_manifest(manifest)
-    print(f"[sync] 完了 — キャッシュ {len(manifest)} 件")
 
 
 async def sync_loop() -> None:
