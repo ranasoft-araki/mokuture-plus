@@ -458,17 +458,17 @@ export function QrGuideBalloon<T extends HTMLElement>({
 
   if (!active || !rect) return null;
 
-  const PURPLE = "#7c3aed";
+  const GREEN = "#4a7c4e";
   const GAP = 12;
   const ARROW = 8;
 
   const box: React.CSSProperties = {
     position: "fixed", zIndex: 4000, pointerEvents: "none",
-    background: PURPLE, color: "#fff",
+    background: GREEN, color: "#fff",
     fontFamily: FONT_JP, fontSize: 12.5, fontWeight: 700, lineHeight: 1.3,
     letterSpacing: "0.3px", whiteSpace: "nowrap",
     padding: "8px 13px", borderRadius: 10,
-    boxShadow: "0 4px 14px rgba(124,58,237,0.4)",
+    boxShadow: "0 4px 14px rgba(74,124,78,0.4)",
     animation: "mkGuideGlow 1.6s ease-in-out infinite",
   };
   const arrow: React.CSSProperties = {
@@ -480,16 +480,16 @@ export function QrGuideBalloon<T extends HTMLElement>({
 
   if (placement === "right") {
     box.left = rect.right + GAP; box.top = cy; box.transform = "translateY(-50%)";
-    Object.assign(arrow, { right: "100%", top: "50%", marginTop: -ARROW, borderRightColor: PURPLE });
+    Object.assign(arrow, { right: "100%", top: "50%", marginTop: -ARROW, borderRightColor: GREEN });
   } else if (placement === "left") {
     box.left = rect.left - GAP; box.top = cy; box.transform = "translate(-100%, -50%)";
-    Object.assign(arrow, { left: "100%", top: "50%", marginTop: -ARROW, borderLeftColor: PURPLE });
+    Object.assign(arrow, { left: "100%", top: "50%", marginTop: -ARROW, borderLeftColor: GREEN });
   } else if (placement === "top") {
     box.left = cx; box.top = rect.top - GAP; box.transform = "translate(-50%, -100%)";
-    Object.assign(arrow, { top: "100%", left: "50%", marginLeft: -ARROW, borderTopColor: PURPLE });
+    Object.assign(arrow, { top: "100%", left: "50%", marginLeft: -ARROW, borderTopColor: GREEN });
   } else { // bottom
     box.left = cx; box.top = rect.bottom + GAP; box.transform = "translateX(-50%)";
-    Object.assign(arrow, { bottom: "100%", left: "50%", marginLeft: -ARROW, borderBottomColor: PURPLE });
+    Object.assign(arrow, { bottom: "100%", left: "50%", marginLeft: -ARROW, borderBottomColor: GREEN });
   }
 
   return createPortal(
