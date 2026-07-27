@@ -1349,7 +1349,7 @@ export default function AppointmentsPage() {
       {/* 審査用デモモード: QR発行ガイド ②〜⑤（①はサイドバー側=AdminShell）。
           ②は作成前のみ（lastCreatedId が立ったら④へ送り、②と④の同時表示を防ぐ）。 */}
       <QrGuideBalloon anchorRef={addBtnRef}    active={isDemo && !lastCreatedId && !showForm && !qrAppt && !editAppt && !confirmDeleteId} text="QR発行はこちら②" placement="bottom" />
-      <QrGuideBalloon anchorRef={createBtnRef} active={isDemo && showForm}                                              text="QR発行はこちら③" placement="top" />
+      <QrGuideBalloon anchorRef={createBtnRef} active={isDemo && showForm}                                              text="QR発行はこちら③" placement="bottom" />
       <QrGuideBalloon anchorRef={qrBtnRef}     active={isDemo && !!lastCreatedId && !showForm && !qrAppt && !editAppt && !confirmDeleteId} text="QR発行はこちら④" placement="top" />
       <QrGuideBalloon anchorRef={printBtnRef}  active={isDemo && !!qrAppt}                                              text="QR発行はこちら" placement="top" />
     </AdminShell>
