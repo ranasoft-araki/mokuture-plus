@@ -7,13 +7,13 @@ Wants=network-online.target
 Type=notify
 User=USER
 WorkingDirectory=AGENT_DIR
-ExecStartPre=/usr/bin/pkill -f chromium
 ExecStart=VENV/bin/uvicorn main:app --host 0.0.0.0 --port 8080 --no-access-log
-ExecStartPost=/bin/sh -c 'sleep 3; /usr/bin/chromium --kiosk http://localhost:3000 >/dev/null 2>&1 &'
 Restart=always
 RestartSec=5
 WatchdogSec=30
 EnvironmentFile=AGENT_DIR/.env
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStartPost=/usr/bin/systemctl --user restart mokuture-browser.service
 
 [Install]
 WantedBy=multi-user.target
