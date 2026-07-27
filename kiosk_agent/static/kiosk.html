@@ -970,6 +970,52 @@ function camGuideCard() {
   </div>`;
 }
 
+// ─── ロッカー扉ガイド (どの扉を開けるか・アニメ) ──────────────────────────────
+// camGuideCard と同じ手法で、ロッカー什器を正面から見た「縦積み」イラストを SVG で描く。
+// 扉は door_number 昇順で上から並ぶ(1=最上段。実機の 1→2→3 縦積みに一致)。取っ手は各扉の
+// 右側にあるので、対象扉(sel)を bc(アクセント)で塗り＋取っ手(右側)のパルスリングで強調し、
+// 「この扉の右側(取っ手側)を押して開ける」ことを一目で示す。
+// 解錠(受取)/扉オープン(保管・置き配)の案内に使う。allLockers=全扉(未指定なら sel 単体)。
+function lockerDoorGuide(sel, allLockers) {
+  const bc = ST.brand_color;
+  const doors = (allLockers && allLockers.length ? allLockers.slice() : [sel])
+    .sort((a, b) => ((a && a.door_number) || 0) - ((b && b.door_number) || 0));
+  const N = doors.length;
+  let si = doors.findIndex(l => l && sel && l.id === sel.id);
+  if (si < 0) si = doors.findIndex(l => l && sel && l.door_number === sel.door_number);
+  if (si < 0) si = 0;
+
+  const doorX = 20, doorW = 300, doorH = 100, gapY = 16, padTop = 22, rightPad = 48;
+  const vbW = doorX + doorW + rightPad;   // 右余白=取っ手のパルスリングがはみ出す分
+  const vbH = padTop * 2 + N * doorH + (N - 1) * gapY;
+  const hx = doorX + doorW - 24;   // 取っ手(右側)の中心X
+
+  const parts = doors.map((l, i) => {
+    const y = padTop + i * (doorH + gapY);
+    const cy = y + doorH / 2;
+    const on = i === si;
+    const stroke = on ? bc : T.borderStrong;
+    const fill = on ? bc + "1f" : T.canvas;
+    const sw = on ? 7 : 3;
+    const num = l && l.door_number != null ? l.door_number : (i + 1);
+    // 扉本体 + 取っ手(右側の縦バー) + 番号
+    let s = `<rect x="${doorX}" y="${y}" width="${doorW}" height="${doorH}" rx="14" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>
+      <rect x="${hx - 5}" y="${cy - 28}" width="10" height="56" rx="5" fill="${on ? bc : T.sub}"/>
+      <text x="${doorX + 48}" y="${cy}" dominant-baseline="central" text-anchor="middle" font-size="${on ? 56 : 46}" font-weight="700" fill="${on ? bc : T.muted}" font-family="Inter,system-ui,sans-serif">${num}</text>`;
+    if (on) {
+      // 取っ手(右側)のパルスリングで対象扉=押す位置を強調
+      s += `<circle cx="${hx}" cy="${cy}" r="24" fill="none" stroke="${bc}" stroke-width="6" opacity="0.6">
+        <animate attributeName="r" values="24;56" dur="1.5s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0.6;0" dur="1.5s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="${hx}" cy="${cy}" r="13" fill="${bc}"/>`;
+    }
+    return s;
+  }).join("");
+
+  return `<svg viewBox="0 0 ${vbW} ${vbH}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="display:block" aria-hidden="true">${parts}</svg>`;
+}
+
 // ─── WELCOME + QR (統合ようこそ画面) ─────────────────────────────────────────
 // 待機解除後の最初の画面。左=QRカメラ常時スキャン(予約QRを自動検出→受付)、
 // 右=カメラ位置ガイド(什器イラスト)＋「ご予約のない方はこちら」ボタン(受付メニューへ)。
@@ -1301,6 +1347,7 @@ function showLocker(mode) {
   let lockers = [], available = 0, shownLockers = [];
   let view = "loading";      // loading | grid | openwait | pinset | pininput | result | error
   let sel = null, pin = "", err = "", busy = false, resultTitle = "", resultSub = "";
+  let resultGuide = false;   // result 画面で扉ガイド(どの扉を開けるか)を出すか=解錠(受取)成功時のみ
   let idleId, resultTimer = null, lastView = "loading";
 
   function resetIdle() {
@@ -1357,15 +1404,19 @@ function showLocker(mode) {
   </div>
   ${body}`);
     } else if (view === "openwait") {
-      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;text-align:center;padding:0 120px">
-        <div style="width:120px;height:120px;border-radius:30px;background:${bc}1a;color:${bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.4)">${ICO.locker}</div></div>
+      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center;padding:0 120px">
+        <div style="width:560px;height:330px;display:flex;align-items:center;justify-content:center">${lockerDoorGuide(sel, lockers)}</div>
         <div style="font-size:60px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">扉が開きました</div>
-        <div style="font-size:30px;color:${T.sub};line-height:1.5"><b>${escHtml(sel.name)}</b> に荷物を入れ、扉を閉めてください</div>
-        <button id="lk-closed" style="margin-top:12px;padding:22px 56px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:28px;font-weight:600;cursor:pointer">扉を閉めました → 暗証番号を設定</button>
+        <div style="font-size:30px;color:${T.sub};line-height:1.5"><b style="color:${bc}">${escHtml(sel.name)}</b> の扉です。右側（取っ手側）を押して開け、<br>荷物を入れて扉を閉めてください。</div>
+        <button id="lk-closed" style="margin-top:6px;padding:22px 56px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:28px;font-weight:600;cursor:pointer">扉を閉めました → 暗証番号を設定</button>
       </div>`);
     } else if (view === "result") {
-      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;text-align:center;padding:0 120px">
-        <div style="width:110px;height:110px;border-radius:50%;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
+      // 解錠(受取)成功時は「どの扉を開けるか」を扉ガイドで案内。PIN設定完了(お預け完了)は従来のチェックマーク。
+      const hero = resultGuide
+        ? `<div style="width:560px;height:320px;display:flex;align-items:center;justify-content:center">${lockerDoorGuide(sel, lockers)}</div>`
+        : `<div style="width:110px;height:110px;border-radius:50%;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>`;
+      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:${resultGuide ? 22 : 26}px;text-align:center;padding:0 120px">
+        ${hero}
         <div style="font-size:64px;font-weight:600;color:${T.ink};letter-spacing:-2px">${escHtml(resultTitle)}</div>
         <div style="font-size:30px;color:${T.sub};line-height:1.5">${escHtml(resultSub)}</div>
         <button id="lk-done" style="margin-top:10px;padding:24px 68px;border:2px solid ${T.borderStrong};border-radius:16px;background:${T.canvas};color:${T.sub};font-size:28px;font-weight:600;cursor:pointer">完了</button>
@@ -1440,11 +1491,13 @@ function showLocker(mode) {
         // 審査用デモ: 入力/完了表示は本番のまま、内部の保存PINだけ固定値へ差し替える(受取もこれで解錠)。
         const pinToSet = ST.is_demo ? (ST.demo_locker_pin || "0805") : pin;
         await devicePost(`/device/locker/${encodeURIComponent(sel.id)}/occupy`, { pin: pinToSet });
+        resultGuide = false;
         resultTitle = "お預け完了"; resultSub = "暗証番号を設定しました。お受け取りの際に入力してください。";
       } else {
         const r = await devicePost(`/device/locker/${encodeURIComponent(sel.id)}/release`, { pin });
         await pulseLocker((r && r.door_number) || sel.door_number);
-        resultTitle = "解錠しました"; resultSub = "扉を開けてお荷物をお受け取りください。";
+        resultGuide = true;
+        resultTitle = "解錠しました"; resultSub = `${sel.name} の扉が開きました。右側（取っ手側）を押して開け、お荷物をお受け取りください。`;
       }
       busy = false; view = "result"; render();
     } catch (e) {
@@ -1531,11 +1584,11 @@ function showDelivery() {
     }).join("")}
   </div>`);
     } else if (view === "openwait") {
-      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;text-align:center;padding:0 120px">
-        <div style="width:120px;height:120px;border-radius:30px;background:${bc}1a;color:${bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.4)">${ICO.locker}</div></div>
+      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center;padding:0 120px">
+        <div style="width:560px;height:320px;display:flex;align-items:center;justify-content:center">${lockerDoorGuide(sel, lockers)}</div>
         <div style="font-size:60px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">扉が開きました</div>
-        <div style="font-size:30px;color:${T.sub};line-height:1.5"><b>${escHtml(sel.name)}</b> に荷物を入れ、扉を閉めてください<br><span style="font-size:24px;color:${T.muted}">暗証番号の設定は不要です</span></div>
-        <button id="dl-lock" style="margin-top:12px;padding:22px 56px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:28px;font-weight:600;cursor:pointer">扉を閉めました（施錠する）</button>
+        <div style="font-size:30px;color:${T.sub};line-height:1.5"><b style="color:${bc}">${escHtml(sel.name)}</b> の扉です。右側（取っ手側）を押して開け、荷物を入れて扉を閉めてください<br><span style="font-size:24px;color:${T.muted}">暗証番号の設定は不要です</span></div>
+        <button id="dl-lock" style="margin-top:6px;padding:22px 56px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:28px;font-weight:600;cursor:pointer">扉を閉めました（施錠する）</button>
       </div>`);
     } else if (view === "wait") {
       // 呼び出し後の「お待ちください」画面
