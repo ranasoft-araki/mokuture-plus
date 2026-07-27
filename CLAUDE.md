@@ -123,7 +123,7 @@ mokuture/
 │   │       │   ├── kiosk/page.tsx     ← キオスク端末管理・承認待ち端末の承認・端末名/場所の変更(鉛筆ボタン or ダブルクリック)
 │   │       │   ├── reception/page.tsx ← 受付ログ一覧・フィルター・受付/電話/お断り応答ボタン
 │   │       │   ├── inquiries/page.tsx ← 共通問い合わせフォーム受信の閲覧・状態更新・削除
-│   │       │   ├── appointments/page.tsx ← 来社予定管理・QRコード発行 (qrcode.react) + 日付/ステータスフィルタ + 会議室紐付け。審査用デモモード(is_demo)では①〜⑤のQR発行ガイドバルーン(QrGuideBalloon)を表示し、既定会議室=「商談ルーム」を自動選択
+│   │       │   ├── appointments/page.tsx ← 来社予定管理・QRコード発行 (qrcode.react)。QRは印刷＋PNG画像DL可(表示は鮮明なSVG、DLは非表示の高解像度Canvas1024pxから toDataURL)。日付/ステータスフィルタ + 会議室紐付け。審査用デモモード(is_demo)では①〜⑤のQR発行ガイドバルーン(QrGuideBalloon)を表示し、既定会議室=「商談ルーム」を自動選択
 │   │       │   ├── meeting-rooms/page.tsx ← 会議室管理 (CRUD・カラー・定員・場所)
 │   │       │   ├── kiosk-settings/page.tsx ← 受付設定 (実機準拠の5画面WYSIWYGプレビュー: 待機/ようこそ/受付メニュー/呼び出し中/完了。文言はプレビュー上を直接クリックしてインライン編集=Canva風、ロゴは受付メニュー画面でドラッグ配置・リサイズ)
 │   │       │   ├── settings/page.tsx  ← 基本設定 (ブランディング: ロゴ・カラー・フォント)
