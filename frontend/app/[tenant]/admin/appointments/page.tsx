@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { QRCodeSVG } from "qrcode.react";
+import { QRCodeSVG, QRCodeCanvas } from "qrcode.react";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle, QrGuideBalloon } from "@/components/AdminShell";
 import { api, type AppointmentCreate, type MeetingRoom, type TenantSettings, type VisitorAppointment } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
@@ -703,6 +703,7 @@ export default function AppointmentsPage() {
   // QR
   const [qrAppt, setQrAppt] = useState<VisitorAppointment | null>(null);
   const printRef = useRef<HTMLDivElement>(null);
+  const qrCanvasWrapRef = useRef<HTMLDivElement>(null);   // 画像DL用の高解像度Canvas(非表示)
 
   // 審査用デモモード: QR発行ガイド（②予定を追加 → ③作成 → ④QR → ⑤印刷）のアンカー
   const [lastCreatedId, setLastCreatedId] = useState<string | null>(null);
@@ -969,6 +970,21 @@ export default function AppointmentsPage() {
     if (!win) return;
     win.document.write(`<html><head><title>来社予定QR</title><style>body{font-family:"Noto Sans JP",sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#fff}.card{border:1px solid #d8d3c7;border-radius:16px;padding:40px;text-align:center;max-width:360px}h2{margin:0 0 8px;font-size:22px;color:#1d1a15}p{margin:4px 0;font-size:14px;color:#6b6559}</style></head><body><div class="card">${content}</div></body></html>`);
     win.document.close(); win.print();
+  }
+
+  // QRコードをPNG画像として保存する。表示は鮮明なSVGのまま、DLは非表示の高解像度Canvasから書き出す。
+  function handleDownloadQr() {
+    if (!qrAppt) return;
+    const canvas = qrCanvasWrapRef.current?.querySelector("canvas");
+    if (!canvas) { showToast("QRコードの生成に失敗しました"); return; }
+    const url = canvas.toDataURL("image/png");
+    const safeName = (qrAppt.visitor_name || "appointment").replace(/[\\/:*?"<>|\s]+/g, "_");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `QR_${safeName}_${qrAppt.token.slice(0, 8)}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   // ── Navigation ──
@@ -1260,10 +1276,18 @@ export default function AppointmentsPage() {
               )}
               <p style={{ margin: "16px 0 0", fontSize: 11, color: "#c8c3b8", fontFamily: FONT_MONO, wordBreak: "break-all" }}>予約コード: {qrAppt.token}</p>
             </div>
-            <div style={{ display: "flex", gap: 10, marginTop: 28, justifyContent: "center" }}>
+            {/* 画像保存用の高解像度Canvas（非表示）。表示は上のSVGのまま。 */}
+            <div ref={qrCanvasWrapRef} aria-hidden style={{ position: "absolute", width: 0, height: 0, overflow: "hidden", opacity: 0, pointerEvents: "none" }}>
+              <QRCodeCanvas value={`appt:${qrAppt.token}`} size={1024} level="M" marginSize={4} />
+            </div>
+            <div style={{ display: "flex", gap: 10, marginTop: 28, justifyContent: "center", flexWrap: "wrap" }}>
               <span ref={printBtnRef} style={{ display: "inline-flex" }}>
                 <MkBtn variant="primary" size="sm" onClick={handlePrint}>印刷</MkBtn>
               </span>
+              <MkBtn variant="default" size="sm" onClick={handleDownloadQr}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                画像を保存
+              </MkBtn>
               <MkBtn variant="default" size="sm" onClick={() => setQrAppt(null)}>閉じる</MkBtn>
             </div>
           </div>
