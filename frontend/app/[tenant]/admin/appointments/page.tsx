@@ -1301,7 +1301,7 @@ export default function AppointmentsPage() {
             onClick={e => e.stopPropagation()}>
             <MkSectionTitle title="来社予定を追加" style={{ marginBottom: 20 }} />
             {isDemo && (
-              <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: "#ede9fe", border: "1px solid #8b5cf6", color: "#6d28d9", fontSize: 12.5, fontFamily: FONT_JP, lineHeight: 1.6 }}>
+              <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: "#eaf0e8", border: "1px solid #4a7c4e", color: "#3a6240", fontSize: 12.5, fontFamily: FONT_JP, lineHeight: 1.6 }}>
                 デモモードのため、審査用の初期値を入力済みです（内容は自由に変更できます）
               </div>
             )}
