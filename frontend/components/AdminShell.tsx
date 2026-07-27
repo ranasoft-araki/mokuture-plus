@@ -1,9 +1,11 @@
 "use client";
 
 import { useRouter, useParams } from "next/navigation";
-import { clearTokens, getLogoutUrl } from "@/lib/auth";
-import { useState } from "react";
+import { clearTokens, getLogoutUrl, getAccessToken } from "@/lib/auth";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
+import { api } from "@/lib/api";
 
 export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "inquiries" | "appointments" | "meeting_rooms" | "notify" | "locker" | "kiosk_settings" | "settings" | "users" | "profile";
 
@@ -65,6 +67,37 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
   const router = useRouter();
   const tenant = params.tenant ?? "";
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // ── 審査用デモモード: QR発行ガイド ──
+  // デモテナントのときだけ、サイドバー「来社予定」に「QR発行はこちら①」バルーンを出す
+  // （来社予定ページに入ると②以降が引き継ぐので、ここでは在席ページを除外して表示）。
+  const [qrGuide, setQrGuide] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(false);
+  const apptNavRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const apply = () => setIsDesktop(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+
+  useEffect(() => {
+    if (!tenant) return;
+    try {
+      const cached = localStorage.getItem(`mk_isdemo_${tenant}`);
+      if (cached === "1") setQrGuide(true);
+      else if (cached === "0") setQrGuide(false);
+    } catch { /* localStorage 不可でも無視 */ }
+    const token = getAccessToken();
+    if (!token) return;
+    api.getTenantSettings(token).then((s) => {
+      const demo = !!s.is_demo;
+      setQrGuide(demo);
+      try { localStorage.setItem(`mk_isdemo_${tenant}`, demo ? "1" : "0"); } catch { /* noop */ }
+    }).catch(() => { /* 取得失敗時はキャッシュ値のまま */ });
+  }, [tenant]);
 
   return (
     <div className="flex overflow-hidden adm-shell-root" style={{ background: "#faf8f4", fontFamily: FONT_UI }}>
@@ -137,6 +170,7 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
               active={active === item.id}
               onClick={() => router.push(NAV_PATHS[item.id](tenant))}
               badge={item.id === "reception" && receptionUnread && receptionUnread > 0 ? receptionUnread : undefined}
+              buttonRef={item.id === "appointments" ? apptNavRef : undefined}
             />
           ))}
           <div style={{ fontSize: 10.5, color: "#a8a198", textTransform: "uppercase", letterSpacing: "0.6px", padding: "14px 10px 6px" }}>
@@ -211,13 +245,22 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
           {children}
         </div>
       </div>
+
+      {/* 審査用デモモード: QR発行ガイド① （サイドバー「来社予定」） */}
+      <QrGuideBalloon
+        anchorRef={apptNavRef}
+        active={qrGuide && isDesktop && active !== "appointments"}
+        text="QR発行はこちら①"
+        placement="right"
+      />
     </div>
   );
 }
 
-function NavItem({ id, label, active, onClick, badge }: { id: NavId; label: string; active: boolean; onClick: () => void; badge?: number }) {
+function NavItem({ id, label, active, onClick, badge, buttonRef }: { id: NavId; label: string; active: boolean; onClick: () => void; badge?: number; buttonRef?: React.Ref<HTMLButtonElement> }) {
   return (
     <button
+      ref={buttonRef}
       onClick={onClick}
       style={{
         width: "100%", display: "flex", alignItems: "center", gap: 10,
@@ -372,6 +415,89 @@ export function MkSectionTitle({ title, subtitle, action, style }: { title: stri
       </div>
       {action}
     </div>
+  );
+}
+
+/* ─ QR発行ガイド用 バルーン（審査用デモモード限定） ─────────────────
+   任意の要素(anchorRef)に吹き出しを固定表示する。position:fixed + ポータルで
+   親の overflow(サイドバー/テーブルのスクロール)にクリップされず、スクロール/リサイズにも追従する。
+   pointer-events:none なので下のボタンのクリックは妨げない。 */
+export function QrGuideBalloon<T extends HTMLElement>({
+  anchorRef, active, text, placement = "bottom",
+}: {
+  anchorRef: React.RefObject<T | null>;
+  active: boolean;
+  text: string;
+  placement?: "top" | "bottom" | "left" | "right";
+}) {
+  const [rect, setRect] = useState<DOMRect | null>(null);
+
+  useEffect(() => {
+    if (!active) { setRect(null); return; }
+    let raf = 0;
+    const update = () => {
+      const el = anchorRef.current;
+      if (!el) { setRect(null); return; }
+      const r = el.getBoundingClientRect();
+      // 非表示(off-canvas サイドバー等)は出さない
+      if (r.width === 0 && r.height === 0) { setRect(null); return; }
+      setRect(r);
+    };
+    update();
+    const onChange = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(update); };
+    window.addEventListener("scroll", onChange, true);
+    window.addEventListener("resize", onChange);
+    const id = window.setInterval(update, 400); // モーダル開閉やレイアウト変化の取りこぼしを拾う
+    return () => {
+      window.removeEventListener("scroll", onChange, true);
+      window.removeEventListener("resize", onChange);
+      window.clearInterval(id);
+      cancelAnimationFrame(raf);
+    };
+  }, [anchorRef, active]);
+
+  if (!active || !rect) return null;
+
+  const PURPLE = "#7c3aed";
+  const GAP = 12;
+  const ARROW = 8;
+
+  const box: React.CSSProperties = {
+    position: "fixed", zIndex: 4000, pointerEvents: "none",
+    background: PURPLE, color: "#fff",
+    fontFamily: FONT_JP, fontSize: 12.5, fontWeight: 700, lineHeight: 1.3,
+    letterSpacing: "0.3px", whiteSpace: "nowrap",
+    padding: "8px 13px", borderRadius: 10,
+    boxShadow: "0 4px 14px rgba(124,58,237,0.4)",
+    animation: "mkGuideGlow 1.6s ease-in-out infinite",
+  };
+  const arrow: React.CSSProperties = {
+    position: "absolute", width: 0, height: 0, border: `${ARROW}px solid transparent`,
+  };
+
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+
+  if (placement === "right") {
+    box.left = rect.right + GAP; box.top = cy; box.transform = "translateY(-50%)";
+    Object.assign(arrow, { right: "100%", top: "50%", marginTop: -ARROW, borderRightColor: PURPLE });
+  } else if (placement === "left") {
+    box.left = rect.left - GAP; box.top = cy; box.transform = "translate(-100%, -50%)";
+    Object.assign(arrow, { left: "100%", top: "50%", marginTop: -ARROW, borderLeftColor: PURPLE });
+  } else if (placement === "top") {
+    box.left = cx; box.top = rect.top - GAP; box.transform = "translate(-50%, -100%)";
+    Object.assign(arrow, { top: "100%", left: "50%", marginLeft: -ARROW, borderTopColor: PURPLE });
+  } else { // bottom
+    box.left = cx; box.top = rect.bottom + GAP; box.transform = "translateX(-50%)";
+    Object.assign(arrow, { bottom: "100%", left: "50%", marginLeft: -ARROW, borderBottomColor: PURPLE });
+  }
+
+  return createPortal(
+    <div style={box}>
+      {text}
+      <span style={arrow} />
+    </div>,
+    document.body,
   );
 }
 

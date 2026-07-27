@@ -109,6 +109,13 @@ body {
   .adm-kpi-row > * { flex: 1 1 calc(50% - 7px); min-width: 0; }
 }
 
+/* 審査用デモモード: QR発行ガイドのバルーンをやわらかく明滅させ視線を誘導する。
+   transform は配置(translate)側で使うため、box-shadow だけをアニメーションさせて競合を避ける。 */
+@keyframes mkGuideGlow {
+  0%, 100% { box-shadow: 0 4px 14px rgba(124,58,237,0.40); }
+  50%      { box-shadow: 0 6px 22px rgba(124,58,237,0.70); }
+}
+
 /* ── Admin responsive helpers (use these instead of inline fixed grids) ──
    These let page content reflow cleanly on phones without per-page breakpoints. */
 

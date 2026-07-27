@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { QRCodeSVG } from "qrcode.react";
-import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
+import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle, QrGuideBalloon } from "@/components/AdminShell";
 import { api, type AppointmentCreate, type MeetingRoom, type TenantSettings, type VisitorAppointment } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 
@@ -108,7 +108,7 @@ function StatusBadge({ status }: { status: string }) {
 
 // ── AppointmentForm ──────────────────────────────────────────────────────────
 function AppointmentForm({
-  data, onChange, onSubmit, onCancel, saving, error, submitLabel, staffList, purposeList, rooms,
+  data, onChange, onSubmit, onCancel, saving, error, submitLabel, staffList, purposeList, rooms, submitRef,
 }: {
   data: AppointmentCreate;
   onChange: (d: AppointmentCreate) => void;
@@ -116,6 +116,7 @@ function AppointmentForm({
   onCancel: () => void;
   saving: boolean; error: string | null; submitLabel: string;
   staffList: string[]; purposeList: string[]; rooms: MeetingRoom[];
+  submitRef?: React.Ref<HTMLSpanElement>;
 }) {
   const endTimeValue = (() => {
     if (!data.scheduled_at) return "";
@@ -224,9 +225,11 @@ function AppointmentForm({
       </div>
       {error && <div style={{ fontSize: 12.5, color: "#a84238", marginBottom: 12, fontFamily: FONT_JP }}>{error}</div>}
       <div style={{ display: "flex", gap: 10 }}>
-        <MkBtn type="submit" variant="primary" size="sm" disabled={saving}>
-          {saving ? "保存中..." : submitLabel}
-        </MkBtn>
+        <span ref={submitRef} style={{ display: "inline-flex" }}>
+          <MkBtn type="submit" variant="primary" size="sm" disabled={saving}>
+            {saving ? "保存中..." : submitLabel}
+          </MkBtn>
+        </span>
         <MkBtn variant="default" size="sm" onClick={onCancel}>キャンセル</MkBtn>
       </div>
     </form>
@@ -701,6 +704,13 @@ export default function AppointmentsPage() {
   const [qrAppt, setQrAppt] = useState<VisitorAppointment | null>(null);
   const printRef = useRef<HTMLDivElement>(null);
 
+  // 審査用デモモード: QR発行ガイド（②予定を追加 → ③作成 → ④QR → ⑤印刷）のアンカー
+  const [lastCreatedId, setLastCreatedId] = useState<string | null>(null);
+  const addBtnRef   = useRef<HTMLSpanElement>(null);   // ② 予定を追加
+  const createBtnRef = useRef<HTMLSpanElement>(null);  // ③ 作成
+  const qrBtnRef    = useRef<HTMLSpanElement>(null);   // ④ 作成した明細の QR
+  const printBtnRef = useRef<HTMLSpanElement>(null);   // ⑤ 印刷
+
   // Edit / delete
   const [deletingId,       setDeletingId]       = useState<string | null>(null);
   const [confirmDeleteId,  setConfirmDeleteId]  = useState<string | null>(null);
@@ -781,10 +791,10 @@ export default function AppointmentsPage() {
   }
 
   // 審査用デモモード店舗では QR発行(来局予定)の初期値を入力済みにする。
-  // 案内先(会議室)はシード済みの「審査会場」の id を解決して充てる。空欄項目のみ補完する。
+  // 案内先(会議室)はシード済みの「商談ルーム」の id を解決して充てる。空欄項目のみ補完する。
   function applyDemoDefaults(base: AppointmentCreate): AppointmentCreate {
     if (!isDemo) return base;
-    const room = rooms.find(r => r.name === "審査会場");
+    const room = rooms.find(r => r.name === "商談ルーム");
     return {
       ...base,
       visitor_name: base.visitor_name || "審査員様",
@@ -906,6 +916,7 @@ export default function AppointmentsPage() {
       setAppointments(prev => [...prev, created].sort((a, b) => +new Date(a.scheduled_at) - +new Date(b.scheduled_at)));
       setTimelineAppts(prev => [...prev, created].sort((a, b) => +new Date(a.scheduled_at) - +new Date(b.scheduled_at)));
       setShowForm(false);
+      if (isDemo) { setViewMode("list"); setLastCreatedId(created.id); }   // ④QRガイドを作成した明細に出す
     } catch (err: unknown) {
       setFormError(err instanceof Error ? err.message : "作成に失敗しました");
     } finally { setFormSaving(false); }
@@ -944,6 +955,7 @@ export default function AppointmentsPage() {
       await api.deleteAppointment(token, id);
       setAppointments(prev => prev.filter(a => a.id !== id));
       setTimelineAppts(prev => prev.filter(a => a.id !== id));
+      if (id === lastCreatedId) setLastCreatedId(null);   // ガイド対象行が消えたら②へ戻す
       setConfirmDeleteId(null);
     } catch (err: unknown) {
       setDeleteError(err instanceof Error ? err.message : "削除に失敗しました");
@@ -1015,10 +1027,12 @@ export default function AppointmentsPage() {
             <button style={segStyle(viewMode === "timeline")} onClick={() => setViewMode("timeline")}>タイムライン</button>
             <button style={{ ...segStyle(viewMode === "list"), borderLeft: "1px solid #d8d3c7" }} onClick={() => setViewMode("list")}>一覧</button>
           </div>
-          <MkBtn variant="primary" size="sm" onClick={() => { resetForm(); setShowForm(true); }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            予定を追加
-          </MkBtn>
+          <span ref={addBtnRef} style={{ display: "inline-flex" }}>
+            <MkBtn variant="primary" size="sm" onClick={() => { resetForm(); setShowForm(true); }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              予定を追加
+            </MkBtn>
+          </span>
         </div>
       }
     >
@@ -1143,7 +1157,9 @@ export default function AppointmentsPage() {
                         </div>
                       )}
                       <div style={{ display: "flex", gap: 6 }}>
-                        <MkBtn variant="default" size="sm" onClick={() => setQrAppt(appt)}>QR</MkBtn>
+                        <span ref={appt.id === lastCreatedId ? qrBtnRef : undefined} style={{ display: "inline-flex" }}>
+                          <MkBtn variant="default" size="sm" onClick={() => setQrAppt(appt)}>QR</MkBtn>
+                        </span>
                         <MkBtn variant="default" size="sm" onClick={() => openEdit(appt)}>編集</MkBtn>
                         <MkBtn variant="danger" size="sm" disabled={deletingId === appt.id} onClick={() => { setDeleteError(null); setConfirmDeleteId(appt.id); }}>
                           削除
@@ -1184,7 +1200,9 @@ export default function AppointmentsPage() {
                         <td style={{ padding: "10px 12px" }}><StatusBadge status={appt.status} /></td>
                         <td style={{ padding: "10px 12px" }}>
                           <div style={{ display: "flex", gap: 5 }}>
-                            <MkBtn variant="default" size="sm" onClick={() => setQrAppt(appt)}>QR</MkBtn>
+                            <span ref={appt.id === lastCreatedId ? qrBtnRef : undefined} style={{ display: "inline-flex" }}>
+                              <MkBtn variant="default" size="sm" onClick={() => setQrAppt(appt)}>QR</MkBtn>
+                            </span>
                             <MkBtn variant="default" size="sm" onClick={() => openEdit(appt)}>編集</MkBtn>
                             <MkBtn variant="danger" size="sm" disabled={deletingId === appt.id} onClick={() => handleDelete(appt.id)}>
                               {deletingId === appt.id ? "削除中..." : "削除"}
@@ -1243,7 +1261,9 @@ export default function AppointmentsPage() {
               <p style={{ margin: "16px 0 0", fontSize: 11, color: "#c8c3b8", fontFamily: FONT_MONO, wordBreak: "break-all" }}>予約コード: {qrAppt.token}</p>
             </div>
             <div style={{ display: "flex", gap: 10, marginTop: 28, justifyContent: "center" }}>
-              <MkBtn variant="primary" size="sm" onClick={handlePrint}>印刷</MkBtn>
+              <span ref={printBtnRef} style={{ display: "inline-flex" }}>
+                <MkBtn variant="primary" size="sm" onClick={handlePrint}>印刷</MkBtn>
+              </span>
               <MkBtn variant="default" size="sm" onClick={() => setQrAppt(null)}>閉じる</MkBtn>
             </div>
           </div>
@@ -1264,7 +1284,8 @@ export default function AppointmentsPage() {
             <AppointmentForm data={formData} onChange={setFormData} onSubmit={handleCreate}
               onCancel={() => { setShowForm(false); setFormError(null); }}
               saving={formSaving} error={formError} submitLabel="作成"
-              staffList={staffList} purposeList={purposeList} rooms={rooms} />
+              staffList={staffList} purposeList={purposeList} rooms={rooms}
+              submitRef={createBtnRef} />
           </div>
         </div>
       )}
@@ -1300,6 +1321,13 @@ export default function AppointmentsPage() {
           {toastMsg}
         </div>
       )}
+
+      {/* 審査用デモモード: QR発行ガイド ②〜⑤（①はサイドバー側=AdminShell）。
+          ②は作成前のみ（lastCreatedId が立ったら④へ送り、②と④の同時表示を防ぐ）。 */}
+      <QrGuideBalloon anchorRef={addBtnRef}    active={isDemo && !lastCreatedId && !showForm && !qrAppt && !editAppt && !confirmDeleteId} text="QR発行はこちら②" placement="bottom" />
+      <QrGuideBalloon anchorRef={createBtnRef} active={isDemo && showForm}                                              text="QR発行はこちら③" placement="top" />
+      <QrGuideBalloon anchorRef={qrBtnRef}     active={isDemo && !!lastCreatedId && !showForm && !qrAppt && !editAppt && !confirmDeleteId} text="QR発行はこちら④" placement="top" />
+      <QrGuideBalloon anchorRef={printBtnRef}  active={isDemo && !!qrAppt}                                              text="QR発行はこちら" placement="top" />
     </AdminShell>
   );
 }

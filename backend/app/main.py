@@ -104,7 +104,8 @@ def _ensure_schema(sync_conn) -> None:
 _DEMO_SLUGS = ("demo1", "demo2")
 _DEMO_STAFF = "mokuture⁺担当者"     # 訪問先(担当者)
 _DEMO_PURPOSE = "製品体験"          # 用件(目的)
-_DEMO_ROOM = "審査会場"             # 案内先(会議室)
+_DEMO_ROOM = "商談ルーム"           # 案内先(会議室)
+_DEMO_ROOM_LEGACY = "審査会場"      # 旧・案内先名。既存デモ環境はこれを改称して引き継ぐ
 # デモ管理者アカウント（slug→email）。テナントの削除→再作成等で管理者ユーザーの tenant_id が
 # 現デモテナントから外れて孤児化すると、会議室作成などの書込が FK 違反で 500 になる。
 # シードで現デモテナントへ確実に再リンクして自己修復する。
@@ -153,11 +154,21 @@ async def _seed_demo_master_data() -> None:
                     )
                 )).scalar_one_or_none()
                 if room is None:
-                    db.add(MeetingRoom(
-                        tenant_id=t.id, name=_DEMO_ROOM, location="デモ会場",
-                        color="#7c3aed", is_active=True,
-                    ))
-                    changed = True
+                    # 旧「審査会場」があれば改称して引き継ぐ(id維持=既存来社予定の紐付けを保持)。
+                    legacy = (await db.execute(
+                        select(MeetingRoom).where(
+                            MeetingRoom.tenant_id == t.id, MeetingRoom.name == _DEMO_ROOM_LEGACY
+                        )
+                    )).scalar_one_or_none()
+                    if legacy is not None:
+                        legacy.name = _DEMO_ROOM
+                        changed = True
+                    else:
+                        db.add(MeetingRoom(
+                            tenant_id=t.id, name=_DEMO_ROOM, location="2階",
+                            color="#7c3aed", is_active=True,
+                        ))
+                        changed = True
             if changed:
                 await db.commit()
     except Exception:
