@@ -1502,8 +1502,29 @@ function showLocker(mode) {
         render();
       });
     } else if (view === "result") {
-      document.getElementById("lk-done").addEventListener("click", () => { cleanup(); go("idle"); });
-      resultTimer = setTimeout(() => { cleanup(); go("idle"); }, Math.max(6, ST.kiosk_complete_timeout_sec) * 1000);
+      // デモの手荷物預け完了(resultGuide無し=お預け完了)は、そのまま取り出し操作へ自動誘導する。
+      const demoDeposit = ST.is_demo && !resultGuide;
+      const dn = document.getElementById("lk-done");
+      if (dn) dn.addEventListener("click", () => {
+        if (demoDeposit) { goDemoPickup(); } else { cleanup(); go("idle"); }
+      });
+      const total = Math.max(6, ST.kiosk_complete_timeout_sec);
+      const barEl = document.getElementById("lk-bar"), cntEl = document.getElementById("lk-cnt");
+      if (barEl || cntEl) {
+        // 受取(全画面案内)は他画面と同じく自動遷移までのタイムバー＋残り秒を表示。
+        let c = total;
+        every(1000, () => {
+          c--;
+          if (c <= 0) { cleanup(); go("idle"); return; }
+          if (barEl) barEl.style.width = `${(c / total) * 100}%`;
+          if (cntEl) cntEl.textContent = c;
+        });
+      } else if (demoDeposit) {
+        // デモ: お預け完了を数秒見せてから、取り出し操作への案内を挟んで pickup へ。
+        resultTimer = setTimeout(goDemoPickup, 3500);
+      } else {
+        resultTimer = setTimeout(() => { cleanup(); go("idle"); }, total * 1000);
+      }
     } else if (view === "pinset" || view === "pininput") {
       sc.querySelectorAll("[data-pk]").forEach(b => b.addEventListener("click", () => handleKey(b.dataset.pk)));
     }
@@ -1559,6 +1580,32 @@ function showLocker(mode) {
     } catch (e) {
       err = e && e.message ? e.message : ""; view = "error"; render();
     }
+  }
+
+  // デモ: 手荷物預け完了 → 「デモモードのため自動で取り出し操作に移ります」案内を挟み、
+  // 取り出し(pickup)のロッカー選択画面へ自動遷移する(デモ店舗のみ・審査用の一連の流れ)。
+  function goDemoPickup() {
+    cleanup();   // result/idle タイマーを停止(以降はこの案内画面が自前で遷移する)
+    const secs = 4;
+    sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:34px;text-align:center;padding:0 160px;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
+      <div style="display:inline-flex;align-items:center;gap:12px;padding:12px 30px;border-radius:999px;background:rgba(20,18,15,.82);color:#fff;font-size:26px;font-weight:700;letter-spacing:.3px">デモモード</div>
+      <div style="width:132px;height:132px;border-radius:50%;background:${LOCKER_AMBER}22;color:${LOCKER_AMBER};display:flex;align-items:center;justify-content:center;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)"><div style="transform:scale(2.2)">${ICO.pin}</div></div>
+      <div style="font-size:62px;font-weight:700;color:${T.ink};letter-spacing:-1.5px;line-height:1.25">デモモードのため<br>自動で取り出し操作に移ります</div>
+      <div style="font-size:34px;color:${T.sub};line-height:1.5">続けてお荷物のお受け取り画面をご案内します</div>
+      <div style="display:flex;align-items:center;gap:14px;color:${T.muted};font-size:24px;margin-top:6px">${ICO.clock}<span>まもなく移動します</span><span id="dh-cnt" style="font-family:'JetBrains Mono',monospace;font-size:30px;font-weight:700;color:${LOCKER_AMBER};min-width:34px;text-align:right">${secs}</span><span>秒</span><div style="width:240px;height:8px;background:${T.border};border-radius:4px;overflow:hidden"><div id="dh-bar" style="width:100%;height:100%;background:${LOCKER_AMBER};border-radius:4px;transition:width 1s linear"></div></div></div>
+    </div>`;
+    rescale();
+    softEnter(sc.firstElementChild);
+    CURRENT_SCREEN = "demoHandoff";   // 次の go("locker") で locker→locker と誤判定させずクロス遷移させる
+    const barEl = document.getElementById("dh-bar"), cntEl = document.getElementById("dh-cnt");
+    let c = secs;
+    const tick = setInterval(() => {
+      c--;
+      if (c <= 0) { clearInterval(tick); go("locker", { mode: "pickup" }); return; }
+      if (barEl) barEl.style.width = `${(c / secs) * 100}%`;
+      if (cntEl) cntEl.textContent = c;
+    }, 1000);
+    CLEANUPS.push(() => clearInterval(tick));
   }
 
   resetIdle();
