@@ -195,6 +195,7 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
               onClick={() => navigate(item.id)}
               badge={item.id === "reception" && receptionUnread && receptionUnread > 0 ? receptionUnread : undefined}
               buttonRef={item.id === "appointments" ? apptNavRef : undefined}
+              guide={item.id === "appointments" && qrGuide && active !== "appointments"}
             />
           ))}
           <div style={{ fontSize: 10.5, color: "#a8a198", textTransform: "uppercase", letterSpacing: "0.6px", padding: "14px 10px 6px" }}>
@@ -292,9 +293,11 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
   );
 }
 
-function NavItem({ id, label, active, pending = false, onClick, badge, buttonRef }: { id: NavId; label: string; active: boolean; pending?: boolean; onClick: () => void; badge?: number; buttonRef?: React.Ref<HTMLButtonElement> }) {
+function NavItem({ id, label, active, pending = false, onClick, badge, buttonRef, guide = false }: { id: NavId; label: string; active: boolean; pending?: boolean; onClick: () => void; badge?: number; buttonRef?: React.Ref<HTMLButtonElement>; guide?: boolean }) {
   // pending 中はクリック直後から選択済みに見せる（即時フィードバック）
   const hot = active || pending;
+  // 審査用デモモード: QR発行ガイド①が指す「来社予定」を緑枠＋パルスで強調（選択中は通常表示）
+  const guiding = guide && !hot;
   return (
     <button
       ref={buttonRef}
@@ -304,16 +307,18 @@ function NavItem({ id, label, active, pending = false, onClick, badge, buttonRef
         width: "100%", display: "flex", alignItems: "center", gap: 10,
         padding: hot ? "8px 10px 8px 12px" : "8px 10px",
         borderRadius: 7, marginBottom: 1,
-        background: hot ? "#eaf0e8" : "transparent",
-        color: hot ? "#3a6240" : "#6b6559",
-        fontSize: 13, fontWeight: hot ? 600 : 500,
+        background: hot ? "#eaf0e8" : guiding ? "#eef4ec" : "transparent",
+        color: hot || guiding ? "#3a6240" : "#6b6559",
+        fontSize: 13, fontWeight: hot || guiding ? 600 : 500,
         cursor: pending ? "progress" : "pointer", textAlign: "left",
         borderLeft: `2px solid ${hot ? "#4a7c4e" : "transparent"}`,
         border: "none", fontFamily: FONT_JP,
         transition: "background 0.1s",
+        boxShadow: guiding ? "0 0 0 2px #4a7c4e" : "none",
+        animation: guiding ? "mkGuidePulse 1.6s ease-in-out infinite" : undefined,
       }}
-      onMouseEnter={(e) => { if (!hot) (e.currentTarget as HTMLButtonElement).style.background = "#f4f1ea"; }}
-      onMouseLeave={(e) => { if (!hot) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+      onMouseEnter={(e) => { if (!hot && !guiding) (e.currentTarget as HTMLButtonElement).style.background = "#f4f1ea"; }}
+      onMouseLeave={(e) => { if (!hot && !guiding) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
     >
       <NavIcon id={id} active={hot} />
       <span style={{ flex: 1 }}>{label}</span>
