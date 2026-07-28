@@ -1255,14 +1255,14 @@ export default function AppointmentsPage() {
       {qrAppt && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: isMobile ? 16 : 0 }}
           onClick={() => setQrAppt(null)}>
-          <div style={{ background: "#fffefb", borderRadius: 20, padding: isMobile ? "28px 24px" : "40px 48px", maxWidth: 480, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
+          <div style={{ background: "#fffefb", borderRadius: 20, padding: isMobile ? "28px 24px" : "44px 52px", maxWidth: 540, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
             onClick={e => e.stopPropagation()}>
             <div ref={printRef} style={{ textAlign: "center" }}>
-              <div style={{ marginBottom: 20 }}>
-                <QRCodeSVG value={`appt:${qrAppt.token}`} size={isMobile ? 160 : 200} level="M"
-                  style={{ border: "1px solid #efece5", borderRadius: 8, padding: 8, background: "#fff" }} />
+              <div style={{ marginBottom: 24 }}>
+                <QRCodeSVG value={`appt:${qrAppt.token}`} size={isMobile ? 220 : 300} level="M"
+                  style={{ border: "1px solid #efece5", borderRadius: 10, padding: 14, background: "#fff" }} />
               </div>
-              <h2 style={{ margin: "0 0 6px", fontSize: 20, fontWeight: 700, color: "#1d1a15", fontFamily: FONT_JP }}>{qrAppt.visitor_name} 様</h2>
+              <h2 style={{ margin: "0 0 6px", fontSize: 24, fontWeight: 700, color: "#1d1a15", fontFamily: FONT_JP }}>{qrAppt.visitor_name} 様</h2>
               {qrAppt.company && <p style={{ margin: "0 0 4px", fontSize: 14, color: "#6b6559", fontFamily: FONT_JP }}>{qrAppt.company}</p>}
               <p style={{ margin: "0 0 4px", fontSize: 13, color: "#a8a198", fontFamily: FONT_JP }}>来社日時：{fmtDatetime(qrAppt.scheduled_at)}</p>
               {qrAppt.staff && <p style={{ margin: "0 0 4px", fontSize: 13, color: "#a8a198", fontFamily: FONT_JP }}>担当：{qrAppt.staff}</p>}
@@ -1280,15 +1280,18 @@ export default function AppointmentsPage() {
             <div ref={qrCanvasWrapRef} aria-hidden style={{ position: "absolute", width: 0, height: 0, overflow: "hidden", opacity: 0, pointerEvents: "none" }}>
               <QRCodeCanvas value={`appt:${qrAppt.token}`} size={1024} level="M" marginSize={4} />
             </div>
-            <div style={{ display: "flex", gap: 10, marginTop: 28, justifyContent: "center", flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 12, marginTop: 32, justifyContent: "center", flexWrap: "wrap" }}>
               <span ref={printBtnRef} style={{ display: "inline-flex" }}>
-                <MkBtn variant="primary" size="sm" onClick={handlePrint}>印刷</MkBtn>
+                <MkBtn variant="primary" size="md" onClick={handlePrint} style={{ padding: "14px 30px", fontSize: 16, borderRadius: 10 }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                  印刷
+                </MkBtn>
               </span>
-              <MkBtn variant="default" size="sm" onClick={handleDownloadQr}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <MkBtn variant="default" size="md" onClick={handleDownloadQr} style={{ padding: "14px 30px", fontSize: 16, borderRadius: 10 }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 画像を保存
               </MkBtn>
-              <MkBtn variant="default" size="sm" onClick={() => setQrAppt(null)}>閉じる</MkBtn>
+              <MkBtn variant="default" size="md" onClick={() => setQrAppt(null)} style={{ padding: "14px 30px", fontSize: 16, borderRadius: 10 }}>閉じる</MkBtn>
             </div>
           </div>
         </div>
