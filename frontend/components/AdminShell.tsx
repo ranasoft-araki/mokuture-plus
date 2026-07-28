@@ -459,16 +459,16 @@ export function QrGuideBalloon<T extends HTMLElement>({
   if (!active || !rect) return null;
 
   const GREEN = "#4a7c4e";
-  const GAP = 12;
-  const ARROW = 8;
+  const GAP = 14;
+  const ARROW = 11;
 
   const box: React.CSSProperties = {
     position: "fixed", zIndex: 4000, pointerEvents: "none",
     background: GREEN, color: "#fff",
-    fontFamily: FONT_JP, fontSize: 12.5, fontWeight: 700, lineHeight: 1.3,
+    fontFamily: FONT_JP, fontSize: 17, fontWeight: 700, lineHeight: 1.3,
     letterSpacing: "0.3px", whiteSpace: "nowrap",
-    padding: "8px 13px", borderRadius: 10,
-    boxShadow: "0 4px 14px rgba(74,124,78,0.4)",
+    padding: "13px 22px", borderRadius: 12,
+    boxShadow: "0 6px 20px rgba(74,124,78,0.5)",
     animation: "mkGuideGlow 1.6s ease-in-out infinite",
   };
   const arrow: React.CSSProperties = {
