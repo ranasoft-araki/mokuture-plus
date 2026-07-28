@@ -284,28 +284,30 @@ def _wifi_toggle(on: bool) -> str | None:
         return str(e)
 
 
-def _camera_status() -> dict[str, object]:
-    if _MOCK_DEVICE:
-        return {
-            "device": settings.camera_device,
-            "available": True,
-            "name": "Mock USB Camera",
-            "detail": "mock",
-        }
+def _camera_label_rank(name: str | None) -> int:
+    label = (name or "").lower()
+    if re.search(r"(usb|uvc|webcam|logitech|hd pro|c9\d\d|brio)", label):
+        return 0
+    if re.search(r"(raspberry pi|camera module|unicam|bcm2835|imx\d+|ov\d+|libcamera|csi)", label):
+        return 1
+    return 2
 
-    device = Path(settings.camera_device)
+
+def _probe_camera_device(device_path: str) -> dict[str, object]:
     status: dict[str, object] = {
-        "device": settings.camera_device,
-        "available": device.exists(),
+        "device": device_path,
+        "available": False,
         "name": None,
         "detail": None,
     }
+    device = Path(device_path)
     if not device.exists():
         status["detail"] = "device not found"
         return status
 
+    status["available"] = True
     try:
-        r = _run(["v4l2-ctl", "--device", settings.camera_device, "--all"])
+        r = _run(["v4l2-ctl", "--device", device_path, "--all"])
         if r.returncode == 0:
             match = re.search(r"Card type\s*:\s*(.+)", r.stdout)
             if match:
@@ -317,6 +319,46 @@ def _camera_status() -> dict[str, object]:
     except Exception as e:
         status["detail"] = str(e)
     return status
+
+
+def _camera_status() -> dict[str, object]:
+    if _MOCK_DEVICE:
+        return {
+            "device": settings.camera_device,
+            "available": True,
+            "name": "Mock USB Camera",
+            "detail": "mock",
+        }
+
+    candidate_paths: list[str] = []
+    seen: set[str] = set()
+    for path in [settings.camera_device, *sorted(str(p) for p in Path("/dev").glob("video*"))]:
+        if path in seen:
+            continue
+        seen.add(path)
+        candidate_paths.append(path)
+
+    candidates = [_probe_camera_device(path) for path in candidate_paths]
+    available = [c for c in candidates if c.get("available")]
+    if not available:
+        return {
+            "device": settings.camera_device,
+            "available": False,
+            "name": None,
+            "detail": "device not found",
+            "candidates": candidates,
+        }
+
+    preferred = sorted(
+        available,
+        key=lambda c: (
+            0 if c.get("device") == settings.camera_device else 1,
+            _camera_label_rank(c.get("name")),
+            str(c.get("device")),
+        ),
+    )[0]
+    preferred["candidates"] = candidates
+    return preferred
 
 
 def _microphone_status() -> dict[str, object]:

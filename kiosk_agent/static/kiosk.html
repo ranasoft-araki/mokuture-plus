@@ -1152,11 +1152,55 @@ ${errBanner}
     if (stream) { const vid = document.getElementById("qr-vid"); if (vid) { vid.srcObject = stream; vid.play().catch(() => {}); } }
   }
 
+  function cameraRank(device) {
+    const label = (device?.label || "").toLowerCase();
+    if (/(usb|uvc|webcam|logitech|hd pro|c9\d\d|brio)/.test(label)) return 0;
+    if (/(raspberry pi|camera module|unicam|bcm2835|imx\d+|ov\d+|libcamera|csi)/.test(label)) return 1;
+    if (/(rear|back|environment)/.test(label)) return 2;
+    return 3;
+  }
+
+  async function openPreferredCameraStream() {
+    const baseVideo = { width: { ideal: 1280 }, height: { ideal: 720 } };
+    const attempts = [];
+    const seen = new Set();
+    const pushAttempt = (constraints) => {
+      const key = JSON.stringify(constraints);
+      if (seen.has(key)) return;
+      seen.add(key);
+      attempts.push(constraints);
+    };
+
+    try {
+      const devices = (await navigator.mediaDevices.enumerateDevices())
+        .filter(d => d.kind === "videoinput")
+        .sort((a, b) => cameraRank(a) - cameraRank(b));
+      for (const device of devices) {
+        if (!device.deviceId) continue;
+        pushAttempt({ video: { ...baseVideo, deviceId: { exact: device.deviceId } } });
+      }
+    } catch {}
+
+    pushAttempt({ video: { ...baseVideo, facingMode: { ideal: "environment" } } });
+    pushAttempt({ video: baseVideo });
+
+    let lastErr = null;
+    for (const constraints of attempts) {
+      try {
+        return await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error("No camera could be opened");
+  }
+
   async function startCamera() {
     try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } });
+      const s = await openPreferredCameraStream();
       if (disposed) { s.getTracks().forEach(t => t.stop()); return; }
       stream = s;
+      errMsg = "";
       const vid = document.getElementById("qr-vid");
       if (vid) { vid.srcObject = stream; await vid.play(); }
       if (disposed) { stopStream(); return; }
