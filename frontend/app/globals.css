@@ -116,6 +116,14 @@ body {
   50%      { box-shadow: 0 8px 30px rgba(74,124,78,0.85); }
 }
 
+/* 管理画面メニューの遷移中インジケータ:
+   選択したメニュー項目のスピナーと、トップバー直下の不定進捗バーを回す。 */
+@keyframes mkNavSpin { to { transform: rotate(360deg); } }
+@keyframes mkNavBar {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
 /* ── Admin responsive helpers (use these instead of inline fixed grids) ──
    These let page content reflow cleanly on phones without per-page breakpoints. */
 

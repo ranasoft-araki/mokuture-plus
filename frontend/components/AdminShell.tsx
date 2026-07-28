@@ -2,7 +2,7 @@
 
 import { useRouter, useParams } from "next/navigation";
 import { clearTokens, getLogoutUrl, getAccessToken } from "@/lib/auth";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { api } from "@/lib/api";
@@ -67,6 +67,29 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
   const router = useRouter();
   const tenant = params.tenant ?? "";
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // ── メニュー遷移中インジケータ ──
+  // router.push を useTransition でラップし、遷移完了(=遷移先ページが描画される)まで
+  // isPending=true を得る。クリックした項目を即ハイライト＋スピナー表示し、
+  // トップバー直下にも不定進捗バーを出して「遷移中」であることを明示する。
+  const [isPending, startTransition] = useTransition();
+  const [pendingId, setPendingId] = useState<NavId | null>(null);
+  const navigating = isPending && pendingId !== null;
+
+  const navigate = (id: NavId) => {
+    setSidebarOpen(false); // モバイルはメニュー選択でドロワーを閉じる
+    if (id === active) return; // 同じページなら遷移不要
+    setPendingId(id);
+    startTransition(() => {
+      router.push(NAV_PATHS[id](tenant));
+    });
+  };
+
+  // 遷移が完了/中断したら pending をクリア（遷移先で AdminShell が再マウントされる
+  // ケースでも念のため）。
+  useEffect(() => {
+    if (!isPending) setPendingId(null);
+  }, [isPending]);
 
   // ── 審査用デモモード: QR発行ガイド ──
   // デモテナントのときだけ、サイドバー「来社予定」に「QR発行はこちら①」バルーンを出す
@@ -168,7 +191,8 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
               id={item.id}
               label={item.label}
               active={active === item.id}
-              onClick={() => router.push(NAV_PATHS[item.id](tenant))}
+              pending={pendingId === item.id}
+              onClick={() => navigate(item.id)}
               badge={item.id === "reception" && receptionUnread && receptionUnread > 0 ? receptionUnread : undefined}
               buttonRef={item.id === "appointments" ? apptNavRef : undefined}
             />
@@ -177,7 +201,7 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
             設定
           </div>
           {NAV_SETTINGS.map((item) => (
-            <NavItem key={item.id} id={item.id} label={item.label} active={active === item.id} onClick={() => router.push(NAV_PATHS[item.id](tenant))} />
+            <NavItem key={item.id} id={item.id} label={item.label} active={active === item.id} pending={pendingId === item.id} onClick={() => navigate(item.id)} />
           ))}
         </nav>
 
@@ -240,6 +264,17 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
           {actions && <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>{actions}</div>}
         </div>
 
+        {/* 遷移中の不定進捗バー（トップバー直下） */}
+        <div aria-hidden={!navigating} style={{ height: 2, flexShrink: 0, overflow: "hidden", background: navigating ? "#eaf0e8" : "transparent" }}>
+          {navigating && (
+            <div style={{
+              height: "100%", width: "40%",
+              background: "linear-gradient(90deg, transparent, #4a7c4e, transparent)",
+              animation: "mkNavBar 0.9s ease-in-out infinite",
+            }} />
+          )}
+        </div>
+
         {/* Content */}
         <div className="flex-1 overflow-auto adm-content">
           {children}
@@ -257,29 +292,41 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
   );
 }
 
-function NavItem({ id, label, active, onClick, badge, buttonRef }: { id: NavId; label: string; active: boolean; onClick: () => void; badge?: number; buttonRef?: React.Ref<HTMLButtonElement> }) {
+function NavItem({ id, label, active, pending = false, onClick, badge, buttonRef }: { id: NavId; label: string; active: boolean; pending?: boolean; onClick: () => void; badge?: number; buttonRef?: React.Ref<HTMLButtonElement> }) {
+  // pending 中はクリック直後から選択済みに見せる（即時フィードバック）
+  const hot = active || pending;
   return (
     <button
       ref={buttonRef}
       onClick={onClick}
+      aria-busy={pending || undefined}
       style={{
         width: "100%", display: "flex", alignItems: "center", gap: 10,
-        padding: active ? "8px 10px 8px 12px" : "8px 10px",
+        padding: hot ? "8px 10px 8px 12px" : "8px 10px",
         borderRadius: 7, marginBottom: 1,
-        background: active ? "#eaf0e8" : "transparent",
-        color: active ? "#3a6240" : "#6b6559",
-        fontSize: 13, fontWeight: active ? 600 : 500,
-        cursor: "pointer", textAlign: "left",
-        borderLeft: `2px solid ${active ? "#4a7c4e" : "transparent"}`,
+        background: hot ? "#eaf0e8" : "transparent",
+        color: hot ? "#3a6240" : "#6b6559",
+        fontSize: 13, fontWeight: hot ? 600 : 500,
+        cursor: pending ? "progress" : "pointer", textAlign: "left",
+        borderLeft: `2px solid ${hot ? "#4a7c4e" : "transparent"}`,
         border: "none", fontFamily: FONT_JP,
         transition: "background 0.1s",
       }}
-      onMouseEnter={(e) => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "#f4f1ea"; }}
-      onMouseLeave={(e) => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+      onMouseEnter={(e) => { if (!hot) (e.currentTarget as HTMLButtonElement).style.background = "#f4f1ea"; }}
+      onMouseLeave={(e) => { if (!hot) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
     >
-      <NavIcon id={id} active={active} />
+      <NavIcon id={id} active={hot} />
       <span style={{ flex: 1 }}>{label}</span>
-      {badge !== undefined && badge > 0 && (
+      {pending ? (
+        <span
+          aria-label="遷移中"
+          style={{
+            width: 13, height: 13, flexShrink: 0, marginLeft: 4,
+            border: "2px solid #cfe0cd", borderTopColor: "#4a7c4e",
+            borderRadius: "50%", animation: "mkNavSpin 0.6s linear infinite",
+          }}
+        />
+      ) : badge !== undefined && badge > 0 && (
         <span style={{
           background: "#c8a96e",
           color: "#1d1a15",
