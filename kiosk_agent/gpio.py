@@ -91,12 +91,24 @@ class PirSensor:
     def __init__(self, pin: int):
         self.pin = pin
         self._pir = _PIR(pin) if _HW else None  # type: ignore
+        self._last_motion_detected = False
 
     @property
     def motion_detected(self) -> bool:
         if self._pir is None:
             return False
-        return bool(self._pir.motion_detected)  # type: ignore[attr-defined]
+        # gpiozero's MotionSensor can occasionally raise "deque mutated during
+        # iteration" while its smoothing queue is being updated. Keep the last
+        # known state and retry once before falling back to that cached value.
+        for _ in range(2):
+            try:
+                detected = bool(self._pir.motion_detected)  # type: ignore[attr-defined]
+                self._last_motion_detected = detected
+                return detected
+            except RuntimeError as exc:
+                if "deque mutated during iteration" not in str(exc):
+                    raise
+        return self._last_motion_detected
 
     def close(self) -> None:
         if self._pir is not None:

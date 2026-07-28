@@ -22,6 +22,7 @@ from gpio import DoorSensor, LockerController, PirSensor
 from state import clear_device_state, get_device_name, get_device_token, is_registered, save_device_state
 from sync import find_media, heartbeat_loop, sync_loop
 from updater import updater, read_version
+from watchdog import BrowserHeartbeatState, SystemdWatchdog
 
 
 def _hardware_id() -> str:
@@ -469,6 +470,13 @@ def _configured_door_numbers() -> list[int]:
 # 一致させること。
 _OPEN_WINDOW_SEC = float(os.getenv("LOCKER_OPEN_WINDOW_SEC", "12"))
 _bg_tasks: set = set()
+browser_heartbeat_state = BrowserHeartbeatState()
+systemd_watchdog = SystemdWatchdog(
+    browser_state=browser_heartbeat_state,
+    browser_required=settings.systemd_watchdog_browser_required,
+    browser_startup_grace_sec=settings.systemd_watchdog_browser_startup_grace_sec,
+    browser_stale_sec=settings.systemd_watchdog_browser_stale_sec,
+)
 
 
 def _spawn(coro):
@@ -511,16 +519,19 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(sync_loop())
     update_task = asyncio.create_task(updater.run())
     heartbeat_task = asyncio.create_task(heartbeat_loop())
+    watchdog_task = asyncio.create_task(systemd_watchdog.run())
     # かな漢字辞書: 無ければ取得→事前ロード(別スレッド)。OTA 更新の Pi でも自動で辞書を揃え、
     # 初回変換の遅延も回避する。取得失敗(オフライン)時は同梱 kana_dict.tsv にフォールバック。
     async def _prepare_convert_dict():
         await asyncio.to_thread(kana_kanji.ensure_dict)
         await asyncio.to_thread(kana_kanji.warmup)
     warmup_task = asyncio.create_task(_prepare_convert_dict())
+    await systemd_watchdog.ready("mokuture kiosk agent started")
     yield
     task.cancel()
     update_task.cancel()
     heartbeat_task.cancel()
+    watchdog_task.cancel()
     warmup_task.cancel()
     locker_ctrl.close()
     pir.close()
@@ -561,6 +572,14 @@ class LockerStateBody(BaseModel):
 
 class LockerConfigBody(BaseModel):
     count: int
+
+
+class KioskHeartbeatBody(BaseModel):
+    screen: str = ""
+    hidden: bool = False
+    focused: bool | None = None
+    href: str = ""
+    ts: int | None = None
 
 
 @app.get("/", include_in_schema=False)
@@ -700,7 +719,14 @@ async def health():
         "device_name": get_device_name(),
         "media_dir": str(settings.media_dir),
         "mock_gpio": settings.mock_gpio,
+        "watchdog": systemd_watchdog.status(),
     }
+
+
+@app.post("/device/kiosk-heartbeat")
+async def kiosk_heartbeat(body: KioskHeartbeatBody):
+    browser_heartbeat_state.record(body.model_dump())
+    return {"ok": True, "watchdog": systemd_watchdog.status()}
 
 
 @app.get("/proxy/settings")

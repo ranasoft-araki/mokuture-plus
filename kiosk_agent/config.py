@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     sync_interval_sec: int = 60
     mock_gpio: bool = False
     locker_pulse_sec: float = 1.0
+    systemd_watchdog_browser_required: bool = False
+    systemd_watchdog_browser_startup_grace_sec: int = 300
+    systemd_watchdog_browser_stale_sec: int = 45
     # 注: 旧 kiosk_mock(ブラウザ全スタブをWindowsで自動有効化)は廃止。ハードは agent 層で
     # 自動モック(main.py の _MOCK_DEVICE=非Linux / MOCK_GPIO env・gpio.py)、ブラウザは常に
     # 実経路を通す。バックエンド不要の完全オフラインUIプレビューは kiosk.html?mock=1 のみ。

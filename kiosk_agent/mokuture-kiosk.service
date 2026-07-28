@@ -4,13 +4,16 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
 User=USER
 WorkingDirectory=AGENT_DIR
-ExecStart=VENV/bin/uvicorn main:app --host 0.0.0.0 --port 8080
+ExecStart=VENV/bin/uvicorn main:app --host 0.0.0.0 --port 8080 --no-access-log
 Restart=always
 RestartSec=5
+WatchdogSec=30
 EnvironmentFile=AGENT_DIR/.env
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStartPost=/usr/bin/systemctl --user restart mokuture-browser.service
 
 [Install]
 WantedBy=multi-user.target
