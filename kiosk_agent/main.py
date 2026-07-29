@@ -469,6 +469,7 @@ def _configured_door_numbers() -> list[int]:
 # バックする。※有効化には DOOR_PINS_JSON のキーを door_number(=LOCKER_PINS_JSON のキー)と
 # 一致させること。
 _OPEN_WINDOW_SEC = float(os.getenv("LOCKER_OPEN_WINDOW_SEC", "12"))
+_OPEN_AFTER_DELAY_SEC = float(os.getenv("LOCKER_OPEN_AFTER_DELAY_SEC", "3"))
 _bg_tasks: set = set()
 browser_heartbeat_state = BrowserHeartbeatState()
 systemd_watchdog = SystemdWatchdog(
@@ -492,8 +493,9 @@ async def _open_with_autolock(locker_id: str, door: DoorSensor) -> None:
     try:
         while waited < _OPEN_WINDOW_SEC:
             if door.configured:
-                # 扉が開いたら即施錠位置へ戻す
+                # 扉が開いたら少し待ってから施錠位置へ戻す
                 if door.is_closed is False:
+                    await asyncio.sleep(_OPEN_AFTER_DELAY_SEC)
                     break
             await asyncio.sleep(0.15)
             waited += 0.15
