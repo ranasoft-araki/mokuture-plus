@@ -489,14 +489,11 @@ def _spawn(coro):
 async def _open_with_autolock(locker_id: str, door: DoorSensor) -> None:
     locker_ctrl.set_state(locker_id, True)   # 解錠(通電)
     waited = 0.0
-    door_opened = False
     try:
         while waited < _OPEN_WINDOW_SEC:
             if door.configured:
+                # 扉が開いたら即施錠位置へ戻す
                 if door.is_closed is False:
-                    door_opened = True
-                # 扉が開いて、その後閉じたら → 施錠位置へ戻す
-                if door_opened and door.is_closed is True:
                     break
             await asyncio.sleep(0.15)
             waited += 0.15
