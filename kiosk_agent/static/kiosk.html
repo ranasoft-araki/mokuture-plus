@@ -1535,7 +1535,7 @@ function showLocker(mode) {
     } else if (view === "openwait") {
       // 手荷物預け(保管)の開錠も受取と同じ「取っ手を押して開けて」の全画面ガイドに統一。
       sc.innerHTML = `<div style="width:1920px;height:1080px;position:relative;background:#f5f2ec;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-        ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "扉を押して開けてください", subtitle: "扉を軽く押して開け、荷物を入れて扉を閉めてください" })}
+        ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "扉を押して開けてください", subtitle: "荷物を入れたら扉を閉めてください" })}
         ${homeBtnCornerHtml("lk-home")}
         <div style="position:absolute;left:0;right:0;bottom:50px;z-index:5;display:flex;justify-content:center"><button id="lk-closed" style="padding:22px 84px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:32px;font-weight:700;cursor:pointer;font-family:inherit">扉を閉めました → 暗証番号を設定</button></div>
       </div>`;
@@ -1779,7 +1779,7 @@ function showDelivery() {
     } else if (view === "openwait") {
       // 置き配の開錠も同じ「取っ手を押して開けて」の全画面ガイドに統一。
       sc.innerHTML = `<div style="width:1920px;height:1080px;position:relative;background:#f5f2ec;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-        ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "扉を押して開けてください", subtitle: "扉を軽く押して開け、荷物を入れて扉を閉めてください（暗証番号は不要）" })}
+        ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "扉を押して開けてください", subtitle: "荷物を入れたら扉を閉めてください（暗証番号は不要）" })}
         ${homeBtnCornerHtml("dl-home")}
         <div style="position:absolute;left:0;right:0;bottom:50px;z-index:5;display:flex;justify-content:center"><button id="dl-lock" style="padding:22px 84px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:32px;font-weight:700;cursor:pointer;font-family:inherit">扉を閉めました（施錠する）</button></div>
       </div>`;
