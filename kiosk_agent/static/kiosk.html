@@ -1388,12 +1388,63 @@ function showLocker(mode) {
   let sel = null, pin = "", err = "", busy = false, resultTitle = "", resultSub = "";
   let resultGuide = false;   // result 画面で扉ガイド(どの扉を開けるか)を出すか=解錠(受取)成功時のみ
   let idleId, resultTimer = null, lastView = "loading";
+  let doorWatchId = null, doorOpenedSinceWait = false, doorAutoAdvancing = false;
 
   function resetIdle() {
     clearTimeout(idleId);
     idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
   }
-  CLEANUPS.push(() => { clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); });
+  function stopDoorWatch() {
+    if (doorWatchId) {
+      clearInterval(doorWatchId);
+      doorWatchId = null;
+    }
+    doorOpenedSinceWait = false;
+    doorAutoAdvancing = false;
+  }
+  CLEANUPS.push(() => { clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); stopDoorWatch(); });
+
+  async function getSelectedDoorClosedState() {
+    if (!sel) return null;
+    try {
+      const r = await deviceGet("/device/door");
+      const doors = Array.isArray(r?.doors) ? r.doors : [];
+      const door = doors.find(d => String(d.door_id) === String(sel.door_number) || String(d.door_id) === String(sel.id));
+      if (!door || !door.configured || typeof door.is_closed !== "boolean") return null;
+      return door.is_closed;
+    } catch {
+      return null;
+    }
+  }
+
+  function startDoorWatch() {
+    stopDoorWatch();
+    if (!sel) return;
+    let inFlight = false;
+    doorWatchId = every(250, async () => {
+      if (view !== "openwait" || !sel || doorAutoAdvancing || inFlight) return;
+      inFlight = true;
+      try {
+        const isClosed = await getSelectedDoorClosedState();
+        if (isClosed == null) return;
+        if (!doorOpenedSinceWait) {
+          if (isClosed === false) doorOpenedSinceWait = true;
+          return;
+        }
+        if (isClosed === true) {
+          doorAutoAdvancing = true;
+          stopDoorWatch();
+          await forceLockLocker(sel.door_number);
+          pin = "";
+          err = "";
+          view = "pinset";
+          render();
+        }
+      } finally {
+        inFlight = false;
+      }
+    });
+  }
 
   const shell = (inner, backTo) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
   <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center"><button id="lk-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button><div style="flex:1"></div>${homeBtnHtml("lk-home")}</div>
@@ -1493,8 +1544,10 @@ function showLocker(mode) {
         else { openEmpty(); }                                                    // 空き=手荷物一時保管(PIN設定)
       });
     } else if (view === "openwait") {
+      startDoorWatch();
       document.getElementById("lk-closed").addEventListener("click", async () => {
         resetIdle();
+        stopDoorWatch();
         await forceLockLocker(sel.door_number);
         pin = "";
         err = "";
@@ -1541,6 +1594,8 @@ function showLocker(mode) {
   async function openEmpty() {
     // 空きロッカー: GPIOで開錠 → 荷物投入待ち
     pulseLocker(sel.door_number).catch(() => {});
+    doorOpenedSinceWait = false;
+    doorAutoAdvancing = false;
     view = "openwait"; render();
   }
 
