@@ -1058,7 +1058,7 @@ function _fixtureElevation(slot) {
 function lockerPushGuideScreen(sel, allLockers, opts) {
   opts = opts || {};
   const badge = opts.badge || "解錠しました";
-  const title = opts.title || "ロッカーの扉を押して開けてください";
+  const title = opts.title || "扉を押して開けてください";
   const subtitle = opts.subtitle || "全体図で緑色に示した扉を押します";
   const slot = _lockerSlotIndex(sel, allLockers);
   const cy = [642, 707, 769][slot];   // 引き出し線の開始Y(取っ手Y)
@@ -1543,7 +1543,7 @@ function showLocker(mode) {
       if (resultGuide) {
         // 解錠(受取)成功: Codex 作の全画面「取っ手を押す」案内。対象扉を全体図で緑強調(動的)。
         sc.innerHTML = `<div style="width:1920px;height:1080px;position:relative;background:#f5f2ec;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-          ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "ロッカーの扉を押して開けてください" })}
+          ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "扉を押して開けてください", subtitle: "お荷物をお受け取りください" })}
           ${homeBtnCornerHtml("lk-home")}
           <div style="position:absolute;left:50%;bottom:52px;transform:translateX(-50%);z-index:5;display:flex;flex-direction:column;align-items:center;gap:16px">
             <div style="display:flex;align-items:center;gap:14px;color:#66717e;font-size:20px">${ICO.clock}<span>待機画面に戻るまで</span><span id="lk-cnt" style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:#17936b;min-width:44px;text-align:right">${Math.max(6, ST.kiosk_complete_timeout_sec)}</span><span>秒</span><div style="width:220px;height:8px;background:#e2ddd4;border-radius:4px;overflow:hidden"><div id="lk-bar" style="width:100%;height:100%;background:#17936b;border-radius:4px;transition:width 1s linear"></div></div></div>
