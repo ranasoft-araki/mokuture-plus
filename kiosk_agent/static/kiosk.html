@@ -1058,8 +1058,8 @@ function _fixtureElevation(slot) {
 function lockerPushGuideScreen(sel, allLockers, opts) {
   opts = opts || {};
   const badge = opts.badge || "解錠しました";
-  const title = opts.title || "ロッカーの取っ手を押して開けてください";
-  const subtitle = opts.subtitle || "全体図で緑色に示した扉の取っ手を、軽く1回押します";
+  const title = opts.title || "ロッカーの扉を押して開けてください";
+  const subtitle = opts.subtitle || "全体図で緑色に示した扉を、軽く1回押します";
   const slot = _lockerSlotIndex(sel, allLockers);
   const cy = [642, 707, 769][slot];   // 引き出し線の開始Y(取っ手Y)
   return `<svg id="lpg-svg" width="1920" height="1080" viewBox="0 0 1920 1080" style="display:block" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">`
@@ -1087,7 +1087,7 @@ function lockerPushGuideScreen(sel, allLockers, opts) {
     + `<circle cx="1165" cy="600" r="56" fill="none" stroke="#75bea5" stroke-width="7"/>`
     + `<circle cx="1165" cy="600" r="72" fill="none" stroke="#b9dfd2" stroke-width="7"/>`
     + `<g transform="translate(1210 492) scale(12.8125) rotate(-90 8 8)" fill="#20262e"><path d="M6.75 1a.75.75 0 0 1 .75.75V8a.5.5 0 0 0 1 0V5.467l.086-.004c.317-.012.637-.008.816.027.134.027.294.096.448.182.077.042.15.147.15.314V8a.5.5 0 1 0 1 0V6.435l.106-.01c.316-.024.584-.01.708.04.118.046.3.207.486.43.081.096.15.19.2.259V8.5a.5.5 0 0 0 1 0v-1h.342a1 1 0 0 1 .995 1.1l-.271 2.715a2.5 2.5 0 0 1-.317.991l-1.395 2.442a.5.5 0 0 1-.434.252H6.035a.5.5 0 0 1-.416-.223l-1.433-2.15a1.5 1.5 0 0 1-.243-.666l-.345-3.105a.5.5 0 0 1 .399-.546L5 8.11V9a.5.5 0 0 0 1 0V1.75A.75.75 0 0 1 6.75 1M8.5 4.466V1.75a1.75 1.75 0 1 0-3.5 0v5.34l-1.2.24a1.5 1.5 0 0 0-1.196 1.636l.345 3.106a2.5 2.5 0 0 0 .405 1.11l1.433 2.15A1.5 1.5 0 0 0 6.035 16h6.385a1.5 1.5 0 0 0 1.302-.756l1.395-2.441a3.5 3.5 0 0 0 .444-1.389l.271-2.715a2 2 0 0 0-1.99-2.199h-.581a5 5 0 0 0-.195-.248c-.191-.229-.51-.568-.88-.716-.364-.146-.846-.132-1.158-.108l-.132.012a1.26 1.26 0 0 0-.56-.642 2.6 2.6 0 0 0-.738-.288c-.31-.062-.739-.058-1.05-.046z"/></g>`
-    + `<text class="jp ink" x="1580" y="518" font-size="46" font-weight="700" text-anchor="middle" dominant-baseline="middle">取っ手を</text>`
+    + `<text class="jp ink" x="1580" y="518" font-size="46" font-weight="700" text-anchor="middle" dominant-baseline="middle">扉を</text>`
     + `<text class="jp" x="1580" y="656" font-size="118" font-weight="700" fill="#0f7452" text-anchor="middle" dominant-baseline="middle">押す</text>`
     + `<line x1="1450" y1="720" x2="1710" y2="720" stroke="#17936b" stroke-width="10"/>`
     + `<text class="jp muted" x="1580" y="792" font-size="38" font-weight="700" text-anchor="middle" dominant-baseline="middle">軽く1回</text>`
@@ -1536,7 +1536,7 @@ function showLocker(mode) {
     } else if (view === "openwait") {
       // 手荷物預け(保管)の開錠も受取と同じ「取っ手を押して開けて」の全画面ガイドに統一。
       sc.innerHTML = `<div style="width:1920px;height:1080px;position:relative;background:#f5f2ec;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-        ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "取っ手を押して扉を開けてください", subtitle: "取っ手を軽く押して扉を開け、荷物を入れて扉を閉めてください" })}
+        ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "扉を押して開けてください", subtitle: "扉を軽く押して開け、荷物を入れて扉を閉めてください" })}
         ${homeBtnCornerHtml("lk-home")}
         <div style="position:absolute;left:0;right:0;bottom:50px;z-index:5;display:flex;justify-content:center"><button id="lk-closed" style="padding:22px 84px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:32px;font-weight:700;cursor:pointer;font-family:inherit">扉を閉めました → 暗証番号を設定</button></div>
       </div>`;
@@ -1544,7 +1544,7 @@ function showLocker(mode) {
       if (resultGuide) {
         // 解錠(受取)成功: Codex 作の全画面「取っ手を押す」案内。対象扉を全体図で緑強調(動的)。
         sc.innerHTML = `<div style="width:1920px;height:1080px;position:relative;background:#f5f2ec;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-          ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "ロッカーの取っ手を押して開けてください" })}
+          ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "ロッカーの扉を押して開けてください" })}
           ${homeBtnCornerHtml("lk-home")}
           <div style="position:absolute;left:50%;bottom:52px;transform:translateX(-50%);z-index:5;display:flex;flex-direction:column;align-items:center;gap:16px">
             <div style="display:flex;align-items:center;gap:14px;color:#66717e;font-size:20px">${ICO.clock}<span>待機画面に戻るまで</span><span id="lk-cnt" style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:#17936b;min-width:44px;text-align:right">${Math.max(6, ST.kiosk_complete_timeout_sec)}</span><span>秒</span><div style="width:220px;height:8px;background:#e2ddd4;border-radius:4px;overflow:hidden"><div id="lk-bar" style="width:100%;height:100%;background:#17936b;border-radius:4px;transition:width 1s linear"></div></div></div>
@@ -1661,7 +1661,7 @@ function showLocker(mode) {
         const r = await devicePost(`/device/locker/${encodeURIComponent(sel.id)}/release`, { pin });
         await pulseLocker((r && r.door_number) || sel.door_number);
         resultGuide = true;
-        resultTitle = "解錠しました"; resultSub = `${sel.name} の扉が開きました。右側（取っ手側）を押して開け、お荷物をお受け取りください。`;
+        resultTitle = "解錠しました"; resultSub = `${sel.name} の扉が開きました。扉の右側を押して開け、お荷物をお受け取りください。`;
       }
       busy = false; view = "result"; render();
     } catch (e) {
@@ -1776,7 +1776,7 @@ function showDelivery() {
     } else if (view === "openwait") {
       // 置き配の開錠も同じ「取っ手を押して開けて」の全画面ガイドに統一。
       sc.innerHTML = `<div style="width:1920px;height:1080px;position:relative;background:#f5f2ec;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-        ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "取っ手を押して扉を開けてください", subtitle: "取っ手を軽く押して扉を開け、荷物を入れて扉を閉めてください（暗証番号は不要）" })}
+        ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "扉を押して開けてください", subtitle: "扉を軽く押して開け、荷物を入れて扉を閉めてください（暗証番号は不要）" })}
         ${homeBtnCornerHtml("dl-home")}
         <div style="position:absolute;left:0;right:0;bottom:50px;z-index:5;display:flex;justify-content:center"><button id="dl-lock" style="padding:22px 84px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:32px;font-weight:700;cursor:pointer;font-family:inherit">扉を閉めました（施錠する）</button></div>
       </div>`;
