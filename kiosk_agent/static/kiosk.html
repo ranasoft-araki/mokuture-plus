@@ -1009,50 +1009,90 @@ function camGuideCard() {
   </div>`;
 }
 
-// ─── ロッカー扉ガイド (どの扉を開けるか・アニメ) ──────────────────────────────
-// camGuideCard と同じ手法で、ロッカー什器を正面から見た「縦積み」イラストを SVG で描く。
-// 扉は door_number 昇順で上から並ぶ(1=最上段。実機の 1→2→3 縦積みに一致)。取っ手は各扉の
-// 右側にあるので、対象扉(sel)を bc(アクセント)で塗り＋取っ手(右側)のパルスリングで強調し、
-// 「この扉の右側(取っ手側)を押して開ける」ことを一目で示す。
-// 解錠(受取)/扉オープン(保管・置き配)の案内に使う。allLockers=全扉(未指定なら sel 単体)。
-function lockerDoorGuide(sel, allLockers) {
-  const bc = ST.brand_color;
+// ─── ロッカー「取っ手を押す」案内 (Codex 作 locker-push-instruction-screen-v8.svg ベース) ──
+// 什器の全体図で対象扉を緑で強調し、取っ手の拡大図＋手アイコンで「取っ手を軽く1回押す」を案内。
+// 全体図の左下=3段(上/中/下)が3つのロッカー。対象扉(door_number)に応じて緑ハイライト矩形・
+// 取っ手リング・拡大図への引き出し線(開始Y=取っ手Y)を動かす(手/拡大/文言 は固定)。
+// 解錠(受取)/保管/置き配 いずれも全画面版 lockerPushGuideScreen を使う(badge/title/subtitle で差し替え)。
+
+// 対象扉→全体図の3スロット(0=上/1=中/2=下)。3口ならそのまま、それ以外は比率で3枠へ寄せる。
+function _lockerSlotIndex(sel, allLockers) {
   const doors = (allLockers && allLockers.length ? allLockers.slice() : [sel])
     .sort((a, b) => ((a && a.door_number) || 0) - ((b && b.door_number) || 0));
-  const N = doors.length;
-  let si = doors.findIndex(l => l && sel && l.id === sel.id);
-  if (si < 0) si = doors.findIndex(l => l && sel && l.door_number === sel.door_number);
-  if (si < 0) si = 0;
+  const N = Math.max(1, doors.length);
+  let i = doors.findIndex(l => l && sel && l.id === sel.id);
+  if (i < 0) i = doors.findIndex(l => l && sel && l.door_number === sel.door_number);
+  if (i < 0) i = 0;
+  const slot = N === 3 ? i : (N <= 1 ? 0 : Math.round(i / (N - 1) * 2));
+  return Math.max(0, Math.min(2, slot));
+}
 
-  const doorX = 20, doorW = 300, doorH = 100, gapY = 16, padTop = 22, rightPad = 48;
-  const vbW = doorX + doorW + rightPad;   // 右余白=取っ手のパルスリングがはみ出す分
-  const vbH = padTop * 2 + N * doorH + (N - 1) * gapY;
-  const hx = doorX + doorW - 24;   // 取っ手(右側)の中心X
+// 什器全体図(絶対座標 x220-515,y410-901)。slot=強調する扉(0/1/2)。SVGソースを忠実に再現。
+function _fixtureElevation(slot) {
+  const S = [{ry:618,rh:63,cy:642},{ry:681,rh:61,cy:707},{ry:742,rh:159,cy:769}][Math.max(0,Math.min(2,slot))];
+  return `<rect x="220" y="410" width="295" height="500" fill="#ffffff" stroke="#66717e" stroke-width="1.2"/>`
+    + `<rect x="230" y="418" width="275" height="483" fill="#ffffff" stroke="#20262e" stroke-width="2.4"/>`
+    + `<rect x="230" y="418" width="275" height="196" fill="#ffffff" stroke="#20262e" stroke-width="2.4"/>`
+    + `<rect x="274" y="457" width="187" height="112" rx="3" fill="#ffffff" stroke="#20262e" stroke-width="3"/>`
+    + `<rect x="283" y="466" width="169" height="94" fill="#ffffff" stroke="#20262e" stroke-width="2"/>`
+    + `<rect x="230" y="610" width="275" height="8" fill="#ffffff" stroke="#20262e" stroke-width="2"/>`
+    + `<rect x="230" y="618" width="275" height="283" fill="#ffffff" stroke="#20262e" stroke-width="2.4"/>`
+    + `<line x1="340" y1="618" x2="340" y2="901" stroke="#20262e" stroke-width="2.4"/>`
+    + `<line x1="450" y1="618" x2="450" y2="901" stroke="#20262e" stroke-width="2.4"/>`
+    + `<line x1="230" y1="681" x2="340" y2="681" stroke="#20262e" stroke-width="2.4"/>`
+    + `<line x1="230" y1="742" x2="340" y2="742" stroke="#20262e" stroke-width="2.4"/>`
+    + `<line x1="340" y1="644" x2="450" y2="644" stroke="#20262e" stroke-width="2.4"/>`
+    + `<line x1="450" y1="673" x2="505" y2="673" stroke="#20262e" stroke-width="2.4"/>`
+    + `<rect x="230" y="${S.ry}" width="110" height="${S.rh}" fill="#e7f7f0" fill-opacity=".95" stroke="#17936b" stroke-width="5"/>`
+    + `<g fill="#ffffff" stroke="#20262e" stroke-width="1.5"><rect x="313" y="631" width="18" height="22" rx="2"/><rect x="313" y="696" width="18" height="22" rx="2"/><rect x="313" y="758" width="18" height="22" rx="2"/></g>`
+    + `<g stroke="#20262e" stroke-width="1.5"><line x1="319" y1="651" x2="325" y2="651"/><line x1="319" y1="716" x2="325" y2="716"/><line x1="319" y1="778" x2="325" y2="778"/></g>`
+    + `<circle cx="377" cy="631" r="3" fill="#ffffff" stroke="#20262e" stroke-width="1.2"/>`
+    + `<circle cx="415" cy="631" r="3" fill="#ffffff" stroke="#20262e" stroke-width="1.2"/>`
+    + `<rect x="470" y="627" width="25" height="5" rx="2.5" fill="#ffffff" stroke="#20262e" stroke-width="1.2"/>`
+    + `<circle cx="322" cy="${S.cy}" r="17" fill="none" stroke="#17936b" stroke-width="5"><animate attributeName="opacity" values="1;.35;1" dur="1.8s" repeatCount="indefinite"/></circle>`
+    + `<circle cx="322" cy="${S.cy}" r="25" fill="none" stroke="#75bea5" stroke-width="5"/>`
+    + `<circle cx="322" cy="${S.cy}" r="33" fill="none" stroke="#b9dfd2" stroke-width="5"/>`;
+}
 
-  const parts = doors.map((l, i) => {
-    const y = padTop + i * (doorH + gapY);
-    const cy = y + doorH / 2;
-    const on = i === si;
-    const stroke = on ? bc : T.borderStrong;
-    const fill = on ? bc + "1f" : T.canvas;
-    const sw = on ? 7 : 3;
-    const num = l && l.door_number != null ? l.door_number : (i + 1);
-    // 扉本体 + 取っ手(右側の縦バー) + 番号
-    let s = `<rect x="${doorX}" y="${y}" width="${doorW}" height="${doorH}" rx="14" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>
-      <rect x="${hx - 5}" y="${cy - 28}" width="10" height="56" rx="5" fill="${on ? bc : T.sub}"/>
-      <text x="${doorX + 48}" y="${cy}" dominant-baseline="central" text-anchor="middle" font-size="${on ? 56 : 46}" font-weight="700" fill="${on ? bc : T.muted}" font-family="Inter,system-ui,sans-serif">${num}</text>`;
-    if (on) {
-      // 取っ手(右側)のパルスリングで対象扉=押す位置を強調
-      s += `<circle cx="${hx}" cy="${cy}" r="24" fill="none" stroke="${bc}" stroke-width="6" opacity="0.6">
-        <animate attributeName="r" values="24;56" dur="1.5s" repeatCount="indefinite"/>
-        <animate attributeName="opacity" values="0.6;0" dur="1.5s" repeatCount="indefinite"/>
-      </circle>
-      <circle cx="${hx}" cy="${cy}" r="13" fill="${bc}"/>`;
-    }
-    return s;
-  }).join("");
-
-  return `<svg viewBox="0 0 ${vbW} ${vbH}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="display:block" aria-hidden="true">${parts}</svg>`;
+// 全画面の「取っ手を押す」案内(解錠=受取/保管/置き配 共通)。badge/title/subtitle は文脈で差し替え可。
+function lockerPushGuideScreen(sel, allLockers, opts) {
+  opts = opts || {};
+  const badge = opts.badge || "解錠しました";
+  const title = opts.title || "ロッカーの取っ手を押して開けてください";
+  const subtitle = opts.subtitle || "全体図で緑色に示した扉の取っ手を、軽く1回押します";
+  const slot = _lockerSlotIndex(sel, allLockers);
+  const cy = [642, 707, 769][slot];   // 引き出し線の開始Y(取っ手Y)
+  return `<svg id="lpg-svg" width="1920" height="1080" viewBox="0 0 1920 1080" style="display:block" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">`
+    + `<style>#lpg-svg .jp{font-family:'Noto Sans JP','BIZ UDPGothic','Yu Gothic',sans-serif}#lpg-svg .ink{fill:#20262e}#lpg-svg .muted{fill:#66717e}</style>`
+    + `<defs><filter id="lpg-shadow" x="-10%" y="-10%" width="130%" height="140%"><feDropShadow dx="8" dy="12" stdDeviation="0" flood-color="#d9d5ce"/></filter></defs>`
+    + `<rect width="1920" height="1080" fill="#f5f2ec"/>`
+    + `<rect x="100" y="55" width="320" height="77" rx="38" fill="#e7f7f0"/>`
+    + `<rect x="133" y="85" width="34" height="28" rx="5" fill="none" stroke="#14855b" stroke-width="5"/>`
+    + `<path d="M140 86 C140 64 176 64 176 86 M176 83 V71" fill="none" stroke="#14855b" stroke-width="5" stroke-linecap="round"/>`
+    + `<text class="jp" x="194" y="96" font-size="31" font-weight="700" fill="#14855b" dominant-baseline="middle">${escHtml(badge)}</text>`
+    + `<text class="jp ink" x="960" y="194" font-size="76" font-weight="700" text-anchor="middle" dominant-baseline="middle">${escHtml(title)}</text>`
+    + `<text class="jp muted" x="960" y="274" font-size="34" text-anchor="middle" dominant-baseline="middle">${escHtml(subtitle)}</text>`
+    // 図(カード＋中身)は上端中央を軸に少し縮小し、下部にタイムバー/ボタンの領域を確保する。
+    + `<g transform="translate(115 42) scale(0.88)">`
+    + `<rect x="100" y="350" width="1720" height="580" rx="34" fill="#ffffff" filter="url(#lpg-shadow)"/>`
+    + `<text class="jp ink" x="368" y="386" font-size="38" font-weight="700" text-anchor="middle" dominant-baseline="middle">全体図</text>`
+    + _fixtureElevation(slot)
+    + `<path d="M355 ${cy} H675 L740 655" fill="none" stroke="#17936b" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>`
+    + `<circle cx="740" cy="655" r="12" fill="#17936b"/>`
+    + `<text class="jp muted" x="990" y="477" font-size="32" font-weight="700" text-anchor="middle" dominant-baseline="middle">押す場所（拡大）</text>`
+    + `<rect x="740" y="510" width="500" height="290" rx="14" fill="#e7f7f0" fill-opacity=".65" stroke="#17936b" stroke-width="6"/>`
+    + `<rect x="1138" y="568" width="54" height="64" rx="6" fill="#ffffff" stroke="#20262e" stroke-width="2.5"/>`
+    + `<rect x="1155" y="624" width="20" height="4" rx="2" fill="#20262e"/>`
+    + `<circle cx="1165" cy="600" r="40" fill="none" stroke="#17936b" stroke-width="7"><animate attributeName="opacity" values="1;.4;1" dur="1.8s" repeatCount="indefinite"/></circle>`
+    + `<circle cx="1165" cy="600" r="56" fill="none" stroke="#75bea5" stroke-width="7"/>`
+    + `<circle cx="1165" cy="600" r="72" fill="none" stroke="#b9dfd2" stroke-width="7"/>`
+    + `<g transform="translate(1210 492) scale(12.8125) rotate(-90 8 8)" fill="#20262e"><path d="M6.75 1a.75.75 0 0 1 .75.75V8a.5.5 0 0 0 1 0V5.467l.086-.004c.317-.012.637-.008.816.027.134.027.294.096.448.182.077.042.15.147.15.314V8a.5.5 0 1 0 1 0V6.435l.106-.01c.316-.024.584-.01.708.04.118.046.3.207.486.43.081.096.15.19.2.259V8.5a.5.5 0 0 0 1 0v-1h.342a1 1 0 0 1 .995 1.1l-.271 2.715a2.5 2.5 0 0 1-.317.991l-1.395 2.442a.5.5 0 0 1-.434.252H6.035a.5.5 0 0 1-.416-.223l-1.433-2.15a1.5 1.5 0 0 1-.243-.666l-.345-3.105a.5.5 0 0 1 .399-.546L5 8.11V9a.5.5 0 0 0 1 0V1.75A.75.75 0 0 1 6.75 1M8.5 4.466V1.75a1.75 1.75 0 1 0-3.5 0v5.34l-1.2.24a1.5 1.5 0 0 0-1.196 1.636l.345 3.106a2.5 2.5 0 0 0 .405 1.11l1.433 2.15A1.5 1.5 0 0 0 6.035 16h6.385a1.5 1.5 0 0 0 1.302-.756l1.395-2.441a3.5 3.5 0 0 0 .444-1.389l.271-2.715a2 2 0 0 0-1.99-2.199h-.581a5 5 0 0 0-.195-.248c-.191-.229-.51-.568-.88-.716-.364-.146-.846-.132-1.158-.108l-.132.012a1.26 1.26 0 0 0-.56-.642 2.6 2.6 0 0 0-.738-.288c-.31-.062-.739-.058-1.05-.046z"/></g>`
+    + `<text class="jp ink" x="1580" y="518" font-size="46" font-weight="700" text-anchor="middle" dominant-baseline="middle">取っ手を</text>`
+    + `<text class="jp" x="1580" y="656" font-size="118" font-weight="700" fill="#0f7452" text-anchor="middle" dominant-baseline="middle">押す</text>`
+    + `<line x1="1450" y1="720" x2="1710" y2="720" stroke="#17936b" stroke-width="10"/>`
+    + `<text class="jp muted" x="1580" y="792" font-size="38" font-weight="700" text-anchor="middle" dominant-baseline="middle">軽く1回</text>`
+    + `</g>`
+    + `</svg>`;
 }
 
 // ─── WELCOME + QR (統合ようこそ画面) ─────────────────────────────────────────
@@ -1443,23 +1483,32 @@ function showLocker(mode) {
   </div>
   ${body}`);
     } else if (view === "openwait") {
-      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center;padding:0 120px">
-        <div style="width:560px;height:330px;display:flex;align-items:center;justify-content:center">${lockerDoorGuide(sel, lockers)}</div>
-        <div style="font-size:60px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">扉が開きました</div>
-        <div style="font-size:30px;color:${T.sub};line-height:1.5"><b style="color:${bc}">${escHtml(sel.name)}</b> の扉です。右側（取っ手側）を押して開け、<br>荷物を入れて扉を閉めてください。</div>
-        <button id="lk-closed" style="margin-top:6px;padding:22px 56px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:28px;font-weight:600;cursor:pointer">扉を閉めました → 暗証番号を設定</button>
-      </div>`);
+      // 手荷物預け(保管)の開錠も受取と同じ「取っ手を押して開けて」の全画面ガイドに統一。
+      sc.innerHTML = `<div style="width:1920px;height:1080px;position:relative;background:#f5f2ec;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
+        ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "取っ手を押して扉を開けてください", subtitle: "取っ手を軽く押して扉を開け、荷物を入れて扉を閉めてください" })}
+        ${homeBtnCornerHtml("lk-home")}
+        <div style="position:absolute;left:0;right:0;bottom:50px;z-index:5;display:flex;justify-content:center"><button id="lk-closed" style="padding:22px 84px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:32px;font-weight:700;cursor:pointer;font-family:inherit">扉を閉めました → 暗証番号を設定</button></div>
+      </div>`;
     } else if (view === "result") {
-      // 解錠(受取)成功時は「どの扉を開けるか」を扉ガイドで案内。PIN設定完了(お預け完了)は従来のチェックマーク。
-      const hero = resultGuide
-        ? `<div style="width:560px;height:320px;display:flex;align-items:center;justify-content:center">${lockerDoorGuide(sel, lockers)}</div>`
-        : `<div style="width:110px;height:110px;border-radius:50%;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>`;
-      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:${resultGuide ? 22 : 26}px;text-align:center;padding:0 120px">
-        ${hero}
-        <div style="font-size:64px;font-weight:600;color:${T.ink};letter-spacing:-2px">${escHtml(resultTitle)}</div>
-        <div style="font-size:30px;color:${T.sub};line-height:1.5">${escHtml(resultSub)}</div>
-        <button id="lk-done" style="margin-top:10px;padding:24px 68px;border:2px solid ${T.borderStrong};border-radius:16px;background:${T.canvas};color:${T.sub};font-size:28px;font-weight:600;cursor:pointer">完了</button>
-      </div>`);
+      if (resultGuide) {
+        // 解錠(受取)成功: Codex 作の全画面「取っ手を押す」案内。対象扉を全体図で緑強調(動的)。
+        sc.innerHTML = `<div style="width:1920px;height:1080px;position:relative;background:#f5f2ec;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
+          ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "ロッカーの取っ手を押して開けてください" })}
+          ${homeBtnCornerHtml("lk-home")}
+          <div style="position:absolute;left:50%;bottom:52px;transform:translateX(-50%);z-index:5;display:flex;flex-direction:column;align-items:center;gap:16px">
+            <div style="display:flex;align-items:center;gap:14px;color:#66717e;font-size:20px">${ICO.clock}<span>待機画面に戻るまで</span><span id="lk-cnt" style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:#17936b;min-width:44px;text-align:right">${Math.max(6, ST.kiosk_complete_timeout_sec)}</span><span>秒</span><div style="width:220px;height:8px;background:#e2ddd4;border-radius:4px;overflow:hidden"><div id="lk-bar" style="width:100%;height:100%;background:#17936b;border-radius:4px;transition:width 1s linear"></div></div></div>
+            <button id="lk-done" style="padding:20px 100px;border:2px solid #cfe7dd;border-radius:16px;background:#fff;color:#0f7452;font-size:32px;font-weight:700;cursor:pointer;font-family:inherit">完了</button>
+          </div>
+        </div>`;
+      } else {
+        // PIN設定完了(お預け完了)は従来のチェックマーク。
+        sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;text-align:center;padding:0 120px">
+          <div style="width:110px;height:110px;border-radius:50%;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
+          <div style="font-size:64px;font-weight:600;color:${T.ink};letter-spacing:-2px">${escHtml(resultTitle)}</div>
+          <div style="font-size:30px;color:${T.sub};line-height:1.5">${escHtml(resultSub)}</div>
+          <button id="lk-done" style="margin-top:10px;padding:24px 68px;border:2px solid ${T.borderStrong};border-radius:16px;background:${T.canvas};color:${T.sub};font-size:28px;font-weight:600;cursor:pointer">完了</button>
+        </div>`);
+      }
     } else { // pinset | pininput
       const isSet = view === "pinset";
       const dots = Array.from({ length: 4 }, (_, i) => `<div style="width:30px;height:30px;border-radius:50%;border:2px solid ${i < pin.length ? bc : T.borderStrong};background:${i < pin.length ? bc : "transparent"}"></div>`).join("");
@@ -1670,12 +1719,12 @@ function showDelivery() {
     }).join("")}
   </div>`);
     } else if (view === "openwait") {
-      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center;padding:0 120px">
-        <div style="width:560px;height:320px;display:flex;align-items:center;justify-content:center">${lockerDoorGuide(sel, lockers)}</div>
-        <div style="font-size:60px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">扉が開きました</div>
-        <div style="font-size:30px;color:${T.sub};line-height:1.5"><b style="color:${bc}">${escHtml(sel.name)}</b> の扉です。右側（取っ手側）を押して開け、荷物を入れて扉を閉めてください<br><span style="font-size:24px;color:${T.muted}">暗証番号の設定は不要です</span></div>
-        <button id="dl-lock" style="margin-top:6px;padding:22px 56px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:28px;font-weight:600;cursor:pointer">扉を閉めました（施錠する）</button>
-      </div>`);
+      // 置き配の開錠も同じ「取っ手を押して開けて」の全画面ガイドに統一。
+      sc.innerHTML = `<div style="width:1920px;height:1080px;position:relative;background:#f5f2ec;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
+        ${lockerPushGuideScreen(sel, lockers, { badge: "解錠しました", title: "取っ手を押して扉を開けてください", subtitle: "取っ手を軽く押して扉を開け、荷物を入れて扉を閉めてください（暗証番号は不要）" })}
+        ${homeBtnCornerHtml("dl-home")}
+        <div style="position:absolute;left:0;right:0;bottom:50px;z-index:5;display:flex;justify-content:center"><button id="dl-lock" style="padding:22px 84px;border:none;border-radius:16px;background:${T.dark};color:#fff;font-size:32px;font-weight:700;cursor:pointer;font-family:inherit">扉を閉めました（施錠する）</button></div>
+      </div>`;
     } else if (view === "wait") {
       // 呼び出し後の「お待ちください」画面
       sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:34px;text-align:center;padding:0 120px">
@@ -3496,7 +3545,7 @@ function showDemoBadge() {
   if (existing) return;
   const b = document.createElement("div");
   b.id = "demo-badge";
-  b.innerHTML = "デモモード<span style='opacity:.82;font-weight:500;margin-left:8px'>担当者の返信操作を自動で再現しています</span>";
+  b.innerHTML = "デモモード<span style='opacity:.82;font-weight:500;margin-left:6px'>にて稼働中</span>";
   b.style.cssText = "position:fixed;top:0;left:50%;transform:translateX(-50%);z-index:2147483647;pointer-events:none;background:rgba(20,18,15,.82);color:#fff;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;font-size:15px;font-weight:700;letter-spacing:.3px;padding:7px 22px;border-radius:0 0 12px 12px;box-shadow:0 2px 8px rgba(0,0,0,.28);white-space:nowrap;opacity:.95";
   document.body.appendChild(b);
 }

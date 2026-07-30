@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1920"
+     height="1080"
+     viewBox="0 0 1920 1080"
+     role="img"
+     aria-labelledby="title description">
+  <title id="title">ロッカーの取っ手を押す案内</title>
+  <desc id="description">什器全体図で対象扉を緑色に示し、取っ手の拡大図と手のアイコンで押す位置を案内する画面。</desc>
+  <metadata>Hand icon derived from Bootstrap Icons hand-index, licensed under the MIT License.</metadata>
+
+  <defs>
+    <style>
+      .jp {
+        font-family: "BIZ UDPGothic", "Yu Gothic", "Noto Sans JP", sans-serif;
+      }
+      .ink { fill: #20262e; }
+      .muted { fill: #66717e; }
+      .green { fill: #17936b; }
+      .green-dark { fill: #0f7452; }
+      .line {
+        fill: none;
+        stroke: #20262e;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .fixture-line {
+        fill: #ffffff;
+        stroke: #20262e;
+        stroke-width: 2.4;
+      }
+    </style>
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="140%">
+      <feDropShadow dx="8" dy="12" stdDeviation="0" flood-color="#d9d5ce"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1920" height="1080" fill="#f5f2ec"/>
+
+  <!-- Unlock badge -->
+  <rect x="100" y="55" width="320" height="77" rx="38" fill="#e7f7f0"/>
+  <rect x="133" y="85" width="34" height="28" rx="5" fill="none" stroke="#14855b" stroke-width="5"/>
+  <path d="M140 86 C140 64 176 64 176 86 M176 83 V71"
+        fill="none" stroke="#14855b" stroke-width="5" stroke-linecap="round"/>
+  <text class="jp" x="194" y="96" font-size="31" font-weight="700"
+        fill="#14855b" dominant-baseline="middle">解錠しました</text>
+
+  <!-- Header -->
+  <text class="jp ink" x="960" y="194" font-size="76" font-weight="700"
+        text-anchor="middle" dominant-baseline="middle">ロッカーの取っ手を押してください</text>
+  <text class="jp muted" x="960" y="274" font-size="34"
+        text-anchor="middle" dominant-baseline="middle">全体図で緑色に示した扉の取っ手を、軽く1回押します</text>
+
+  <!-- Main card -->
+  <rect x="100" y="350" width="1720" height="580" rx="34" fill="#ffffff" filter="url(#shadow)"/>
+
+  <!-- Full elevation heading -->
+  <text class="jp ink" x="368" y="386" font-size="38" font-weight="700"
+        text-anchor="middle" dominant-baseline="middle">全体図</text>
+
+  <!-- Fixture full elevation: PDF proportions simplified above the monitor -->
+  <g id="fixture-full">
+    <rect x="220" y="410" width="295" height="500" fill="#ffffff" stroke="#66717e" stroke-width="1.2"/>
+    <rect x="230" y="418" width="275" height="483" class="fixture-line"/>
+
+    <!-- Upper section: outer frame and monitor only -->
+    <rect x="230" y="418" width="275" height="196" class="fixture-line"/>
+    <rect x="274" y="457" width="187" height="112" rx="3" class="fixture-line" stroke-width="3"/>
+    <rect x="283" y="466" width="169" height="94" fill="#ffffff" stroke="#20262e" stroke-width="2"/>
+
+    <!-- Section divider -->
+    <rect x="230" y="610" width="275" height="8" fill="#ffffff" stroke="#20262e" stroke-width="2"/>
+
+    <!-- Lower cabinet -->
+    <rect x="230" y="618" width="275" height="283" fill="#ffffff" stroke="#20262e" stroke-width="2.4"/>
+    <line x1="340" y1="618" x2="340" y2="901" stroke="#20262e" stroke-width="2.4"/>
+    <line x1="450" y1="618" x2="450" y2="901" stroke="#20262e" stroke-width="2.4"/>
+
+    <!-- Left: three doors, matching the B-type elevation -->
+    <line x1="230" y1="681" x2="340" y2="681" stroke="#20262e" stroke-width="2.4"/>
+    <line x1="230" y1="742" x2="340" y2="742" stroke="#20262e" stroke-width="2.4"/>
+
+    <!-- Center and right divisions -->
+    <line x1="340" y1="644" x2="450" y2="644" stroke="#20262e" stroke-width="2.4"/>
+    <line x1="450" y1="673" x2="505" y2="673" stroke="#20262e" stroke-width="2.4"/>
+
+    <!-- Selected upper-left door -->
+    <rect x="230" y="618" width="110" height="63" fill="#e7f7f0" fill-opacity=".95"
+          stroke="#17936b" stroke-width="5"/>
+
+    <!-- Left door handles -->
+    <g fill="#ffffff" stroke="#20262e" stroke-width="1.5">
+      <rect x="313" y="631" width="18" height="22" rx="2"/>
+      <rect x="313" y="696" width="18" height="22" rx="2"/>
+      <rect x="313" y="758" width="18" height="22" rx="2"/>
+    </g>
+    <g stroke="#20262e" stroke-width="1.5">
+      <line x1="319" y1="651" x2="325" y2="651"/>
+      <line x1="319" y1="716" x2="325" y2="716"/>
+      <line x1="319" y1="778" x2="325" y2="778"/>
+    </g>
+
+    <!-- Center holes and right slot -->
+    <circle cx="377" cy="631" r="3" fill="#ffffff" stroke="#20262e" stroke-width="1.2"/>
+    <circle cx="415" cy="631" r="3" fill="#ffffff" stroke="#20262e" stroke-width="1.2"/>
+    <rect x="470" y="627" width="25" height="5" rx="2.5" fill="#ffffff" stroke="#20262e" stroke-width="1.2"/>
+
+    <!-- Full-view target rings -->
+    <circle cx="322" cy="642" r="17" fill="none" stroke="#17936b" stroke-width="5"/>
+    <circle cx="322" cy="642" r="25" fill="none" stroke="#75bea5" stroke-width="5"/>
+    <circle cx="322" cy="642" r="33" fill="none" stroke="#b9dfd2" stroke-width="5"/>
+  </g>
+
+  <!-- Connector from full elevation to enlarged door -->
+  <path d="M355 642 H675 L740 655"
+        fill="none" stroke="#17936b" stroke-width="6"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="740" cy="655" r="12" fill="#17936b"/>
+
+  <!-- Enlarged target door -->
+  <text class="jp muted" x="990" y="477" font-size="32" font-weight="700"
+        text-anchor="middle" dominant-baseline="middle">押す場所（拡大）</text>
+  <rect x="740" y="510" width="500" height="290" rx="14"
+        fill="#e7f7f0" fill-opacity=".65" stroke="#17936b" stroke-width="6"/>
+
+  <!-- Enlarged handle -->
+  <rect x="1138" y="568" width="54" height="64" rx="6"
+        fill="#ffffff" stroke="#20262e" stroke-width="2.5"/>
+  <rect x="1155" y="624" width="20" height="4" rx="2" fill="#20262e"/>
+
+  <!-- Target rings -->
+  <circle cx="1165" cy="600" r="40" fill="none" stroke="#17936b" stroke-width="7"/>
+  <circle cx="1165" cy="600" r="56" fill="none" stroke="#75bea5" stroke-width="7"/>
+  <circle cx="1165" cy="600" r="72" fill="none" stroke="#b9dfd2" stroke-width="7"/>
+
+  <!-- Bootstrap hand-index icon, rotated to point left -->
+  <g transform="translate(1210 492) scale(12.8125) rotate(-90 8 8)" fill="#20262e">
+    <path d="M6.75 1a.75.75 0 0 1 .75.75V8a.5.5 0 0 0 1 0V5.467l.086-.004c.317-.012.637-.008.816.027.134.027.294.096.448.182.077.042.15.147.15.314V8a.5.5 0 1 0 1 0V6.435l.106-.01c.316-.024.584-.01.708.04.118.046.3.207.486.43.081.096.15.19.2.259V8.5a.5.5 0 0 0 1 0v-1h.342a1 1 0 0 1 .995 1.1l-.271 2.715a2.5 2.5 0 0 1-.317.991l-1.395 2.442a.5.5 0 0 1-.434.252H6.035a.5.5 0 0 1-.416-.223l-1.433-2.15a1.5 1.5 0 0 1-.243-.666l-.345-3.105a.5.5 0 0 1 .399-.546L5 8.11V9a.5.5 0 0 0 1 0V1.75A.75.75 0 0 1 6.75 1M8.5 4.466V1.75a1.75 1.75 0 1 0-3.5 0v5.34l-1.2.24a1.5 1.5 0 0 0-1.196 1.636l.345 3.106a2.5 2.5 0 0 0 .405 1.11l1.433 2.15A1.5 1.5 0 0 0 6.035 16h6.385a1.5 1.5 0 0 0 1.302-.756l1.395-2.441a3.5 3.5 0 0 0 .444-1.389l.271-2.715a2 2 0 0 0-1.99-2.199h-.581a5 5 0 0 0-.195-.248c-.191-.229-.51-.568-.88-.716-.364-.146-.846-.132-1.158-.108l-.132.012a1.26 1.26 0 0 0-.56-.642 2.6 2.6 0 0 0-.738-.288c-.31-.062-.739-.058-1.05-.046z"/>
+  </g>
+
+  <!-- Action wording -->
+  <text class="jp ink" x="1580" y="518" font-size="46" font-weight="700"
+        text-anchor="middle" dominant-baseline="middle">取っ手を</text>
+  <text class="jp green-dark" x="1580" y="656" font-size="118" font-weight="700"
+        text-anchor="middle" dominant-baseline="middle">押す</text>
+  <line x1="1450" y1="720" x2="1710" y2="720" stroke="#17936b" stroke-width="10"/>
+  <text class="jp muted" x="1580" y="792" font-size="38" font-weight="700"
+        text-anchor="middle" dominant-baseline="middle">軽く1回</text>
+
+  <!-- Bottom caution -->
+  <rect x="395" y="970" width="1130" height="70" rx="35" fill="#fff4cc"/>
+  <circle cx="448" cy="1005" r="18" fill="#f0a500"/>
+  <text class="jp" x="448" y="1007" font-size="27" font-weight="700" fill="#ffffff"
+        text-anchor="middle" dominant-baseline="middle">!</text>
+  <text class="jp ink" x="495" y="1007" font-size="32" font-weight="700"
+        dominant-baseline="middle">画面ではなく、実際のロッカー扉の取っ手を押してください</text>
+</svg>
