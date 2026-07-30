@@ -469,7 +469,7 @@ def _configured_door_numbers() -> list[int]:
 # バックする。※有効化には DOOR_PINS_JSON のキーを door_number(=LOCKER_PINS_JSON のキー)と
 # 一致させること。
 _OPEN_WINDOW_SEC = float(os.getenv("LOCKER_OPEN_WINDOW_SEC", "12"))
-_OPEN_AFTER_DELAY_SEC = float(os.getenv("LOCKER_OPEN_AFTER_DELAY_SEC", "3"))
+_OPEN_AFTER_DELAY_SEC = float(os.getenv("LOCKER_OPEN_AFTER_DELAY_SEC", "1"))
 _bg_tasks: set = set()
 browser_heartbeat_state = BrowserHeartbeatState()
 systemd_watchdog = SystemdWatchdog(
