@@ -43,7 +43,36 @@ function _isAccessTokenExpired(token: string): boolean {
   }
 }
 
+// 審査環境の閲覧専用アカウント判定（アクセストークンの ro クレーム）。lib/auth の getReadonly と
+// 同じロジックだが、ここでは request() に渡された token 引数からストレージ非依存で判定する。
+function _tokenIsReadonly(token: string): boolean {
+  try {
+    const part = token.split(".")[1];
+    if (!part) return false;
+    let b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    b64 += "=".repeat((4 - (b64.length % 4)) % 4);
+    return JSON.parse(atob(b64)).ro === true;
+  } catch {
+    return false;
+  }
+}
+
+// 閲覧専用アカウントがミューテーション(GET/HEAD以外)を来社予定(/appointments)以外へ
+// 投げようとしていれば true。サーバの ReadOnlyGuardMiddleware と対を成すクライアント側ガードで、
+// ボタンを押した瞬間に分かりやすく止める（エラーはページ既存のエラー表示に流れる）。
+function _blockedByReadonly(path: string, method: string | undefined, token: string): boolean {
+  const m = (method ?? "GET").toUpperCase();
+  if (m === "GET" || m === "HEAD" || m === "OPTIONS") return false;
+  if (!_tokenIsReadonly(token)) return false;
+  const p = path.split("?")[0];
+  const allowed = p === "/appointments" || p.startsWith("/appointments/");
+  return !allowed;
+}
+
 async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+  if (token && _blockedByReadonly(path, init?.method, token)) {
+    throw new Error("この環境は閲覧専用です。操作できるのは「来社予定」のみです。");
+  }
   // 先読みリフレッシュ: 失効が判明していれば先にトークンを更新し、無駄な401往復を省く。
   // (ホーム画面ショートカット起動時は15分超で失効している事が多く、ここが効く)
   if (token && _isAccessTokenExpired(token)) {

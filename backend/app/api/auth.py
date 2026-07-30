@@ -7,7 +7,7 @@ from app.database import get_db
 from app.models.tenant import Tenant
 from app.models.user import User
 from jose import JWTError
-from app.services.auth import hash_password, verify_password, create_access_token, create_refresh_token, decode_token
+from app.services.auth import hash_password, verify_password, create_access_token, create_refresh_token, decode_token, is_readonly_account
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -120,7 +120,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     tenant = tenant_result.scalar_one_or_none()
 
     return TokenResponse(
-        access_token=create_access_token(user.tenant_id or "", user.id, user.role),
+        access_token=create_access_token(user.tenant_id or "", user.id, user.role, readonly=is_readonly_account(user.email)),
         refresh_token=create_refresh_token(user.tenant_id or "", user.id),
         tenant_slug=tenant.slug if tenant else "",
         role=user.role,
@@ -198,7 +198,7 @@ async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
         tenant = tenant_result.scalar_one_or_none()
 
     return TokenResponse(
-        access_token=create_access_token(user.tenant_id or "", user.id, user.role),
+        access_token=create_access_token(user.tenant_id or "", user.id, user.role, readonly=is_readonly_account(user.email)),
         refresh_token=create_refresh_token(user.tenant_id or "", user.id),
         tenant_slug=tenant.slug if tenant else "",
         role=user.role,

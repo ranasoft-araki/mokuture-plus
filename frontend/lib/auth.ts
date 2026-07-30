@@ -29,6 +29,23 @@ export function getSlug(): string | null {
   return sessionStorage.getItem("mokuture_slug") ?? localStorage.getItem("mokuture_slug");
 }
 
+// 審査環境の閲覧専用アカウントか。アクセストークン(JWT)の ro クレームを見る。
+// ログイン/refresh 時にサーバが demo1@ranasoft.co.jp 等へ ro=true を付与するため、
+// 追加のAPI往復なしにトークンから同期的に判定できる（新しいトークンにも ro が引き継がれる）。
+export function getReadonly(): boolean {
+  const token = getAccessToken();
+  if (!token) return false;
+  try {
+    const part = token.split(".")[1];
+    if (!part) return false;
+    let b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    b64 += "=".repeat((4 - (b64.length % 4)) % 4);
+    return JSON.parse(atob(b64)).ro === true;
+  } catch {
+    return false;
+  }
+}
+
 export function clearTokens() {
   ["mokuture_access", "mokuture_refresh", "mokuture_role", "mokuture_slug"].forEach((k) => {
     localStorage.removeItem(k);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useParams } from "next/navigation";
-import { clearTokens, getLogoutUrl, getAccessToken } from "@/lib/auth";
+import { clearTokens, getLogoutUrl, getAccessToken, getReadonly } from "@/lib/auth";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
@@ -67,6 +67,27 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
   const router = useRouter();
   const tenant = params.tenant ?? "";
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // ── 審査環境の閲覧専用アカウント（demo1@ranasoft.co.jp 等） ──
+  // アクセストークンの ro クレームから判定（SSR一致のため初期 false→マウント後に確定）。
+  // true のとき: ユーザー管理/アカウント メニューとログアウトを非表示、来社予定以外の
+  // 画面上部アクション(保存・追加等)を隠し、閲覧専用バナーを出す。実際の書込抑止は
+  // lib/api.ts のガードとサーバの ReadOnlyGuardMiddleware が担う（本表示はそのUX面）。
+  const [readOnly, setReadOnly] = useState(false);
+  useEffect(() => { setReadOnly(getReadonly()); }, []);
+
+  // 非表示ページ(ユーザー管理/アカウント)へ直リンクで来ても閲覧専用時はダッシュボードへ戻す。
+  useEffect(() => {
+    if (readOnly && (active === "users" || active === "profile")) {
+      router.replace(`/${tenant}/admin`);
+    }
+  }, [readOnly, active, tenant, router]);
+
+  const settingsNav = readOnly
+    ? NAV_SETTINGS.filter((i) => i.id !== "users" && i.id !== "profile")
+    : NAV_SETTINGS;
+  // 来社予定は閲覧専用でも操作可。それ以外の画面では上部アクションを隠す。
+  const hideActions = readOnly && active !== "appointments";
 
   // ── メニュー遷移中インジケータ ──
   // router.push を useTransition でラップし、遷移完了(=遷移先ページが描画される)まで
@@ -201,7 +222,7 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
           <div style={{ fontSize: 10.5, color: "#a8a198", textTransform: "uppercase", letterSpacing: "0.6px", padding: "14px 10px 6px" }}>
             設定
           </div>
-          {NAV_SETTINGS.map((item) => (
+          {settingsNav.map((item) => (
             <NavItem key={item.id} id={item.id} label={item.label} active={active === item.id} pending={pendingId === item.id} onClick={() => navigate(item.id)} />
           ))}
         </nav>
@@ -217,23 +238,26 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
               <div style={{ fontSize: 10.5, color: "#a8a198" }}>管理者 · admin</div>
             </div>
           </div>
-          <button
-            onClick={() => { clearTokens(); router.push(getLogoutUrl()); }}
-            style={{
-              width: "100%", display: "flex", alignItems: "center", gap: 8,
-              padding: "9px 14px", background: "none", border: "none",
-              borderTop: "1px solid #efece5", cursor: "pointer",
-              color: "#6b6559", fontSize: 12.5, fontFamily: FONT_JP,
-              textAlign: "left",
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f4f1ea"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
-            </svg>
-            ログアウト
-          </button>
+          {/* 審査環境の閲覧専用アカウントではログアウトを非表示 */}
+          {!readOnly && (
+            <button
+              onClick={() => { clearTokens(); router.push(getLogoutUrl()); }}
+              style={{
+                width: "100%", display: "flex", alignItems: "center", gap: 8,
+                padding: "9px 14px", background: "none", border: "none",
+                borderTop: "1px solid #efece5", cursor: "pointer",
+                color: "#6b6559", fontSize: 12.5, fontFamily: FONT_JP,
+                textAlign: "left",
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f4f1ea"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
+              </svg>
+              ログアウト
+            </button>
+          )}
         </div>
       </aside>
 
@@ -262,8 +286,23 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
               </div>
             )}
           </div>
-          {actions && <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>{actions}</div>}
+          {actions && !hideActions && <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>{actions}</div>}
         </div>
+
+        {/* 審査環境の閲覧専用バナー（来社予定以外の画面で表示） */}
+        {readOnly && active !== "appointments" && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8,
+            padding: "8px 20px", background: "#f7ecd9",
+            borderBottom: "1px solid #ecdcc0", color: "#8a6524",
+            fontSize: 12.5, fontFamily: FONT_JP, flexShrink: 0,
+          }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/>
+            </svg>
+            この画面は閲覧専用です。操作できるのは「来社予定」のみです。
+          </div>
+        )}
 
         {/* 遷移中の不定進捗バー（トップバー直下） */}
         <div aria-hidden={!navigating} style={{ height: 2, flexShrink: 0, overflow: "hidden", background: navigating ? "#eaf0e8" : "transparent" }}>

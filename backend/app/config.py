@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     demo_auto_reply_min_sec: float = 5.0
     demo_auto_reply_max_sec: float = 7.0
 
+    # 審査環境の閲覧専用アカウント。ここに列挙した email でログインしたアカウントは、
+    # アクセストークンに ro=true が付与され、来社予定(appointments)以外のミューテーションを
+    # サーバ側(ReadOnlyGuardMiddleware)とフロント(lib/api.ts, AdminShell)の双方で拒否する。
+    # env 上書き例: REVIEW_READONLY_EMAILS='["demo1@ranasoft.co.jp","demo2@ranasoft.co.jp"]'
+    review_readonly_emails: list[str] = ["demo1@ranasoft.co.jp"]
+
     @property
     def slack_oauth_enabled(self) -> bool:
         return bool(self.slack_client_id and self.slack_client_secret and self.slack_redirect_uri)

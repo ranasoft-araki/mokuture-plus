@@ -10,6 +10,7 @@ from sqlalchemy import inspect, select, text
 from app.config import settings
 from app.database import engine, Base, AsyncSessionLocal
 from app.api import api_router
+from app.middleware.readonly import ReadOnlyGuardMiddleware
 
 
 # Alembic 未導入のため、起動時に冪等な軽量カラム追加を適用する。
@@ -197,6 +198,11 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# 審査環境の閲覧専用アカウント(ro=true)のミューテーションを来社予定以外で拒否する。
+# CORS より「先に」add_middleware することで CORS が最外になり、ここで返す 403 にも
+# CORS ヘッダが付く（ブラウザが detail を読める）。
+app.add_middleware(ReadOnlyGuardMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
