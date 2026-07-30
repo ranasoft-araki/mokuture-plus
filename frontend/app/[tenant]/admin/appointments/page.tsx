@@ -705,6 +705,12 @@ export default function AppointmentsPage() {
   const printRef = useRef<HTMLDivElement>(null);
   const qrCanvasWrapRef = useRef<HTMLDivElement>(null);   // 画像DL用の高解像度Canvas(非表示)
 
+  // QRメール送信(宛先は保存せず都度入力)
+  const [emailInput,  setEmailInput]  = useState("");
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailError,  setEmailError]  = useState<string | null>(null);
+  const [emailSentTo, setEmailSentTo] = useState<string | null>(null);
+
   // 審査用デモモード: QR発行ガイド（②予定を追加 → ③作成 → ④QR → ⑤印刷）のアンカー
   const [lastCreatedId, setLastCreatedId] = useState<string | null>(null);
   const addBtnRef   = useRef<HTMLSpanElement>(null);   // ② 予定を追加
@@ -987,6 +993,28 @@ export default function AppointmentsPage() {
     a.remove();
   }
 
+  // QRモーダルの開閉・対象切替のたびにメール入力欄をリセットする。
+  useEffect(() => {
+    setEmailInput(""); setEmailError(null); setEmailSentTo(null); setEmailSending(false);
+  }, [qrAppt?.id]);
+
+  // 来社予定QRを入力したメールアドレスへ送信する(宛先は保存しない)。
+  async function handleSendEmail() {
+    if (!qrAppt) return;
+    const token = getAccessToken();
+    if (!token) return;
+    const email = emailInput.trim();
+    if (!email) { setEmailError("メールアドレスを入力してください"); return; }
+    setEmailSending(true); setEmailError(null); setEmailSentTo(null);
+    try {
+      const res = await api.sendAppointmentEmail(token, qrAppt.id, email);
+      setEmailSentTo(res.sent_to);
+      showToast("QRコードをメールで送信しました");
+    } catch (err: unknown) {
+      setEmailError(err instanceof Error ? err.message : "メール送信に失敗しました");
+    } finally { setEmailSending(false); }
+  }
+
   // ── Navigation ──
   const weekStart = getWeekStart(timelineDate);
   function navPrev() {
@@ -1255,7 +1283,7 @@ export default function AppointmentsPage() {
       {qrAppt && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: isMobile ? 16 : 0 }}
           onClick={() => setQrAppt(null)}>
-          <div style={{ background: "#fffefb", borderRadius: 20, padding: isMobile ? "28px 24px" : "44px 52px", maxWidth: 540, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
+          <div style={{ background: "#fffefb", borderRadius: 20, padding: isMobile ? "28px 24px" : "44px 52px", maxWidth: 540, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)", maxHeight: "90vh", overflowY: "auto" }}
             onClick={e => e.stopPropagation()}>
             <div ref={printRef} style={{ textAlign: "center" }}>
               <div style={{ marginBottom: 24 }}>
@@ -1280,7 +1308,41 @@ export default function AppointmentsPage() {
             <div ref={qrCanvasWrapRef} aria-hidden style={{ position: "absolute", width: 0, height: 0, overflow: "hidden", opacity: 0, pointerEvents: "none" }}>
               <QRCodeCanvas value={`appt:${qrAppt.token}`} size={1024} level="M" marginSize={4} />
             </div>
-            <div style={{ display: "flex", gap: 12, marginTop: 32, justifyContent: "center", flexWrap: "wrap" }}>
+
+            {/* メールで送信（宛先は保存せず都度入力） */}
+            <div style={{ marginTop: 28, padding: "16px 18px", background: "#f7f5f0", border: "1px solid #efece5", borderRadius: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#2d2a24", fontFamily: FONT_JP, marginBottom: 10, textAlign: "left" }}>
+                QRコードをメールで送る
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <input
+                  type="email"
+                  value={emailInput}
+                  onChange={e => { setEmailInput(e.target.value); setEmailError(null); setEmailSentTo(null); }}
+                  onKeyDown={e => { if (e.key === "Enter" && !emailSending) { e.preventDefault(); handleSendEmail(); } }}
+                  placeholder="visitor@example.com"
+                  autoComplete="off"
+                  disabled={emailSending}
+                  style={{ ...INPUT_STYLE, flex: "1 1 200px", minWidth: 0, fontSize: 14, padding: "10px 12px", background: "#fff" }}
+                />
+                <MkBtn variant="primary" size="md" disabled={emailSending || !emailInput.trim()} onClick={handleSendEmail}
+                  style={{ padding: "10px 22px", fontSize: 14, borderRadius: 10 }}>
+                  {emailSending ? "送信中..." : "メールで送信"}
+                </MkBtn>
+              </div>
+              {emailError && (
+                <div style={{ marginTop: 8, fontSize: 12.5, color: "#a84238", fontFamily: FONT_JP, textAlign: "left", lineHeight: 1.6 }}>
+                  {emailError}
+                </div>
+              )}
+              {emailSentTo && (
+                <div style={{ marginTop: 8, fontSize: 12.5, color: "#3a6240", fontFamily: FONT_JP, textAlign: "left" }}>
+                  ✓ {emailSentTo} に送信しました
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: "flex", gap: 12, marginTop: 20, justifyContent: "center", flexWrap: "wrap" }}>
               <span ref={printBtnRef} style={{ display: "inline-flex" }}>
                 <MkBtn variant="primary" size="md" onClick={handlePrint} style={{ padding: "14px 30px", fontSize: 16, borderRadius: 10 }}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>

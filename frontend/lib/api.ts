@@ -578,6 +578,9 @@ export const api = {
     request<VisitorAppointment>(`/appointments/${id}`, { method: "PATCH", body: JSON.stringify(body) }, token),
   deleteAppointment: (token: string, id: string): Promise<void> =>
     request(`/appointments/${id}`, { method: "DELETE" }, token),
+  // 来社予定QRを指定メールアドレスへ送信(宛先は保存しない・都度入力)
+  sendAppointmentEmail: (token: string, id: string, email: string) =>
+    request<{ ok: boolean; sent_to: string }>(`/appointments/${id}/send-email`, { method: "POST", body: JSON.stringify({ email }) }, token),
 
   // Kiosk appointment lookup (device token auth)
   getKioskAppointment: (kioskToken: string, apptToken: string) =>

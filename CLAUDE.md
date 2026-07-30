@@ -101,7 +101,8 @@ mokuture/
 │           ├── crypto.py      ← Fernet 暗号化 (Slack URL 等の秘密情報)
 │           ├── storage.py     ← R2/MinIO Presigned URL 生成
 │           ├── slack.py       ← SlackNotifier(OAuth認可URL/code交換→Bot Token/chat.postMessage送信/チャンネル列挙・参加/受付文面生成)。旧Webhook送信も後方互換で残置
-│           └── webpush.py     ← Web Push 送信
+│           ├── webpush.py     ← Web Push 送信
+│           └── email.py       ← SMTP メール送信(aiosmtplib, best-effort)。来社予定QRのメール送信(segno で QR PNG 生成→CIDインライン画像+添付)。SMTP未設定なら送信APIが 503
 │
 ├── frontend/                  ← Next.js フロントエンド
 │   ├── app/
@@ -123,7 +124,7 @@ mokuture/
 │   │       │   ├── kiosk/page.tsx     ← キオスク端末管理・承認待ち端末の承認・端末名/場所の変更(鉛筆ボタン or ダブルクリック)
 │   │       │   ├── reception/page.tsx ← 受付ログ一覧・フィルター・受付/電話/お断り応答ボタン
 │   │       │   ├── inquiries/page.tsx ← 共通問い合わせフォーム受信の閲覧・状態更新・削除
-│   │       │   ├── appointments/page.tsx ← 来社予定管理・QRコード発行 (qrcode.react)。QRは印刷＋PNG画像DL可(表示は鮮明なSVG、DLは非表示の高解像度Canvas1024pxから toDataURL)。日付/ステータスフィルタ + 会議室紐付け。審査用デモモード(is_demo)では①〜⑤のQR発行ガイドバルーン(QrGuideBalloon)を表示し、既定会議室=「商談ルーム」を自動選択
+│   │       │   ├── appointments/page.tsx ← 来社予定管理・QRコード発行 (qrcode.react)。QRは印刷＋PNG画像DL＋メール送信可(表示は鮮明なSVG、DLは非表示の高解像度Canvas1024pxから toDataURL、メールは QRモーダルの「メールで送信」欄に宛先を都度入力→POST /appointments/{id}/send-email)。日付/ステータスフィルタ + 会議室紐付け。審査用デモモード(is_demo)では①〜⑤のQR発行ガイドバルーン(QrGuideBalloon)を表示し、既定会議室=「商談ルーム」を自動選択
 │   │       │   ├── meeting-rooms/page.tsx ← 会議室管理 (CRUD・カラー・定員・場所)
 │   │       │   ├── kiosk-settings/page.tsx ← 受付設定 (実機準拠の5画面WYSIWYGプレビュー: 待機/ようこそ/受付メニュー/呼び出し中/完了。文言はプレビュー上を直接クリックしてインライン編集=Canva風、ロゴは受付メニュー画面でドラッグ配置・リサイズ)
 │   │       │   ├── settings/page.tsx  ← 基本設定 (ブランディング: ロゴ・カラー・フォント)
@@ -369,6 +370,7 @@ mokuture/
 | POST | /appointments | JWT | 来社予定作成 (meeting_room_id 対応) |
 | PATCH | /appointments/{id} | JWT | 来社予定更新 (meeting_room_id 対応) |
 | DELETE | /appointments/{id} | JWT | 来社予定削除 |
+| POST | /appointments/{id}/send-email | JWT | 来社予定QRを指定メールへ送信 (body `{email}`・**宛先は保存しない**)。`segno` で `appt:<token>` の QR PNG を生成し CID インライン画像+添付でHTMLメール送信。SMTP未設定(`smtp_enabled=false`)は 503、送信失敗は 502。閲覧専用アカウントも `/appointments/*` は許可 |
 | GET | /meeting-rooms | JWT | 会議室一覧 (active_only フィルタ) |
 | POST | /meeting-rooms | JWT | 会議室作成 (map_image_url 対応) |
 | POST | /meeting-rooms/map-upload-url | JWT | 館内マップ画像 Presigned URL 取得 (logo-upload と同形式) |
@@ -593,6 +595,20 @@ SLACK_REDIRECT_URI=https://mokuture-plus-api.onrender.com/api/notifications/slac
 # 設定時のみ 受付/電話/お断り ボタンを付け、押下(/notifications/slack/interactions)を署名検証する。
 # 未設定ならボタン無し(従来のテキスト通知)。Slack App 側で Interactivity Request URL の登録も必要。
 SLACK_SIGNING_SECRET=...
+
+# SMTP メール送信(来社予定QRのメール送信 = 管理画面「来社予定」QRモーダルの「メールで送信」)。
+# HOST/USERNAME/PASSWORD が揃ったときのみ有効(settings.smtp_enabled)。未設定なら送信APIは 503。
+# 587=STARTTLS(SMTP_STARTTLS=true) / 465=implicit TLS(SMTP_SSL=true, SMTP_STARTTLS=false)。
+# Gmail は 2段階認証+「アプリパスワード」を SMTP_PASSWORD に。差出人表示名は未設定ならテナント名。
+# 注意: Render は無料/starter プランで送信SMTPポート(587/465)を塞ぐことがある(本番で送信失敗時は経路/プランを確認)。
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=...
+SMTP_PASSWORD=...
+SMTP_FROM=            # 差出人アドレス(空なら SMTP_USERNAME)
+SMTP_FROM_NAME=       # 差出人表示名(空ならテナント名)
+SMTP_STARTTLS=true
+SMTP_SSL=false
 ```
 
 ### Frontend (.env.local)

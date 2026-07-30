@@ -72,9 +72,25 @@ class Settings(BaseSettings):
     # env 上書き例: REVIEW_READONLY_EMAILS='["demo1@ranasoft.co.jp","demo2@ranasoft.co.jp"]'
     review_readonly_emails: list[str] = ["demo1@ranasoft.co.jp"]
 
+    # SMTP メール送信(来社予定QRのメール送信)。host/username/password が揃ったときのみ有効(smtp_enabled)。
+    # 587=STARTTLS(smtp_starttls=True)、465=implicit TLS(smtp_ssl=True)。Gmail は「アプリパスワード」を smtp_password に。
+    # 注意: Render は無料/starter プランで送信SMTPポート(587/465)を塞ぐことがあり、その場合本番で送信に失敗する。
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""       # 差出人アドレス(空なら smtp_username を使う)
+    smtp_from_name: str = ""  # 差出人表示名(空ならテナント名 → app_name)
+    smtp_starttls: bool = True  # 587: STARTTLS で暗号化
+    smtp_ssl: bool = False      # 465: implicit TLS を使う場合 True(starttls は無視)
+
     @property
     def slack_oauth_enabled(self) -> bool:
         return bool(self.slack_client_id and self.slack_client_secret and self.slack_redirect_uri)
+
+    @property
+    def smtp_enabled(self) -> bool:
+        return bool(self.smtp_host and self.smtp_username and self.smtp_password)
 
 
 settings = Settings()
