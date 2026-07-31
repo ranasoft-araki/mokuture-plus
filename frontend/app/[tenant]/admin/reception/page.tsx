@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, type ReceptionLog } from "@/lib/api";
 import { getAccessToken, clearTokens } from "@/lib/auth";
+import { hasHonorific } from "@/lib/honorific";
 import { AdminShell, MkCard } from "@/components/AdminShell";
 import { ConfirmModal } from "@/components/ConfirmModal";
 
@@ -405,7 +406,7 @@ function RespondModal({ log, token, onClose, onUpdate }: { log: ReceptionLog; to
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: "#fffefb", borderRadius: 20, padding: 28, width: 460, maxWidth: "94vw", boxShadow: "0 24px 70px rgba(0,0,0,0.25)" }}>
         <div style={{ fontSize: 11, color: "#a8a198", letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: 6 }}>受付対応</div>
-        <div style={{ fontSize: 26, fontWeight: 700, color: "#1d1a15" }}>{log.visitor_name} <span style={{ fontSize: 18, fontWeight: 500 }}>様</span></div>
+        <div style={{ fontSize: 26, fontWeight: 700, color: "#1d1a15" }}>{log.visitor_name}{!hasHonorific(log.visitor_name) && <span style={{ fontSize: 18, fontWeight: 500 }}> 様</span>}</div>
         <div style={{ fontSize: 14, color: "#6b6559", marginTop: 4 }}>{log.company || "—"}{log.purpose ? ` ・ ${log.purpose}` : ""}</div>
         <div style={{ fontSize: 12, color: "#a8a198", marginTop: 4 }}>{timeStr} 受付</div>
 

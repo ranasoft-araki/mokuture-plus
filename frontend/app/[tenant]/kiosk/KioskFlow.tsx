@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, type PublicTenantSettings, getCachedKioskSettings, setCachedKioskSettings } from "@/lib/api";
 import { JapaneseKeyboard } from "@/components/JapaneseKeyboard";
+import { withHonorific } from "@/lib/honorific";
 
 type KioskScreen = "loading" | "suspended" | "ready";
 
@@ -568,7 +569,7 @@ function SuccessScreen({ visitorName, settings }: { visitorName: string; setting
         transition={{ duration: 0.5, delay: 0.95, ease }}
         style={{ textAlign: "center" }}
       >
-        <div style={{ fontSize: 28, fontWeight: 600, color: "#fffefb" }}>{visitorName} 様</div>
+        <div style={{ fontSize: 28, fontWeight: 600, color: "#fffefb" }}>{withHonorific(visitorName)}</div>
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}

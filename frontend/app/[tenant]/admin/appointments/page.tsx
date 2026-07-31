@@ -6,6 +6,7 @@ import { QRCodeSVG, QRCodeCanvas } from "qrcode.react";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle, QrGuideBalloon } from "@/components/AdminShell";
 import { api, type AppointmentCreate, type MeetingRoom, type TenantSettings, type VisitorAppointment } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
+import { withHonorific } from "@/lib/honorific";
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 const FONT_JP   = '"Noto Sans JP", "Inter", system-ui, sans-serif';
@@ -1290,7 +1291,7 @@ export default function AppointmentsPage() {
                 <QRCodeSVG value={`appt:${qrAppt.token}`} size={isMobile ? 220 : 300} level="M"
                   style={{ border: "1px solid #efece5", borderRadius: 10, padding: 14, background: "#fff" }} />
               </div>
-              <h2 style={{ margin: "0 0 6px", fontSize: 24, fontWeight: 700, color: "#1d1a15", fontFamily: FONT_JP }}>{qrAppt.visitor_name} 様</h2>
+              <h2 style={{ margin: "0 0 6px", fontSize: 24, fontWeight: 700, color: "#1d1a15", fontFamily: FONT_JP }}>{withHonorific(qrAppt.visitor_name)}</h2>
               {qrAppt.company && <p style={{ margin: "0 0 4px", fontSize: 14, color: "#6b6559", fontFamily: FONT_JP }}>{qrAppt.company}</p>}
               <p style={{ margin: "0 0 4px", fontSize: 13, color: "#a8a198", fontFamily: FONT_JP }}>来社日時：{fmtDatetime(qrAppt.scheduled_at)}</p>
               {qrAppt.staff && <p style={{ margin: "0 0 4px", fontSize: 13, color: "#a8a198", fontFamily: FONT_JP }}>担当：{qrAppt.staff}</p>}
