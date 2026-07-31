@@ -39,3 +39,23 @@ services:
       # Slack Interactivity（受付通知の対応ボタン）の署名検証用。未設定ならボタン無し。
       - key: SLACK_SIGNING_SECRET
         sync: false
+      # SMTP メール送信（来社予定QRのメール送信）。HOST/USERNAME/PASSWORD が揃うと有効(smtp_enabled)。
+      # 全て sync:false = 値は Render ダッシュボードで設定（このリポジトリは公開のため yaml に値を書かない）。
+      # hetemail: SMTP_HOST=smtp.hetemail.jp / SMTP_PORT=465 / SMTP_SSL=true / SMTP_STARTTLS=false。
+      # 未設定なら送信APIは 503 を返すだけで他機能に影響なし。
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: SMTP_FROM_NAME
+        sync: false
+      - key: SMTP_STARTTLS
+        sync: false
+      - key: SMTP_SSL
+        sync: false
