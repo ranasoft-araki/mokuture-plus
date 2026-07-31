@@ -1416,7 +1416,7 @@ export default function AppointmentsPage() {
       <QrGuideBalloon anchorRef={addBtnRef}    active={isDemo && !lastCreatedId && !showForm && !qrAppt && !editAppt && !confirmDeleteId} text="QR発行はこちら②" placement="bottom" />
       <QrGuideBalloon anchorRef={createBtnRef} active={isDemo && showForm}                                              text="QR発行はこちら③" placement="bottom" />
       <QrGuideBalloon anchorRef={qrBtnRef}     active={isDemo && !!lastCreatedId && !showForm && !qrAppt && !editAppt && !confirmDeleteId} text="QR発行はこちら④" placement="top" />
-      <QrGuideBalloon anchorRef={emailBtnRef}  active={isDemo && !!qrAppt}                                              text="メールで送信はこちら⑤" placement="top" />
+      <QrGuideBalloon anchorRef={emailBtnRef}  active={isDemo && !!qrAppt}                                              text="QR送信はこちら⑤" placement="top" />
     </AdminShell>
   );
 }
