@@ -601,6 +601,33 @@ export function QrGuideBalloon<T extends HTMLElement>({
     };
   }, [anchorRef, active]);
 
+  // カーソルを吹き出しに重ねたら一時的に消して下のコンテンツを見せる。
+  // pointer-events:none のままなので座標判定は window の mousemove で行う（クリックは元々透過）。
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [dodge, setDodge] = useState(false);
+  useEffect(() => {
+    if (!active) { setDodge(false); return; }
+    const onMove = (e: MouseEvent) => {
+      const el = boxRef.current;
+      if (!el) return;
+      const b = el.getBoundingClientRect();
+      if (b.width === 0 && b.height === 0) { setDodge(false); return; }
+      const m = 4; // わずかに広めに判定して端でチラつかないように
+      setDodge(
+        e.clientX >= b.left - m && e.clientX <= b.right + m &&
+        e.clientY >= b.top - m && e.clientY <= b.bottom + m,
+      );
+    };
+    const onLeaveWin = () => setDodge(false); // 吹き出し上でウィンドウ外へ出たら戻す
+    window.addEventListener("mousemove", onMove, { passive: true });
+    document.addEventListener("mouseleave", onLeaveWin);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseleave", onLeaveWin);
+      setDodge(false);
+    };
+  }, [active]);
+
   if (!active || !rect) return null;
 
   const GAP = 14;
@@ -614,6 +641,9 @@ export function QrGuideBalloon<T extends HTMLElement>({
     padding: "13px 22px", borderRadius: 12,
     boxShadow: `0 6px 20px rgba(${glow},0.5)`,
     animation: "mkGuideGlow 1.6s ease-in-out infinite",
+    // 既定は約20%透明（下がうっすら見える）、カーソルが重なったら完全に消す
+    opacity: dodge ? 0 : 0.8,
+    transition: "opacity 0.18s ease",
     ["--mkg-glow" as string]: glow,
   } as React.CSSProperties;
   const arrow: React.CSSProperties = {
@@ -638,7 +668,7 @@ export function QrGuideBalloon<T extends HTMLElement>({
   }
 
   return createPortal(
-    <div style={box}>
+    <div ref={boxRef} style={box}>
       {text}
       <span style={arrow} />
     </div>,
