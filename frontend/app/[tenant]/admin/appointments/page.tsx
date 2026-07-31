@@ -711,12 +711,12 @@ export default function AppointmentsPage() {
   const [emailError,  setEmailError]  = useState<string | null>(null);
   const [emailSentTo, setEmailSentTo] = useState<string | null>(null);
 
-  // 審査用デモモード: QR発行ガイド（②予定を追加 → ③作成 → ④QR → ⑤印刷）のアンカー
+  // 審査用デモモード: QR発行ガイド（②予定を追加 → ③作成 → ④QR → ⑤メールで送信）のアンカー
   const [lastCreatedId, setLastCreatedId] = useState<string | null>(null);
   const addBtnRef   = useRef<HTMLSpanElement>(null);   // ② 予定を追加
   const createBtnRef = useRef<HTMLSpanElement>(null);  // ③ 作成
   const qrBtnRef    = useRef<HTMLSpanElement>(null);   // ④ 作成した明細の QR
-  const printBtnRef = useRef<HTMLSpanElement>(null);   // ⑤ 印刷
+  const emailBtnRef = useRef<HTMLSpanElement>(null);   // ⑤ メールで送信
 
   // Edit / delete
   const [deletingId,       setDeletingId]       = useState<string | null>(null);
@@ -1325,10 +1325,12 @@ export default function AppointmentsPage() {
                   disabled={emailSending}
                   style={{ ...INPUT_STYLE, flex: "1 1 200px", minWidth: 0, fontSize: 14, padding: "10px 12px", background: "#fff" }}
                 />
-                <MkBtn variant="primary" size="md" disabled={emailSending || !emailInput.trim()} onClick={handleSendEmail}
-                  style={{ padding: "10px 22px", fontSize: 14, borderRadius: 10 }}>
-                  {emailSending ? "送信中..." : "メールで送信"}
-                </MkBtn>
+                <span ref={emailBtnRef} style={{ display: "inline-flex" }}>
+                  <MkBtn variant="primary" size="md" disabled={emailSending || !emailInput.trim()} onClick={handleSendEmail}
+                    style={{ padding: "10px 22px", fontSize: 14, borderRadius: 10 }}>
+                    {emailSending ? "送信中..." : "メールで送信"}
+                  </MkBtn>
+                </span>
               </div>
               {emailError && (
                 <div style={{ marginTop: 8, fontSize: 12.5, color: "#a84238", fontFamily: FONT_JP, textAlign: "left", lineHeight: 1.6 }}>
@@ -1343,12 +1345,10 @@ export default function AppointmentsPage() {
             </div>
 
             <div style={{ display: "flex", gap: 12, marginTop: 20, justifyContent: "center", flexWrap: "wrap" }}>
-              <span ref={printBtnRef} style={{ display: "inline-flex" }}>
-                <MkBtn variant="primary" size="md" onClick={handlePrint} style={{ padding: "14px 30px", fontSize: 16, borderRadius: 10 }}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-                  印刷
-                </MkBtn>
-              </span>
+              <MkBtn variant="primary" size="md" onClick={handlePrint} style={{ padding: "14px 30px", fontSize: 16, borderRadius: 10 }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                印刷
+              </MkBtn>
               <MkBtn variant="default" size="md" onClick={handleDownloadQr} style={{ padding: "14px 30px", fontSize: 16, borderRadius: 10 }}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 画像を保存
@@ -1416,7 +1416,7 @@ export default function AppointmentsPage() {
       <QrGuideBalloon anchorRef={addBtnRef}    active={isDemo && !lastCreatedId && !showForm && !qrAppt && !editAppt && !confirmDeleteId} text="QR発行はこちら②" placement="bottom" />
       <QrGuideBalloon anchorRef={createBtnRef} active={isDemo && showForm}                                              text="QR発行はこちら③" placement="bottom" />
       <QrGuideBalloon anchorRef={qrBtnRef}     active={isDemo && !!lastCreatedId && !showForm && !qrAppt && !editAppt && !confirmDeleteId} text="QR発行はこちら④" placement="top" />
-      <QrGuideBalloon anchorRef={printBtnRef}  active={isDemo && !!qrAppt}                                              text="QR発行はこちら" placement="top" />
+      <QrGuideBalloon anchorRef={emailBtnRef}  active={isDemo && !!qrAppt}                                              text="メールで送信はこちら⑤" placement="top" />
     </AdminShell>
   );
 }
