@@ -2268,6 +2268,14 @@ function showReception(initPurpose) {
   render();
 }
 
+// QR受付(予約QR=appointment / ウォークインQR=qr)では登録名をそのまま表示し、
+// 「様」を固定で付けない(登録名が敬称・法人名等を含む場合の二重敬称を避ける)。
+// 手入力フォーム受付(form)等は従来どおり「様」を付与する。
+function honorificSuffix(data) {
+  const m = data && data.method;
+  return (m === "appointment" || m === "qr") ? "" : " 様";
+}
+
 // ─── CALLING ─────────────────────────────────────────────────────────────────
 function showCalling(data) {
   data = data || {};
@@ -2289,7 +2297,7 @@ function showCalling(data) {
       ${logo}
       <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:18px;font-family:Inter,system-ui,sans-serif">PLEASE WAIT</div>
       <div style="font-size:92px;font-weight:600;color:${T.ink};letter-spacing:-3px;line-height:1.04;margin-bottom:24px">お待ちください</div>
-      ${vName ? `<div style="font-size:34px;color:${T.sub};margin-bottom:10px">${escHtml(vName)} 様</div>` : ""}
+      ${vName ? `<div style="font-size:34px;color:${T.sub};margin-bottom:10px">${escHtml(vName)}${honorificSuffix(data)}</div>` : ""}
       ${dept ? `<div style="font-size:24px;color:${T.muted};margin-bottom:6px">部署：${escHtml(dept)}</div>` : ""}
       ${staff ? `<div style="font-size:24px;color:${T.muted};margin-bottom:22px">ご担当：${escHtml(staff)}</div>` : ""}
       <div style="font-size:24px;color:${T.sub};line-height:1.7;margin-bottom:30px">${escHtml(callingMsg || "担当者が確認しています。少々お待ちください。")}</div>
@@ -2350,7 +2358,7 @@ function showResultOk(data) {
   ${logo}
   <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:20px;font-family:Inter,system-ui,sans-serif">STAFF IS COMING</div>
   <div style="font-size:88px;font-weight:600;color:${T.ink};letter-spacing:-3px;line-height:1.05;margin-bottom:26px">参りますので<br>少々お待ちください</div>
-  ${vName ? `<div style="font-size:36px;color:${T.sub};margin-bottom:8px">${escHtml(vName)} 様</div>` : ""}
+  ${vName ? `<div style="font-size:36px;color:${T.sub};margin-bottom:8px">${escHtml(vName)}${honorificSuffix(data)}</div>` : ""}
   <div style="font-size:30px;color:${T.sub};line-height:1.6;margin-bottom:8px">担当者がお迎えにあがります。そのままお待ちください。</div>
   ${staff ? `<div style="font-size:22px;color:${T.muted};margin-top:6px">ご担当：${escHtml(staff)}</div>` : ""}
   <div style="margin-top:54px;display:flex;align-items:center;gap:14px;color:${T.muted};font-size:18px">${ICO.clock}<span>待機画面に戻るまで</span><span id="ok-cnt" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${bc}">${count}</span><span>秒</span></div>
@@ -2386,7 +2394,7 @@ function showResultPhone(data) {
   ${logo}
   <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;margin-bottom:20px;font-family:Inter,system-ui,sans-serif">PLEASE CALL</div>
   <div style="font-size:72px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.1;margin-bottom:28px">お電話にてお呼び出しください</div>
-  ${vName ? `<div style="font-size:32px;color:${T.sub};margin-bottom:16px">${escHtml(vName)} 様</div>` : ""}
+  ${vName ? `<div style="font-size:32px;color:${T.sub};margin-bottom:16px">${escHtml(vName)}${honorificSuffix(data)}</div>` : ""}
   ${phoneBlock}
   <div style="margin-top:50px;display:flex;align-items:center;gap:14px;color:${T.muted};font-size:18px">${ICO.clock}<span>待機画面に戻るまで</span><span id="ph-cnt" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${bc}">${count}</span><span>秒</span></div>
 </div>`;
@@ -2444,8 +2452,9 @@ function showResultDecline(data) {
 }
 
 // ─── COMPLETE (歓迎画面 — お待ちしておりました) ───────────────────────────────
-// 様は氏名と同サイズでインライン表示。予約情報を拡大。QR受付で行き先確定かつ
-// 会議室にマップ画像が登録されている場合のみ館内マップを表示する。
+// 氏名は登録名をそのまま表示(QR受付経由のため honorificSuffix は「様」を付けない)。
+// 予約情報を拡大。QR受付で行き先確定かつ会議室にマップ画像が登録されている
+// 場合のみ館内マップを表示する。
 function showComplete(data) {
   data = data || {};
   const bc = ST.brand_color;
@@ -2496,7 +2505,7 @@ function showComplete(data) {
     <div style="display:flex;flex-direction:column;justify-content:center">
       <div style="width:96px;height:96px;border-radius:24px;background:${bc}1a;color:${bc};display:flex;align-items:center;justify-content:center;margin-bottom:28px;animation:scale-in .5s cubic-bezier(.2,.9,.3,1.1)">${ICO.check_lg}</div>
       <div style="font-size:18px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;font-family:Inter,system-ui,sans-serif;margin-bottom:14px">WELCOME</div>
-      <div style="font-size:84px;font-weight:600;color:${T.ink};letter-spacing:-3px;line-height:1.06;margin-bottom:18px">${escHtml(vName)} 様</div>
+      <div style="font-size:84px;font-weight:600;color:${T.ink};letter-spacing:-3px;line-height:1.06;margin-bottom:18px">${escHtml(vName)}${honorificSuffix(data)}</div>
       <div style="font-size:34px;color:${T.sub};line-height:1.5">${escHtml(ST.kiosk_complete_message || "お待ちしておりました")}</div>
       <div style="margin-top:38px">
         <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">${ICO.clock}<span style="font-size:18px;color:${T.sub};flex:1">待機画面に戻るまで</span><span id="cnt" style="font-size:40px;font-weight:700;font-family:'JetBrains Mono',monospace;color:${bc};min-width:58px;text-align:right;transition:color .3s">${count}</span><span style="font-size:18px;color:${T.sub}">秒</span></div>
