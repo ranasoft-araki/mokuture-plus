@@ -822,16 +822,21 @@ function syncDeviceName(name) {
 // PIR非搭載/開発環境向けに画面タップでも遷移できるが、画面上には文言を出さない。
 function showIdle() {
   const bc = ST.brand_color;
+  // signage(動画/画像)が設定されているか。設定時は「ようこそ」ブランド面を最初から描画しない
+  // ＝動画のロード/フェードイン中に背後の「ようこそ」がチラつくのを防ぐ(暗転背景のまま動画へ)。
+  const hasMedia = ITEMS.length > 0;
   const brand = ST.logo_url
     ? `<img src="${escHtml(ST.logo_url)}" style="max-width:820px;max-height:320px;object-fit:contain" alt="logo">`
     : `<div style="font-size:120px;font-weight:600;color:#f5efe3;letter-spacing:-3px;line-height:1.04">${escHtml(ST.kiosk_welcome_message)}</div>`;
 
-  sc.innerHTML = `<div id="idle-root" style="width:1920px;height:1080px;position:relative;overflow:hidden;background:${T.idleBg};cursor:none;user-select:none">
-  <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:38px;text-align:center;padding:0 140px">
+  const welcomeLayer = hasMedia ? "" : `<div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:38px;text-align:center;padding:0 140px">
     ${brand}
     <div style="width:84px;height:2px;background:${bc};opacity:.9;transform-origin:left;animation:line-draw .7s .25s cubic-bezier(.2,.9,.3,1) both"></div>
     <div style="font-size:34px;color:rgba(245,239,227,.7);letter-spacing:3px;font-weight:300">${escHtml(ST.kiosk_sub_message)}</div>
-  </div>
+  </div>`;
+
+  sc.innerHTML = `<div id="idle-root" style="width:1920px;height:1080px;position:relative;overflow:hidden;background:${T.idleBg};cursor:none;user-select:none">
+  ${welcomeLayer}
   <div style="position:absolute;inset:0;z-index:10;pointer-events:none"></div>
 </div>`;
   rescale();
