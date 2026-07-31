@@ -23,6 +23,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 
 from app.config import settings
+from app.services.honorific import with_honorific
 
 logger = logging.getLogger(__name__)
 _JST = timezone(timedelta(hours=9))
@@ -320,7 +321,7 @@ class SlackNotifier:
         lines = [":bell: 来客がありました", ""]
         if (company or "").strip():
             lines.append(f"会社名：{company.strip()}")
-        lines.append(f"お名前：{visitor_name.strip()} 様")
+        lines.append(f"お名前：{with_honorific(visitor_name)}")
         if (department or "").strip():
             lines.append(f"訪問先部署：{department.strip()}")
         if (host_name or "").strip():

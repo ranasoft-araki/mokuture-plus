@@ -18,6 +18,7 @@ from app.services.slack import SlackNotifier
 from app.services.webpush import send_push
 from app.services.auth import create_decision_token, decode_token
 from app.services.crypto import decrypt_dict
+from app.services.honorific import with_honorific
 from app.config import settings
 
 router = APIRouter(prefix="/reception", tags=["reception"])
@@ -511,7 +512,7 @@ async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> N
         return
 
     title = "来客のお知らせ"
-    body = f"{log.visitor_name}様（{log.company or '—'}）が受付を完了しました。"
+    body = f"{with_honorific(log.visitor_name)}（{log.company or '—'}）が受付を完了しました。"
     if log.department:
         body += f" 部署：{log.department}"
     if log.purpose:

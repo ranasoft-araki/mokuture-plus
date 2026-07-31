@@ -17,6 +17,7 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.visitor_appointment import VisitorAppointment
 from app.services import email as email_service
+from app.services.honorific import with_honorific
 
 router = APIRouter(prefix="/appointments", tags=["appointments"])
 
@@ -317,18 +318,6 @@ def _fmt_scheduled_jp(dt: datetime) -> str:
     return f"{dt.year}年{dt.month}月{dt.day}日({_WEEKDAY_JP[dt.weekday()]}) {dt.hour:02d}:{dt.minute:02d}"
 
 
-def _with_honorific(name: str) -> str:
-    """氏名に敬称「様」を付ける。既に敬称で終わる名前(デモの「審査員様」等)には重ねない。
-
-    デモ環境の来訪者名「審査員様」で「審査員様 様」と二重敬称になる不具合の対策。
-    末尾が 様/さま/さん の場合はそのまま返す(通常の氏名には従来どおり「様」を付ける)。
-    """
-    name = name.strip()
-    if name.endswith(("様", "さま", "さん")):
-        return name
-    return f"{name} 様"
-
-
 def _build_appointment_email(
     tenant_name: str,
     brand_color: str,
@@ -352,7 +341,7 @@ def _build_appointment_email(
 
     # ── text ──
     text_lines = [
-        _with_honorific(appt.visitor_name),
+        with_honorific(appt.visitor_name),
         "",
         f"{tenant_name} でございます。ご来社の予定をご案内いたします。",
         "当日は受付にて、このメールに添付のQRコードを受付カメラにおかざしください。",
@@ -370,7 +359,7 @@ def _build_appointment_email(
 
     # ── html ── ユーザー入力(氏名・会社・会議室名・テナント名等)は全て escape する。
     # 正当な値(「A&B商事」等)でのレイアウト崩れ防止＋メール経由の任意HTML混入防止。
-    e_name = escape(_with_honorific(appt.visitor_name))
+    e_name = escape(with_honorific(appt.visitor_name))
     e_tenant = escape(tenant_name)
     # brand_color は tenant 設定(#RRGGBB, 最大7文字)だが CSS 文脈に挿すので `#` 以外は落として無害化。
     accent = brand_color if re.fullmatch(r"#[0-9A-Fa-f]{3,8}", brand_color or "") else "#4a7c4e"

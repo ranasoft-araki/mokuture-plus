@@ -38,6 +38,7 @@ from app.models.notification import NotificationSetting, PushSubscription
 from app.models.visitor_appointment import VisitorAppointment
 from app.models.room import MeetingRoom
 from app.services.slack import SlackNotifier
+from app.services.honorific import with_honorific
 from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
 from app.services.webpush import send_push
@@ -1051,7 +1052,7 @@ async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> N
         return
 
     title = "来客のお知らせ"
-    body = f"{log.visitor_name}様（{log.company or '—'}）が受付を完了しました。"
+    body = f"{with_honorific(log.visitor_name)}（{log.company or '—'}）が受付を完了しました。"
     if log.department:
         body += f" 部署：{log.department}"
     if log.purpose:
