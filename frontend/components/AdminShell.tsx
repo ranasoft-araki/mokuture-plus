@@ -62,6 +62,19 @@ const FONT_UI = '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-
 const FONT_JP = '"Noto Sans JP", "Inter", system-ui, sans-serif';
 const FONT_MONO = '"JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace';
 
+// 審査用デモモード: サイドバーの誘導ガイド用カラートーン。
+// nav = 指し先メニュー項目のハイライト(bg/文字/リング)、balloon = 吹き出しの塗り/文字。
+// glow/ring は CSS変数(--mkg-glow / --mkg-ring)へ渡す "R,G,B" 文字列。
+type GuideTone = {
+  navBg: string; navFg: string; ring: string;
+  balloonBg: string; balloonFg: string; glow: string;
+};
+const GUIDE_TONES: Record<"green" | "blue" | "yellow", GuideTone> = {
+  green:  { navBg: "#eef4ec", navFg: "#3a6240", ring: "74,124,78",   balloonBg: "#4a7c4e", balloonFg: "#fff",     glow: "74,124,78" },
+  blue:   { navBg: "#e8f0f6", navFg: "#2e6b8e", ring: "46,107,142",  balloonBg: "#2e6b8e", balloonFg: "#fff",     glow: "46,107,142" },
+  yellow: { navBg: "#f7efd7", navFg: "#8a6524", ring: "217,163,38",  balloonBg: "#d9a326", balloonFg: "#3d2f10", glow: "217,163,38" },
+};
+
 export function AdminShell({ active, title, subtitle, breadcrumb, actions, children, receptionUnread }: Props) {
   const params = useParams<{ tenant: string }>();
   const router = useRouter();
@@ -118,6 +131,9 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
   const [qrGuide, setQrGuide] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const apptNavRef = useRef<HTMLButtonElement>(null);
+  // デモモード: 受付ログ(反映確認)/ロッカー(施錠状況)へも同様の誘導ガイドを出す
+  const receptionNavRef = useRef<HTMLButtonElement>(null);
+  const lockerNavRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 768px)");
@@ -215,8 +231,18 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
               pending={pendingId === item.id}
               onClick={() => navigate(item.id)}
               badge={item.id === "reception" && receptionUnread && receptionUnread > 0 ? receptionUnread : undefined}
-              buttonRef={item.id === "appointments" ? apptNavRef : undefined}
-              guide={item.id === "appointments" && qrGuide && active !== "appointments"}
+              buttonRef={
+                item.id === "appointments" ? apptNavRef
+                : item.id === "reception" ? receptionNavRef
+                : item.id === "locker" ? lockerNavRef
+                : undefined
+              }
+              guide={qrGuide && active !== item.id && (item.id === "appointments" || item.id === "reception" || item.id === "locker")}
+              guideTone={
+                item.id === "reception" ? GUIDE_TONES.blue
+                : item.id === "locker" ? GUIDE_TONES.yellow
+                : GUIDE_TONES.green
+              }
             />
           ))}
           <div style={{ fontSize: 10.5, color: "#a8a198", textTransform: "uppercase", letterSpacing: "0.6px", padding: "14px 10px 6px" }}>
@@ -326,14 +352,36 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
         text="QR発行はこちら①"
         placement="right"
       />
+
+      {/* 審査用デモモード: 受付ログの反映確認ガイド（サイドバー「受付ログ」・青） */}
+      <QrGuideBalloon
+        anchorRef={receptionNavRef}
+        active={qrGuide && isDesktop && active !== "reception"}
+        text="受付ログへの反映確認はこちら"
+        placement="right"
+        fill={GUIDE_TONES.blue.balloonBg}
+        textColor={GUIDE_TONES.blue.balloonFg}
+        glow={GUIDE_TONES.blue.glow}
+      />
+
+      {/* 審査用デモモード: ロッカー施錠状況ガイド（サイドバー「ロッカー」・黄） */}
+      <QrGuideBalloon
+        anchorRef={lockerNavRef}
+        active={qrGuide && isDesktop && active !== "locker"}
+        text="ロッカー施錠状況はこちら"
+        placement="right"
+        fill={GUIDE_TONES.yellow.balloonBg}
+        textColor={GUIDE_TONES.yellow.balloonFg}
+        glow={GUIDE_TONES.yellow.glow}
+      />
     </div>
   );
 }
 
-function NavItem({ id, label, active, pending = false, onClick, badge, buttonRef, guide = false }: { id: NavId; label: string; active: boolean; pending?: boolean; onClick: () => void; badge?: number; buttonRef?: React.Ref<HTMLButtonElement>; guide?: boolean }) {
+function NavItem({ id, label, active, pending = false, onClick, badge, buttonRef, guide = false, guideTone = GUIDE_TONES.green }: { id: NavId; label: string; active: boolean; pending?: boolean; onClick: () => void; badge?: number; buttonRef?: React.Ref<HTMLButtonElement>; guide?: boolean; guideTone?: GuideTone }) {
   // pending 中はクリック直後から選択済みに見せる（即時フィードバック）
   const hot = active || pending;
-  // 審査用デモモード: QR発行ガイド①が指す「来社予定」を緑枠＋パルスで強調（選択中は通常表示）
+  // 審査用デモモード: ガイドが指すメニュー(来社予定=緑/受付ログ=青/ロッカー=黄)を色枠＋パルスで強調（選択中は通常表示）
   const guiding = guide && !hot;
   return (
     <button
@@ -344,16 +392,17 @@ function NavItem({ id, label, active, pending = false, onClick, badge, buttonRef
         width: "100%", display: "flex", alignItems: "center", gap: 10,
         padding: hot ? "8px 10px 8px 12px" : "8px 10px",
         borderRadius: 7, marginBottom: 1,
-        background: hot ? "#eaf0e8" : guiding ? "#eef4ec" : "transparent",
-        color: hot || guiding ? "#3a6240" : "#6b6559",
+        background: hot ? "#eaf0e8" : guiding ? guideTone.navBg : "transparent",
+        color: hot ? "#3a6240" : guiding ? guideTone.navFg : "#6b6559",
         fontSize: 13, fontWeight: hot || guiding ? 600 : 500,
         cursor: pending ? "progress" : "pointer", textAlign: "left",
         borderLeft: `2px solid ${hot ? "#4a7c4e" : "transparent"}`,
         border: "none", fontFamily: FONT_JP,
         transition: "background 0.1s",
-        boxShadow: guiding ? "0 0 0 2px #4a7c4e" : "none",
+        boxShadow: guiding ? `0 0 0 2px rgba(${guideTone.ring},0.9)` : "none",
         animation: guiding ? "mkGuidePulse 1.6s ease-in-out infinite" : undefined,
-      }}
+        ...(guiding ? { ["--mkg-ring" as string]: guideTone.ring } : {}),
+      } as React.CSSProperties}
       onMouseEnter={(e) => { if (!hot && !guiding) (e.currentTarget as HTMLButtonElement).style.background = "#f4f1ea"; }}
       onMouseLeave={(e) => { if (!hot && !guiding) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
     >
@@ -513,11 +562,18 @@ export function MkSectionTitle({ title, subtitle, action, style }: { title: stri
    pointer-events:none なので下のボタンのクリックは妨げない。 */
 export function QrGuideBalloon<T extends HTMLElement>({
   anchorRef, active, text, placement = "bottom",
+  fill = "#4a7c4e", textColor = "#fff", glow = "74,124,78",
 }: {
   anchorRef: React.RefObject<T | null>;
   active: boolean;
   text: string;
   placement?: "top" | "bottom" | "left" | "right";
+  /** 吹き出しの塗り色（既定=緑）。青/黄など誘導ごとに変える。 */
+  fill?: string;
+  /** 吹き出しの文字色（塗りに応じて可読性を確保。既定=白） */
+  textColor?: string;
+  /** 明滅グロー色 "R,G,B"（CSS変数 --mkg-glow へ。既定=緑） */
+  glow?: string;
 }) {
   const [rect, setRect] = useState<DOMRect | null>(null);
 
@@ -547,19 +603,19 @@ export function QrGuideBalloon<T extends HTMLElement>({
 
   if (!active || !rect) return null;
 
-  const GREEN = "#4a7c4e";
   const GAP = 14;
   const ARROW = 11;
 
   const box: React.CSSProperties = {
     position: "fixed", zIndex: 4000, pointerEvents: "none",
-    background: GREEN, color: "#fff",
+    background: fill, color: textColor,
     fontFamily: FONT_JP, fontSize: 17, fontWeight: 700, lineHeight: 1.3,
     letterSpacing: "0.3px", whiteSpace: "nowrap",
     padding: "13px 22px", borderRadius: 12,
-    boxShadow: "0 6px 20px rgba(74,124,78,0.5)",
+    boxShadow: `0 6px 20px rgba(${glow},0.5)`,
     animation: "mkGuideGlow 1.6s ease-in-out infinite",
-  };
+    ["--mkg-glow" as string]: glow,
+  } as React.CSSProperties;
   const arrow: React.CSSProperties = {
     position: "absolute", width: 0, height: 0, border: `${ARROW}px solid transparent`,
   };
@@ -569,16 +625,16 @@ export function QrGuideBalloon<T extends HTMLElement>({
 
   if (placement === "right") {
     box.left = rect.right + GAP; box.top = cy; box.transform = "translateY(-50%)";
-    Object.assign(arrow, { right: "100%", top: "50%", marginTop: -ARROW, borderRightColor: GREEN });
+    Object.assign(arrow, { right: "100%", top: "50%", marginTop: -ARROW, borderRightColor: fill });
   } else if (placement === "left") {
     box.left = rect.left - GAP; box.top = cy; box.transform = "translate(-100%, -50%)";
-    Object.assign(arrow, { left: "100%", top: "50%", marginTop: -ARROW, borderLeftColor: GREEN });
+    Object.assign(arrow, { left: "100%", top: "50%", marginTop: -ARROW, borderLeftColor: fill });
   } else if (placement === "top") {
     box.left = cx; box.top = rect.top - GAP; box.transform = "translate(-50%, -100%)";
-    Object.assign(arrow, { top: "100%", left: "50%", marginLeft: -ARROW, borderTopColor: GREEN });
+    Object.assign(arrow, { top: "100%", left: "50%", marginLeft: -ARROW, borderTopColor: fill });
   } else { // bottom
     box.left = cx; box.top = rect.bottom + GAP; box.transform = "translateX(-50%)";
-    Object.assign(arrow, { bottom: "100%", left: "50%", marginLeft: -ARROW, borderBottomColor: GREEN });
+    Object.assign(arrow, { bottom: "100%", left: "50%", marginLeft: -ARROW, borderBottomColor: fill });
   }
 
   return createPortal(
