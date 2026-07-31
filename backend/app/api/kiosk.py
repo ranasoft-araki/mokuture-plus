@@ -11,6 +11,7 @@ import os
 import random
 import re
 import secrets
+import time
 import zoneinfo
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from pydantic import BaseModel, field_validator
@@ -102,10 +103,22 @@ _limiter = Limiter(key_func=get_remote_address)
 _ALLOWED_METHODS = {"form", "qr", "appointment"}
 
 # ── OTA bundle ────────────────────────────────────────────────────────────────
-# Env var override; default resolves to <repo>/kiosk_agent relative to this file.
+# Bundle files are served from the local kiosk_agent dir when it exists (local dev
+# and any deploy that ships it). On the Render image the backend build context is
+# backend/ only, so kiosk_agent/ is NOT in the image — there we transparently fall
+# back to fetching each file from the public GitHub repo (always `master`). This
+# keeps OTA working for deployed kiosks without vendoring copies into backend/ or
+# reworking the Docker build/context. Both sources hash bytes with sha256[:16],
+# identical to kiosk_agent/updater._local_hash, so the device never re-downloads
+# an unchanged file. Override the mirror with KIOSK_BUNDLE_GITHUB_RAW if the repo
+# moves; override the local dir with KIOSK_BUNDLE_DIR.
 _KIOSK_AGENT_DIR = Path(
     os.environ.get("KIOSK_BUNDLE_DIR", str(Path(__file__).parents[3] / "kiosk_agent"))
 )
+_BUNDLE_GITHUB_RAW = os.environ.get(
+    "KIOSK_BUNDLE_GITHUB_RAW",
+    "https://raw.githubusercontent.com/ranasoft-araki/mokuture-plus/master/kiosk_agent",
+).rstrip("/")
 
 # Files distributed via OTA (relative to kiosk_agent root); order is stable for hashing.
 BUNDLE_FILES = [
@@ -121,18 +134,65 @@ BUNDLE_FILES = [
 ]
 _FORCE_WINDOW_SEC = 7200  # force flag stays active for 2 hours after trigger
 
+# GitHub-fallback byte cache: rel -> (monotonic_ts, bytes). Avoids refetching the
+# same file on every manifest poll; short TTL so master edits still propagate fast.
+_bundle_bytes_cache: dict[str, tuple[float, bytes]] = {}
+_BUNDLE_CACHE_TTL = 120.0
 
-def _file_sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+async def _read_bundle_bytes(rel: str) -> bytes | None:
+    """Return the bytes of an OTA bundle file, or None if unavailable.
+
+    Prefers the local kiosk_agent copy; if it is missing (Render backend/-only
+    image) fetches from the public GitHub raw mirror and caches briefly. On a
+    fetch error the last cached copy (if any) is returned so a transient GitHub
+    blip does not blank the manifest."""
+    if rel not in BUNDLE_FILES:
+        return None
+    local = _KIOSK_AGENT_DIR / rel
+    try:
+        if local.exists():
+            return local.read_bytes()
+    except OSError:
+        pass
+    now = time.monotonic()
+    cached = _bundle_bytes_cache.get(rel)
+    if cached is not None and now - cached[0] < _BUNDLE_CACHE_TTL:
+        return cached[1]
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(f"{_BUNDLE_GITHUB_RAW}/{rel}")
+        if resp.status_code == 200:
+            data = resp.content
+            _bundle_bytes_cache[rel] = (now, data)
+            return data
+        logger.warning("[ota] github bundle fetch %s -> HTTP %s", rel, resp.status_code)
+    except Exception:
+        logger.warning("[ota] github bundle fetch failed for %s", rel)
+    return cached[1] if cached is not None else None
 
 
-def _bundle_version() -> str:
-    parts = []
-    for rel in BUNDLE_FILES:
-        p = _KIOSK_AGENT_DIR / rel
-        if p.exists():
-            parts.append(f"{rel}:{_file_sha(p)}")
-    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+async def _collect_bundle() -> tuple[str, list[dict]]:
+    """Compute the bundle version and per-file hashes over the available files.
+
+    Per-file hash = sha256(bytes)[:16], matching kiosk_agent/updater._local_hash so
+    the device's per-file "unchanged → skip" check stays correct. version =
+    sha256[:16] over the ordered `rel:hash` list (deterministic per content).
+
+    Files are read concurrently so a cold-cache manifest (GitHub fallback) resolves
+    in ~one round trip instead of 9 sequential fetches. gather keeps input order,
+    which the version hash depends on."""
+    datas = await asyncio.gather(*(_read_bundle_bytes(rel) for rel in BUNDLE_FILES))
+    parts: list[str] = []
+    files: list[dict] = []
+    for rel, data in zip(BUNDLE_FILES, datas):
+        if data is None:
+            continue
+        sha = hashlib.sha256(data).hexdigest()[:16]
+        parts.append(f"{rel}:{sha}")
+        files.append({"path": rel, "hash": sha, "size": len(data)})
+    version = hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+    return version, files
 
 
 class RegisterRequest(BaseModel):
@@ -1340,13 +1400,8 @@ async def kiosk_bundle_manifest(
         diff = (now - fat).total_seconds()
         force = 0 <= diff <= _FORCE_WINDOW_SEC
 
-    files = []
-    for rel in BUNDLE_FILES:
-        p = _KIOSK_AGENT_DIR / rel
-        if p.exists():
-            files.append({"path": rel, "hash": _file_sha(p), "size": p.stat().st_size})
-
-    return {"version": _bundle_version(), "files": files, "force": force}
+    version, files = await _collect_bundle()
+    return {"version": version, "files": files, "force": force}
 
 
 @router.get("/bundle/file/{file_path:path}")
@@ -1357,7 +1412,13 @@ async def kiosk_bundle_file(
     """Download a single bundle file. Path must be in BUNDLE_FILES whitelist."""
     if file_path not in BUNDLE_FILES:
         raise HTTPException(status_code=404, detail="Not in bundle")
-    p = _KIOSK_AGENT_DIR / file_path
-    if not p.exists():
+    # Local file when present (dev / full deploy) — streamed directly.
+    local = _KIOSK_AGENT_DIR / file_path
+    if local.exists():
+        return FileResponse(local)
+    # Otherwise serve the bytes fetched from the GitHub mirror (Render image).
+    data = await _read_bundle_bytes(file_path)
+    if data is None:
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(p)
+    media = "text/html; charset=utf-8" if file_path.endswith(".html") else "application/octet-stream"
+    return Response(content=data, media_type=media)
