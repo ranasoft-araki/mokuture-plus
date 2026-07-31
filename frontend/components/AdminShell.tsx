@@ -238,26 +238,24 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
               <div style={{ fontSize: 10.5, color: "#a8a198" }}>管理者 · admin</div>
             </div>
           </div>
-          {/* 審査環境の閲覧専用アカウントではログアウトを非表示 */}
-          {!readOnly && (
-            <button
-              onClick={() => { clearTokens(); router.push(getLogoutUrl()); }}
-              style={{
-                width: "100%", display: "flex", alignItems: "center", gap: 8,
-                padding: "9px 14px", background: "none", border: "none",
-                borderTop: "1px solid #efece5", cursor: "pointer",
-                color: "#6b6559", fontSize: 12.5, fontFamily: FONT_JP,
-                textAlign: "left",
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f4f1ea"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
-              </svg>
-              ログアウト
-            </button>
-          )}
+          {/* ログアウトはユーザー切り替えのため閲覧専用アカウントでも表示する */}
+          <button
+            onClick={() => { clearTokens(); router.push(getLogoutUrl()); }}
+            style={{
+              width: "100%", display: "flex", alignItems: "center", gap: 8,
+              padding: "9px 14px", background: "none", border: "none",
+              borderTop: "1px solid #efece5", cursor: "pointer",
+              color: "#6b6559", fontSize: 12.5, fontFamily: FONT_JP,
+              textAlign: "left",
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f4f1ea"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
+            </svg>
+            ログアウト
+          </button>
         </div>
       </aside>
 
