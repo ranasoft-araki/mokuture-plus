@@ -730,8 +730,15 @@ export default function AppointmentsPage() {
   const [editError,     setEditError]     = useState<string | null>(null);
 
   const [isMobile, setIsMobile] = useState(false);
+  // iPad/タブレット幅（縦768/横1024〜1194px）以下では一覧を表ではなくカードのグリッドで描画する。
+  // サイドバー248px＋余白を引くと表(minWidth:720)が収まらず横スクロールが発生し、右端の「操作」列(QR)と
+  // QR発行ガイド④が画面外に出るため。デスクトップ(1280px〜)は情報密度の高い表のまま。
+  const [isCardView, setIsCardView] = useState(false);
   useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 640);
+    const check = () => {
+      setIsMobile(window.innerWidth < 640);
+      setIsCardView(window.innerWidth < 1200);
+    };
     check();
     window.addEventListener("resize", check);
     return () => window.removeEventListener("resize", check);
@@ -1183,31 +1190,40 @@ export default function AppointmentsPage() {
                 <div style={{ padding: 40, textAlign: "center", fontSize: 13, color: "#a8a198", fontFamily: FONT_JP }}>
                   {dateFilter !== "today" || statusFilter !== "all" ? "条件に一致する来社予定がありません" : "本日の来社予定がありません。「予定を追加」から登録してください。"}
                 </div>
-              ) : isMobile ? (
-                <div>
-                  {appointments.map((appt, idx) => (
-                    <div key={appt.id} style={{ padding: 16, borderBottom: idx < appointments.length - 1 ? "1px solid #efece5" : "none" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-                        <div>
-                          <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15", fontFamily: FONT_JP }}>{appt.visitor_name}</div>
+              ) : isCardView ? (
+                /* iPad/タブレット/スマホ: カードのグリッド表示。横スクロール無し・タッチ操作向けで、
+                   QRボタンとQR発行ガイド④が常に画面内に見える。iPad横=2〜3列 / iPad縦・スマホ=1列に自動折返し。 */
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 280px), 1fr))", gap: 12, padding: 12 }}>
+                  {appointments.map(appt => (
+                    <div key={appt.id} style={{ background: "#faf8f4", border: "1px solid #efece5", borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15", fontFamily: FONT_JP }}>{appt.visitor_name}</div>
                           {appt.company && <div style={{ fontSize: 12.5, color: "#6b6559", fontFamily: FONT_JP }}>{appt.company}</div>}
                         </div>
                         <StatusBadge status={appt.status} />
                       </div>
-                      <div style={{ fontSize: 12, color: "#a8a198", fontFamily: FONT_MONO, marginBottom: 4 }}>{fmtDatetime(appt.scheduled_at)}</div>
-                      {appt.meeting_room && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 6 }}>
-                          <div style={{ width: 8, height: 8, borderRadius: 2, background: appt.meeting_room.color ?? "#4a7c4e" }} />
-                          <span style={{ fontSize: 12, color: "#6b6559", fontFamily: FONT_JP }}>{appt.meeting_room.name}</span>
+                      <div style={{ fontSize: 12.5, color: "#6b6559", fontFamily: FONT_MONO }}>
+                        {fmtDatetime(appt.scheduled_at)}{appt.duration_minutes ? ` · ${appt.duration_minutes}分` : ""}
+                      </div>
+                      {(appt.purpose || appt.staff) && (
+                        <div style={{ fontSize: 12.5, color: "#6b6559", fontFamily: FONT_JP }}>
+                          {appt.purpose ? `目的：${appt.purpose}` : ""}{appt.purpose && appt.staff ? "　" : ""}{appt.staff ? `担当：${appt.staff}` : ""}
                         </div>
                       )}
-                      <div style={{ display: "flex", gap: 6 }}>
+                      {appt.meeting_room && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <div style={{ width: 8, height: 8, borderRadius: 2, background: appt.meeting_room.color ?? "#4a7c4e" }} />
+                          <span style={{ fontSize: 12.5, color: "#6b6559", fontFamily: FONT_JP }}>{appt.meeting_room.name}</span>
+                        </div>
+                      )}
+                      <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
                         <span ref={appt.id === lastCreatedId ? qrBtnRef : undefined} style={{ display: "inline-flex" }}>
                           <MkBtn variant="default" size="sm" onClick={() => setQrAppt(appt)}>QR</MkBtn>
                         </span>
                         <MkBtn variant="default" size="sm" onClick={() => openEdit(appt)}>編集</MkBtn>
                         <MkBtn variant="danger" size="sm" disabled={deletingId === appt.id} onClick={() => { setDeleteError(null); setConfirmDeleteId(appt.id); }}>
-                          削除
+                          {deletingId === appt.id ? "削除中..." : "削除"}
                         </MkBtn>
                       </div>
                     </div>
@@ -1249,7 +1265,7 @@ export default function AppointmentsPage() {
                               <MkBtn variant="default" size="sm" onClick={() => setQrAppt(appt)}>QR</MkBtn>
                             </span>
                             <MkBtn variant="default" size="sm" onClick={() => openEdit(appt)}>編集</MkBtn>
-                            <MkBtn variant="danger" size="sm" disabled={deletingId === appt.id} onClick={() => handleDelete(appt.id)}>
+                            <MkBtn variant="danger" size="sm" disabled={deletingId === appt.id} onClick={() => { setDeleteError(null); setConfirmDeleteId(appt.id); }}>
                               {deletingId === appt.id ? "削除中..." : "削除"}
                             </MkBtn>
                           </div>
