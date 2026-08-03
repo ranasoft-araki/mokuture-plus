@@ -747,11 +747,52 @@ export function QrGuideBalloon<T extends HTMLElement>({
   // 重なり回避の下方向オフセットを反映（覆われている時は dy=0 に戻している）。
   box.top = (box.top as number) + dy;
 
+  // 重なりで本体をずらしたときは、三角しっぽの代わりに「根本を伸ばした引き出し線」で
+  // 本体を対象(メニュー項目/ボタン)までつなぎ、どの案内かを一目で分かるようにする。
+  // anchorPt=対象側の付け根(点を打つ) / edgePt=バルーン側の付け根。dy(縦ずれ)を線で橋渡しする。
+  const boxCy = cy + dy;
+  let anchorPt: { x: number; y: number };
+  let edgePt: { x: number; y: number };
+  if (placement === "right")      { anchorPt = { x: rect.right, y: cy };    edgePt = { x: rect.right + GAP, y: boxCy }; }
+  else if (placement === "left")  { anchorPt = { x: rect.left,  y: cy };    edgePt = { x: rect.left - GAP,  y: boxCy }; }
+  else if (placement === "top")   { anchorPt = { x: cx, y: rect.top };      edgePt = { x: cx, y: rect.top - GAP + dy }; }
+  else                            { anchorPt = { x: cx, y: rect.bottom };   edgePt = { x: cx, y: rect.bottom + GAP + dy }; }
+
+  const showLeader = Math.abs(dy) >= 2;   // ずれた時だけ引き出し線に切替（通常は従来の三角しっぽ＝差分なし）
+  let leader: ReactNode = null;
+  if (showLeader) {
+    const pad = 12;
+    const minX = Math.min(anchorPt.x, edgePt.x) - pad;
+    const minY = Math.min(anchorPt.y, edgePt.y) - pad;
+    const w = Math.abs(anchorPt.x - edgePt.x) + pad * 2;
+    const h = Math.abs(anchorPt.y - edgePt.y) + pad * 2;
+    leader = (
+      <svg
+        width={w} height={h}
+        style={{
+          position: "fixed", left: minX, top: minY,
+          zIndex: (covered ? 900 : 4000) - 1, pointerEvents: "none",
+          opacity: dodge ? 0 : 0.85, transition: "opacity 0.18s ease", overflow: "visible",
+        }}
+      >
+        <line
+          x1={anchorPt.x - minX} y1={anchorPt.y - minY}
+          x2={edgePt.x - minX}   y2={edgePt.y - minY}
+          stroke={fill} strokeWidth={5} strokeLinecap="round"
+        />
+        <circle cx={anchorPt.x - minX} cy={anchorPt.y - minY} r={6} fill={fill} />
+      </svg>
+    );
+  }
+
   return createPortal(
-    <div ref={boxRef} style={box}>
-      {text}
-      <span style={arrow} />
-    </div>,
+    <>
+      {leader}
+      <div ref={boxRef} style={box}>
+        {text}
+        {!showLeader && <span style={arrow} />}
+      </div>
+    </>,
     document.body,
   );
 }
