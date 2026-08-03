@@ -556,6 +556,41 @@ export function MkSectionTitle({ title, subtitle, action, style }: { title: stri
   );
 }
 
+/* ─ ガイドバルーンの重なり回避（全インスタンス共有） ─────────────────
+   QrGuideBalloon は各々独立した position:fixed ポータルで互いを知らないため、
+   モジュールスコープに各バルーンの「ずらす前の理想box」を集約する。横も縦も重なる場合、
+   上にあるものを優先配置し、後続を下方向へ押し下げる量(dy)を返す。 */
+type GuideBox = { top: number; left: number; width: number; height: number };
+const guideRegistry = new Map<number, { order: number; box: GuideBox }>();
+const guideListeners = new Set<() => void>();
+let guideSeq = 0;
+function notifyGuides() { guideListeners.forEach((fn) => fn()); }
+function resolveGuideOffsets(): Map<number, number> {
+  // 上(top小)から順に確定。同値は登録順(order)で安定化。
+  const entries = [...guideRegistry.entries()].sort(
+    (a, b) => (a[1].box.top - b[1].box.top) || (a[1].order - b[1].order),
+  );
+  const placed: GuideBox[] = [];
+  const offsets = new Map<number, number>();
+  const MARGIN = 8;
+  for (const [id, { box }] of entries) {
+    let shift = 0;
+    let moved = true;
+    while (moved) {
+      moved = false;
+      const top = box.top + shift;
+      for (const p of placed) {
+        const horiz = box.left < p.left + p.width && box.left + box.width > p.left;
+        const vert  = top < p.top + p.height && top + box.height > p.top;
+        if (horiz && vert) { shift = p.top + p.height + MARGIN - box.top; moved = true; }
+      }
+    }
+    offsets.set(id, shift);
+    placed.push({ ...box, top: box.top + shift });
+  }
+  return offsets;
+}
+
 /* ─ QR発行ガイド用 バルーン（審査用デモモード限定） ─────────────────
    任意の要素(anchorRef)に吹き出しを固定表示する。position:fixed + ポータルで
    親の overflow(サイドバー/テーブルのスクロール)にクリップされず、スクロール/リサイズにも追従する。
@@ -576,26 +611,43 @@ export function QrGuideBalloon<T extends HTMLElement>({
   glow?: string;
 }) {
   const [rect, setRect] = useState<DOMRect | null>(null);
+  const [covered, setCovered] = useState(false);   // モーダル等に覆われているか（覆われたら裏側へ回す）
+  const [dy, setDy] = useState(0);                  // 他バルーンとの重なりを避ける下方向オフセット
+  const dyRef = useRef(0); dyRef.current = dy;
+  const idRef = useRef(-1); if (idRef.current < 0) idRef.current = guideSeq++;
 
   useEffect(() => {
-    if (!active) { setRect(null); return; }
+    if (!active) { setRect(null); setCovered(false); return; }
     let raf = 0;
+    let prevKey = "";
     const update = () => {
       const el = anchorRef.current;
       if (!el) { setRect(null); return; }
       const r = el.getBoundingClientRect();
       // 非表示(off-canvas サイドバー等)は出さない
-      if (r.width === 0 && r.height === 0) { setRect(null); return; }
-      setRect(r);
+      if (r.width === 0 && r.height === 0) { setRect(null); prevKey = ""; return; }
+      // 位置/サイズが実際に変わった時だけ setRect（毎回新オブジェクトでの無駄な再描画/再登録を防ぐ）
+      const key = `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`;
+      if (key !== prevKey) { prevKey = key; setRect(r); }
+      // アンカーがモーダル等に覆われているか判定（覆われていたら裏側に回す）。
+      // バルーンは pointer-events:none なので elementFromPoint はバルーン自身を返さない。
+      const topEl = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      setCovered(!!topEl && !(topEl === el || el.contains(topEl) || topEl.contains(el)));
     };
     update();
     const onChange = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(update); };
     window.addEventListener("scroll", onChange, true);
     window.addEventListener("resize", onChange);
-    const id = window.setInterval(update, 400); // モーダル開閉やレイアウト変化の取りこぼしを拾う
+    // モーダル等の出現/消滅を即検知して covered を更新する（scroll/resize が出ない開閉でも
+    // 400ms を待たずに裏側へ回す）。属性は監視せず childList/subtree のみ＝バルーン自身の
+    // style 変更ではループしない。バーストは rAF で1フレームに集約。
+    const mo = new MutationObserver(onChange);
+    mo.observe(document.body, { childList: true, subtree: true });
+    const id = window.setInterval(update, 400); // レイアウト変化(画像読込・トランジション等)の取りこぼしのフォールバック
     return () => {
       window.removeEventListener("scroll", onChange, true);
       window.removeEventListener("resize", onChange);
+      mo.disconnect();
       window.clearInterval(id);
       cancelAnimationFrame(raf);
     };
@@ -628,13 +680,38 @@ export function QrGuideBalloon<T extends HTMLElement>({
     };
   }, [active]);
 
+  // 重なり回避: 自分の理想boxを共有レジストリへ登録し、他バルーンとの重なりから dy を解決する。
+  // 覆われている(裏側)/非表示のときは他を押しのけないよう登録しない。
+  useEffect(() => {
+    const id = idRef.current;
+    const unregister = () => { if (guideRegistry.delete(id)) notifyGuides(); };
+    if (!active || !rect || covered) {
+      unregister();
+      setDy((prev) => (prev !== 0 ? 0 : prev));
+      return;
+    }
+    const el = boxRef.current;
+    if (!el) return;
+    const b = el.getBoundingClientRect();
+    if (b.width === 0 && b.height === 0) { unregister(); return; }
+    // 現在適用中の dy を差し引いた「ずらす前の理想位置」を登録する。
+    guideRegistry.set(id, { order: id, box: { top: b.top - dyRef.current, left: b.left, width: b.width, height: b.height } });
+    const recompute = () => {
+      const next = resolveGuideOffsets().get(id) ?? 0;
+      setDy((prev) => (Math.abs(prev - next) > 0.5 ? next : prev));
+    };
+    guideListeners.add(recompute);
+    notifyGuides();   // 自分の登録を全バルーンへ反映して再解決させる
+    return () => { guideListeners.delete(recompute); unregister(); };
+  }, [active, rect, covered, text, placement]);
+
   if (!active || !rect) return null;
 
   const GAP = 14;
   const ARROW = 11;
 
   const box: React.CSSProperties = {
-    position: "fixed", zIndex: 4000, pointerEvents: "none",
+    position: "fixed", zIndex: covered ? 900 : 4000, pointerEvents: "none",
     background: fill, color: textColor,
     fontFamily: FONT_JP, fontSize: 17, fontWeight: 700, lineHeight: 1.3,
     letterSpacing: "0.3px", whiteSpace: "nowrap",
@@ -666,6 +743,9 @@ export function QrGuideBalloon<T extends HTMLElement>({
     box.left = cx; box.top = rect.bottom + GAP; box.transform = "translateX(-50%)";
     Object.assign(arrow, { bottom: "100%", left: "50%", marginLeft: -ARROW, borderBottomColor: fill });
   }
+
+  // 重なり回避の下方向オフセットを反映（覆われている時は dy=0 に戻している）。
+  box.top = (box.top as number) + dy;
 
   return createPortal(
     <div ref={boxRef} style={box}>
