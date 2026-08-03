@@ -558,25 +558,31 @@ export function MkSectionTitle({ title, subtitle, action, style }: { title: stri
 
 /* ─ ガイドバルーンの重なり回避（全インスタンス共有） ─────────────────
    QrGuideBalloon は各々独立した position:fixed ポータルで互いを知らないため、
-   モジュールスコープに各バルーンの「ずらす前の理想box」を集約する。横も縦も重なる場合、
-   上にあるものを優先配置し、後続を下方向へ押し下げる量(dy)を返す。 */
+   モジュールスコープに各バルーンの「ずらす前の理想box」を集約し、重なる場合のオフセット(dy)を返す。
+   ・ボタンを指す top/bottom(②〜⑤) は動かさない（押すと自分のアンカー=ボタンを覆うため）。
+   ・サイドバー left/right は「上方向」へ逃がす（下だとコンテンツや他バルーンに被るため）。 */
 type GuideBox = { top: number; left: number; width: number; height: number };
 const guideRegistry = new Map<number, { order: number; box: GuideBox; placement: string }>();
 const guideListeners = new Set<() => void>();
 let guideSeq = 0;
 function notifyGuides() { guideListeners.forEach((fn) => fn()); }
 function resolveGuideOffsets(): Map<number, number> {
-  // ボタンを指すバルーン(top/bottom=②〜⑤)を先に確定＝動かさない。押し下げると自分のアンカー
-  // (ボタン)を覆ってしまうため。横に矢印が出るサイドバー(left/right)は下へ押しても安全なので
-  // 後回し＝そちらが top/bottom を避けて下がる。同順位は上(top小)→登録順(order)で安定化。
-  const pri = (p: string) => (p === "left" || p === "right" ? 1 : 0);
-  const entries = [...guideRegistry.entries()].sort(
-    (a, b) => (pri(a[1].placement) - pri(b[1].placement)) || (a[1].box.top - b[1].box.top) || (a[1].order - b[1].order),
-  );
+  const isSide = (p: string) => p === "left" || p === "right";
+  const all = [...guideRegistry.entries()];
   const placed: GuideBox[] = [];
   const offsets = new Map<number, number>();
   const MARGIN = 8;
-  for (const [id, { box }] of entries) {
+  // 1) ボタンを指すバルーン(top/bottom=②〜⑤)は動かさず理想位置で確定する。
+  for (const [id, e] of all) {
+    if (!isSide(e.placement)) { offsets.set(id, 0); placed.push({ ...e.box }); }
+  }
+  // 2) サイドバー(left/right)は上方向へ避ける。下にあるものから処理して上へ積み、
+  //    視覚順(上の nav 項目=上)を保つ。上端が相手より上に出るまで負方向へずらす。
+  const sides = all
+    .filter(([, e]) => isSide(e.placement))
+    .sort((a, b) => (b[1].box.top - a[1].box.top) || (a[1].order - b[1].order));
+  for (const [id, e] of sides) {
+    const box = e.box;
     let shift = 0;
     let moved = true;
     while (moved) {
@@ -585,10 +591,11 @@ function resolveGuideOffsets(): Map<number, number> {
       for (const p of placed) {
         const horiz = box.left < p.left + p.width && box.left + box.width > p.left;
         const vert  = top < p.top + p.height && top + box.height > p.top;
-        if (horiz && vert) { shift = p.top + p.height + MARGIN - box.top; moved = true; }
+        // 上へ逃がす: 自分の下端を相手の上端より上へ。shift は負に単調減少＝必ず停止。
+        if (horiz && vert) { shift = (p.top - box.height - MARGIN) - box.top; moved = true; }
       }
     }
-    offsets.set(id, shift);
+    offsets.set(id, shift);   // 上方向＝負値
     placed.push({ ...box, top: box.top + shift });
   }
   return offsets;
