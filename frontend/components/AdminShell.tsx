@@ -561,14 +561,17 @@ export function MkSectionTitle({ title, subtitle, action, style }: { title: stri
    モジュールスコープに各バルーンの「ずらす前の理想box」を集約する。横も縦も重なる場合、
    上にあるものを優先配置し、後続を下方向へ押し下げる量(dy)を返す。 */
 type GuideBox = { top: number; left: number; width: number; height: number };
-const guideRegistry = new Map<number, { order: number; box: GuideBox }>();
+const guideRegistry = new Map<number, { order: number; box: GuideBox; placement: string }>();
 const guideListeners = new Set<() => void>();
 let guideSeq = 0;
 function notifyGuides() { guideListeners.forEach((fn) => fn()); }
 function resolveGuideOffsets(): Map<number, number> {
-  // 上(top小)から順に確定。同値は登録順(order)で安定化。
+  // ボタンを指すバルーン(top/bottom=②〜⑤)を先に確定＝動かさない。押し下げると自分のアンカー
+  // (ボタン)を覆ってしまうため。横に矢印が出るサイドバー(left/right)は下へ押しても安全なので
+  // 後回し＝そちらが top/bottom を避けて下がる。同順位は上(top小)→登録順(order)で安定化。
+  const pri = (p: string) => (p === "left" || p === "right" ? 1 : 0);
   const entries = [...guideRegistry.entries()].sort(
-    (a, b) => (a[1].box.top - b[1].box.top) || (a[1].order - b[1].order),
+    (a, b) => (pri(a[1].placement) - pri(b[1].placement)) || (a[1].box.top - b[1].box.top) || (a[1].order - b[1].order),
   );
   const placed: GuideBox[] = [];
   const offsets = new Map<number, number>();
@@ -695,7 +698,7 @@ export function QrGuideBalloon<T extends HTMLElement>({
     const b = el.getBoundingClientRect();
     if (b.width === 0 && b.height === 0) { unregister(); return; }
     // 現在適用中の dy を差し引いた「ずらす前の理想位置」を登録する。
-    guideRegistry.set(id, { order: id, box: { top: b.top - dyRef.current, left: b.left, width: b.width, height: b.height } });
+    guideRegistry.set(id, { order: id, placement, box: { top: b.top - dyRef.current, left: b.left, width: b.width, height: b.height } });
     const recompute = () => {
       const next = resolveGuideOffsets().get(id) ?? 0;
       setDy((prev) => (Math.abs(prev - next) > 0.5 ? next : prev));
