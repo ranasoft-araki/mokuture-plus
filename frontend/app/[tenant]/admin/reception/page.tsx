@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, type ReceptionLog } from "@/lib/api";
+import { subscribeRealtime } from "@/lib/realtime";
 import { getAccessToken, clearTokens } from "@/lib/auth";
 import { hasHonorific } from "@/lib/honorific";
 import { AdminShell, MkCard } from "@/components/AdminShell";
@@ -511,14 +512,29 @@ export default function ReceptionLogsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [respondId, detailId, token]);
 
+  // ニアリアルタイム連動: キオスクの受付送信/配達呼び出し/置き配、およびスタッフ応答が起きた瞬間に
+  // backend が SSE で push → 受付一覧を即再取得する。SSE が切れた稀なケースは 30秒ポーリングが拾う。
+  // 「自動更新 OFF」時は SSE もポーリングも張らない（ユーザーが更新を止めた意図を尊重）。
   useEffect(() => {
     if (!autoRefresh || !token) return;
-    const id = setInterval(() => {
+    const refetch = () => {
       api.listReception(token)
         .then((data) => { setLogs(data); setLastRefreshed(new Date()); })
         .catch(() => {});
-    }, 30000);
-    return () => clearInterval(id);
+    };
+    // 連続イベント(通知直後の状態変化が続く等)を300msでまとめて1回だけ取得する。
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const unsub = subscribeRealtime((e) => {
+      if (e.type !== "reception") return;
+      if (debounce) return;
+      debounce = setTimeout(() => { debounce = null; refetch(); }, 300);
+    });
+    const id = setInterval(refetch, 30000); // フォールバック（SSE 断の保険）
+    return () => {
+      unsub();
+      clearInterval(id);
+      if (debounce) clearTimeout(debounce);
+    };
   }, [autoRefresh, token]);
 
   const handleStateUpdate = (id: string, state: string) => {
@@ -807,7 +823,7 @@ export default function ReceptionLogsPage() {
           {autoRefresh && (
             <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#a8a198" }}>
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#16a34a", display: "inline-block", animation: "mk-pulse 2s ease-in-out infinite" }} />
-              30秒ごとに更新
+              リアルタイム更新
             </span>
           )}
           {lastRefreshed && (

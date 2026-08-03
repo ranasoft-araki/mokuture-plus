@@ -19,10 +19,16 @@ from app.services.webpush import send_push
 from app.services.auth import create_decision_token, decode_token
 from app.services.crypto import decrypt_dict
 from app.services.honorific import with_honorific
+from app.services import events as event_bus
 from app.config import settings
 
 router = APIRouter(prefix="/reception", tags=["reception"])
 logger = logging.getLogger(__name__)
+
+
+def _publish_reception(tenant_id: str) -> None:
+    """受付一覧が変わったことを管理画面(SSE)へ通知する。best-effort・例外は投げない。"""
+    event_bus.publish(tenant_id, {"type": "reception"})
 
 _ALLOWED_METHODS = {"form", "qr", "calendar"}
 
@@ -60,6 +66,9 @@ async def _apply_decision(db: AsyncSession, log: ReceptionLog, decision: str) ->
     log.decided_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
     await db.refresh(log)
+    # 応答が実際に確定した時だけ通知（冪等early-returnでは通知しない）。JWT/署名トークン/
+    # Slackインタラクション/デモ自動応答の全経路がここを通る＝単一の通知ポイント。
+    _publish_reception(log.tenant_id)
     return log.state
 
 
@@ -156,6 +165,7 @@ async def create_reception(
     await _notify_slack(user.tenant_id, log, db)
     await _notify_push(user.tenant_id, log, db)
 
+    _publish_reception(user.tenant_id)
     return _log_out(log)
 
 
@@ -284,6 +294,7 @@ async def update_reception(
         log.staff_notes = body.staff_notes
     await db.commit()
     await db.refresh(log)
+    _publish_reception(log.tenant_id)
     return _log_out(log)
 
 
@@ -365,6 +376,8 @@ async def bulk_delete_reception(
         )
     )
     await db.commit()
+    if result.rowcount:
+        _publish_reception(user.tenant_id)
     return {"deleted": result.rowcount}
 
 
@@ -384,6 +397,7 @@ async def delete_reception(
         raise HTTPException(status_code=403, detail="Forbidden")
     await db.delete(log)
     await db.commit()
+    _publish_reception(user.tenant_id)
 
 
 class DailyStatItem(BaseModel):

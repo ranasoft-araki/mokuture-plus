@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 
 async function _fetch(path: string, init?: RequestInit, token?: string): Promise<Response> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -67,6 +67,23 @@ function _blockedByReadonly(path: string, method: string | undefined, token: str
   const p = path.split("?")[0];
   const allowed = p === "/appointments" || p.startsWith("/appointments/");
   return !allowed;
+}
+
+// 有効なアクセストークンを返す（失効間近なら先にリフレッシュ）。SSE(EventSource)の接続直前に
+// 使い、失効トークンで張って 401→再接続ループに陥るのを防ぐ。request() と同じ先読み判定・
+// シングルトンリフレッシュを再利用する。
+export async function ensureFreshToken(): Promise<string | null> {
+  const { getAccessToken } = await import("@/lib/auth");
+  let token = getAccessToken();
+  if (!token) return null;
+  if (_isAccessTokenExpired(token)) {
+    if (!_pendingRefresh) {
+      _pendingRefresh = _doRefresh().finally(() => { _pendingRefresh = null; });
+    }
+    const fresh = await _pendingRefresh;
+    if (fresh) token = fresh;
+  }
+  return token;
 }
 
 async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {

@@ -81,6 +81,7 @@ mokuture/
 │       │   ├── devices.py     ← /devices (キオスク端末管理・承認)
 │       │   ├── kiosk.py       ← /kiosk/* (公開API: スケジュール・受付送信・自己登録/承認状態)
 │       │   ├── reception.py   ← /reception (受付ログ一覧)
+│       │   ├── events.py      ← /events/stream (SSE: 管理画面の受付/ロッカー ニアリアルタイム連動)
 │       │   ├── notifications.py ← /notifications (Slack/Chatwork 設定)
 │       │   ├── lockers.py     ← /lockers (ロッカー制御モック)
 │       │   ├── inquiries.py   ← /inquiries (共通問い合わせフォーム: 公開送信・管理閲覧)
@@ -101,6 +102,7 @@ mokuture/
 │           ├── crypto.py      ← Fernet 暗号化 (Slack URL 等の秘密情報)
 │           ├── storage.py     ← R2/MinIO Presigned URL 生成
 │           ├── slack.py       ← SlackNotifier(OAuth認可URL/code交換→Bot Token/chat.postMessage送信/チャンネル列挙・参加/受付文面生成)。旧Webhook送信も後方互換で残置
+│           ├── events.py      ← テナント単位の in-memory pub/sub (SSE 管理画面ニアリアルタイム連動)。単一ワーカー前提
 │           ├── webpush.py     ← Web Push 送信
 │           └── email.py       ← SMTP メール送信(aiosmtplib, best-effort)。来社予定QRのメール送信(segno で QR PNG 生成→CIDインライン画像+添付)。SMTP未設定なら送信APIが 503
 │
@@ -151,7 +153,8 @@ mokuture/
 │   │   ├── KioskScaler.tsx    ← 1920×1080 キャンバスをビューポートに等比スケール
 │   │   └── PWAInit.tsx        ← PWA Service Worker 登録
 │   └── lib/
-│       ├── api.ts             ← API クライアント・全型定義 (TenantSettings 等)
+│       ├── api.ts             ← API クライアント・全型定義 (TenantSettings 等)。ensureFreshToken/API_BASE を export(SSE 接続用)
+│       ├── realtime.ts        ← SSE 購読(EventSource)。受付/ロッカー変化の push を受けて該当リストを即再取得
 │       ├── auth.ts            ← JWT トークン管理 (localStorage)
 │       └── push.ts            ← Web Push 購読ユーティリティ
 │
@@ -233,7 +236,7 @@ mokuture/
 - `GET /reseller/reception/daily-stats` — 代理店向け受付日次統計（過去14日）
 
 ### フロントエンド機能
-- 受付ログ自動更新（Auto-refresh）: 管理画面 `/reception` および運営画面 `/operator/reception` に ON/OFF トグル付き自動更新機能（`setInterval` ポーリング）を実装
+- 受付ログ自動更新（Auto-refresh）: 管理画面 `/reception` および運営画面 `/operator/reception` に ON/OFF トグル付き自動更新機能を実装。**管理画面 `/reception`・`/locker` は SSE push でニアリアルタイム連動**(トグル ON 時は `subscribeRealtime` で即再取得＋30秒フォールバックポーリング。詳細は「管理画面のニアリアルタイム連動（SSE push）」節)。`/operator/reception` は従来どおり `setInterval` ポーリング
 - 受付OK/NG応答: 管理画面「受付ログ」の未応答行(received/notified)に「すぐ伺います」「只今対応できません」ボタン(`DecisionButtons`)を表示し `api.decideReception` を呼ぶ。ステータス `accepted`(対応中)/`declined`(対応不可) を `STATUS_LABEL`/`STATUS_COLOR`・フィルタに追加。
 - 来訪回数(「N回目の来訪」): 受付ログ詳細モーダルは `getVisitorHistory(visitor_name)` で来訪回数を表示するが、**配達(delivery)・置き配(dropoff)は visitor_name が総称ラベル(「配達」「置き配」)に潰れる**ため取得・表示しない(宅配業者に「4回目の来訪」等の無意味表示を避ける)。
 - Web Push: スタッフPWAの Service Worker(`public/sw.js`)は受付プッシュ(`kind==="reception_decision"`)に 受付/電話/お断り アクションボタンを表示し、通知タップ(`accept`/`phone`/`decline`)で署名トークン付き `POST /reception/decision` を送る。iOS PWA は通知アクション非対応のため上記アプリ内ボタンがフォールバック。
@@ -377,6 +380,7 @@ mokuture/
 | PATCH | /meeting-rooms/{id} | JWT | 会議室更新 (map_image_url 対応) |
 | DELETE | /meeting-rooms/{id} | JWT | 会議室削除 |
 | GET | /reception | JWT | 受付ログ一覧 |
+| GET | /events/stream | クエリ`token`(access JWT) | **管理画面ニアリアルタイム連動の SSE ストリーム**。受付/ロッカーが変化すると `data: {"type":"reception"\|"locker"}` を push。EventSource はヘッダを送れないため token はクエリで受け接続時に一度だけ検証。ストリームは秘密情報を運ばない(再取得対象の型マーカーのみ)。保持中は DB 接続を握らない・20秒ごとに keepalive コメント |
 | POST | /inquiries/public/{slug} | なし | 共通問い合わせフォーム送信 (rate-limit 10/min) |
 | GET/PATCH/DELETE | /inquiries | JWT | 問い合わせ閲覧・状態更新・削除 |
 | GET/PATCH | /notifications | JWT | 通知設定 |
@@ -397,6 +401,21 @@ mokuture/
 | POST | /kiosk/lockers/mirror | デバイストークン | agent からの占有状態ミラー `{lockers:[{id,occupied,has_pin,name?,door_number?,kind?}]}`→`{ok,updated}`（管理画面の表示専用、**PINは受けない**）。**DBの lockers 台帳には書かず、送信端末の `devices.locker_state_json` に端末ごとの全件スナップショットとして保存**(冪等に丸ごと置換)。旧agent(メタ無し)は id から door_number/name を補完。管理画面は `GET /lockers/status` で端末ごとに表示 |
 | POST | /kiosk/call-staff | デバイストークン | 配達の呼び出し: **受付ログ(ReceptionLog: visitor="配達"/company=device.name/method="delivery"/state="received")を作成**し、担当者へ「どの端末(device.name)から呼び出し」を通知 `{message?}`→`{ok, id}`。id はキオスクの待機画面が `GET /kiosk/reception/{id}` をポーリングして 受付(accepted)/電話(phone) 応答を結果画面へ反映するのに使う(受付フローと同じ仕組み。配達は お断り 無し)。**通知には受付/電話の対応ボタンを付ける**(`_fire_delivery_notifications(decision_log=log)`)＝来客受付と同じ Slack Block Kit(署名シークレット＋Bot Token時)＋Web Push アクション(`decision_actions`/`build_decision_push_extras`, 配達は accept/phone の2択)。スタッフが**通知から直接「受付」を押す**→`_apply_decision`で accepted→キオスクがポーリングで拾い「参ります」へ遷移。WebPush は `push_delivery` 設定 (`{enabled}`, 既定ON) で ON/OFF 可、通知本体タップ先は `?respond={id}` 付きで対応モーダル(受付/電話)を直接開く。Slack/WebPush/Webhook/Chatwork (best-effort)。**通知は非ブロック(BackgroundTasks)** |
 | POST | /lockers/{id}/open | JWT | ロッカー開錠 |
+
+---
+
+## 管理画面のニアリアルタイム連動（SSE push）
+
+管理画面の「受付ログ」「ロッカー状況」を、キオスク操作と**ほぼリアルタイム(<1秒)**で連動させる仕組み。
+キオスク→backend(DB反映)は元々ほぼ即時で、遅延は「DB→管理画面」の最後の1ホップ(旧: 受付30秒/ロッカー15秒ポーリング)だった。ここを **Server-Sent Events の push** に置き換えた。
+
+- **in-memory pub/sub (`backend/app/services/events.py`)**: `publish(tenant_id, {"type": ...})` / `subscribe` / `unsubscribe`。テナント単位で接続中の管理画面へファンアウトする。本番は **uvicorn `--workers 1`**(Dockerfile) ＝単一プロセス単一ループなのでプロセス内メモリで全接続に届く（Redis 等不要）。**複数ワーカー化する場合はプロセス跨ぎのブローカーに差し替えること**。`publish` はノンブロッキング(`put_nowait`)で**リクエスト経路に例外を投げない**。遅い/固まったクライアントは上限超過分を捨てる(メモリ無限増加防止)＝取りこぼしてもフロントは次イベントかフォールバックで再取得するので状態は失われない。
+- **SSE エンドポイント (`backend/app/api/events.py` = `GET /events/stream`)**: 認証は EventSource がヘッダを送れないため **access token をクエリ**で受け接続時に一度だけ検証(get_current_user と同判定)。**DB セッションはユーザー解決の短命のみで、ストリーム保持中は握らない**(`Depends(get_db)` は使わない＝長時間 DB 接続を占有しない)。20秒ごとに `: keepalive` コメントを流しプロキシのアイドル切断を防ぐ＋切断を検出して `unsubscribe`。ペイロードは再取得対象を示す `{"type":"reception"|"locker"}` のみで**秘密情報・PIN・本文は一切載せない**。
+- **publish する箇所**:
+  - 受付(`type:"reception"`): `reception.create_reception`・`reception._apply_decision`(応答が実際に確定した時のみ＝冪等early-returnでは出さない。JWT/署名トークン/Slackインタラクション/デモ自動応答の全経路がここを通る単一ポイント)・`reception.update_reception`(PATCH)・`bulk_delete`/`delete`、および `kiosk.kiosk_reception`・`kiosk.kiosk_call_staff`(配達呼出)・`kiosk._log_delivery_dropoff`(置き配)。
+  - ロッカー(`type:"locker"`): `kiosk.kiosk_mirror_lockers`。ミラーは操作時＋heartbeat(60秒)で届くので、**占有スナップショットが実際に変わった時だけ** publish(文字列比較)＝アイドルの定期ミラーではストリームを静かに保つ。
+- **フロント (`frontend/lib/realtime.ts` `subscribeRealtime`)**: `/reception` と `/locker` ページが各1本 EventSource を張る。イベント受信で該当リスト(受付一覧/ロッカー状況)だけ 300ms デバウンスで即再取得。**「自動更新 OFF」時は SSE もポーリングも張らない**(更新を止めた意図を尊重)。EventSource は一時切断で自動再接続するが**トークン失効時は 401 ループに陥る**ため、`onerror` で一度閉じ `ensureFreshToken()`(lib/api.ts, 先読みrefresh再利用)でトークンを更新してから張り直す。**フォールバックの低頻度ポーリング(30秒)を併用**し、SSE が恒久的に切れても更新は続く。
+- **デプロイ上の注意**: SSE は接続を張りっぱなしで uvicorn `--limit-concurrency` 枠を1つ占有する。通常リクエストと取り合って枯渇しないよう Dockerfile で **50→300** に引き上げた(天井であり予約ではない/アイドルSSEはDB接続を握らず軽量)。単一ワーカー維持が in-memory pub/sub の前提。
 
 ---
 

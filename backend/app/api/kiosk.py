@@ -43,6 +43,7 @@ from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
 from app.services.webpush import send_push
 from app.services.auth import hash_password, verify_password, create_decision_token
+from app.services import events as event_bus
 from app.config import settings
 
 _PIN_RE = re.compile(r"^\d{4}$")
@@ -618,6 +619,9 @@ async def kiosk_reception(
     # 超えてキオスクに「リモートAPIに接続できません」が出る（配達系と同じ理由で非ブロック化する）。
     background.add_task(_fire_reception_notifications, tenant.id, log)
 
+    # 管理画面(SSE)へ「受付が増えた」を即 push（ニアリアルタイム連動・best-effort）。
+    event_bus.publish(tenant.id, {"type": "reception"})
+
     # 審査用デモモード: 実通知の後、担当者返信「受付(参ります)」をサーバ側で自動再現する。
     # 通知は上の BackgroundTasks で即送信し、こちらは別 task で 5〜7 秒後に accepted を確定させる。
     if getattr(tenant, "is_demo", False):
@@ -681,6 +685,9 @@ async def kiosk_call_staff(
     db.add(log)
     await db.commit()
     await db.refresh(log)
+
+    # 管理画面(SSE)へ「受付(配達呼び出し)が増えた」を即 push（best-effort）。
+    event_bus.publish(tenant.id, {"type": "reception"})
 
     title = "配達の呼び出し"
     text = f"🔔 配達の呼び出し\n「{device_label}」から呼び出しがあります。{message or ''}"
@@ -977,9 +984,16 @@ async def kiosk_mirror_lockers(
             "has_pin": bool(it.has_pin),
             "kind": it.kind,
         })
-    device.locker_state_json = json.dumps(items, ensure_ascii=False)
+    new_json = json.dumps(items, ensure_ascii=False)
+    # 占有スナップショットが実際に変わった時だけ管理画面(SSE)へ push する。
+    # ミラーは操作時に加え heartbeat で60秒ごとにも届く(無変化)ので、差分がある時のみ通知して
+    # アイドル時のストリームを静かに保つ（同じ状態を同じ手順で直列化するので文字列比較で判定できる）。
+    changed = (device.locker_state_json or "") != new_json
+    device.locker_state_json = new_json
     device.locker_state_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
+    if changed:
+        event_bus.publish(device.tenant_id, {"type": "locker"})
     return {"ok": True, "updated": len(items)}
 
 
@@ -1325,6 +1339,8 @@ async def _log_delivery_dropoff(
         )
         db.add(log)
         await db.commit()
+        # 管理画面(SSE)へ「置き配が受付ログに増えた」を即 push（best-effort）。
+        event_bus.publish(tenant_id, {"type": "reception"})
         return log.id
     except Exception:
         try:
