@@ -268,3 +268,113 @@ def test_期限切れセッションは掃除される(client, monkeypatch):
     settings.reload()
     assert session_mod.store.purge() >= 1
     assert client.get(f"/card/session/{sid}/result").status_code == 404
+
+
+# ── 自動撮影と撮り直し ────────────────────────────────────────────────────────
+# 「名刺を認識したら自動で読み取りに入り、実際に項目が取れたときだけ確認画面へ進む」
+# という流れの検証。取れなかった場合は黙って撮り直すので、利用者は空っぽの確認画面を
+# 見ない。
+
+@pytest.mark.ocr
+def test_項目が取れたら確認画面へ進む(ocr_engine, client, scene):
+    sid = start(client)
+    bgr, _truth, _spec = scene("landscape_ja")
+    r = client.post(f"/card/capture?session_id={sid}", content=jpeg(bgr, 1280, 92),
+                    headers={"Content-Type": "image/jpeg"}).json()
+    assert r["accepted"] is True
+    assert r["proceed"] is True
+    assert r["accept_reason"] == "ok"
+    assert r["attempt"] == 1
+
+
+@pytest.mark.ocr
+def test_何も読めなければ確認画面へ進まない(ocr_engine, client, scene):
+    """撮影はできたが項目が取れなかったケース。画面側はこれを見て撮り直す。"""
+    sid = start(client)
+    bgr, _truth, _spec = scene("empty_desk")
+    r = client.post(f"/card/capture?session_id={sid}", content=jpeg(bgr, 1280, 92),
+                    headers={"Content-Type": "image/jpeg"}).json()
+    assert r["accepted"] is False
+    assert r["proceed"] is False
+    assert r["accept_reason"] != "ok"
+    assert r["retry_cooldown_sec"] > 0
+
+
+@pytest.mark.ocr
+def test_読み取れなかった直後も自動撮影を続けられる(ocr_engine, client, scene):
+    """撮り直しができるよう、失敗時は自動撮影の抑止をかけない。"""
+    sid = start(client)
+    blank, _t, _s = scene("empty_desk")
+    r = client.post(f"/card/capture?session_id={sid}", content=jpeg(blank, 1280, 92),
+                    headers={"Content-Type": "image/jpeg"}).json()
+    assert r["proceed"] is False
+
+    card, _t2, _s2 = scene("landscape_ja")
+    body = jpeg(card, 640)
+    need = int(settings.get("quality.stable_frames"))
+    fired = False
+    for _ in range(need + 6):
+        payload = client.post(f"/card/frame?session_id={sid}", content=body,
+                              headers={"Content-Type": "image/jpeg"}).json()
+        if payload["should_capture"]:
+            fired = True
+            break
+    assert fired, "読み取り失敗後に自動撮影が再開しなかった"
+
+
+@pytest.mark.ocr
+def test_確認画面へ進んだら自動撮影は止まる(ocr_engine, client, scene):
+    sid = start(client)
+    bgr, _truth, _spec = scene("landscape_ja")
+    r = client.post(f"/card/capture?session_id={sid}", content=jpeg(bgr, 1280, 92),
+                    headers={"Content-Type": "image/jpeg"}).json()
+    assert r["proceed"] is True
+
+    body = jpeg(bgr, 640)
+    for _ in range(int(settings.get("quality.stable_frames")) + 6):
+        payload = client.post(f"/card/frame?session_id={sid}", content=body,
+                              headers={"Content-Type": "image/jpeg"}).json()
+        assert payload["should_capture"] is False
+
+
+@pytest.mark.ocr
+def test_手動撮影は内容に関わらず確認画面へ進む(ocr_engine, client, scene):
+    """「撮影する」は利用者の明示的な操作。読めなくても画面を出して手入力させる。"""
+    sid = start(client)
+    bgr, _truth, _spec = scene("empty_desk")
+    r = client.post(f"/card/capture?session_id={sid}&force=1", content=jpeg(bgr, 1280, 92),
+                    headers={"Content-Type": "image/jpeg"}).json()
+    assert r["accepted"] is False
+    assert r["proceed"] is True
+
+
+@pytest.mark.ocr
+def test_撮り直しの上限に達したら取れた分で進む(ocr_engine, client, scene, monkeypatch):
+    monkeypatch.setenv("CARD_ACCEPT__MAX_ATTEMPTS", "2")
+    settings.reload()
+    sid = start(client)
+    bgr, _truth, _spec = scene("empty_desk")
+    body = jpeg(bgr, 1280, 92)
+
+    first = client.post(f"/card/capture?session_id={sid}", content=body,
+                        headers={"Content-Type": "image/jpeg"}).json()
+    assert first["proceed"] is False and first["attempt"] == 1
+
+    second = client.post(f"/card/capture?session_id={sid}", content=body,
+                         headers={"Content-Type": "image/jpeg"}).json()
+    assert second["accepted"] is False
+    assert second["proceed"] is True          # 上限に達したので手入力できるよう進む
+    assert second["attempt"] == 2
+
+
+@pytest.mark.ocr
+def test_受理条件は設定で変えられる(ocr_engine, client, scene, monkeypatch):
+    """会社名だけでも進めたい現場向けに、要求する項目を緩められること。"""
+    monkeypatch.setenv("CARD_ACCEPT__REQUIRE_ANY", "email")
+    monkeypatch.setenv("CARD_ACCEPT__MIN_FIELDS", "1")
+    settings.reload()
+    sid = start(client)
+    bgr, _truth, _spec = scene("landscape_ja")
+    r = client.post(f"/card/capture?session_id={sid}", content=jpeg(bgr, 1280, 92),
+                    headers={"Content-Type": "image/jpeg"}).json()
+    assert r["accepted"] is True

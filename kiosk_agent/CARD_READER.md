@@ -233,9 +233,43 @@ sudo systemctl restart mokuture-kiosk
                                     利用者が「受付する」
 ```
 
+### 自動で読み取りに入り、読めたときだけ次へ進む
+
+名刺を認識したら**利用者は何も押さなくてよい**。条件が整った時点で自動的に撮影し、
+OCR まで進む。そして**実際に項目が取れたときだけ確認画面へ遷移する**。
+取れなかった場合は「失敗しました」とは出さず、そのまま黙って撮り直す。
+
+```
+名刺を認識  →  0.4 秒ほどで自動撮影  →  OCR・項目抽出
+                                          ├ 取れた   → 確認画面へ
+                                          └ 取れない → そのまま撮り直し
+                                                       （上限まで繰り返す）
+```
+
+「取れた」と見なす条件は `accept` で決める（既定値）:
+
+| 設定 | 既定 | 意味 |
+|---|---|---|
+| `accept.require_any` | `[person_name, company_name]` | 氏名か会社名のどちらかは取れていること |
+| `accept.min_fields` | `2` | 埋まった項目が 2 つ以上 |
+| `accept.min_confidence` | `0.35` | 全体の読み取り精度の下限 |
+| `accept.max_attempts` | `5` | 撮り直しの上限。超えたら取れた分で確認画面へ進む |
+| `accept.retry_cooldown_sec` | `0.8` | 撮り直しまでの間隔 |
+
+- 連絡先だけ読めても受付フォームには使えないので、既定では撮り直す。
+  会社名だけで進めたい現場では `require_any: [company_name]` にする。
+- 上限（既定 5 回）に達したら、取れた分だけで確認画面へ進む。無限には繰り返さない
+  （利用者が手で入力できるようにするため）。
+- **「撮影する」ボタンを押した場合は内容に関わらず確認画面へ進む。** 利用者の明示的な
+  操作なので、読めていなくても画面を出して手入力してもらう。
+- 撮り直し中の画面には「もう一度読み取ります」「明るい場所で、名刺を枠いっぱいに
+  写してください」と出し、右上に `読み取り 2 回目 / 5` のように回数を表示する。
+
 ### 自動撮影の条件
 
-以下がすべて満たされた状態が連続 6 フレーム（既定）続くと自動で撮影する。
+以下がすべて満たされた状態が連続 3 フレーム（既定・検出間隔 120ms なのでおよそ
+0.4 秒）続くと自動で撮影する。読み取りに失敗しても自動で撮り直すので、ここは
+慎重にしすぎず「認識したらすぐ読み取りに入る」ほうを優先している。
 
 - 名刺全体が画面内に入っている
 - 名刺が小さすぎない / 大きすぎない
@@ -346,7 +380,10 @@ sudo systemctl restart mokuture-kiosk
 | ぼけたまま撮影される | `quality.focus_min` | 上げる |
 | 「反射を避けて」が出続ける | `quality.glare_max` | 上げる（0.06 → 0.12） |
 | 「暗すぎ」が出続ける | `quality.brightness_min` | 下げる（90 → 60） |
-| 撮影が早すぎる/手ブレする | `quality.stable_frames` | 増やす（6 → 10） |
+| 撮影が早すぎる/手ブレする | `quality.stable_frames` | 増やす（3 → 6） |
+| 何度も撮り直して進まない | `accept.min_confidence` | 下げる（0.35 → 0.2） |
+| 会社名だけで進めたい | `accept.require_any` | `[company_name]` にする |
+| 空の確認画面が出てしまう | `accept.min_fields` | 上げる（2 → 3） |
 | 白い名刺を検出しない | `detection.gradient_thresh` | 下げる（5 → 3） |
 | 机の木目を名刺と誤検出する | `detection.gradient_thresh` | 上げる（5 → 8） |
 | 精度を上げたい（遅くてよい） | `preprocess.early_accept_score` | 上げる（0.86 → 0.95） |
@@ -547,6 +584,12 @@ grep -rn "import requests\|import httpx\|urllib.request\|aiohttp" card/
     "email": {"value": "taro.yamada@example.jp", "confidence": 0.97}
   },
   "ocr_confidence": 0.94,
+  "accepted": true,
+  "accept_reason": "ok",
+  "proceed": true,
+  "attempt": 1,
+  "max_attempts": 5,
+  "retry_cooldown_sec": 0.8,
   "variant": "color",
   "variants_tried": ["color"],
   "engine": "paddle_onnx",
@@ -564,6 +607,15 @@ grep -rn "import requests\|import httpx\|urllib.request\|aiohttp" card/
 ```
 
 確信度が低い項目には `candidates` が付くことがある（氏名など）。
+
+`proceed` が **false** のときは確認画面へ進まず、画面側が `retry_cooldown_sec` だけ
+待って検出ループを再開する（＝撮り直す）。`accepted` は `accept` の条件を満たしたか、
+`accept_reason` はその理由（`missing person_name/company_name` など。値は含まない）。
+`proceed` は `accepted` に加えて「手動撮影だった」「撮り直しの上限に達した」場合も
+true になる。
+
+クエリに `force=1` を付けると、読み取れた内容に関わらず `proceed: true` になる
+（「撮影する」ボタン用）。
 
 ### `GET /card/session/{id}/result`
 
@@ -848,6 +900,23 @@ journalctl -u mokuture-kiosk -n 50 | grep "\[card\] disabled"
 - 文字領域数が 3 未満 → ピントか解像度が足りない
 
 それでも駄目なら「撮影する」ボタンで手動撮影できる。
+
+### 撮り直しを繰り返して確認画面に進まない
+
+`accept` の条件を満たす読み取りができていない。ログに理由が出る。
+
+```bash
+journalctl -u mokuture-kiosk -n 50 | grep "capture done"
+# accepted=False reason=missing person_name/company_name proceed=False attempt=2/5
+```
+
+- `missing person_name/company_name` … 氏名も会社名も取れていない。撮影品質の問題
+  （照明・距離・ピント）か、名刺のレイアウトが辞書と合っていない
+- `only N field(s)` … 読めた項目が少ない。`accept.min_fields` を下げるか撮影品質を改善
+- `confidence 0.xx` … 全体の精度が低い。`accept.min_confidence` を下げる
+
+上限（`accept.max_attempts`、既定 5 回）に達すれば取れた分で確認画面へ進むので、
+永久に止まることはない。すぐ進めたい場合は「撮影する」ボタンを押す。
 
 ### 会社名や氏名がうまく取れない
 

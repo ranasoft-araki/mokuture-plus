@@ -9,7 +9,7 @@ import pytest
 from card import settings
 from card.detect import detect_card
 from card.extract import extract
-from card.pipeline import lines_payload, read_card, score_result
+from card.pipeline import evaluate_acceptance, lines_payload, read_card, score_result
 from card.types import OcrLine
 
 pytestmark = pytest.mark.ocr
@@ -158,3 +158,55 @@ def test_撮影からの処理時間を記録する(ocr_engine, scene, capsys):
     with capsys.disabled():
         print(f"\n  read_card: {elapsed:.0f}ms  内訳={result.timings_ms}")
     assert elapsed < 30000      # 明らかに詰まっていないこと（実機の目標は README 参照）
+
+
+# ── 受理判定（確認画面へ進んでよいか） ──────────────────────────────────────────
+
+def _fields(**values):
+    from card.types import CardFields, Field
+    f = CardFields()
+    for name, value in values.items():
+        setattr(f, name, Field(value=value, confidence=0.9))
+    return f
+
+
+def test_会社名か氏名が取れていれば受理する():
+    ok, reason = evaluate_acceptance(_fields(company_name="株式会社サンプル商会",
+                                             email="taro.yamada@example.jp"), 0.9)
+    assert ok and reason == "ok"
+
+
+def test_会社名も氏名も無ければ受理しない():
+    """連絡先だけ取れていても受付フォームには使えないので撮り直す。"""
+    ok, reason = evaluate_acceptance(_fields(email="taro.yamada@example.jp",
+                                             phone="03-1234-5678"), 0.9)
+    assert not ok
+    assert "person_name" in reason
+
+
+def test_項目が少なすぎれば受理しない():
+    ok, reason = evaluate_acceptance(_fields(company_name="株式会社サンプル商会"), 0.9)
+    assert not ok
+    assert "field" in reason
+
+
+def test_全体の精度が低ければ受理しない():
+    ok, reason = evaluate_acceptance(
+        _fields(company_name="株式会社サンプル商会", person_name="山田 太郎"), 0.1)
+    assert not ok
+    assert "confidence" in reason
+
+
+def test_何も取れていなければ受理しない():
+    ok, _reason = evaluate_acceptance(_fields(), 0.0)
+    assert not ok
+
+
+def test_受理条件は設定から変えられる(monkeypatch):
+    from card import settings as st
+    only_contact = _fields(email="taro.yamada@example.jp", phone="03-1234-5678")
+    assert not evaluate_acceptance(only_contact, 0.9)[0]
+
+    monkeypatch.setenv("CARD_ACCEPT__REQUIRE_ANY", "email")
+    st.reload()
+    assert evaluate_acceptance(only_contact, 0.9)[0]

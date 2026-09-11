@@ -37,6 +37,10 @@ class Session:
     frames: int = 0
     last_capture_at: float = 0.0
     result: ReadResult | None = None
+    # 自動での撮り直しの回数。確認画面へ進んだ時点で数えるのをやめる。
+    attempts: int = 0
+    # 確認画面を表示中（＝これ以上자動撮影しない）。撮り直しで False に戻す。
+    awaiting_confirm: bool = False
     # 確認画面で利用者が直した項目名（元の OCR 値と区別して持つ）
     edited: dict[str, str] = field(default_factory=dict)
     # 1 セッションのフレーム処理を直列化する。ブラウザは 1 枚ずつ待って送るが、
@@ -50,6 +54,7 @@ class Session:
     def clear_result(self) -> None:
         self.result = None
         self.edited.clear()
+        self.awaiting_confirm = False
 
     def reset_tracking(self) -> None:
         self.prev_quad = None
@@ -155,10 +160,12 @@ def _process_frame_locked(session: Session, bgr) -> dict:
     need = int(q["stable_frames"])
     cooldown = float(q["capture_cooldown_sec"])
     elapsed = time.monotonic() - session.last_capture_at
+    # 確認画面を出している間だけ撮影を止める。読み取りに失敗した結果が
+    # 残っているときは、撮り直せるように止めない。
     should_capture = (
         session.steady_count >= need
         and elapsed > cooldown
-        and session.result is None
+        and not session.awaiting_confirm
     )
     if should_capture:
         session.last_capture_at = time.monotonic()

@@ -73,7 +73,8 @@ quality:
   # 四隅の移動量（画面短辺比）の上限。これを超えると「動かさずにお待ちください」。
   motion_max: 0.012
   # 条件を満たすフレームがこの回数続いたら自動撮影する。
-  stable_frames: 6
+  # 読み取りに失敗したら自動で撮り直すので、ここは短め（検出間隔 120ms × 3 ≒ 0.4 秒）。
+  stable_frames: 3
   capture_cooldown_sec: 1.5
 
 preprocess:
@@ -134,6 +135,22 @@ extraction:
   # 氏名がこの確信度に届かないときは確定せず、候補として画面に出す。
   name_min_conf: 0.45
   large_text_ratio: 0.72
+
+# 撮影して OCR した結果を「読み取れた」と見なす条件。満たしていれば確認画面へ進み、
+# 満たしていなければ黙って撮り直す（＝空っぽの確認画面を見せない）。
+accept:
+  # このうち少なくとも 1 つは値が取れていること。空リストにすると種類を問わない。
+  require_any:
+    - person_name
+    - company_name
+  # 埋まった項目の数の下限。
+  min_fields: 2
+  # 全体の読み取り精度の下限。
+  min_confidence: 0.35
+  # 自動での撮り直しの上限。超えたら取れた分だけで確認画面へ進む（手入力できるように）。
+  max_attempts: 5
+  # 撮り直しまでの間隔（秒）。
+  retry_cooldown_sec: 0.8
 
 confidence:
   # 確認画面の色分け。ok 以上＝通常 / warn 以上＝黄（要確認）/ 未満＝赤（要入力）

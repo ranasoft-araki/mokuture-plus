@@ -154,6 +154,30 @@ def read_card(bgr, quad: Quad | None) -> ReadResult | None:
     )
 
 
+def evaluate_acceptance(fields: CardFields, overall: float) -> tuple[bool, str]:
+    """この読み取り結果で確認画面へ進んでよいかを判定する。
+
+    「撮影はできたが何も読めていない」確認画面を利用者に見せないための関門。
+    満たしていなければ呼び出し側（画面）が黙って撮り直す。
+
+    戻り値の理由は英数字のみ（ログに出しても個人情報にならない語彙にしてある）。
+    """
+    cfg = settings.get("accept")
+
+    require_any = [str(name) for name in cfg["require_any"]]
+    if require_any and not any(fields.get(name).value for name in require_any):
+        return False, "missing " + "/".join(require_any)
+
+    filled = fields.filled_count()
+    if filled < int(cfg["min_fields"]):
+        return False, f"only {filled} field(s)"
+
+    if overall < float(cfg["min_confidence"]):
+        return False, f"confidence {overall:.2f}"
+
+    return True, "ok"
+
+
 def lines_payload(lines: list[OcrLine]) -> list[dict]:
     """OCR 行を API で返せる形にする（§7 の保持項目）。
 

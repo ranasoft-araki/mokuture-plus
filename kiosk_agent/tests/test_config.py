@@ -34,8 +34,8 @@ def test_設定ファイル例は既定値と完全に一致する():
 
 def test_既定値が読める():
     assert settings.get("ocr.engine") == "paddle_onnx"
-    assert settings.get("quality.stable_frames") == 6
     assert settings.get("confidence.ok") == 0.85
+    assert settings.get("accept.require_any") == ["person_name", "company_name"]
 
 
 def test_存在しないキーは既定値を返す():
@@ -69,9 +69,10 @@ def test_知らないキーは無視して落ちない(monkeypatch):
 
 
 def test_型が合わない値は既定値のまま(monkeypatch):
+    fallback = defaults.DEFAULTS["quality"]["stable_frames"]
     monkeypatch.setenv("CARD_QUALITY__STABLE_FRAMES", "たくさん")
     settings.reload()
-    assert settings.get("quality.stable_frames") == 6
+    assert settings.get("quality.stable_frames") == fallback
 
 
 def test_壊れたYAMLでも起動を止めない(tmp_path, monkeypatch):
@@ -79,7 +80,8 @@ def test_壊れたYAMLでも起動を止めない(tmp_path, monkeypatch):
     broken.write_text("quality: [これは\n  マッピングではない", encoding="utf-8")
     monkeypatch.setattr(settings, "CONFIG_PATH", broken)
     settings.reload()
-    assert settings.get("quality.stable_frames") == 6      # 既定にフォールバック
+    # 既定にフォールバック
+    assert settings.get("quality.stable_frames") == defaults.DEFAULTS["quality"]["stable_frames"]
     assert any("parse failed" in n or "not a mapping" in n for n in settings.notes())
 
 
@@ -91,7 +93,8 @@ def test_YAMLで上書きできる(tmp_path, monkeypatch):
     settings.reload()
     assert settings.get("quality.stable_frames") == 2
     assert settings.get("ocr.engine") == "tesseract"
-    assert settings.get("quality.focus_min") == 60.0       # 書かなかった項目は既定のまま
+    # 書かなかった項目は既定のまま
+    assert settings.get("quality.focus_min") == defaults.DEFAULTS["quality"]["focus_min"]
 
 
 def test_相対パスはエージェント直下を基準に解決する():

@@ -463,6 +463,11 @@ mokuture/
   画面側は boot 時に `GET /card/status` を見て、使えなければ「名刺で入力」を描画しない。
 - **カメラはブラウザが握る**(`getUserMedia`)。サーバ側で `/dev/video0` を開くと QR スキャンと排他になるため。
   検出ループは 640px の JPEG を 120ms ごとに `POST /card/frame`、撮影時だけ 2048px を `POST /card/capture`。
+- **認識したら自動で読み取りに入り、項目が取れたときだけ確認画面へ進む**。取れなければ
+  「失敗」を見せずそのまま撮り直す(`accept.*` / `evaluate_acceptance`)。判定は会社名か氏名が
+  取れていること＋項目数＋全体精度。上限(`accept.max_attempts`=5)に達したら取れた分で進む
+  （手入力できるように。無限ループにしない）。手動「撮影する」は `force=1` で常に進む。
+  自動撮影は `quality.stable_frames`=3（≒0.4秒）と短め — 失敗しても撮り直すので慎重にしすぎない。
 - **保存しない**。SQLite も一時ファイルも持たない。画像はプロセスメモリ上のセッションのみで、
   確定/取り消し/TTL(180s)のいずれでも破棄。受付に送るのは氏名/会社名/部署だけで、
   メール・電話・住所は確認画面に出すだけで捨てる。ログにも値を出さない。
@@ -482,7 +487,7 @@ mokuture/
 - **辞書は再起動不要**。`card/dictionaries/*.txt|tsv` は mtime を見て読み直す。
 - OTA 対象は agent(`updater.MANAGED_FILES`) と backend(`kiosk.BUNDLE_FILES`) の2箇所にあり、
   ズレると「その端末だけ古いコード」になる。`tests/test_ota_list.py` が並び順まで一致を検証する。
-- テストは `kiosk_agent/tests/`（252件）。**実在の名刺は使わない**。`tests/make_fixtures.py` が
+- テストは `kiosk_agent/tests/`（265件）。**実在の名刺は使わない**。`tests/make_fixtures.py` が
   架空の社名・氏名と予約済みドメインで名刺画像を生成する（横型/縦型/日英混在/白/色付き/木目/斜め/
   反射/ぼけ/暗所/名刺でない紙/スマホ画面 等19パターン）。モデル未取得なら `-m ocr` のテストが自動 skip。
 

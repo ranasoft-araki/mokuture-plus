@@ -2046,6 +2046,7 @@ function openCardCapture({ onConfirm }) {
         <div id="cd-msg-en" style="font-size:19px;opacity:.75;margin-top:6px;font-family:Inter,system-ui,sans-serif">Starting camera</div>
       </div>
       <div id="cd-steady" style="position:absolute;left:32px;top:32px;display:flex;gap:8px"></div>
+      <div id="cd-attempt" style="position:absolute;right:32px;top:30px;color:rgba(255,255,255,.82);font-size:19px;font-family:'JetBrains Mono',monospace;text-shadow:0 2px 10px rgba(0,0,0,.6)"></div>
     </div>
     <div style="width:520px;display:flex;flex-direction:column;gap:20px;flex-shrink:0">
       <div style="background:${T.canvas};border:2px solid ${T.border};border-radius:18px;padding:26px 28px">
@@ -2066,7 +2067,7 @@ function openCardCapture({ onConfirm }) {
   </div>
 </div>`;
     g("cd-cancel").addEventListener("click", () => { close(); });
-    g("cd-shot").addEventListener("click", () => { capture(); });
+    g("cd-shot").addEventListener("click", () => { capture(true); });
   }
 
   function setMessage(ja, en) {
@@ -2168,7 +2169,7 @@ function openCardCapture({ onConfirm }) {
             setMessage(r.message, r.message_en);
             setSteady(r.steady, r.steady_needed);
             drawQuad(r.quad, r.state);
-            if (r.should_capture) { busy = false; capture(); return; }
+            if (r.should_capture) { busy = false; capture(false); return; }
           }
         }
       } catch (e) { /* 1 フレームの失敗は無視して次へ */ }
@@ -2177,15 +2178,27 @@ function openCardCapture({ onConfirm }) {
     setTimeout(loop, DETECT_INTERVAL);
   }
 
-  async function capture() {
+  // 撮影して読み取る。
+  //   force=false … 自動撮影。項目が取れていなければ確認画面へ進まず、黙って撮り直す
+  //                （「撮れたのに何も入っていない確認画面」を利用者に見せないため）
+  //   force=true  … 「撮影する」を押した場合。内容に関わらず確認画面へ進む
+  // 何回まで撮り直すか(max_attempts)と間隔(retry_cooldown_sec)は端末側の設定。
+  async function capture(force) {
     if (closed || !sessionId) return;
     looping = false;
     setMessage("名刺を読み取っています", "Reading the card");
     try {
       const blob = await frameBlob("shot", CAPTURE_WIDTH, 0.92);
       if (!blob) throw new Error("no frame");
-      const r = await cardPostImage(`/card/capture?session_id=${sessionId}`, blob);
+      const url = `/card/capture?session_id=${sessionId}${force ? "&force=1" : ""}`;
+      const r = await cardPostImage(url, blob);
       if (closed) return;
+
+      if (!r.proceed) {
+        // 読み取れなかった。カメラは止めずにそのまま撮り直す。
+        retryScan(r);
+        return;
+      }
       stopCamera();
       result = r;
       values = {};
@@ -2193,10 +2206,29 @@ function openCardCapture({ onConfirm }) {
       renderConfirm();
     } catch (e) {
       if (closed) return;
-      setMessage("うまく読み取れませんでした。もう一度お試しください", "Could not read the card");
-      looping = true;
-      setTimeout(loop, 900);
+      retryScan(null);
     }
+  }
+
+  // 読み取れなかったときの撮り直し。利用者には「失敗」ではなく「続けてください」と伝える。
+  function retryScan(r) {
+    const attempt = (r && r.attempt) || 0;
+    const total = (r && r.max_attempts) || 0;
+    const wait = Math.round(((r && r.retry_cooldown_sec) || 0.8) * 1000);
+    if (attempt >= 2) {
+      // 2 回目以降は、直せそうな点を具体的に案内する
+      setMessage("読み取れません。明るい場所で、名刺を枠いっぱいに写してください",
+                 "Move to a brighter spot and fill the frame with the card");
+    } else {
+      setMessage("もう一度読み取ります。名刺はそのままでお待ちください",
+                 "Reading again - please hold the card still");
+    }
+    const el = g("cd-attempt");
+    if (el && total > 1) {
+      el.textContent = attempt > 0 ? `読み取り ${attempt} 回目 / ${total}` : "";
+    }
+    looping = true;
+    setTimeout(loop, wait);
   }
 
   // ── 確認画面 ───────────────────────────────────────────────────────────────

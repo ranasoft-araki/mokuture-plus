@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field as PydField
 from card import dicts, session as session_mod, settings
 from card.ocr import describe_all, get_engine
 from card.ocr.base import OcrUnavailable
-from card.pipeline import lines_payload, read_card
+from card.pipeline import evaluate_acceptance, lines_payload, read_card
 from card.preprocess import decode_image, limit_width
 from card.quality import GUIDANCE
 from card.types import FIELD_NAMES
@@ -195,11 +195,14 @@ async def card_frame(request: Request, session_id: str = ""):
 
 
 @router.post("/capture")
-async def card_capture(request: Request, session_id: str = ""):
+async def card_capture(request: Request, session_id: str = "", force: int = 0):
     """撮影フレームを受け取り、OCR と項目抽出まで行う。
 
     検出はこの高解像度フレームでやり直す（検出ループの縮小フレームの四隅をそのまま
     拡大するより正確）。見つからなければ画像全体を名刺として扱う。
+
+    force=1 は利用者が「撮影する」を押した場合。読み取れた内容に関わらず確認画面へ
+    進む（自動撮影のときだけ、何も読めていなければ黙って撮り直す）。
     """
     _require_enabled()
     _require_local(request)
@@ -226,18 +229,43 @@ async def card_capture(request: Request, session_id: str = ""):
     if result is None:
         raise HTTPException(status_code=422, detail="could not read card")
 
+    accepted, reason = evaluate_acceptance(result.fields, result.overall)
+    max_attempts = max(1, int(settings.get("accept.max_attempts")))
+    session.attempts += 1
+    attempt_no = session.attempts
+
+    # 何も読めていなければ確認画面へ進まず、画面側が黙って撮り直す。
+    # ただし撮り直しの上限に達したら、取れた分だけで確認画面へ進む
+    # （利用者が手で入力できるようにする。無限に撮り直さない）。
+    # 手動撮影(force=1)は利用者の明示的な操作なので、内容に関わらず進む。
+    proceed = bool(accepted or force or attempt_no >= max_attempts)
+
     session.result = result
     session.edited.clear()
     session.reset_tracking()
+    session.awaiting_confirm = proceed
+    if proceed:
+        session.attempts = 0
     session.touch()
 
     elapsed = round((time.perf_counter() - started) * 1000, 1)
     log.info(
-        "[card] capture done in %.0fms (variant=%s lines=%d filled=%d/%d)",
+        "[card] capture done in %.0fms (variant=%s lines=%d filled=%d/%d "
+        "accepted=%s reason=%s proceed=%s attempt=%d/%d)",
         elapsed, result.variant, len(result.lines),
         result.fields.filled_count(), len(FIELD_NAMES),
+        accepted, reason, proceed, attempt_no, max_attempts,
     )
-    return _result_payload(session, elapsed)
+    payload = _result_payload(session, elapsed)
+    payload.update({
+        "accepted": accepted,
+        "accept_reason": reason,
+        "proceed": proceed,
+        "attempt": attempt_no,
+        "max_attempts": max_attempts,
+        "retry_cooldown_sec": float(settings.get("accept.retry_cooldown_sec")),
+    })
+    return payload
 
 
 def _read_with_detection(image):
