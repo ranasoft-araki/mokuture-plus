@@ -44,6 +44,10 @@ EXPECT = {
     "with_kana":     {"person_name": "中村優子", "person_name_kana": "なかむらゆうこ"},
     # 縦書きの名刺。連絡先の縦列は取りこぼすが、受付フォームに入る 2 項目は取れる。
     "vertical_writing": {"company_name": "株式会社松風堂", "person_name": "小林誠"},
+    # 手に持って差し出した状態。指が下辺を隠すので、下側に組まれた連絡先までは
+    # 求めず、受付フォームへ渡す会社名・氏名が取れることを見る。
+    "held_in_hand":  {"company_name": "株式会社サンプル商会", "person_name": "山田太郎"},
+    "held_in_hand_portrait": {"company_name": "有限会社きらめき工房", "person_name": "鈴木花子"},
 }
 
 # 撮影ゲート（quality）で止まるため OCR まで進まないもの。抽出の期待値は置かない。

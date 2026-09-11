@@ -558,6 +558,41 @@ def _build_raw(name: str):
         d.rounded_rectangle([x0 - 20, y1 - 190, x0 + 92, y1 + 90], radius=54, fill=skin)
         return scene, quad, spec
 
+    if name == "held_in_hand_portrait":
+        # 実機の録画とほぼ同じ持ち方。縦型の名刺を手のひらの前に立て、親指を
+        # 上辺に、指先を右辺にかけている。名刺の右辺と上辺が手に重なるので、
+        # 輝度だけでは辺が出ない。利用者が実際に困ったのはこの形。
+        spec = CardSpec(
+            vertical=True,
+            company="有限会社きらめき工房",
+            name="鈴木 花子",
+            department="制作課",
+            title="主任",
+            email="hanako.suzuki@sample.co.jp",
+            url="https://sample.co.jp",
+            name_size=54,
+        )
+        card = render_card(spec)
+        scene, quad = place_on_background(
+            card, plain_background(SCENE_W, SCENE_H, (170, 168, 164)), scale=0.22)
+        d = ImageDraw.Draw(scene)
+        xs = [p[0] for p in quad]
+        ys = [p[1] for p in quad]
+        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+        skin = (252, 228, 206)          # 明るい照明下の手。紙との明暗差は小さい
+        w, h = x1 - x0, y1 - y0
+        # 手のひら: 名刺の裏から右へはみ出す（重なるのは右端だけ）
+        d.ellipse([x1 - 0.05 * w, y0 + 0.28 * h, x1 + 1.2 * w, y1 + 0.10 * h], fill=skin)
+        # 指先: 右辺をまたいで少しだけ内側へ入る
+        for k in range(3):
+            fy = y0 + (0.30 + 0.18 * k) * h
+            d.rounded_rectangle([x1 - 0.09 * w, fy, x1 + 0.8 * w, fy + 0.11 * h],
+                                radius=26, fill=skin)
+        # 親指: 上辺を表からつまむ
+        d.rounded_rectangle([x0 + 0.12 * w, y0 - 0.16 * h, x0 + 0.72 * w, y0 + 0.06 * h],
+                            radius=30, fill=skin)
+        return scene, quad, spec
+
     if name == "blank_card":
         # 名刺と同じ大きさ・縦横比の無地の紙。四角形の判定だけでは弾けないので、
         # 「内部に文字らしい領域がある」条件が効いているかを確かめるためのケース。
@@ -577,7 +612,7 @@ PATTERNS = [
     "white_card", "colored_card", "wood_background", "skewed",
     "glare", "blurry", "dark", "too_small",
     "multi_phone", "no_corporate_suffix", "small_name", "with_kana", "vertical_writing",
-    "held_in_hand",
+    "held_in_hand", "held_in_hand_portrait",
     "not_a_card_paper", "not_a_card_phone", "blank_card", "empty_desk",
 ]
 

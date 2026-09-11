@@ -256,18 +256,33 @@ def _stretch(gray, lo_pct: float, hi_pct: float):
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-def skin_mask(bgr):
-    """肌の色をしている画素のマスク。skin_ratio と同じ判定。"""
+def _skin_bool(bgr, luma_max: int):
+    """肌の色をしている画素の真偽配列。明るさの上限だけ用途ごとに変える。
+
+    色域（YCrCb）は暖色の紙とかなり重なる。生成り・クラフト紙の名刺は
+    Cr-Cb が 24-33 で、肌の 30-40 と見分けがつかない。実際に分けられるのは
+    明るさで、紙は肌より明るい。その上限を用途ごとに変えるのがこの引数。
+    """
     ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
     y = ycrcb[:, :, 0].astype(np.int16)
     cr = ycrcb[:, :, 1].astype(np.int16)
     cb = ycrcb[:, :, 2].astype(np.int16)
     d = settings.get("detection")
-    m = ((cr >= int(d["skin_cr_min"])) & (cr <= int(d["skin_cr_max"]))
-         & (cb >= int(d["skin_cb_min"])) & (cb <= int(d["skin_cb_max"]))
-         & ((cr - cb) >= int(d["skin_cr_cb_min"]))
-         & (y < int(d["skin_luma_max"])))
-    return (m.astype(np.uint8) * 255)
+    return ((cr >= int(d["skin_cr_min"])) & (cr <= int(d["skin_cr_max"]))
+            & (cb >= int(d["skin_cb_min"])) & (cb <= int(d["skin_cb_max"]))
+            & ((cr - cb) >= int(d["skin_cr_cb_min"]))
+            & (y < int(luma_max)))
+
+
+def skin_mask(bgr):
+    """肌の色をしている画素のマスク。エッジを足す用（取りこぼしを減らす側）。
+
+    ここで紙を肌と取り違えても、エッジが 1 本増えるだけで害は小さい。だから
+    明るさの上限は skin_luma_max（緩い側）を使う。候補を落とす skin_ratio とは
+    別のしきい値なので注意（あちらは skin_reject_luma_max・厳しい側）。
+    """
+    return (_skin_bool(bgr, settings.get("detection")["skin_luma_max"])
+            .astype(np.uint8) * 255)
 
 
 def skin_boundary_edges(bgr):
@@ -296,19 +311,26 @@ def _edge_strategies(gray, d, skin_edges=None):
       (1) 設定値の Canny            … 通常のコントラスト。最も速い
       (2) 正規化＋モルフォロジー勾配 … 低コントラスト・暗所・部分的な白飛びに強い
       (3) 中央値ベースの自動 Canny  … 上記で取れないときの保険
+      (4) (1)(2) に肌との境目を足したもの … 手に重なった辺が輝度では出ないとき
     の順に試し、名刺候補が採れた時点で打ち切る（毎フレーム全部走らせると Pi では
     検出間隔に間に合わない）。
+
+    肌の境目を最後に回すのが重要。全部の戦略に足すと、手が紙より明らかに暗くて
+    輝度だけで縁が出ているとき（＝本来うまくいく場合）にまで余計な線が入り、
+    輪郭が分かれて検出率が落ちる。横型の名刺を手に持った合成画像 180 通り
+    （回転・傾き・大きさ・肌の明るさ・背景を振ったもの）で実測すると:
+
+        手の明るさ    全戦略に足す   予備に回す(現在)   足さない
+        紙と同程度        42/60          43/60           22/60
+        中間              38/60          48/60           47/60
+        紙より暗い        34/60          58/60           58/60
+
+    つまり「輝度で取れるならそのまま、取れないときだけ色に頼る」のが正しい。
     """
     k3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 
-    def _with_skin(edges):
-        """肌との境目を足す。手に重なった辺はこれでしか出ない。"""
-        if skin_edges is None:
-            return edges
-        return cv2.bitwise_or(edges, skin_edges)
-
     def fixed():
-        return _with_skin(cv2.Canny(gray, int(d["canny_low"]), int(d["canny_high"])))
+        return cv2.Canny(gray, int(d["canny_low"]), int(d["canny_high"]))
 
     cache: dict[str, object] = {}
 
@@ -335,7 +357,7 @@ def _edge_strategies(gray, d, skin_edges=None):
         grad = _gradient()
         floor = float(np.percentile(grad, float(d["gradient_noise_pct"])))
         thr = max(float(d["gradient_thresh"]), floor * float(d["gradient_noise_mult"]))
-        return _with_skin((grad >= thr).astype(np.uint8) * 255)
+        return (grad >= thr).astype(np.uint8) * 255
 
     def grad_fixed():
         """ノイズ床を見ない固定しきい値。
@@ -344,7 +366,7 @@ def _edge_strategies(gray, d, skin_edges=None):
         （反射で弱くなっている）まで切り落としてしまう。そのときの取りこぼし対策。
         ノイズを拾いやすいので、適応版で取れなかったときだけ使う。
         """
-        return _with_skin((_gradient() >= int(d["gradient_thresh"])).astype(np.uint8) * 255)
+        return (_gradient() >= int(d["gradient_thresh"])).astype(np.uint8) * 255
 
     def auto_canny():
         med = float(np.median(gray))
@@ -352,7 +374,7 @@ def _edge_strategies(gray, d, skin_edges=None):
         hi = int(min(255.0, 1.33 * med))
         if hi - lo < 20:                      # 平坦な画像では開きを確保する
             lo, hi = max(0, lo - 10), min(255, hi + 20)
-        return _with_skin(cv2.Canny(gray, lo, hi))
+        return cv2.Canny(gray, lo, hi)
 
     strategies = [("canny", fixed), ("grad_norm", grad_norm)]
     # 固定しきい値は反射があるときだけ。ノイズを拾いやすいうえ、名刺が写っていない
@@ -360,12 +382,17 @@ def _edge_strategies(gray, d, skin_edges=None):
     if _has_glare():
         strategies.append(("grad_fixed", grad_fixed))
     strategies.append(("auto_canny", auto_canny))
+    # 肌の境目を足した版は最後の 1 本だけ。実機の録画では予備が 2 本あると
+    # 検出は 27.2%→31.3% と少し上がるが、1 フレームの処理が 50ms→128ms になり
+    # 送信間隔 120ms に間に合わなくなる（自動撮影の回数は 15→16 でほぼ変わらない）。
+    if skin_edges is not None:
+        strategies.append(("canny_skin", lambda: cv2.bitwise_or(fixed(), skin_edges)))
     return tuple(strategies)
 
 
 # ── 文字らしさ ────────────────────────────────────────────────────────────────
 
-def edge_support(gray, quad: Quad, thresh: float, window: int = 4) -> float:
+def edge_support(gray, quad: Quad, thresh: float, window: int | None = None) -> float:
     """四隅を結ぶ辺のうち、実際に輝度の段差がある割合 0-1。
 
     本物の名刺の縁は明暗の境目になっている。背景の雑多なエッジを凸包でつないだ
@@ -378,6 +405,8 @@ def edge_support(gray, quad: Quad, thresh: float, window: int = 4) -> float:
     途切れを埋めるクロージングで輪郭が数 px 外へ膨らむため、当てはめた辺は真の縁から
     少しずれる。厳密に同じ画素を見ると、正しい四角形でも段差なしと判定してしまう。
     """
+    if window is None:
+        window = int(settings.get("detection.edge_support_window"))
     h, w = gray.shape[:2]
     grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT,
                             cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
@@ -412,24 +441,24 @@ def skin_ratio(bgr, quad: Quad) -> float:
     辺の裏付けや文字領域の条件だけでは落ちない。名刺の内側が肌色で埋まることは
     ないので、これで人物を落とす。
 
-    判定は YCrCb の定番の色域に、赤側への寄り（Cr-Cb）と明るさの上限を足したもの。
-    色域だけだとクリーム色・アイボリーの名刺まで肌に入ってしまう（実測で 93% が
-    肌判定になり検出できなくなった）。生成りの紙は肌より明るい（実測 Y=219 に対し
-    肌は 120-180）ので、明るさで分ける。濃い色の名刺はそもそも色域に入らない。
-
-    取り違えたときの損得が非対称なことに注意する。顔を名刺と誤検出しても、撮影後の
+    取り違えたときの損得は大きく非対称になる。顔を名刺と誤検出しても、撮影後の
     受理判定で弾かれて撮り直すだけで済む。一方、本物の名刺を肌と誤判定すると
-    その名刺は永久に読み取れない。だから条件は「明らかに肌」に絞ってある。
+    その名刺は永久に読み取れない。だから候補を落とすこちら側は
+    skin_reject_luma_max（厳しい側）を使い、「明らかに肌」だけに絞る。
+
+    しきい値の根拠。暖色の紙は色域では肌と分けられない（生成り・クラフト紙で
+    Cr-Cb=24-33 に対し肌は 30-40）。分かれるのは明るさで、紙は肌より明るい:
+
+      生成り・クラフト紙の名刺   Y=170-225
+      実機の録画での肌           Y 中央値 53 / 95 パーセンタイル 110
+
+    既定の 165 はこの間に置いてある。上げると生成りの名刺が読み取れなくなるので、
+    顔の誤検出が気になっても下げる方向で調整すること。
     """
     warped = warp_card(bgr, quad, width=160)
     if warped is None or warped.size == 0:
         return 0.0
-    ycrcb = cv2.cvtColor(warped, cv2.COLOR_BGR2YCrCb)
-    y = ycrcb[:, :, 0].astype(np.int16)
-    cr = ycrcb[:, :, 1].astype(np.int16)
-    cb = ycrcb[:, :, 2].astype(np.int16)
-    skin = ((cr >= 133) & (cr <= 173) & (cb >= 77) & (cb <= 127)
-            & ((cr - cb) >= 15) & (y < 200))
+    skin = _skin_bool(warped, settings.get("detection")["skin_reject_luma_max"])
     return float(np.count_nonzero(skin)) / float(skin.size)
 
 
@@ -547,7 +576,13 @@ def _detect_at_scale(bgr, prev_quad: Quad | None) -> Detection | None:
     close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (close_k, close_k))
     best_overall: Detection | None = None
     stop_area = float(d["strategy_stop_area"])
-    skin_edges = skin_boundary_edges(bgr) if bool(d["use_skin_boundary"]) else None
+    # 肌の境目は予備の戦略でしか使わないので、肌がほとんど写っていないフレーム
+    # （＝検出ループの大半）では作らない。
+    skin_edges = None
+    if bool(d["use_skin_boundary"]):
+        edges_from_skin = skin_boundary_edges(bgr)
+        if np.count_nonzero(edges_from_skin) > 0:
+            skin_edges = edges_from_skin
     for _name, make_edges in _edge_strategies(gray, d, skin_edges):
         edges = make_edges()
         # 途切れた輪郭をつなぐ。実機では名刺の 1 辺が背景（手のひら・白い壁）と

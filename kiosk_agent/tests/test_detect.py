@@ -31,7 +31,7 @@ DETECTABLE = [
     "landscape_ja", "portrait_ja", "mixed_ja_en", "english_only",
     "white_card", "colored_card", "wood_background", "skewed",
     "multi_phone", "no_corporate_suffix", "small_name", "with_kana",
-    "vertical_writing", "held_in_hand",
+    "vertical_writing", "held_in_hand", "held_in_hand_portrait",
 ]
 # 名刺ではないので検出されてはいけないもの
 #   not_a_card_paper : A4 の書類（縦横比が違う）
@@ -178,6 +178,37 @@ def test_動いている間は撮影しない(scene):
     assert metrics.motion > float(settings.get("quality.motion_max"))
 
 
+def test_手ぶれの上限は手に持つ前提で決めてある(scene, monkeypatch):
+    """机に置く前提の厳しさ（0.012）だと、手に持った名刺が撮影に進まない。
+
+    緩めた副作用として、ブレた画像が OCR に流れてはいけない。上限そのものは
+    設定から動かせること、上限を超える動きはきちんと moving になることを見る。
+    """
+    bgr, _truth, _spec = scene("landscape_ja")
+    frame = _detect_frame(bgr)
+    det = detect_card(frame)
+    assert det is not None
+
+    limit = float(settings.get("quality.motion_max"))
+    short = min(frame.shape[0], frame.shape[1])
+    # 上限の 2 倍だけ四隅をずらした「直前のフレーム」を作れば moving になる
+    shifted = [(x + limit * 2 * short, y) for x, y in det.quad]
+    state, m = evaluate(frame, det, prev_quad=shifted)
+    assert state == "moving"
+    assert m.motion > limit
+
+    # 上限の半分なら通る
+    small = [(x + limit * 0.5 * short, y) for x, y in det.quad]
+    state2, m2 = evaluate(frame, det, prev_quad=small)
+    assert m2.motion < limit
+    assert state2 == "steady"
+
+    # しきい値は設定から変えられる
+    monkeypatch.setenv("CARD_QUALITY__MOTION_MAX", "0.0001")
+    settings.reload()
+    assert evaluate(frame, det, prev_quad=small)[0] == "moving"
+
+
 def test_すべての状態に案内文言がある():
     from card.types import CaptureState  # noqa: F401
     for state in ("no_card", "out_of_frame", "too_small", "too_large",
@@ -258,6 +289,48 @@ def test_手に持った名刺は肌の境目が無いと検出できない(scen
     monkeypatch.setenv("CARD_DETECTION__USE_SKIN_BOUNDARY", "false")
     settings.reload()
     assert detect_card(frame) is None
+
+
+def test_縦型の名刺を手に持った場合も肌の境目で検出できる(scene, monkeypatch):
+    """利用者が実際に困った形（縦型を手のひらの前に立てて差し出す）。
+
+    親指が上辺に、指先が右辺にかかる。名刺の右辺と上辺は手に重なるので
+    輝度だけでは辺が出ない。
+    """
+    bgr, truth, _spec = scene("held_in_hand_portrait")
+    frame = _detect_frame(bgr)
+    scale = frame.shape[1] / bgr.shape[1]
+    want = [(x * scale, y * scale) for x, y in truth]
+
+    det = detect_card(frame)
+    assert det is not None
+    assert _iou(det.quad, want, frame.shape) > 0.80
+
+    monkeypatch.setenv("CARD_DETECTION__USE_SKIN_BOUNDARY", "false")
+    settings.reload()
+    assert detect_card(frame) is None
+
+
+def test_生成りやクラフト紙の名刺を肌と間違えない(scene):
+    """暖色の紙は色域では肌と分けられないので、明るさで分けている。
+
+    ここを緩めると（＝肌と判定する明るさの上限を上げると）生成りの名刺が
+    max_skin_ratio で落ち、その名刺は永久に読み取れなくなる。実際に一度
+    そうなったので、紙の色を振って回帰させないようにする。
+    """
+    import make_fixtures as mf
+    papers = [(248, 242, 228), (235, 220, 190), (228, 210, 178),
+              (220, 200, 165), (210, 190, 155), (205, 180, 145)]
+    for paper in papers:
+        card = mf.render_card(mf.CardSpec(bg=paper))
+        img, truth = mf.place_on_background(
+            card, mf.plain_background(mf.SCENE_W, mf.SCENE_H, (150, 150, 150)))
+        bgr = cv2.cvtColor(np.asarray(mf.simulate_camera(img)), cv2.COLOR_RGB2BGR)
+        frame = _detect_frame(bgr)
+        scale = frame.shape[1] / bgr.shape[1]
+        want = [(x * scale, y * scale) for x, y in truth]
+        assert skin_ratio(frame, want) < float(settings.get("detection.max_skin_ratio")),             f"紙 {paper} が肌と判定されている"
+        assert detect_card(frame) is not None, f"紙 {paper} の名刺が検出できない"
 
 
 def test_肌の色の範囲は設定から変えられる(scene, monkeypatch):
