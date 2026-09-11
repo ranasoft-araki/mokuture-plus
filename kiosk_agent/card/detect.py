@@ -207,6 +207,42 @@ def _approx_quad(cnt, base_eps: float) -> Quad | None:
     return order_quad(cv2.boxPoints(rect))
 
 
+def _quad_candidates(cnt, base_eps: float):
+    """1 つの輪郭から四角形の候補を返す。素の輪郭と凸包の両方を試す。
+
+    実機では名刺の輪郭がそのまま閉じることはまずない:
+      - 縁を指で持つと、そこがへこんで四角形でなくなる
+      - 手のひらや白い壁が背景だと、その辺だけコントラストが出ずに途切れる
+    凸包を取ると、指のへこみは埋まり、途切れた断片も名刺の外形に復元される。
+    実測（実機の録画）では、名刺の輪郭は面積比 0.026 の断片にしかならないのに、
+    その凸包は面積比 0.240・縦横比 1.84 と名刺そのものの形になっていた。
+
+    素の輪郭が四角形になるならそれを優先する（凸包では台形＝遠近が潰れるため）。
+    """
+    out = []
+    q = _approx_quad(cnt, base_eps)
+    if q is not None:
+        out.append(q)
+
+    hull = cv2.convexHull(cnt)
+    if len(hull) < 4:
+        return out
+
+    qh = _approx_quad(hull, base_eps)
+    if qh is not None and (q is None or quad_area(qh) > quad_area(q) * 1.05):
+        out.append(qh)
+
+    # 角を指で隠されると、その角だけ凸包が斜めに切り落とされて多角形近似が崩れる。
+    # 残り 3 辺は正しいので、凸包の最小外接矩形を採るとほぼ名刺の形になる。
+    # 遠近（台形）は表現できないので最後の候補にとどめる。
+    rect = cv2.minAreaRect(hull)
+    if min(rect[1]) > 1.0:
+        qr = order_quad(cv2.boxPoints(rect))
+        if all(quad_area(qr) > quad_area(e) * 1.05 for e in out):
+            out.append(qr)
+    return out
+
+
 def _stretch(gray, lo_pct: float, hi_pct: float):
     """輝度を百分位で 0-255 に引き伸ばす。
 
@@ -220,7 +256,39 @@ def _stretch(gray, lo_pct: float, hi_pct: float):
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-def _edge_strategies(gray, d):
+def skin_mask(bgr):
+    """肌の色をしている画素のマスク。skin_ratio と同じ判定。"""
+    ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
+    y = ycrcb[:, :, 0].astype(np.int16)
+    cr = ycrcb[:, :, 1].astype(np.int16)
+    cb = ycrcb[:, :, 2].astype(np.int16)
+    d = settings.get("detection")
+    m = ((cr >= int(d["skin_cr_min"])) & (cr <= int(d["skin_cr_max"]))
+         & (cb >= int(d["skin_cb_min"])) & (cb <= int(d["skin_cb_max"]))
+         & ((cr - cb) >= int(d["skin_cr_cb_min"]))
+         & (y < int(d["skin_luma_max"])))
+    return (m.astype(np.uint8) * 255)
+
+
+def skin_boundary_edges(bgr):
+    """肌と肌でないものの境目をエッジとして返す。
+
+    キオスクでは名刺を手に持って差し出す。名刺の縁が手のひらや指に重なると、
+    その辺は明暗の差がほとんど無く、輝度ベースのエッジ抽出では出てこない。
+    一方その境目は「肌か否か」の境目でもあるので、色で切れば確実に線になる。
+    実機の録画では、名刺の左辺と下辺が手に重なって輪郭が閉じないのが
+    検出できない主因だった。
+    """
+    mask = skin_mask(bgr)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
+                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
+                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    return cv2.morphologyEx(mask, cv2.MORPH_GRADIENT,
+                            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+
+
+def _edge_strategies(gray, d, skin_edges=None):
     """エッジ画像を「効きやすい順」に遅延生成する。
 
     固定しきい値の Canny だけでは、白い名刺を明るい机に置いた場合（境界の輝度差が
@@ -233,8 +301,14 @@ def _edge_strategies(gray, d):
     """
     k3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 
+    def _with_skin(edges):
+        """肌との境目を足す。手に重なった辺はこれでしか出ない。"""
+        if skin_edges is None:
+            return edges
+        return cv2.bitwise_or(edges, skin_edges)
+
     def fixed():
-        return cv2.Canny(gray, int(d["canny_low"]), int(d["canny_high"]))
+        return _with_skin(cv2.Canny(gray, int(d["canny_low"]), int(d["canny_high"])))
 
     cache: dict[str, object] = {}
 
@@ -261,7 +335,7 @@ def _edge_strategies(gray, d):
         grad = _gradient()
         floor = float(np.percentile(grad, float(d["gradient_noise_pct"])))
         thr = max(float(d["gradient_thresh"]), floor * float(d["gradient_noise_mult"]))
-        return (grad >= thr).astype(np.uint8) * 255
+        return _with_skin((grad >= thr).astype(np.uint8) * 255)
 
     def grad_fixed():
         """ノイズ床を見ない固定しきい値。
@@ -270,7 +344,7 @@ def _edge_strategies(gray, d):
         （反射で弱くなっている）まで切り落としてしまう。そのときの取りこぼし対策。
         ノイズを拾いやすいので、適応版で取れなかったときだけ使う。
         """
-        return (_gradient() >= int(d["gradient_thresh"])).astype(np.uint8) * 255
+        return _with_skin((_gradient() >= int(d["gradient_thresh"])).astype(np.uint8) * 255)
 
     def auto_canny():
         med = float(np.median(gray))
@@ -278,7 +352,7 @@ def _edge_strategies(gray, d):
         hi = int(min(255.0, 1.33 * med))
         if hi - lo < 20:                      # 平坦な画像では開きを確保する
             lo, hi = max(0, lo - 10), min(255, hi + 20)
-        return cv2.Canny(gray, lo, hi)
+        return _with_skin(cv2.Canny(gray, lo, hi))
 
     strategies = [("canny", fixed), ("grad_norm", grad_norm)]
     # 固定しきい値は反射があるときだけ。ノイズを拾いやすいうえ、名刺が写っていない
@@ -290,6 +364,74 @@ def _edge_strategies(gray, d):
 
 
 # ── 文字らしさ ────────────────────────────────────────────────────────────────
+
+def edge_support(gray, quad: Quad, thresh: float, window: int = 4) -> float:
+    """四隅を結ぶ辺のうち、実際に輝度の段差がある割合 0-1。
+
+    本物の名刺の縁は明暗の境目になっている。背景の雑多なエッジを凸包でつないだ
+    だけの四角形は、辺の大部分に段差が無い。この違いで誤検出を落とす。
+
+    指で隠れている部分や、背景と同系色で段差が出ない辺もあるので「全部」ではなく
+    「何割あるか」で見る。実機では名刺の 1〜2 辺が白いシャツや手のひらに重なる。
+
+    段差は「その点のちょうど上」ではなく window ピクセルの範囲で探す。エッジの
+    途切れを埋めるクロージングで輪郭が数 px 外へ膨らむため、当てはめた辺は真の縁から
+    少しずれる。厳密に同じ画素を見ると、正しい四角形でも段差なしと判定してしまう。
+    """
+    h, w = gray.shape[:2]
+    grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT,
+                            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+    total = 0
+    supported = 0
+    for i in range(4):
+        ax, ay = quad[i]
+        bx, by = quad[(i + 1) % 4]
+        length = math.hypot(bx - ax, by - ay)
+        n = max(4, min(60, int(length / 4)))
+        for k in range(n):
+            t = (k + 0.5) / n
+            x = int(round(ax + (bx - ax) * t))
+            y = int(round(ay + (by - ay) * t))
+            if not (0 <= x < w and 0 <= y < h):
+                continue
+            total += 1
+            y0, y1 = max(0, y - window), min(h, y + window + 1)
+            x0, x1 = max(0, x - window), min(w, x + window + 1)
+            if grad[y0:y1, x0:x1].max() >= thresh:
+                supported += 1
+    if total == 0:
+        return 0.0
+    return supported / total
+
+
+def skin_ratio(bgr, quad: Quad) -> float:
+    """四角形の内側のうち、肌の色をしている画素の割合 0-1。
+
+    キオスクでは利用者が名刺を顔の前に持つので、顔・首・手のひらが候補として
+    出てくる。顔の輪郭には本物の段差があり、肌にも文字らしい細かい模様が出るため、
+    辺の裏付けや文字領域の条件だけでは落ちない。名刺の内側が肌色で埋まることは
+    ないので、これで人物を落とす。
+
+    判定は YCrCb の定番の色域に、赤側への寄り（Cr-Cb）と明るさの上限を足したもの。
+    色域だけだとクリーム色・アイボリーの名刺まで肌に入ってしまう（実測で 93% が
+    肌判定になり検出できなくなった）。生成りの紙は肌より明るい（実測 Y=219 に対し
+    肌は 120-180）ので、明るさで分ける。濃い色の名刺はそもそも色域に入らない。
+
+    取り違えたときの損得が非対称なことに注意する。顔を名刺と誤検出しても、撮影後の
+    受理判定で弾かれて撮り直すだけで済む。一方、本物の名刺を肌と誤判定すると
+    その名刺は永久に読み取れない。だから条件は「明らかに肌」に絞ってある。
+    """
+    warped = warp_card(bgr, quad, width=160)
+    if warped is None or warped.size == 0:
+        return 0.0
+    ycrcb = cv2.cvtColor(warped, cv2.COLOR_BGR2YCrCb)
+    y = ycrcb[:, :, 0].astype(np.int16)
+    cr = ycrcb[:, :, 1].astype(np.int16)
+    cb = ycrcb[:, :, 2].astype(np.int16)
+    skin = ((cr >= 133) & (cr <= 173) & (cb >= 77) & (cb <= 127)
+            & ((cr - cb) >= 15) & (y < 200))
+    return float(np.count_nonzero(skin)) / float(skin.size)
+
 
 def count_text_regions(bgr, quad: Quad) -> tuple[int, int]:
     """名刺候補の内部にある「文字らしい領域」の数と、それが何行に分かれるかを返す。
@@ -401,75 +543,127 @@ def _detect_at_scale(bgr, prev_quad: Quad | None) -> Detection | None:
     k = int(d["blur_kernel"]) | 1
     gray = cv2.GaussianBlur(gray, (k, k), 0)
 
-    for _name, make_edges in _edge_strategies(gray, d):
+    close_k = max(3, int(d["close_kernel"]) | 1)
+    close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (close_k, close_k))
+    best_overall: Detection | None = None
+    stop_area = float(d["strategy_stop_area"])
+    skin_edges = skin_boundary_edges(bgr) if bool(d["use_skin_boundary"]) else None
+    for _name, make_edges in _edge_strategies(gray, d, skin_edges):
         edges = make_edges()
-        # 途切れた輪郭をつなぐ（名刺の白い縁が背景と近いときに効く）
+        # 途切れた輪郭をつなぐ。実機では名刺の 1 辺が背景（手のひら・白い壁）と
+        # 同系色になって数 px〜十数 px 途切れる。膨張だけでは埋まらないので
+        # クロージング（膨張→収縮）で穴を閉じてから輪郭を拾う。
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, close_kernel)
         edges = cv2.dilate(edges, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)), iterations=1)
-        best = _best_quad(bgr, edges, frame_area, d, prev_quad)
-        if best is not None:
-            return best
-    return None
+        found = _best_quad(bgr, gray, edges, frame_area, d, prev_quad)
+        if found is not None and (best_overall is None or found.score > best_overall.score):
+            best_overall = found
+        # 名刺らしい大きさで見つかったらそこで打ち切る。小さな四角形（名刺の中の
+        # 枠線や背景の一部）で止めてしまうと、本体を見つける機会を失う。
+        if best_overall is not None and best_overall.metrics.area_ratio >= stop_area:
+            break
+    return best_overall
 
 
-def _best_quad(bgr, edges, frame_area: float, d: dict, prev_quad: Quad | None) -> Detection | None:
+def _best_quad(bgr, gray, edges, frame_area: float, d: dict,
+               prev_quad: Quad | None) -> Detection | None:
     """1 つのエッジ画像から最良の名刺候補を選ぶ。条件を満たすものが無ければ None。"""
     h, w = bgr.shape[:2]
+    # 辺の裏付けを測るしきい値も、画像ごとのノイズ床に合わせる（固定値では
+    # コントラストの低い名刺と、ノイズの多い映像を同時に扱えない）。
+    # 段差を測る画像は、輪郭を拾ったのと同じ「正規化後」のものを使う。生の輝度で
+    # 測ると、暗所の名刺（縁の差が 5 程度しかない）で段差なしと判定してしまう。
+    support_gray = _stretch(gray, float(d["normalize_lo_pct"]), float(d["normalize_hi_pct"]))
+    base = cv2.morphologyEx(support_gray, cv2.MORPH_GRADIENT,
+                            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+    edge_thresh = max(float(d["gradient_thresh"]),
+                      float(np.percentile(base, 85)) * float(d["edge_support_mult"]))
     contours = _find_contours(edges)
     if contours is None or len(contours) == 0:
         return None
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)[: int(d["max_candidates"])]
+    # 並べ替えは輪郭そのものの面積ではなく凸包の面積で行う。名刺の輪郭は断片に
+    # なりがちで、面積で並べると候補から漏れる（実測: 断片の面積比 0.026 に対し
+    # 凸包は 0.240）。凸包の面積なら、途切れていても名刺が上位に来る。
+    contours = sorted(contours, key=lambda c: cv2.contourArea(cv2.convexHull(c)),
+                      reverse=True)[: int(d["max_candidates"])]
 
     margin = float(d["margin_px"])
     best: Detection | None = None
 
     for cnt in contours:
-        quad = _approx_quad(cnt, float(d["approx_epsilon"]))
-        if quad is None:
-            continue
-        if bool(d["refine_corners"]):
-            quad = refine_quad(cnt, quad)
+        for quad in _quad_candidates(cnt, float(d["approx_epsilon"])):
+            if bool(d["refine_corners"]):
+                quad = refine_quad(cnt, quad)
 
-        area_ratio = quad_area(quad) / frame_area
-        if not (float(d["min_area_ratio"]) <= area_ratio <= float(d["max_area_ratio"])):
-            continue
+            area_ratio = quad_area(quad) / frame_area
+            if not (float(d["min_area_ratio"]) <= area_ratio <= float(d["max_area_ratio"])):
+                continue
 
-        aspect = quad_aspect(quad)
-        if not (float(d["aspect_min"]) <= aspect <= float(d["aspect_max"])):
-            continue
+            aspect = quad_aspect(quad)
+            if not (float(d["aspect_min"]) <= aspect <= float(d["aspect_max"])):
+                continue
 
-        angles = quad_angles(quad)
-        lo, hi = float(d["min_corner_angle_deg"]), float(d["max_corner_angle_deg"])
-        if any(a < lo or a > hi for a in angles):
-            continue
+            angles = quad_angles(quad)
+            lo, hi = float(d["min_corner_angle_deg"]), float(d["max_corner_angle_deg"])
+            if any(a < lo or a > hi for a in angles):
+                continue
 
-        inside = all(
-            margin <= x <= (w - margin) and margin <= y <= (h - margin) for x, y in quad
-        )
+            # 画面の縁に達している候補は捨てる。背景の雑多なエッジを凸包でつなぐと
+            # 画面いっぱいの四角形ができやすく、これを残すと誤検出になる。
+            # 本当に名刺が見切れている場合は「枠内に入れてください」で足りる。
+            if not all(margin <= x <= (w - margin) and margin <= y <= (h - margin)
+                       for x, y in quad):
+                continue
 
-        regions, rows = count_text_regions(bgr, quad)
-        if regions < int(d["min_text_regions"]) or rows < 2:
-            continue
+            # 直前のフレームと同じ位置にあるなら、辺の裏付けの条件を緩める。
+            # 手に持った名刺は 1 辺が手のひらや服に重なって段差が消えることがあり、
+            # 毎フレーム同じ厳しさを求めると検出が点滅して静止判定が積み上がらない。
+            # 一度きちんと見つけた場所の近くだけを緩めるので、誤検出は増えにくい。
+            required = float(d["min_edge_support"])
+            if prev_quad is not None:
+                moved = quad_motion(prev_quad, quad, float(min(h, w)))
+                if moved < float(d["track_motion_max"]):
+                    required *= float(d["track_support_relax"])
 
-        # スコア: 長方形らしさ・面積・文字量・前フレームとの近さ
-        rect_score = 1.0 - min(1.0, sum(abs(a - 90.0) for a in angles) / 120.0)
-        size_score = min(1.0, area_ratio / 0.5)
-        text_score = min(1.0, regions / 24.0)
-        stick = 0.0
-        if prev_quad is not None:
-            short = float(min(h, w))
-            stick = max(0.0, 1.0 - quad_motion(prev_quad, quad, short) * 12.0) * 0.15
-        score = 0.40 * rect_score + 0.20 * size_score + 0.30 * text_score + stick
-        if not inside:
-            score *= 0.5
+            support = edge_support(support_gray, quad, edge_thresh,
+                                   window=int(d["edge_support_window"]))
+            if support < required:
+                continue
 
-        metrics = FrameMetrics(
-            area_ratio=area_ratio,
-            aspect=aspect,
-            text_regions=regions,
-        )
-        cand = Detection(quad=quad, metrics=metrics, score=round(score, 4))
-        if best is None or cand.score > best.score:
-            best = cand
+            if skin_ratio(bgr, quad) > float(d["max_skin_ratio"]):
+                continue          # 顔や手のひらを名刺と取り違えない
+
+            regions, rows = count_text_regions(bgr, quad)
+            if regions < int(d["min_text_regions"]) or rows < 2:
+                continue
+
+            # スコア: 大きさ・長方形らしさ・辺の裏付け・文字量・前フレームとの近さ。
+            # 大きさを重く見るのは、画面の片隅の小さな四角形（名刺の中の枠線など）が
+            # 名刺本体に勝ってしまわないようにするため。名刺は普通いちばん大きい。
+            rect_score = 1.0 - min(1.0, sum(abs(a - 90.0) for a in angles) / 120.0)
+            size_score = min(1.0, area_ratio / 0.35)
+            text_score = min(1.0, regions / 24.0)
+            stick = 0.0
+            if prev_quad is not None:
+                short = float(min(h, w))
+                stick = max(0.0, 1.0 - quad_motion(prev_quad, quad, short) * 12.0) * 0.15
+            score = (0.25 * rect_score + 0.30 * size_score + 0.20 * text_score
+                     + 0.25 * support + stick)
+
+            metrics = FrameMetrics(
+                area_ratio=area_ratio,
+                aspect=aspect,
+                text_regions=regions,
+            )
+            cand = Detection(quad=quad, metrics=metrics, score=round(score, 4))
+            if best is None or cand.score > best.score:
+                best = cand
+            # 十分に確からしい候補が出たら残りは見ない。候補は凸包の面積の降順に
+            # 並んでいるので、名刺は普通ここで見つかる。実機の雑然とした背景では
+            # 候補が 10 本以上出ることがあり、全部に文字領域や肌色の判定をかけると
+            # 1 フレームの処理が検出間隔に間に合わなくなる。
+            if best.score >= float(d["candidate_stop_score"]):
+                return best
 
     return best
 

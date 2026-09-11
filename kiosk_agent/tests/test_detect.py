@@ -13,11 +13,15 @@ import pytest
 from card import settings
 from card.detect import (
     detect_card,
+    edge_support,
+    fill_ratio,
     order_quad,
     quad_area,
     quad_aspect,
     quad_angles,
     quad_motion,
+    skin_mask,
+    skin_ratio,
     warp_card,
 )
 from card.quality import GUIDANCE, evaluate, message
@@ -27,7 +31,7 @@ DETECTABLE = [
     "landscape_ja", "portrait_ja", "mixed_ja_en", "english_only",
     "white_card", "colored_card", "wood_background", "skewed",
     "multi_phone", "no_corporate_suffix", "small_name", "with_kana",
-    "vertical_writing",
+    "vertical_writing", "held_in_hand",
 ]
 # 名刺ではないので検出されてはいけないもの
 #   not_a_card_paper : A4 の書類（縦横比が違う）
@@ -230,3 +234,102 @@ def test_無地の紙は文字領域が数えられない(scene):
     assert det is not None
     card_regions, card_rows = count_text_regions(card_frame, det.quad)
     assert card_regions >= threshold and card_rows >= 2
+
+
+# ── 手に持った名刺（実機で最初に壊れた条件）──────────────────────────────────
+
+def test_手に持った名刺は肌の境目が無いと検出できない(scene, monkeypatch):
+    """実機の録画で「端を指で持つと検出できない」が起きた仕組みそのもの。
+
+    指は紙に近い明るさなので、名刺と指の間には強いエッジが立たない。
+    輪郭は指の外側を回って閉じ、「名刺 ∪ 手」の形になって長方形ではなくなる。
+    肌と肌でないものの境目をエッジとして足すと、指が名刺の縁で切れて
+    長方形に戻る。この差が出ていることを両方向で確かめる。
+    """
+    bgr, truth, _spec = scene("held_in_hand")
+    frame = _detect_frame(bgr)
+    scale = frame.shape[1] / bgr.shape[1]
+    want = [(x * scale, y * scale) for x, y in truth]
+
+    det = detect_card(frame)
+    assert det is not None
+    assert _iou(det.quad, want, frame.shape) > 0.85
+
+    monkeypatch.setenv("CARD_DETECTION__USE_SKIN_BOUNDARY", "false")
+    settings.reload()
+    assert detect_card(frame) is None
+
+
+def test_肌の色の範囲は設定から変えられる(scene, monkeypatch):
+    """肌色のしきい値はハードコードせず設定で動かせること（§13）。"""
+    bgr, _truth, _spec = scene("held_in_hand")
+    frame = _detect_frame(bgr)
+    before = int(np.count_nonzero(skin_mask(frame)))
+    assert before > 0
+
+    # 明るさの上限を下げれば、明るい照明下の手は肌と見なされなくなる
+    monkeypatch.setenv("CARD_DETECTION__SKIN_LUMA_MAX", "150")
+    settings.reload()
+    assert int(np.count_nonzero(skin_mask(frame))) < before // 10
+
+
+def test_名刺の紙は肌と見なさない(scene):
+    """肌の判定が紙まで拾うと、名刺そのものが max_skin_ratio で落ちる。"""
+    for pattern in ("landscape_ja", "white_card", "colored_card"):
+        bgr, _truth, _spec = scene(pattern)
+        frame = _detect_frame(bgr)
+        assert np.count_nonzero(skin_mask(frame)) / frame[:, :, 0].size < 0.01, pattern
+
+
+def test_顔のように肌が多い候補は名刺として採らない(scene, monkeypatch):
+    """max_skin_ratio が効いていることを、値を絞って逆向きに確かめる。
+
+    実機では名刺を顔の前に持つので、顔が候補として上がってくる。
+    """
+    bgr, _truth, _spec = scene("landscape_ja")
+    frame = _detect_frame(bgr)
+    det = detect_card(frame)
+    assert det is not None
+    assert skin_ratio(frame, det.quad) < float(settings.get("detection.max_skin_ratio"))
+
+    # 名刺の内側の肌率でも落ちる値まで下げれば、検出されなくなる
+    monkeypatch.setenv("CARD_DETECTION__MAX_SKIN_RATIO", "-1")
+    settings.reload()
+    assert detect_card(frame) is None
+
+
+# ── 候補の絞り込み ────────────────────────────────────────────────────────────
+
+def test_辺の裏付けは本物の縁で高く_でたらめな四角形で低い(scene):
+    """edge_support は「その四辺に本当に明暗の段差があるか」を測る。
+
+    木目の机のように四角形がいくらでも取れる背景で、名刺以外を落とす根拠。
+    """
+    bgr, truth, _spec = scene("wood_background")
+    frame = _detect_frame(bgr)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    scale = frame.shape[1] / bgr.shape[1]
+    want = [(x * scale, y * scale) for x, y in truth]
+
+    thresh = float(settings.get("detection.gradient_thresh"))
+    on_card = edge_support(gray, want, thresh)
+    # 名刺の中に完全に収まる小さな四角形。縁ではないので段差が無い
+    cx = sum(p[0] for p in want) / 4
+    cy = sum(p[1] for p in want) / 4
+    inside = [(cx - 20, cy - 12), (cx + 20, cy - 12), (cx + 20, cy + 12), (cx - 20, cy + 12)]
+    assert on_card > float(settings.get("detection.min_edge_support"))
+    assert on_card > edge_support(gray, inside, thresh)
+
+
+def test_占有率は向きで変わらない():
+    """縦型でも横型でも「画面をどれだけ占めているか」は同じ尺度で測る。
+
+    ここが向き依存だと、縦型名刺だけ「もっと近づけてください」が出続ける。
+    """
+    w, h = 640, 360
+    # 長辺が画面の長辺いっぱいなら、どちらの向きでも 1.0 に近い値になる
+    assert fill_ratio([(0, 100), (w - 1, 100), (w - 1, 300), (0, 300)], w, h) > 0.95
+    assert fill_ratio([(100, 0), (300, 0), (300, h - 1), (100, h - 1)], w, h) > 0.95
+    # 小さければどちらの向きでも小さい
+    assert fill_ratio([(0, 0), (100, 0), (100, 60), (0, 60)], w, h) < 0.3
+    assert fill_ratio([(0, 0), (60, 0), (60, 100), (0, 100)], w, h) < 0.3

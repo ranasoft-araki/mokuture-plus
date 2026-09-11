@@ -531,6 +531,33 @@ def _build_raw(name: str):
         img, _ = place_on_background(phone, plain, scale=0.22)
         return img, None, None
 
+    if name == "held_in_hand":
+        # 手に持って差し出した名刺。実機のキオスクではこれがいちばん多い持ち方で、
+        # 実際の録画ではこの状態が検出できない最大の原因だった。
+        #
+        # 壊れ方はこうなる。名刺の縁は背景との明暗差で出るが、指が縁をまたぐと
+        # そこだけ「名刺 → 指 → 背景」になる。指は紙に近い明るさなので
+        # 名刺と指の間に強いエッジが立たず、輪郭は指の外側を回って閉じる。
+        # つまり輪郭は「名刺 ∪ 手」の形になり、長方形ではなくなる。
+        # 肌の色の境目をエッジとして足すと、指は名刺の縁で切れて長方形に戻る。
+        spec = CardSpec()
+        card = render_card(spec)
+        scene, quad = place_on_background(
+            card, plain_background(SCENE_W, SCENE_H, (170, 168, 164)))
+        d = ImageDraw.Draw(scene)
+        x0, y0 = quad[0]
+        x1, y1 = quad[2]
+        skin = (252, 228, 206)          # 明るい照明下の手。紙との明暗差は小さい
+        # 手のひら: 名刺の下辺の裏から出て画面の下へ抜ける
+        d.ellipse([x0 + 150, y1 - 30, x1 - 120, y1 + 260], fill=skin)
+        # 指先: 下辺をまたいで名刺の内側まで少し入る
+        for k in range(4):
+            fx = x0 + 210 + k * 150
+            d.rounded_rectangle([fx, y1 - 70, fx + 96, y1 + 120], radius=46, fill=skin)
+        # 親指: 左下の角を表からつまむ
+        d.rounded_rectangle([x0 - 20, y1 - 190, x0 + 92, y1 + 90], radius=54, fill=skin)
+        return scene, quad, spec
+
     if name == "blank_card":
         # 名刺と同じ大きさ・縦横比の無地の紙。四角形の判定だけでは弾けないので、
         # 「内部に文字らしい領域がある」条件が効いているかを確かめるためのケース。
@@ -550,6 +577,7 @@ PATTERNS = [
     "white_card", "colored_card", "wood_background", "skewed",
     "glare", "blurry", "dark", "too_small",
     "multi_phone", "no_corporate_suffix", "small_name", "with_kana", "vertical_writing",
+    "held_in_hand",
     "not_a_card_paper", "not_a_card_phone", "blank_card", "empty_desk",
 ]
 
