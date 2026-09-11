@@ -557,6 +557,7 @@ const ICO = {
   qr:        `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14h1M14 20h1M17 18v3M20 17v4"/></svg>`,
   truck:     `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>`,
   more:      `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`,
+  card:      `<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="11" r="2"/><path d="M5 16c.6-1.3 1.7-2 3-2s2.4.7 3 2"/><path d="M14 9.5h5M14 13h5M14 16h3"/></svg>`,
   arrow:     `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`,
   bell_sm:   `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0v5l2 3H4l2-3z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>`,
   bell_lg:   `<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0v5l2 3H4l2-3z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>`,
@@ -1902,6 +1903,555 @@ function showDelivery() {
   load();
 }
 
+// ─── 名刺読み取り (QR無し来訪の受付フォーム自動入力) ──────────────────────────
+// カメラはブラウザ(getUserMedia)が握り、フレームを端末内のローカルAPI(/card/*)へ送る。
+// 検出・自動撮影判定・OCR・項目抽出はすべて端末内(Python側)で完結し、外部には一切
+// 送信しない。画像は端末にもサーバにも保存せず、確定/やり直し/中断のいずれでも破棄する。
+//
+// 画面は 2 段構え:
+//   1) スキャン  … 左=カメラ映像+四隅の枠、右=案内文言と操作
+//   2) 確認      … 左=補正後の名刺画像、右=抽出項目(信頼度で色分け・その場で修正可)
+// 確認せずに受付が確定することはない。
+const CARD = { status: null, checked: false };
+
+// 名刺APIはローカルエージェント直通。MOCK(?mock=1)や未導入端末では status が取れず、
+// 導線そのものを出さない。
+async function cardApi(method, path, body) {
+  const r = await fetch(path, {
+    method,
+    headers: body != null ? { "Content-Type": "application/json" } : {},
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({ detail: r.statusText }));
+    throw new Error(e.detail ?? "card request failed");
+  }
+  return r.status === 204 ? null : r.json();
+}
+
+async function cardPostImage(path, blob) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({ detail: r.statusText }));
+    throw new Error(e.detail ?? "card request failed");
+  }
+  return r.json();
+}
+
+// 起動時に一度だけ利用可否を調べる。失敗しても例外は投げない(名刺導線を隠すだけ)。
+async function ensureCardStatus() {
+  if (CARD.checked) return CARD.status;
+  CARD.checked = true;
+  if (MOCK) return null;
+  try {
+    const s = await cardApi("GET", "/card/status");
+    CARD.status = s && s.available ? s : null;
+  } catch { CARD.status = null; }
+  return CARD.status;
+}
+function cardAvailable() { return !!(CARD.status && CARD.status.available); }
+
+// 項目名 → 画面表示。受付フォームに入る項目を上に並べる。
+const CARD_FIELD_LABELS = {
+  company_name:     ["会社名", "Company"],
+  person_name:      ["お名前", "Name"],
+  person_name_kana: ["ふりがな", "Name (kana)"],
+  department:       ["部署", "Department"],
+  title:            ["役職", "Title"],
+  email:            ["メール", "Email"],
+  phone:            ["電話番号", "Phone"],
+  mobile:           ["携帯電話", "Mobile"],
+  fax:              ["FAX", "Fax"],
+  postal_code:      ["郵便番号", "Postal code"],
+  address:          ["住所", "Address"],
+  website:          ["Webサイト", "Website"],
+};
+const CARD_FIELD_ORDER = [
+  "company_name", "person_name", "person_name_kana", "department", "title",
+  "email", "phone", "mobile", "fax", "postal_code", "address", "website",
+];
+// 受付フォームへ引き継ぐ項目(この3つ以外は画面で確認するだけで、保存も送信もしない)
+const CARD_TO_FORM = { person_name: "visitor_name", company_name: "company", department: "department" };
+
+// 信頼度 → 表示色。しきい値は端末の設定(/card/status)から受け取る。
+function cardConfTone(conf, value, thresholds) {
+  const ok = (thresholds && thresholds.ok) ?? 0.85;
+  const warn = (thresholds && thresholds.warn) ?? 0.60;
+  if (!value) return { label: "未入力", color: T.muted, bg: T.panel, border: T.border };
+  if (conf >= ok) return { label: "", color: T.ink, bg: T.canvas, border: T.borderStrong };
+  if (conf >= warn) return { label: "要確認", color: "#8a6d1f", bg: "#fdf6e3", border: "#e3cf94" };
+  return { label: "要入力", color: T.urgent, bg: T.urgentBg, border: "rgba(168,66,56,.45)" };
+}
+
+// 名刺読み取りのオーバーレイを開く。確定されたら onConfirm(values) を呼ぶ。
+// 呼び出し側の画面(受付フォーム)はそのまま生きているので、入力途中の値は失われない。
+function openCardCapture({ onConfirm }) {
+  const bc = ST.brand_color;
+  const st = CARD.status || {};
+  const cap = st.capture || {};
+  const DETECT_INTERVAL = cap.detect_interval_ms || 120;
+  const DETECT_WIDTH = cap.detect_frame_max_width || 640;
+  const CAPTURE_WIDTH = cap.capture_max_width || 2048;
+  const THRESHOLDS = st.confidence || { ok: 0.85, warn: 0.6 };
+
+  let sessionId = null, stream = null, closed = false, looping = false, busy = false;
+  let result = null;                 // /card/capture の戻り
+  let values = {};                   // 確認画面で編集中の値
+  let focusedField = null, kbMode = "kana", cands = [];
+  let detectCanvas = null, detectCtx = null, shotCanvas = null, shotCtx = null;
+
+  const root = document.createElement("div");
+  root.id = "card-ov";
+  root.style.cssText = "position:absolute;inset:0;z-index:9600;background:rgba(20,18,14,.55);display:flex;align-items:center;justify-content:center;font-family:'Noto Sans JP',Inter,system-ui,sans-serif";
+  sc.appendChild(root);
+
+  const g = (id) => root.querySelector("#" + id);
+
+  function close() {
+    if (closed) return;
+    closed = true;
+    stopCamera();
+    if (sessionId) {
+      // セッション破棄 = 端末メモリ上の画像と抽出結果の破棄。失敗しても TTL で消える。
+      fetch(`/card/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
+      sessionId = null;
+    }
+    root.remove();
+  }
+  CLEANUPS.push(close);
+
+  function stopCamera() {
+    looping = false;
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  }
+
+  // ── スキャン画面 ───────────────────────────────────────────────────────────
+  function renderScan(msg) {
+    root.innerHTML = `
+<div style="width:1760px;height:960px;background:${T.bg};border-radius:28px;box-shadow:0 30px 90px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden">
+  <div style="padding:26px 40px;border-bottom:1px solid ${T.border};display:flex;align-items:center;gap:20px;flex-shrink:0">
+    <div>
+      <div style="font-size:40px;font-weight:600;color:${T.ink};letter-spacing:-1px">名刺を読み取ります</div>
+      <div style="font-size:20px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:2px">Scan your business card</div>
+    </div>
+    <div style="flex:1"></div>
+    <button id="cd-cancel" style="min-height:72px;padding:0 40px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:26px;font-weight:600;color:${T.sub};cursor:pointer;font-family:inherit">やめる</button>
+  </div>
+  <div style="flex:1;display:flex;gap:28px;padding:28px 40px;min-height:0">
+    <div id="cd-box" style="position:relative;flex:1;background:#14110d;border-radius:20px;overflow:hidden;min-width:0">
+      <video id="cd-vid" muted playsinline style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></video>
+      <canvas id="cd-ov" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas>
+      <div id="cd-msg" style="position:absolute;left:0;right:0;bottom:0;padding:28px 32px;background:linear-gradient(to top,rgba(0,0,0,.72),rgba(0,0,0,0));color:#fff">
+        <div id="cd-msg-ja" style="font-size:34px;font-weight:600;text-shadow:0 2px 12px rgba(0,0,0,.6)">${escHtml(msg || "カメラを準備しています")}</div>
+        <div id="cd-msg-en" style="font-size:19px;opacity:.75;margin-top:6px;font-family:Inter,system-ui,sans-serif">Starting camera</div>
+      </div>
+      <div id="cd-steady" style="position:absolute;left:32px;top:32px;display:flex;gap:8px"></div>
+    </div>
+    <div style="width:520px;display:flex;flex-direction:column;gap:20px;flex-shrink:0">
+      <div style="background:${T.canvas};border:2px solid ${T.border};border-radius:18px;padding:26px 28px">
+        <div style="font-size:24px;font-weight:600;color:${T.ink};margin-bottom:14px">きれいに読み取るコツ</div>
+        <div style="font-size:21px;color:${T.sub};line-height:1.85">
+          ・名刺を枠いっぱいに写す<br>
+          ・まっすぐ置いて動かさない<br>
+          ・照明の映り込みを避ける
+        </div>
+      </div>
+      <div style="background:${T.panel};border:2px solid ${T.border};border-radius:18px;padding:26px 28px;font-size:20px;color:${T.sub};line-height:1.8">
+        読み取りはこの端末の中だけで行います。名刺の画像が外部に送られることはなく、受付が終わると消去されます。
+      </div>
+      <div style="flex:1"></div>
+      <button id="cd-shot" style="width:100%;min-height:104px;background:${T.dark};border:none;border-radius:18px;color:#fff;font-size:32px;font-weight:600;cursor:pointer;font-family:inherit">撮影する</button>
+      <div style="font-size:19px;color:${T.muted};text-align:center">自動で撮影されないときはこちら</div>
+    </div>
+  </div>
+</div>`;
+    g("cd-cancel").addEventListener("click", () => { close(); });
+    g("cd-shot").addEventListener("click", () => { capture(); });
+  }
+
+  function setMessage(ja, en) {
+    const a = g("cd-msg-ja"), b = g("cd-msg-en");
+    if (a) a.textContent = ja || "";
+    if (b) b.textContent = en || "";
+  }
+
+  function setSteady(n, need) {
+    const el = g("cd-steady");
+    if (!el) return;
+    let html = "";
+    for (let i = 0; i < need; i++) {
+      const on = i < n;
+      html += `<div style="width:22px;height:8px;border-radius:4px;background:${on ? bc : "rgba(255,255,255,.28)"}"></div>`;
+    }
+    el.innerHTML = html;
+  }
+
+  // 四隅は「送ったフレームに対する比」で返ってくる。映像は object-fit:contain なので、
+  // 実際に描画されている矩形(レターボックスを除いた部分)へ写し直す。
+  function drawQuad(quad, state) {
+    const cv = g("cd-ov"), vid = g("cd-vid");
+    if (!cv || !vid) return;
+    const box = g("cd-box");
+    const cw = box.clientWidth, ch = box.clientHeight;
+    if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
+    const ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, cw, ch);
+    if (!quad || !vid.videoWidth) return;
+    const scale = Math.min(cw / vid.videoWidth, ch / vid.videoHeight);
+    const dw = vid.videoWidth * scale, dh = vid.videoHeight * scale;
+    const ox = (cw - dw) / 2, oy = (ch - dh) / 2;
+    const pts = quad.map(([rx, ry]) => [ox + rx * dw, oy + ry * dh]);
+    const good = state === "steady" || state === "capturing";
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = good ? bc : "rgba(255,255,255,.85)";
+    ctx.setLineDash(good ? [] : [16, 12]);
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < 4; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+    ctx.stroke();
+    if (good) { ctx.fillStyle = "rgba(255,255,255,.10)"; ctx.fill(); }
+    ctx.setLineDash([]);
+    ctx.fillStyle = good ? bc : "rgba(255,255,255,.9)";
+    pts.forEach(([x, y]) => { ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill(); });
+  }
+
+  async function startCamera() {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
+      });
+      if (closed) { s.getTracks().forEach(t => t.stop()); return; }
+      stream = s;
+      const vid = g("cd-vid");
+      if (vid) { vid.srcObject = stream; await vid.play().catch(() => {}); }
+      const started = await cardApi("POST", "/card/session", {});
+      if (closed) return;
+      sessionId = started.session_id;
+      looping = true;
+      setMessage("名刺を枠内に入れてください", "Place your card inside the frame");
+      loop();
+    } catch (e) {
+      if (!closed) setMessage("カメラを起動できませんでした", "Camera unavailable");
+    }
+  }
+
+  // 映像から 1 枚切り出して JPEG にする。検出ループ用(小さく速く)と撮影用(大きく綺麗に)で
+  // キャンバスを分けて使い回す。毎フレーム作り直すと GC が効いて描画が引っかかる。
+  function frameBlob(kind, width, quality) {
+    const vid = g("cd-vid");
+    if (!vid || !vid.videoWidth) return null;
+    const w = Math.min(width, vid.videoWidth);
+    const h = Math.round(vid.videoHeight * (w / vid.videoWidth));
+    let cv, ctx;
+    if (kind === "detect") {
+      if (!detectCanvas) { detectCanvas = document.createElement("canvas"); detectCtx = detectCanvas.getContext("2d"); }
+      cv = detectCanvas; ctx = detectCtx;
+    } else {
+      if (!shotCanvas) { shotCanvas = document.createElement("canvas"); shotCtx = shotCanvas.getContext("2d"); }
+      cv = shotCanvas; ctx = shotCtx;
+    }
+    cv.width = w; cv.height = h;
+    ctx.drawImage(vid, 0, 0, w, h);
+    return new Promise(res => cv.toBlob(res, "image/jpeg", quality));
+  }
+
+  async function loop() {
+    if (!looping || closed) return;
+    if (!busy) {
+      busy = true;
+      try {
+        const blob = await frameBlob("detect", DETECT_WIDTH, 0.62);
+        if (blob && sessionId && looping) {
+          const r = await cardPostImage(`/card/frame?session_id=${sessionId}`, blob);
+          if (!closed && looping) {
+            setMessage(r.message, r.message_en);
+            setSteady(r.steady, r.steady_needed);
+            drawQuad(r.quad, r.state);
+            if (r.should_capture) { busy = false; capture(); return; }
+          }
+        }
+      } catch (e) { /* 1 フレームの失敗は無視して次へ */ }
+      busy = false;
+    }
+    setTimeout(loop, DETECT_INTERVAL);
+  }
+
+  async function capture() {
+    if (closed || !sessionId) return;
+    looping = false;
+    setMessage("名刺を読み取っています", "Reading the card");
+    try {
+      const blob = await frameBlob("shot", CAPTURE_WIDTH, 0.92);
+      if (!blob) throw new Error("no frame");
+      const r = await cardPostImage(`/card/capture?session_id=${sessionId}`, blob);
+      if (closed) return;
+      stopCamera();
+      result = r;
+      values = {};
+      CARD_FIELD_ORDER.forEach(k => { values[k] = (r.fields[k] && r.fields[k].value) || ""; });
+      renderConfirm();
+    } catch (e) {
+      if (closed) return;
+      setMessage("うまく読み取れませんでした。もう一度お試しください", "Could not read the card");
+      looping = true;
+      setTimeout(loop, 900);
+    }
+  }
+
+  // ── 確認画面 ───────────────────────────────────────────────────────────────
+  function fieldRow(key) {
+    const [ja, en] = CARD_FIELD_LABELS[key];
+    const f = (result && result.fields[key]) || { value: "", confidence: 0 };
+    const tone = cardConfTone(f.confidence, values[key], THRESHOLDS);
+    const pct = Math.round((f.confidence || 0) * 100);
+    const cands = (f.candidates || []).filter(c => c && c !== values[key]).slice(0, 3);
+    const toForm = CARD_TO_FORM[key];
+    return `
+<div style="margin-bottom:14px">
+  <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
+    <span style="font-size:21px;font-weight:600;color:${T.ink}">${ja}</span>
+    <span style="font-size:15px;color:${T.muted};font-family:Inter,system-ui,sans-serif">${en}</span>
+    ${toForm ? `<span style="font-size:14px;color:${bc};border:1px solid ${bc};border-radius:6px;padding:1px 7px">受付に入力</span>` : ""}
+    <span style="flex:1"></span>
+    ${tone.label ? `<span style="font-size:15px;font-weight:700;color:${tone.color}">${tone.label}</span>` : ""}
+    <span style="font-size:14px;color:${T.muted};font-family:'JetBrains Mono',monospace">${values[key] ? pct + "%" : "—"}</span>
+  </div>
+  <input id="cf-${key}" data-cf="${key}" type="text" value="${escHtml(values[key] || "")}"
+    style="width:100%;height:56px;background:${tone.bg};border:2px solid ${focusedField === key ? bc : tone.border};border-radius:12px;padding:0 16px;font-size:22px;color:${T.ink};outline:none;font-family:inherit">
+  ${cands.length ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:8px">${cands.map(c =>
+      `<button type="button" data-cand-for="${key}" data-cand-val="${escHtml(c)}" style="padding:6px 14px;background:${T.panel};border:1px solid ${T.borderStrong};border-radius:8px;font-size:17px;color:${T.sub};cursor:pointer;font-family:inherit">${escHtml(c)}</button>`
+    ).join("")}</div>` : ""}
+</div>`;
+  }
+
+  function renderConfirm() {
+    const img = result && result.card_image;
+    root.innerHTML = `
+<div style="width:1820px;height:1010px;background:${T.bg};border-radius:28px;box-shadow:0 30px 90px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden">
+  <div style="padding:22px 36px;border-bottom:1px solid ${T.border};display:flex;align-items:center;gap:18px;flex-shrink:0">
+    <div>
+      <div style="font-size:36px;font-weight:600;color:${T.ink};letter-spacing:-1px">読み取り結果をご確認ください</div>
+      <div style="font-size:18px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:2px">Please check the result</div>
+    </div>
+    <div style="flex:1"></div>
+    <div style="font-size:19px;color:${T.sub};text-align:right;line-height:1.5">
+      黄色=要確認 / 赤=要入力<br>
+      <span style="color:${T.muted};font-size:16px">違うところはタップして直せます</span>
+    </div>
+  </div>
+  <div style="flex:1;display:flex;gap:24px;padding:22px 36px;min-height:0">
+    <div style="width:560px;display:flex;flex-direction:column;gap:16px;flex-shrink:0">
+      <div style="background:${T.panel};border:2px solid ${T.border};border-radius:16px;padding:14px;display:flex;align-items:center;justify-content:center;min-height:0;flex:1">
+        ${img ? `<img src="${img}" alt="名刺" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:8px">` : `<div style="color:${T.muted};font-size:20px">画像なし</div>`}
+      </div>
+      <div style="background:${T.canvas};border:2px solid ${T.border};border-radius:16px;padding:16px 20px;font-size:18px;color:${T.sub};line-height:1.7;flex-shrink:0">
+        全体の読み取り精度 <span style="font-weight:700;color:${T.ink};font-family:'JetBrains Mono',monospace">${Math.round((result.ocr_confidence || 0) * 100)}%</span><br>
+        <span style="font-size:16px;color:${T.muted}">この画像は確定後に消去されます</span>
+      </div>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+      <div id="cf-list" style="flex:1;overflow-y:auto;padding-right:10px;min-height:0">
+        ${CARD_FIELD_ORDER.map(fieldRow).join("")}
+      </div>
+      <div id="cf-kb" style="flex-shrink:0"></div>
+    </div>
+  </div>
+  <div style="padding:18px 36px 22px;border-top:1px solid ${T.border};display:flex;gap:16px;flex-shrink:0">
+    <button id="cf-retry" style="min-height:84px;padding:0 44px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:16px;font-size:27px;font-weight:600;color:${T.sub};cursor:pointer;font-family:inherit">再撮影</button>
+    <button id="cf-clear" style="min-height:84px;padding:0 44px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:16px;font-size:27px;font-weight:600;color:${T.sub};cursor:pointer;font-family:inherit">すべてクリア</button>
+    <div style="flex:1"></div>
+    <button id="cf-cancel" style="min-height:84px;padding:0 44px;background:transparent;border:2px solid ${T.border};border-radius:16px;font-size:27px;font-weight:600;color:${T.muted};cursor:pointer;font-family:inherit">やめる</button>
+    <button id="cf-ok" style="min-height:84px;padding:0 72px;background:${T.dark};border:none;border-radius:16px;font-size:30px;font-weight:600;color:#fff;cursor:pointer;font-family:inherit">この内容で入力する →</button>
+  </div>
+</div>`;
+
+    root.querySelectorAll("[data-cf]").forEach(el => {
+      el.addEventListener("input", () => { values[el.dataset.cf] = el.value; });
+      el.addEventListener("focus", () => {
+        focusedField = el.dataset.cf;
+        renderKeyboard(); markFocus();
+        // キーボードが出ると一覧が縮むので、編集中の項目を見える位置へ寄せる
+        setTimeout(() => el.scrollIntoView({ block: "nearest" }), 0);
+      });
+      el.addEventListener("touchstart", (e) => { e.preventDefault(); el.focus(); });
+    });
+    root.querySelectorAll("[data-cand-for]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.candFor;
+        values[key] = btn.dataset.candVal;
+        const input = g("cf-" + key);
+        if (input) input.value = values[key];
+      });
+    });
+    g("cf-retry").addEventListener("click", () => { restart(); });
+    g("cf-clear").addEventListener("click", () => {
+      CARD_FIELD_ORDER.forEach(k => { values[k] = ""; const el = g("cf-" + k); if (el) el.value = ""; });
+    });
+    g("cf-cancel").addEventListener("click", () => { close(); });
+    g("cf-ok").addEventListener("click", () => { confirm(); });
+    renderKeyboard();
+  }
+
+  function markFocus() {
+    root.querySelectorAll("[data-cf]").forEach(el => {
+      el.style.borderColor = el.dataset.cf === focusedField ? bc : T.borderStrong;
+    });
+  }
+
+  // ── 確認画面の簡易キーボード ───────────────────────────────────────────────
+  // 受付フォームの五十音キーボードと同じ考え方の縮小版。実機キオスクは OS の
+  // ソフトキーボードが出ないため、修正できるようにこれを備える。
+  const KB_HIRA = [
+    ["あ","か","さ","た","な","は","ま","や","ら","わ"],
+    ["い","き","し","ち","に","ひ","み","",  "り",""],
+    ["う","く","す","つ","ぬ","ふ","む","ゆ","る",""],
+    ["え","け","せ","て","ね","へ","め","",  "れ",""],
+    ["お","こ","そ","と","の","ほ","も","よ","ろ","を"],
+  ];
+  const KB_ABC = [
+    ["A","B","C","D","E","F","G","H","I","J"],
+    ["K","L","M","N","O","P","Q","R","S","T"],
+    ["U","V","W","X","Y","Z","-","_",".","@"],
+    ["a","b","c","d","e","f","g","h","i","j"],
+    ["k","l","m","n","o","p","q","r","s","t"],
+    ["u","v","w","x","y","z","/",":","+","~"],
+  ];
+  const KB_NUM = [
+    ["1","2","3","4","5","6","7","8","9","0"],
+    ["-","(",")","〒","#","*"," ",".","@","/"],
+  ];
+  const kataOf = (s) => s.replace(/[ぁ-ゖ]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60));
+  const hiraOf = (s) => s.replace(/[ァ-ヶ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60));
+  const KB_DAKU = { "か":"が","き":"ぎ","く":"ぐ","け":"げ","こ":"ご","さ":"ざ","し":"じ","す":"ず","せ":"ぜ","そ":"ぞ","た":"だ","ち":"ぢ","つ":"づ","て":"で","と":"ど","は":"ば","ひ":"び","ふ":"ぶ","へ":"べ","ほ":"ぼ","が":"か","ぎ":"き","ぐ":"く","げ":"け","ご":"こ","ざ":"さ","じ":"し","ず":"す","ぜ":"せ","ぞ":"そ","だ":"た","ぢ":"ち","づ":"つ","で":"て","ど":"と","ば":"は","び":"ひ","ぶ":"ふ","べ":"へ","ぼ":"ほ" };
+  const KB_HANDAKU = { "は":"ぱ","ひ":"ぴ","ふ":"ぷ","へ":"ぺ","ほ":"ぽ","ぱ":"は","ぴ":"ひ","ぷ":"ふ","ぺ":"へ","ぽ":"ほ" };
+  const KB_SMALL = { "あ":"ぁ","い":"ぃ","う":"ぅ","え":"ぇ","お":"ぉ","つ":"っ","や":"ゃ","ゆ":"ゅ","よ":"ょ","ぁ":"あ","ぃ":"い","ぅ":"う","ぇ":"え","ぉ":"お","っ":"つ","ゃ":"や","ゅ":"ゆ","ょ":"よ" };
+  const withKata = (m) => { const r = { ...m }; for (const k in m) r[kataOf(k)] = kataOf(m[k]); return r; };
+
+  function kbRows() {
+    if (kbMode === "abc") return KB_ABC;
+    if (kbMode === "num") return KB_NUM;
+    if (kbMode === "kata") return KB_HIRA.map(r => r.map(c => c ? kataOf(c) : ""));
+    return KB_HIRA;
+  }
+
+  function renderKeyboard() {
+    const pane = g("cf-kb");
+    if (!pane) return;
+    if (!focusedField) {
+      pane.innerHTML = `<div style="margin-top:10px;padding:18px;border-top:1px solid ${T.border};font-size:19px;color:${T.muted};text-align:center">直したい項目をタップするとキーボードが出ます</div>`;
+      return;
+    }
+    const [ja] = CARD_FIELD_LABELS[focusedField];
+    const key = (label, id, extra) => `<button type="button" ${id ? `id="${id}"` : ""} ${extra || ""} style="height:52px;min-width:52px;flex:1;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:22px;color:${T.ink};cursor:pointer;font-family:inherit">${label}</button>`;
+    const tab = (label, mode) => `<button type="button" data-kbmode="${mode}" style="height:44px;padding:0 18px;background:${kbMode === mode ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:17px;font-weight:600;color:${kbMode === mode ? "#fff" : T.ink};cursor:pointer;font-family:inherit">${label}</button>`;
+    const rows = kbRows().map(row =>
+      `<div style="display:flex;gap:6px">${row.map(c => c ? key(c, "", `data-kbkey="${escHtml(c)}"`) : `<div style="flex:1;min-width:52px"></div>`).join("")}</div>`
+    ).join("");
+    const isKana = kbMode === "kana" || kbMode === "kata";
+    pane.innerHTML = `
+<div style="margin-top:10px;border-top:1px solid ${T.border};padding-top:12px">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+    <span style="font-size:18px;color:${T.sub}">「${ja}」を入力中</span>
+    <span style="flex:1"></span>
+    ${tab("かな","kana")}${tab("カナ","kata")}${tab("ABC","abc")}${tab("123","num")}
+    <button type="button" id="kb-done" style="height:44px;padding:0 20px;background:${T.panel};border:1px solid ${T.borderStrong};border-radius:8px;font-size:17px;font-weight:600;color:${T.sub};cursor:pointer;font-family:inherit">閉じる</button>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:6px">
+    ${rows}
+    <div style="display:flex;gap:6px">
+      ${isKana ? key("ん","kb-n") + key("゛","kb-daku") + key("゜","kb-handaku") + key("小","kb-small") + key("ー","kb-choon") + key("変換","kb-conv") : ""}
+      ${key("空白","kb-space")}
+      ${key("⌫","kb-bs")}
+    </div>
+  </div>
+  <div id="kb-cands" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px"></div>
+</div>`;
+    pane.querySelectorAll("[data-kbmode]").forEach(b =>
+      b.addEventListener("mousedown", e => { e.preventDefault(); kbMode = b.dataset.kbmode; renderKeyboard(); }));
+    const act = (e) => {
+      const btn = e.target.closest("button");
+      if (!btn || !pane.contains(btn)) return;
+      e.preventDefault();
+      if (btn.dataset.kbmode) return;
+      const input = g("cf-" + focusedField);
+      if (!input) return;
+      const k = btn.dataset.kbkey;
+      if (btn.id === "kb-done") { focusedField = null; renderKeyboard(); markFocus(); return; }
+      if (btn.dataset.candVal != null) { applyCand(btn.dataset.candVal); return; }
+      if (btn.id === "kb-conv") { convert(); return; }
+      if (btn.id === "kb-bs") input.value = input.value.slice(0, -1);
+      else if (btn.id === "kb-space") input.value += " ";
+      else if (btn.id === "kb-n") input.value += (kbMode === "kata" ? "ン" : "ん");
+      else if (btn.id === "kb-choon") input.value += "ー";
+      else if (btn.id === "kb-daku") input.value = modLast(input.value, withKata(KB_DAKU));
+      else if (btn.id === "kb-handaku") input.value = modLast(input.value, withKata(KB_HANDAKU));
+      else if (btn.id === "kb-small") input.value = modLast(input.value, withKata(KB_SMALL));
+      else if (k != null) input.value += k;
+      else return;
+      values[focusedField] = input.value;
+      if (btn.id !== "kb-conv") clearCands();
+    };
+    pane.addEventListener("mousedown", act);
+    pane.addEventListener("touchstart", act, { passive: false });
+  }
+
+  function modLast(v, map) {
+    if (!v) return v;
+    const last = v[v.length - 1];
+    return map[last] !== undefined ? v.slice(0, -1) + map[last] : v;
+  }
+  function clearCands() { const el = g("kb-cands"); if (el) el.innerHTML = ""; cands = []; }
+  function applyCand(val) {
+    const input = g("cf-" + focusedField);
+    if (!input) return;
+    input.value = input.value.replace(/[ぁ-ゖァ-ヶー]+$/, val);
+    values[focusedField] = input.value;
+    clearCands();
+  }
+  async function convert() {
+    const input = g("cf-" + focusedField);
+    if (!input) return;
+    const m = input.value.match(/[ぁ-ゖァ-ヶー]+$/);
+    if (!m) return;
+    let list = await deviceConvert(m[0], 60);
+    const hira = hiraOf(m[0]), kata = kataOf(hira);
+    for (const x of [hira, kata]) if (x && !list.includes(x)) list.push(x);
+    cands = [...new Set(list)].slice(0, 40);
+    const el = g("kb-cands");
+    if (el) el.innerHTML = cands.map(c =>
+      `<button type="button" data-cand-val="${escHtml(c)}" style="height:46px;padding:0 16px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:21px;color:${T.ink};cursor:pointer;font-family:inherit">${escHtml(c)}</button>`
+    ).join("");
+  }
+
+  // ── 確定 / やり直し ────────────────────────────────────────────────────────
+  async function confirm() {
+    const btn = g("cf-ok");
+    if (btn) { btn.disabled = true; btn.textContent = "確定しています…"; }
+    let payload = null;
+    try {
+      payload = await cardApi("POST", `/card/session/${sessionId}/confirm`, { values });
+    } catch (e) {
+      // 確定APIが落ちても、画面で確認済みの値は使える（保存はもともとしない）
+      payload = { ...values, confirmed_by_user: true };
+    }
+    sessionId = null;         // confirm でサーバ側は破棄済み
+    close();
+    if (typeof onConfirm === "function") onConfirm(payload);
+  }
+
+  async function restart() {
+    if (sessionId) { fetch(`/card/session/${sessionId}`, { method: "DELETE" }).catch(() => {}); sessionId = null; }
+    result = null; values = {}; focusedField = null;
+    renderScan("カメラを準備しています");
+    startCamera();
+  }
+
+  renderScan();
+  startCamera();
+  return { close };
+}
+
 // ─── RECEPTION FORM (画面内蔵の五十音ソフトキーボード) ────────────────────────────
 // 左=入力フォーム / 右=五十音表キーボード。列＝行(あ/か/さ…)の五十音表に、撥音ん・
 // 濁点゛・半濁点゜・小文字・長音ー・スペースのコントロール行を備える。ひらがな/カタカナ/ABC
@@ -1917,6 +2467,7 @@ function showReception(initPurpose) {
     : ["ご予約のあるお客様", "お打ち合わせ", "納品", "採用面接", "その他"];
   const chipStyle = (sel) => `padding:16px 24px;border-radius:14px;border:2px solid ${sel ? bc : T.borderStrong};background:${sel ? bc : T.canvas};color:${sel ? "#fff" : T.ink};font-size:26px;font-weight:600;cursor:pointer;font-family:inherit;min-height:60px;display:flex;align-items:center;justify-content:center`;
   let submitting = false, errMsg = "";
+  let cardNote = "";          // 名刺から入力したときの案内(1行)
   let form = { visitor_name: "", company: "", department: "", staff: "", purpose: initPurpose ?? "" };
   let idleId, kbMode = "kana", focusedField = null;
   let cands = [];   // 現在表示中の漢字変換候補
@@ -2139,6 +2690,26 @@ function showReception(initPurpose) {
     kbPane.addEventListener("touchstart", kbAction, { passive: false });
   }
 
+  // 名刺の読み取り結果をフォームへ反映する。
+  // 受付に送るのは お名前 / 会社名 / 部署 の 3 つだけ。メール・電話・住所などは
+  // 確認画面で表示するだけで、端末にもサーバにも保存せず、ここで捨てる。
+  function applyCardValues(v) {
+    if (!v) return;
+    const applied = [];
+    if (v.person_name) { form.visitor_name = v.person_name; applied.push("お名前"); }
+    if (v.company_name) { form.company = v.company_name; applied.push("会社名"); }
+    // 部署は管理画面で登録された選択肢にあるものだけ反映する(自由入力欄が無いため)
+    if (v.department && DEPARTMENT_LIST.includes(v.department)) {
+      form.department = v.department;
+      applied.push("部署");
+    }
+    cardNote = applied.length
+      ? `名刺から ${applied.join("・")} を入力しました。違うところは右のキーボードで直してください。`
+      : "名刺から読み取れる情報がありませんでした。お手数ですが入力してください。";
+    errMsg = "";
+    render();
+  }
+
   function render() {
     const staffInner = STAFF_LIST.length
       ? `<select id="f-staff" style="${selStyle}"><option value="">選択してください</option>${STAFF_LIST.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join("")}</select>`
@@ -2164,10 +2735,15 @@ function showReception(initPurpose) {
   <div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px 32px;overflow:hidden">
     <!-- 左側：入力フォーム -->
     <div style="display:flex;flex-direction:column;gap:12px">
-      <div style="margin-bottom:8px">
-        <div style="font-size:40px;font-weight:600;color:${T.ink};letter-spacing:-1.2px;line-height:1.1">ご来訪情報</div>
-        <div style="font-size:24px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:2px">Visit Details</div>
+      <div style="margin-bottom:8px;display:flex;align-items:flex-end;gap:16px">
+        <div>
+          <div style="font-size:40px;font-weight:600;color:${T.ink};letter-spacing:-1.2px;line-height:1.1">ご来訪情報</div>
+          <div style="font-size:24px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:2px">Visit Details</div>
+        </div>
+        <div style="flex:1"></div>
+        ${cardAvailable() ? `<button id="rec-card" type="button" style="display:inline-flex;align-items:center;gap:12px;min-height:72px;padding:0 28px;background:${T.canvas};border:2px solid ${bc};border-radius:16px;font-size:25px;font-weight:600;color:${bc};cursor:pointer;font-family:inherit">${ICO.card}名刺で入力</button>` : ""}
       </div>
+      ${cardNote ? `<div style="margin-bottom:10px;background:${T.panel};border:1px solid ${T.border};border-radius:12px;padding:12px 16px;color:${T.sub};font-size:19px">${escHtml(cardNote)}</div>` : ""}
       ${errMsg ? `<div style="margin-bottom:14px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.35);border-radius:12px;padding:12px 14px;color:${T.urgent};font-size:16px">${escHtml(errMsg)}</div>` : ""}
       <div style="display:flex;flex-direction:column;gap:12px;flex:1">
         ${fieldWrap("お名前", "Name", true, `<input id="f-name" type="text" autocomplete="off" placeholder="山田 太郎" style="${inputStyle}">`)}
@@ -2205,6 +2781,8 @@ function showReception(initPurpose) {
     if (g("f-staff")) g("f-staff").value = form.staff;
     g("rec-back").addEventListener("click", () => { cleanup(); go("top"); });
     bindHomeBtn("rec-home");
+    const cardBtn = g("rec-card");
+    if (cardBtn) cardBtn.addEventListener("click", () => { resetIdle(); openCardCapture({ onConfirm: applyCardValues }); });
     Object.keys(KEY).forEach(id => {
       const el = g(id); if (!el) return;
       const ev = el.tagName === "SELECT" ? "change" : "input";
@@ -2271,6 +2849,14 @@ function showReception(initPurpose) {
   }
 
   render();
+
+  // boot 時の可否確認(ensureCardStatus)がまだ終わっていない場合に備える。
+  // 解決してからこの画面が生きていれば描き直して「名刺で入力」を出す。
+  if (!CARD.checked) {
+    ensureCardStatus()
+      .then(() => { if (CURRENT_SCREEN === "reception") render(); })
+      .catch(() => {});
+  }
 }
 
 // 訪問者名に付ける敬称サフィックス(名前ベース)。名前が既に敬称(様/さま/さん)で
@@ -3672,6 +4258,10 @@ async function boot() {
   // トークンが無ければ自己登録。承認待ちなら showPending 済みで false が返る。
   if (!(await ensureRegistered())) return;
   const token = localStorage.getItem(TOKEN_KEY);
+
+  // 名刺読み取りの利用可否(OCR モデル・依存パッケージの導入状況)を一度だけ確認する。
+  // 使えない端末では受付フォームに「名刺で入力」を出さない。失敗しても起動は止めない。
+  ensureCardStatus().catch(() => {});
 
   // Load settings + schedule in parallel
   try {

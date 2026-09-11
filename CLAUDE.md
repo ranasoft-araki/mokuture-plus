@@ -446,10 +446,45 @@ mokuture/
 
 ### キオスク OTA 配信（`kiosk.html`・agent の自己更新）
 
-キオスク端末(agent)は `updater.py` で backend の `GET /kiosk/bundle/manifest`(version＋各ファイル `sha256(bytes)[:16]`)を定期ポーリングし、version が変われば変更ファイルだけを `GET /kiosk/bundle/file/{path}` からDL→idle時に適用する。対象は `BUNDLE_FILES`(kiosk.html/tap.mp3/main.py/updater.py/gpio.py/sync.py/state.py/config.py/locker_store.py)。デバイス側 `_local_hash` と backend の hash は同一算法(`sha256(bytes)[:16]`)＝一致すれば再DLしない。
+キオスク端末(agent)は `updater.py` で backend の `GET /kiosk/bundle/manifest`(version＋各ファイル `sha256(bytes)[:16]`)を定期ポーリングし、version が変われば変更ファイルだけを `GET /kiosk/bundle/file/{path}` からDL→idle時に適用する。対象は `BUNDLE_FILES`(kiosk.html/tap.mp3/main.py/updater.py/gpio.py/sync.py/state.py/config.py/locker_store.py＋`card/**.py` 17ファイル)。デバイス側 `_local_hash` と backend の hash は同一算法(`sha256(bytes)[:16]`)＝一致すれば再DLしない。
 
 - **配信元は「ローカルの kiosk_agent が有ればそれ、無ければ GitHub public raw(master)」**(`backend/app/api/kiosk.py` の `_read_bundle_bytes`/`_collect_bundle`)。**本番 Render のイメージはビルドコンテキストが `backend/` のみで `kiosk_agent/` を含まないため**、以前は配信元パスが存在せず manifest が空(`files:[]`)＝**全キオスクにOTAが一切届いていなかった**。対策として、ローカルに無い場合は公開リポジトリ `raw.githubusercontent.com/ranasoft-araki/mokuture-plus/master/kiosk_agent/<rel>` から取得(120s バイトキャッシュ)。これで **Dockerfile/コンテキストを触らず**、push→backend再デプロイ→GitHub master の最新 kiosk.html を配信、で更新が実機に届く。env `KIOSK_BUNDLE_DIR`/`KIOSK_BUNDLE_GITHUB_RAW` で上書き可。
 - **注意**: 配信は GitHub **master** ソース＝**push していない変更は実機に届かない**。kiosk.html を直したら commit＋push すること。Windows開発機のローカル配信は CRLF、GitHub/Linux は LF で hash が変わるが、実機(Linux Pi)は常に LF なので manifest と一致し再DLループにならない。
+
+### 名刺読み取り（QR無し来訪者の受付フォーム自動入力）
+
+受付フォーム(`showReception`)の「名刺で入力」から、カメラにかざした名刺を読み取って
+**お名前・会社名・部署**を自動入力する。**端末内で完結**し、外部 OCR/生成AI/外部APIは一切使わない。
+詳細は [`kiosk_agent/CARD_READER.md`](kiosk_agent/CARD_READER.md)（セットアップ/API仕様/しきい値/トラブルシュート）。
+
+- **実装場所は `kiosk_agent/card/`**（別サービス・別ポート・別systemdは作らない）。キオスクエージェントに
+  `APIRouter(prefix="/card")` をマウントする。`main.py` の import は try/except で包んであり、
+  依存(opencv/onnxruntime)やモデルが無い端末では**ルーターを生やさずキオスク本体は従来どおり起動**する。
+  画面側は boot 時に `GET /card/status` を見て、使えなければ「名刺で入力」を描画しない。
+- **カメラはブラウザが握る**(`getUserMedia`)。サーバ側で `/dev/video0` を開くと QR スキャンと排他になるため。
+  検出ループは 640px の JPEG を 120ms ごとに `POST /card/frame`、撮影時だけ 2048px を `POST /card/capture`。
+- **保存しない**。SQLite も一時ファイルも持たない。画像はプロセスメモリ上のセッションのみで、
+  確定/取り消し/TTL(180s)のいずれでも破棄。受付に送るのは氏名/会社名/部署だけで、
+  メール・電話・住所は確認画面に出すだけで捨てる。ログにも値を出さない。
+- **`/card/*` は既定でループバック限定**(`bind_loopback_only`)。agent 自体は 0.0.0.0 で待つが、名刺だけ絞る。
+- **しきい値はコードに直書きしない**。`card/defaults.py` が唯一の定義で、`card_reader.yaml`(端末ごと・gitignore)
+  と環境変数 `CARD_<SECTION>__<KEY>` で上書きする。`card_reader.yaml.example` は既定値と完全一致し、
+  ズレると `tests/test_config.py` が落ちる。
+- **OCR は2系統**。第一候補 `paddle_onnx`(PP-OCRv4 の det/rec を ONNX Runtime で直接実行)、
+  第二候補 `tesseract`(コマンド直叩き)。`card/ocr/base.py` の `OcrEngine` を実装し、設定 `ocr.engine` の一語で入替。
+  **日本語モデルの文字セットに `@`/`_`/`〒` が無い**ため、英数字専用モデル(`rec_en.onnx`)で
+  CJK を含まない行だけ読み直している。無い場合は復元を試み、特定できなければ**空欄で返す**（作らない）。
+- **モデル(約23MB)と依存パッケージは OTA では配らない**。`install.sh` → `scripts/fetch_ocr_models.py`
+  (SHA-256 照合つき)の担当。OTA が配るのは `card/**.py` のみ。辞書(`card/dictionaries/`)は現場で
+  追記される想定なので**あえて OTA 対象外**（上書きすると消えるため）。**その裏返しとして、
+  リポジトリ側で辞書に語を足しても OTA では実機に届かない**。端末で `git pull` するか
+  該当ファイルを手で置き換える必要がある（辞書は mtime を見るので再起動は不要）。
+- **辞書は再起動不要**。`card/dictionaries/*.txt|tsv` は mtime を見て読み直す。
+- OTA 対象は agent(`updater.MANAGED_FILES`) と backend(`kiosk.BUNDLE_FILES`) の2箇所にあり、
+  ズレると「その端末だけ古いコード」になる。`tests/test_ota_list.py` が並び順まで一致を検証する。
+- テストは `kiosk_agent/tests/`（252件）。**実在の名刺は使わない**。`tests/make_fixtures.py` が
+  架空の社名・氏名と予約済みドメインで名刺画像を生成する（横型/縦型/日英混在/白/色付き/木目/斜め/
+  反射/ぼけ/暗所/名刺でない紙/スマホ画面 等19パターン）。モデル未取得なら `-m ocr` のテストが自動 skip。
 
 ### キオスク画面（device 版 `kiosk_agent/static/kiosk.html`）
 画面遷移フロー（`go(screen, data)` で管理）:

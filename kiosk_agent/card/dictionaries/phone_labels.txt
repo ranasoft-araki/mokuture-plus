@@ -1,0 +1,27 @@
+# 電話番号の種別ラベル。「種別<TAB>表記」。表記は大文字小文字を無視して照合する。
+# OCR の 0/O 取り違えを吸収するため、照合前に O を 0 に寄せた形でも比較する。
+phone	TEL
+phone	Tel
+phone	TEL.
+phone	電話
+phone	℡
+phone	代表
+phone	直通
+phone	DIAL
+phone	Phone
+phone	PHONE
+mobile	携帯
+mobile	携带
+mobile	Mobile
+mobile	MOBILE
+mobile	Mob
+mobile	M.
+mobile	Cell
+mobile	CELL
+mobile	携帯電話
+fax	FAX
+fax	Fax
+fax	FAX.
+fax	ファックス
+fax	ファクシミリ
+fax	F.

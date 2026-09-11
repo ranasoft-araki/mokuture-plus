@@ -133,6 +133,26 @@ BUNDLE_FILES = [
     "state.py",
     "config.py",
     "locker_store.py",  # ロッカーのローカル状態・ミラーペイロード生成。agent の MANAGED_FILES と一致させる
+    # 名刺読み取り(QR無し来訪の受付フォーム自動入力)。agent の updater.MANAGED_FILES と
+    # 同じ並びにしておくこと(片方だけ足すと、その端末だけ古いコードのまま動く)。
+    # 依存パッケージと OCR モデルは OTA では配らない(install.sh / fetch_ocr_models.py の担当)。
+    "card/__init__.py",
+    "card/api.py",
+    "card/defaults.py",
+    "card/detect.py",
+    "card/dicts.py",
+    "card/extract.py",
+    "card/pipeline.py",
+    "card/preprocess.py",
+    "card/quality.py",
+    "card/session.py",
+    "card/settings.py",
+    "card/textnorm.py",
+    "card/types.py",
+    "card/ocr/__init__.py",
+    "card/ocr/base.py",
+    "card/ocr/paddle_onnx.py",
+    "card/ocr/tesseract.py",
 ]
 _FORCE_WINDOW_SEC = 7200  # force flag stays active for 2 hours after trigger
 

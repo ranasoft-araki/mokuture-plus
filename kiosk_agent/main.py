@@ -503,6 +503,19 @@ async def _open_with_autolock(locker_id: str, door: DoorSensor) -> None:
         locker_ctrl.set_state(locker_id, False)  # 無通電=施錠位置(閉扉で自動施錠)
 
 
+# 名刺読み取り（QR無し来訪者の受付フォーム自動入力）。
+# opencv / onnxruntime は任意依存なので、入っていない端末では import に失敗する。
+# その場合でもキオスク本体は従来どおり動かし、/card/* を生やさないだけにする。
+# 画面側は起動時に /card/status を見て、使えなければ名刺の導線を出さない。
+try:
+    from card.api import purge_loop as card_purge_loop, router as card_router, warmup_sync as card_warmup
+    _CARD_IMPORT_ERROR = ""
+except Exception as _e:          # ImportError 以外（モデル破損など）でも止めない
+    card_purge_loop = None       # type: ignore[assignment]
+    card_router = None           # type: ignore[assignment]
+    card_warmup = None           # type: ignore[assignment]
+    _CARD_IMPORT_ERROR = f"{type(_e).__name__}: {_e}"
+
 _KIOSK_HTML = Path(__file__).parent / "static" / "kiosk.html"
 _JSQR_JS   = Path(__file__).parent / "static" / "jsqr.min.js"
 _TAP_MP3   = Path(__file__).parent / "static" / "tap.mp3"
@@ -525,6 +538,14 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(kana_kanji.ensure_dict)
         await asyncio.to_thread(kana_kanji.warmup)
     warmup_task = asyncio.create_task(_prepare_convert_dict())
+    # 名刺読み取り: OCR モデルの事前ロード（初回の待ち時間を消す）と、
+    # 期限切れセッション（＝メモリ上の画像）の定期破棄。
+    card_tasks: list[asyncio.Task] = []
+    if card_router is not None:
+        card_tasks.append(asyncio.create_task(asyncio.to_thread(card_warmup)))
+        card_tasks.append(asyncio.create_task(card_purge_loop()))
+    elif _CARD_IMPORT_ERROR:
+        print(f"[card] disabled: {_CARD_IMPORT_ERROR}")
     await systemd_watchdog.ready("mokuture kiosk agent started")
     yield
     task.cancel()
@@ -532,6 +553,8 @@ async def lifespan(app: FastAPI):
     heartbeat_task.cancel()
     watchdog_task.cancel()
     warmup_task.cancel()
+    for t in card_tasks:
+        t.cancel()
     locker_ctrl.close()
     pir.close()
     for door in doors.values():
@@ -546,6 +569,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if card_router is not None:
+    app.include_router(card_router)
 
 
 class ReceptionBody(BaseModel):

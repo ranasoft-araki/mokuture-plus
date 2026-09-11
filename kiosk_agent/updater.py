@@ -39,10 +39,36 @@ MANAGED_FILES = [
     "state.py",
     "config.py",
     "locker_store.py",  # ロッカーのローカル状態・ミラーペイロード生成。実機へ確実に届ける
+    # 名刺読み取り(QR無し来訪者の受付フォーム自動入力)。Python の変更は再起動が要る。
+    # 依存パッケージ(opencv/onnxruntime)と OCR モデルは OTA では配れない(サイズと
+    # ビルドの都合)。それらは install.sh / scripts/fetch_ocr_models.py の担当で、
+    # ここで配るのはコードと辞書だけ。未導入の端末に届いても import に失敗して
+    # 名刺機能が無効になるだけで、キオスク本体は動き続ける。
+    "card/__init__.py",
+    "card/api.py",
+    "card/defaults.py",
+    "card/detect.py",
+    "card/dicts.py",
+    "card/extract.py",
+    "card/pipeline.py",
+    "card/preprocess.py",
+    "card/quality.py",
+    "card/session.py",
+    "card/settings.py",
+    "card/textnorm.py",
+    "card/types.py",
+    "card/ocr/__init__.py",
+    "card/ocr/base.py",
+    "card/ocr/paddle_onnx.py",
+    "card/ocr/tesseract.py",
+    # 辞書は運用中に現場で追記されうる。OTA で上書きされると消えてしまうため
+    # 配信対象に入れない(初期セットは install / git pull で入る)。
 ]
 
 # Changing these files requires a service restart to take effect.
 RESTART_FILES = {"main.py", "updater.py", "gpio.py", "sync.py", "state.py", "config.py", "locker_store.py"}
+# card/ 配下はすべて Python なので、変更があれば再起動する（下の apply() が判定）。
+_RESTART_DIRS = ("card",)
 
 NORMAL_INTERVAL = 1800   # 30 min between normal checks
 FORCE_INTERVAL  = 60     # 1 min when a force-flagged update is pending
@@ -178,7 +204,7 @@ class BundleUpdater:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dst)
                 log.info(f"[updater] applied {rel}")
-                if Path(rel).name in RESTART_FILES:
+                if Path(rel).name in RESTART_FILES or Path(rel).parts[0] in _RESTART_DIRS:
                     needs_restart = True
 
             _save_version(version)

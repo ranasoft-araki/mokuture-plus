@@ -35,6 +35,17 @@ kiosk_agent/locker_state.json
 # Kiosk agent かな漢字辞書のダウンロード中間物(SKK-JISYO.L 本体は資産として commit 済み)
 kiosk_agent/SKK-JISYO.L.gz
 
+# 名刺 OCR のモデル(約 23MB)。scripts/fetch_ocr_models.py が導入時に取得する。
+# ハッシュ付きの取得元はスクリプト側に書いてあるので、リポジトリには置かない。
+kiosk_agent/models/
+
+# 名刺テストの生成画像。tests/make_fixtures.py がその場で作る(実在の名刺は使わない)。
+kiosk_agent/tests/fixtures/
+
+# 端末ごとの名刺読み取り設定(現場でしきい値を調整したもの)。
+# 配布するのは card_reader.yaml.example のほう。
+kiosk_agent/card_reader.yaml
+
 # Misc
 .DS_Store
 *.log

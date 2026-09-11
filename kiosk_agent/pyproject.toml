@@ -16,4 +16,25 @@ rpi = [
     "gpiozero>=2.0",
     "lgpio",
 ]
+# 名刺読み取り（QR無し来訪者の受付フォーム自動入力）。
+# 入っていない端末でもキオスク本体は従来どおり起動し、名刺の導線だけが出なくなる。
+# opencv は Raspberry Pi OS では apt の python3-opencv を使うほうが速く入る
+# （install.sh が apt を先に試し、失敗したら pip に落とす）。
+card = [
+    "opencv-python-headless>=4.9",
+    "numpy>=1.26",
+    "onnxruntime>=1.17",
+    "PyYAML>=6.0",
+]
+dev = [
+    "pytest>=8.0",
+    "Pillow>=10.0",      # tests/make_fixtures.py が架空名刺の画像を作るのに使う
+]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "ocr: OCR モデルを必要とするテスト（モデル未取得なら自動で skip）",
+    "slow: 数秒かかるテスト",
+]

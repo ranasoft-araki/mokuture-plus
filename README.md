@@ -153,8 +153,24 @@ kiosk_agent/
 ├── pyproject.toml        依存パッケージ
 ├── install.sh            RPi 向けセットアップスクリプト
 ├── mokuture-kiosk.service  systemd ユニットファイル
-└── .env.example          環境変数サンプル
+├── .env.example          環境変数サンプル
+├── card/                 名刺読み取り (QR無し来訪者の受付フォーム自動入力)
+├── card_reader.yaml.example  名刺読み取りの設定例 (しきい値・OCR エンジン)
+├── scripts/              OCR モデル取得・処理時間の計測・開発用の確認スクリプト
+└── tests/                テスト (架空名刺をその場で生成して使う)
 ```
+
+### 名刺読み取り
+
+受付フォームで「名刺で入力」を押すと、カメラにかざした名刺から会社名・氏名・部署を
+読み取ってフォームに入力します。**読み取りは端末の中だけで完結し**、外部の OCR API も
+生成 AI も使いません。名刺の画像も抽出結果も保存しません。
+
+任意機能です。依存パッケージ (opencv / onnxruntime) と OCR モデルが入っていない端末
+では、受付画面に導線が出ないだけでキオスク本体は従来どおり動きます。
+
+→ セットアップ・API 仕様・しきい値調整・トラブルシューティングは
+[kiosk_agent/CARD_READER.md](kiosk_agent/CARD_READER.md)
 
 ### 起動コマンド
 
@@ -241,6 +257,11 @@ curl -X POST http://<RPiのIPアドレス>:8080/register
 | `GET` | `/media/{media_id}` | ローカルキャッシュからメディア配信 |
 | `POST` | `/device/locker/{id}/open` | ロッカー解錠 (GPIO) |
 | `GET` | `/device/pir` | PIR センサー状態取得 |
+| `GET` | `/card/status` | 名刺読み取りの利用可否・しきい値（未導入なら 404） |
+| `POST` | `/card/session` | 名刺読み取りセッションの開始 |
+| `POST` | `/card/frame` | 検出用フレームの送信（案内文言・四隅を返す） |
+| `POST` | `/card/capture` | 撮影フレームの送信（OCR・項目抽出） |
+| `POST` | `/card/session/{id}/confirm` | 確認済みの値を確定しセッションを破棄 |
 
 ### 環境変数 (.env)
 
