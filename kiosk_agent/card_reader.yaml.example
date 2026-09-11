@@ -40,8 +40,16 @@ detection:
   # gradient_thresh を上げると木目などの誤検出が減り、白い名刺は取りにくくなる。
   normalize_lo_pct: 1.0
   normalize_hi_pct: 99.0
+  # しきい値は max(gradient_thresh, 勾配の gradient_noise_pct 百分位 × gradient_noise_mult)。
+  # ノイズの多い映像では自動的に上がる。誤検出が多いなら mult を上げる。
   gradient_thresh: 5
+  gradient_noise_pct: 90.0
+  gradient_noise_mult: 1.6
+  # 白飛び画素がこの割合を超えたら、固定しきい値のエッジ抽出も試す（反射対策）。
+  glare_fallback_ratio: 0.02
   approx_epsilon: 0.02
+  # 四隅を辺ごとの直線当てはめで取り直す（縦型名刺など、画面内で小さいときに効く）。
+  refine_corners: true
   # 候補として拾う面積の下限/上限（画面に占める割合）。
   # 「小さすぎます」の案内は quality.capture_area_min が出すので、ここは低めでよい。
   min_area_ratio: 0.02
@@ -58,9 +66,10 @@ detection:
   max_corner_angle_deg: 120
 
 quality:
-  # 自動撮影に進んでよい名刺の大きさ（画面に占める面積比）。
-  capture_area_min: 0.12
-  capture_area_max: 0.88
+  # 自動撮影に進んでよい名刺の大きさ。「その向きで写せる最大の何割か」で測るので、
+  # 縦型・横型のどちらでも同じ基準になる（面積比だと縦型が原理的に不利）。
+  capture_fill_min: 0.50
+  capture_fill_max: 0.99
   # ピント。Laplacian 分散がこれを下回ると「ピントを合わせています」。
   # カメラと照明で妥当な値が変わるので、実機では scripts/bench.py --metrics で
   # 実際の数値を見てから決めること。
@@ -121,6 +130,14 @@ ocr:
     rec_batch: 6
     use_space_char: true
     drop_score: 0.5
+    # 縦書き対応。縦長の枠を「1 文字ずつ読む（縦書き）」解釈でも試し、
+    # 倒れた横書きとして読むより確からしければそちらを採る。
+    vertical_text: true
+    vertical_ratio: 1.5
+    vertical_margin: 0.05
+    vertical_try_below: 0.75
+    en_pass_max_lines: 4
+    vertical_batch: 32
   tesseract:
     cmd: tesseract
     lang: jpn+eng

@@ -40,9 +40,22 @@ DEFAULTS: dict[str, Any] = {
         # エッジとする。上げると木目などの誤検出が減り、白名刺が取りにくくなる。
         "normalize_lo_pct": 1.0,
         "normalize_hi_pct": 99.0,
+        # しきい値は max(gradient_thresh, この画像の勾配の gradient_noise_pct 百分位
+        # × gradient_noise_mult)。画面の大半は平坦なので高めの百分位がノイズ床の
+        # 推定になる。固定値だけでは、白い名刺（境界の勾配が弱い）と暗所やノイズの
+        # 多い映像（ノイズ床が高い）を同時に扱えない。
         "gradient_thresh": 5,
+        "gradient_noise_pct": 90.0,
+        "gradient_noise_mult": 1.6,
+        # 画面の白飛び画素がこの割合を超えたら、固定しきい値のエッジ抽出も試す。
+        # 強い反射があると勾配の分布全体が持ち上がり、適応しきい値が名刺の境界まで
+        # 切り落とすことがあるため。常時走らせると検出ループが重くなるので絞る。
+        "glare_fallback_ratio": 0.02,
         "approx_epsilon": 0.02,       # 多角形近似の許容誤差（輪郭長に対する比）
-        # 「候補として拾う」下限。小さすぎ/大きすぎの案内は quality.capture_area_* が出す
+        # 多角形近似で得た四隅を、辺ごとの直線当てはめで取り直す。
+        # 名刺が画面内で小さいとき（縦型を横長のカメラで写した場合など）に効く。
+        "refine_corners": True,
+        # 「候補として拾う」下限。小さすぎ/大きすぎの案内は quality.capture_fill_* が出す
         # ので、ここは拾えなくなる限界だけを決める（拾えないと案内自体が出せない）。
         "min_area_ratio": 0.02,
         "max_area_ratio": 0.95,
@@ -58,10 +71,12 @@ DEFAULTS: dict[str, Any] = {
     },
 
     "quality": {
-        # 自動撮影に進んでよい名刺の大きさ（画面に占める面積比）。
+        # 自動撮影に進んでよい名刺の大きさ。「その向きで写せる最大の何割か」で測る
+        # （面積比だと、横長のカメラでは縦型の名刺が最大でも画面の 34% にしかならず、
+        #  横型の 93% と同じしきい値では縦型だけ不利になる。detect.fill_ratio 参照）。
         # 下回れば「もう少しカメラに近づけてください」、超えれば「少し離してください」。
-        "capture_area_min": 0.12,
-        "capture_area_max": 0.88,
+        "capture_fill_min": 0.50,
+        "capture_fill_max": 0.99,
         "focus_min": 60.0,            # Laplacian 分散の下限（下回る＝ピンぼけ）
         # 明るさは名刺領域の「上位 5% 点」で測る（平均だと濃色の名刺が暗所扱いになる）。
         "brightness_min": 90.0,       # 下回る＝その場が暗すぎる
@@ -114,7 +129,20 @@ DEFAULTS: dict[str, Any] = {
             "rec_image_height": 48,
             "rec_batch": 6,
             "use_space_char": True,
-            "drop_score": 0.5,        # これ未満の行は捨てる
+            "drop_score": 0.5,
+            # 縦書き対応。縦長の枠を「1 文字ずつのマスに切って読む」解釈も試し、
+            # 倒れた横書きとして読むより確からしければそちらを採る。
+            "vertical_text": True,
+            # 枠の縦横比がこれ以上なら縦長とみなす（縦書きの列の候補）。
+            "vertical_ratio": 1.5,
+            # 縦書きとして採用するのに必要な確信度の上乗せ。同点なら横書きを残す。
+            "vertical_margin": 0.05,
+            # 起こして読んだ確信度がこれ未満の列だけ、1 文字ずつの読みも試す。
+            "vertical_try_below": 0.75,
+            # 英数字モデルで読み直す行数の上限（メール・URL を優先して選ぶ）。
+            "en_pass_max_lines": 4,
+            # 縦書きのマスはどれも小さいので、まとめて推論したほうがずっと速い。
+            "vertical_batch": 32,        # これ未満の行は捨てる
         },
         "tesseract": {
             "cmd": "tesseract",

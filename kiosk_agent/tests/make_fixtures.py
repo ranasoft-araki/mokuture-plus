@@ -94,6 +94,57 @@ class CardSpec:
     extra: list[str] = field(default_factory=list)
 
 
+def draw_vertical(d: ImageDraw.ImageDraw, xy, text: str, font, fill, gap: float = 0.10) -> float:
+    """縦書きで 1 文字ずつ積む。戻り値は次に書ける y。
+
+    日本語の縦書きは字送りが一定（全角幅）なので、等間隔に積めば実物に近くなる。
+    """
+    x, y = xy
+    size = getattr(font, "size", 20)
+    step = size * (1.0 + gap)
+    for ch in text:
+        d.text((x, y), ch, font=font, fill=fill)
+        y += step
+    return y
+
+
+def render_vertical_card(spec: "CardSpec") -> Image.Image:
+    """縦書きの縦型名刺。右から左へ、社名・氏名・連絡先の順に並べる。
+
+    伝統的な日本の名刺でよくある組み方。横書きの名刺とは OCR のかかり方が
+    まったく違うので、専用のフィクスチャとして用意する。
+    """
+    w, h = CARD_H, CARD_W          # 縦型
+    img = Image.new("RGB", (w, h), spec.bg)
+    d = ImageDraw.Draw(img)
+    pad = 52
+
+    # 右端: 会社名
+    x = w - pad - 30
+    draw_vertical(d, (x, pad), spec.company, font(30, bold=True), spec.fg)
+
+    # 中央: 部署・役職 と 氏名（氏名がいちばん大きい）
+    x -= 62
+    y = draw_vertical(d, (x, pad + 20), spec.department + " " + spec.title, font(22), spec.fg)
+    x -= 58
+    draw_vertical(d, (x, pad + 30), spec.name.replace(" ", ""), font(46, bold=True), spec.fg)
+
+    # 左側: 住所と連絡先（縦書き）
+    x = pad + 150
+    draw_vertical(d, (x, pad), spec.postal + spec.address, font(17), spec.fg)
+    x -= 34
+    draw_vertical(d, (x, pad), spec.tel, font(17), spec.fg)
+    x -= 34
+    draw_vertical(d, (x, pad), spec.fax, font(17), spec.fg)
+    x -= 34
+    draw_vertical(d, (x, pad), spec.mobile, font(17), spec.fg)
+
+    # メールと URL は縦書きにしない（実物でも横書きのことが多い）
+    d.text((pad, h - pad - 40), spec.email, font=font(16), fill=spec.fg)
+    d.text((pad, h - pad - 18), spec.url, font=font(16), fill=spec.fg)
+    return img
+
+
 def render_card(spec: CardSpec) -> Image.Image:
     """名刺そのもの（正対・余白なし）を描く。"""
     w, h = (CARD_H, CARD_W) if spec.vertical else (CARD_W, CARD_H)
@@ -441,6 +492,22 @@ def _build_raw(name: str):
         )
         return (*_scene(render_card(spec), plain), spec)
 
+    if name == "vertical_writing":
+        spec = CardSpec(
+            company="株式会社松風堂",
+            name="小林 誠",
+            department="営業部",
+            title="部長",
+            postal="〒100-0001",
+            address="東京都千代田区千代田一ノ二ノ三",
+            tel="TEL 03-1234-5678",
+            fax="FAX 03-1234-5679",
+            mobile="携帯 090-1234-5678",
+            email="makoto.kobayashi@example.jp",
+            url="https://example.jp",
+        )
+        return (*place_on_background(render_vertical_card(spec), plain, scale=0.24), spec)
+
     if name == "not_a_card_paper":
         # 名刺ではない A4 の紙（縦横比が違う）。検出されてはいけない。
         paper = Image.new("RGB", (1240, 1754), (252, 252, 250))
@@ -482,7 +549,7 @@ PATTERNS = [
     "landscape_ja", "portrait_ja", "mixed_ja_en", "english_only",
     "white_card", "colored_card", "wood_background", "skewed",
     "glare", "blurry", "dark", "too_small",
-    "multi_phone", "no_corporate_suffix", "small_name", "with_kana",
+    "multi_phone", "no_corporate_suffix", "small_name", "with_kana", "vertical_writing",
     "not_a_card_paper", "not_a_card_phone", "blank_card", "empty_desk",
 ]
 

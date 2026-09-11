@@ -27,6 +27,7 @@ DETECTABLE = [
     "landscape_ja", "portrait_ja", "mixed_ja_en", "english_only",
     "white_card", "colored_card", "wood_background", "skewed",
     "multi_phone", "no_corporate_suffix", "small_name", "with_kana",
+    "vertical_writing",
 ]
 # 名刺ではないので検出されてはいけないもの
 #   not_a_card_paper : A4 の書類（縦横比が違う）

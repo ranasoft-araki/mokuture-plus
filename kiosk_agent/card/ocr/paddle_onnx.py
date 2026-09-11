@@ -52,14 +52,28 @@ def _has_cjk(text: str) -> bool:
     return any(lo <= ord(ch) <= hi for ch in text for lo, hi in _CJK_RANGES)
 
 
-def _needs_ascii_pass(text: str) -> bool:
-    """英数字モデルで読み直す価値がある行か。
+def _ascii_pass_targets(results: dict, limit: int) -> list[int]:
+    """英数字モデルで読み直す行を選ぶ。
 
-    日本語モデルに足りないのは "@" と "_" だけなので、メール・URL になり得る行
-    （CJK を含まず、ドメインらしい並びがある）に限る。英文の社名や住所まで
-    読み直すと認識時間がほぼ倍になるだけで得るものが無い。
+    日本語モデルに足りないのは "@" と "_" だけなので、メール・URL になり得る行に
+    絞る。ただし日本語モデルがひどく崩して読むと（"...@example.jp" が
+    "ft txample. jp" のように空白混じりになる）ドメインの形に見えなくなるため、
+    「CJK を含まず、どこかにドットがある」行まで広げたうえで本数を絞る。
+    英文の社名や住所まで全部読み直すと認識時間がほぼ倍になる。
     """
-    return bool(text) and not _has_cjk(text) and _DOMAINISH.search(text) is not None
+    scored: list[tuple[int, int, int]] = []
+    for i, (text, _conf) in results.items():
+        if not text or _has_cjk(text):
+            continue
+        if _DOMAINISH.search(text):
+            priority = 0                 # ドメインの形をしている＝メール/URL の可能性大
+        elif "." in text:
+            priority = 1                 # 崩れているがドットはある
+        else:
+            continue                     # ドットが無い行に "@" は入っていない
+        scored.append((priority, -len(text), i))
+    scored.sort()
+    return [i for _p, _l, i in scored[:max(1, limit)]]
 
 
 def _import_ort():
@@ -274,7 +288,12 @@ class PaddleOnnxEngine(OcrEngine):
 
     @staticmethod
     def _crop_rotated(bgr, box: np.ndarray):
-        """PaddleOCR の get_rotate_crop_image 相当。行を水平な短冊へ起こす。"""
+        """PaddleOCR の get_rotate_crop_image 相当。枠を正対した短冊に起こす。
+
+        縦長のまま返す（ここでは回さない）。縦長の枠は「縦書きの列」かもしれないし
+        「倒れた横書きの行」かもしれず、画像だけでは決められない。どちらなのかは
+        run() が両方読んでみて確信度の高いほうを採る。
+        """
         pts = box.astype(np.float32)
         w = int(max(
             np.linalg.norm(pts[0] - pts[1]),
@@ -291,10 +310,80 @@ class PaddleOnnxEngine(OcrEngine):
         crop = cv2.warpPerspective(
             bgr, m, (w, h), borderMode=cv2.BORDER_REPLICATE, flags=cv2.INTER_CUBIC
         )
-        # 縦長すぎる（縦書き行など）なら 90 度起こす
-        if crop.shape[0] * 1.0 / max(1, crop.shape[1]) >= 1.5:
-            crop = np.rot90(crop)
         return np.ascontiguousarray(crop)
+
+    @staticmethod
+    def _split_vertical(crop, max_cells: int = 40) -> list:
+        """縦書きの列を 1 文字ずつのマスに切る。
+
+        1 文字ずつなら向きを変えずにそのまま認識器へ渡せる。切れ目は字間の空白で
+        探す。列の幅で等分する方法は、字間が空いている組み方だと 1 文字ぶんずれて
+        以降が全部ずれるので、空白が見つかるならそちらを優先する。
+        """
+        h, w = crop.shape[:2]
+        if w < 4 or h < 4:
+            return []
+
+        cuts = PaddleOnnxEngine._vertical_cuts(crop)
+        if not cuts:
+            # 空白が見つからない（字が詰まっている）。全角の字送りを仮定して等分する。
+            n = max(1, min(int(round(h / float(w))), max_cells))
+            step = h / float(n)
+            cuts = [(int(round(i * step)), int(round((i + 1) * step) if i < n - 1 else h))
+                    for i in range(n)]
+
+        pad = max(2, int(w * 0.12))        # 認識器は字の周りに少し余白があるほうが強い
+        cells = []
+        for y0, y1 in cuts[:max_cells]:
+            a, b = max(0, y0 - pad), min(h, y1 + pad)
+            if b - a < 4:
+                continue
+            cell = crop[a:b, :]
+            cell = cv2.copyMakeBorder(cell, 0, 0, pad, pad, cv2.BORDER_REPLICATE)
+            cells.append(np.ascontiguousarray(cell))
+        return cells
+
+    @staticmethod
+    def _vertical_cuts(crop) -> list[tuple[int, int]]:
+        """縦書きの列を字ごとに区切る位置を、行方向の空白から求める。
+
+        見つからない（字間が無い / 判定できない）場合は空リストを返す。
+        """
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        h, w = gray.shape[:2]
+        # 文字は背景より暗いとは限らない（濃地に白文字）。振れ幅の大きいほうを字とみなす。
+        mid = float(np.median(gray))
+        ink = (np.abs(gray.astype(np.float32) - mid) > 28).sum(axis=1)
+        if ink.max() <= 0:
+            return []
+        filled = ink > max(1.0, ink.max() * 0.12)
+
+        runs: list[tuple[int, int]] = []
+        start = None
+        for y in range(h):
+            if filled[y] and start is None:
+                start = y
+            elif not filled[y] and start is not None:
+                runs.append((start, y))
+                start = None
+        if start is not None:
+            runs.append((start, h))
+
+        # 小さすぎる塊（濁点・句読点など）は前の字にくっつける
+        merged: list[list[int]] = []
+        for a, b in runs:
+            if merged and (a - merged[-1][1]) < w * 0.25 and (b - a) < w * 0.45:
+                merged[-1][1] = b
+            else:
+                merged.append([a, b])
+        out = [(a, b) for a, b in merged if b - a >= max(3, int(w * 0.25))]
+        if len(out) < 2:
+            return []
+        # 字送りが極端にばらつくなら空白の読み違い。等分割に任せる。
+        sizes = [b - a for a, b in out]
+        if max(sizes) > min(sizes) * 3.0:
+            return []
+        return out
 
     def _rec_resize(self, crop, target_h: int, max_wh_ratio: float):
         h, w = crop.shape[:2]
@@ -328,11 +417,11 @@ class PaddleOnnxEngine(OcrEngine):
             return "", 0.0
         return "".join(chars), float(np.mean(scores))
 
-    def _recognize(self, session, charset, crops, indices) -> dict[int, tuple[str, float]]:
+    def _recognize(self, session, charset, crops, indices, batch_size: int | None = None) -> dict[int, tuple[str, float]]:
         """指定した crop 群を 1 つのモデルで認識し {index: (text, conf)} を返す。"""
         c = self._cfg()
         target_h = int(c["rec_image_height"])
-        batch = max(1, int(c["rec_batch"]))
+        batch = max(1, int(batch_size if batch_size else c["rec_batch"]))
         rec_in = session.get_inputs()[0].name
         out: dict[int, tuple[str, float]] = {}
 
@@ -350,6 +439,43 @@ class PaddleOnnxEngine(OcrEngine):
             preds = session.run(None, {rec_in: padded})[0]
             for n, i in enumerate(chunk):
                 out[i] = self._ctc_decode(preds[n], charset)
+        return out
+
+    def _recognize_vertical(self, bgr, boxes: list) -> list[tuple[str, float]]:
+        """縦書きの列として読む。列を 1 文字ずつに切り、上から順に連結する。
+
+        1 文字ずつなら向きを変えずに認識器へ渡せる（列ごと 90 度回すと、文字が
+        横倒しになってほとんど読めない）。
+        """
+        cells: list = []
+        spans: list[tuple[int, int]] = []
+        for box in boxes:
+            crop = self._crop_rotated(bgr, box)
+            start = len(cells)
+            if crop is not None:
+                cells.extend(self._split_vertical(crop))
+            spans.append((start, len(cells)))
+
+        if not cells:
+            return [("", 0.0) for _ in boxes]
+
+        # マスはどれも 1 文字ぶんの小さな正方形なので、まとめて流したほうが速い
+        # （既定のバッチ 6 のままだと縦書きの名刺で OCR が 3 倍近くかかる）。
+        decoded = self._recognize(
+            self._rec, self._charset, cells, list(range(len(cells))),
+            batch_size=int(self._cfg().get("vertical_batch", 32)),
+        )
+        out: list[tuple[str, float]] = []
+        for start, end in spans:
+            chars, confs = [], []
+            for i in range(start, end):
+                text, conf = decoded.get(i, ("", 0.0))
+                text = text.strip()
+                if not text:
+                    continue
+                chars.append(text)
+                confs.append(conf)
+            out.append(("".join(chars), float(np.mean(confs)) if confs else 0.0))
         return out
 
     def _classify_direction(self, crops: list) -> tuple[list, int]:
@@ -401,6 +527,17 @@ class PaddleOnnxEngine(OcrEngine):
         if not crops:
             return []
 
+        # 縦長の枠は「縦書きの列」か「倒れた横書きの行」のどちらか。画像だけでは
+        # 決められないので、両方読んで確信度の高いほうを採る（行ごとに判断する）。
+        ratio = float(c.get("vertical_ratio", 1.5))
+        vert_idx = [
+            i for i, cr in enumerate(crops)
+            if cr.shape[0] / max(1.0, cr.shape[1]) >= ratio
+        ]
+        # 横書きとして読むぶんは 90 度起こしてから通常経路に乗せる
+        for i in vert_idx:
+            crops[i] = np.ascontiguousarray(np.rot90(crops[i]))
+
         crops, flipped = self._classify_direction(crops)
         # 大半の行が上下逆だった＝名刺自体が 180 度回っている。画像を読み直さず、
         # 枠の座標を点対称に写して「正立したときの位置」に直す。これで読み取り順と
@@ -415,11 +552,29 @@ class PaddleOnnxEngine(OcrEngine):
 
         results = self._recognize(self._rec, self._charset, crops, list(range(len(crops))))
 
+        # 縦書きとしての読み（1 文字ずつのマスに切って上から連結）と比べる。
+        # 実測では、縦書きの列を 90 度起こして 1 行として読む従来の経路のほうが
+        # たいてい強い（文字が大きい列では 0.98 に達する）。1 文字ずつ読むのは
+        # 前後の文脈が無くなるぶん弱い。そこで「起こして読んだ結果が怪しい列」
+        # だけを対象にする。全部の列でやると縦書きの名刺で OCR が倍近くかかる。
+        if vert_idx and bool(c.get("vertical_text", True)):
+            weak = float(c.get("vertical_try_below", 0.75))
+            targets = [i for i in vert_idx if results.get(i, ("", 0.0))[1] < weak]
+            if targets:
+                vertical = self._recognize_vertical(bgr, [kept_boxes[i] for i in targets])
+                margin = float(c.get("vertical_margin", 0.05))
+                for n, i in enumerate(targets):
+                    v_text, v_conf = vertical[n]
+                    h_text, h_conf = results[i]
+                    # 明確に確からしいときだけ差し替える。同点なら従来の解釈を残す。
+                    if v_text and v_conf > h_conf + margin:
+                        results[i] = (v_text, v_conf)
+
         # CJK を含まない行（メール・URL・電話番号など）は英数字モデルで読み直す。
         # 日本語モデルの文字セットには "@" や "_" が無く、これらを含む文字列は
         # 原理的に正しく出力できないため。信頼度が大きく落ちない限り差し替える。
         if self._rec_en is not None:
-            ascii_idx = [i for i, (t, _c) in results.items() if _needs_ascii_pass(t)]
+            ascii_idx = _ascii_pass_targets(results, int(c.get("en_pass_max_lines", 4)))
             if ascii_idx:
                 en = self._recognize(self._rec_en, self._charset_en, crops, ascii_idx)
                 for i, (en_text, en_conf) in en.items():

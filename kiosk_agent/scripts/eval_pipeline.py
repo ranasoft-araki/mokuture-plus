@@ -42,10 +42,12 @@ EXPECT = {
     "no_corporate_suffix": {"company_name": "あおぞらクリエイティブ", "person_name": "伊藤直樹"},
     "small_name":    {"person_name": "渡辺三郎"},
     "with_kana":     {"person_name": "中村優子", "person_name_kana": "なかむらゆうこ"},
+    # 縦書きの名刺。連絡先の縦列は取りこぼすが、受付フォームに入る 2 項目は取れる。
+    "vertical_writing": {"company_name": "株式会社松風堂", "person_name": "小林誠"},
 }
 
 # 撮影ゲート（quality）で止まるため OCR まで進まないもの。抽出の期待値は置かない。
-SKIP = {"not_a_card_paper", "not_a_card_phone", "empty_desk", "dark", "too_small"}
+SKIP = {"not_a_card_paper", "not_a_card_phone", "blank_card", "empty_desk", "dark", "too_small"}
 
 
 def run_one(name: str, variant: str, engine):

@@ -198,6 +198,7 @@ def _metrics_payload(m: FrameMetrics) -> dict:
         "brightness": round(m.brightness, 1),
         "glare": round(m.glare_ratio, 4),
         "area": round(m.area_ratio, 4),
+        "fill": round(m.fill_ratio, 4),
         "aspect": round(m.aspect, 3),
         "text_regions": m.text_regions,
         "motion": round(m.motion, 4),

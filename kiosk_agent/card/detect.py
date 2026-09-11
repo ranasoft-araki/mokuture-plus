@@ -101,6 +101,86 @@ def _find_contours(edges):
     return res[0] if len(res) == 2 else res[1]
 
 
+def _point_segment_distance(p, a, b) -> float:
+    ab = b - a
+    denom = float(ab[0] * ab[0] + ab[1] * ab[1])
+    if denom < 1e-9:
+        return float(np.hypot(*(p - a)))
+    t = float(np.clip(np.dot(p - a, ab) / denom, 0.0, 1.0))
+    return float(np.hypot(*(p - (a + t * ab))))
+
+
+def _line_intersection(l1, l2):
+    """(vx, vy, x0, y0) 形式の 2 直線の交点。ほぼ平行なら None。"""
+    (vx1, vy1, x1, y1), (vx2, vy2, x2, y2) = l1, l2
+    det = vx1 * (-vy2) - vy1 * (-vx2)
+    if abs(det) < 1e-6:
+        return None
+    dx, dy = x2 - x1, y2 - y1
+    t = (dx * (-vy2) - dy * (-vx2)) / det
+    return (x1 + vx1 * t, y1 + vy1 * t)
+
+
+def refine_quad(cnt, quad: Quad) -> Quad:
+    """輪郭の点を 4 辺に振り分けて直線を当てはめ、その交点を四隅にする。
+
+    approxPolyDP は輪郭のギザつきに引きずられる。名刺が画面内で小さいとき
+    （縦型の名刺を横長のカメラで写した場合など）は特に顕著で、4 頂点に落とすために
+    許容誤差を大きくせざるを得ず、四隅が数十 px ずれる。辺は本来まっすぐなので、
+    辺ごとに直線を当てはめて交点を取り直したほうがずっと正確になる。
+
+    当てはめに失敗したら元の四隅をそのまま返す（悪化させない）。
+    """
+    pts = np.asarray(cnt, dtype=np.float64).reshape(-1, 2)
+    if len(pts) < 12:
+        return quad
+
+    corners = np.asarray(quad, dtype=np.float64)
+    side_len = [float(np.hypot(*(corners[(i + 1) % 4] - corners[i]))) for i in range(4)]
+    if min(side_len) < 8.0:
+        return quad
+
+    # 各点を最も近い辺へ割り当てる。角の近くの点はどちらの辺にも属しうるので捨てる。
+    # 検出ループで毎フレーム走るので、点ごとの Python ループにはしない
+    # （輪郭は数百点あり、素直に書くと 1 フレームで数十 ms 食う）。
+    a = corners                                   # (4, 2) 各辺の始点
+    b = np.roll(corners, -1, axis=0)              # (4, 2) 各辺の終点
+    ab = b - a                                    # (4, 2)
+    denom = np.einsum("ij,ij->i", ab, ab)         # (4,)
+    denom[denom < 1e-9] = 1e-9
+    rel = pts[:, None, :] - a[None, :, :]         # (N, 4, 2)
+    t = np.einsum("nij,ij->ni", rel, ab) / denom  # (N, 4) 辺上の位置 0-1
+    t_clamped = np.clip(t, 0.0, 1.0)
+    foot = a[None, :, :] + t_clamped[:, :, None] * ab[None, :, :]
+    dist = np.linalg.norm(pts[:, None, :] - foot, axis=2)   # (N, 4)
+    nearest = np.argmin(dist, axis=1)                        # (N,)
+    t_near = t[np.arange(len(pts)), nearest]
+    keep = (t_near >= 0.12) & (t_near <= 0.88)               # 角から離れた点だけ
+
+    lines = []
+    for i in range(4):
+        sel = pts[keep & (nearest == i)]
+        if len(sel) < 5:
+            return quad
+        vx, vy, x0, y0 = cv2.fitLine(
+            sel.astype(np.float32), cv2.DIST_L2, 0, 0.01, 0.01).ravel()
+        lines.append((float(vx), float(vy), float(x0), float(y0)))
+
+    refined = []
+    for i in range(4):
+        p = _line_intersection(lines[(i - 1) % 4], lines[i])
+        if p is None:
+            return quad
+        refined.append(p)
+
+    # 大きく動いたら当てはめが失敗している。元のほうを信じる。
+    limit = max(side_len) * 0.25
+    for i in range(4):
+        if float(np.hypot(refined[i][0] - corners[i][0], refined[i][1] - corners[i][1])) > limit:
+            return quad
+    return order_quad(np.array(refined))
+
+
 def _approx_quad(cnt, base_eps: float) -> Quad | None:
     """輪郭を四角形に落とす。落とせなければ None。
 
@@ -156,10 +236,41 @@ def _edge_strategies(gray, d):
     def fixed():
         return cv2.Canny(gray, int(d["canny_low"]), int(d["canny_high"]))
 
+    cache: dict[str, object] = {}
+
+    def _gradient():
+        """正規化してからモルフォロジー勾配。2 つの戦略で共有するので 1 度だけ計算する。"""
+        if "grad" not in cache:
+            n = _stretch(gray, float(d["normalize_lo_pct"]), float(d["normalize_hi_pct"]))
+            cache["grad"] = cv2.morphologyEx(n, cv2.MORPH_GRADIENT, k3)
+        return cache["grad"]
+
+    def _has_glare():
+        """強い反射が写っているか。固定しきい値の戦略を出すかどうかの判断に使う。"""
+        if "glare" not in cache:
+            cache["glare"] = float(np.count_nonzero(gray >= 250)) / float(gray.size)
+        return cache["glare"] > float(d["glare_fallback_ratio"])
+
     def grad_norm():
-        n = _stretch(gray, float(d["normalize_lo_pct"]), float(d["normalize_hi_pct"]))
-        grad = cv2.morphologyEx(n, cv2.MORPH_GRADIENT, k3)
-        return (grad >= int(d["gradient_thresh"])).astype(np.uint8) * 255
+        """ノイズ床に追従するしきい値。通常はこれで取れる。
+
+        固定値では成立しない: 実測で名刺の境界の勾配は 16(白い名刺×明るい机) から
+        130(木目の机) まで開き、背景のノイズ床も 0(きれいな面) から 15(暗所) まで
+        動く。画面の大半は平坦なので、高めの百分位がノイズ床のよい推定になる。
+        """
+        grad = _gradient()
+        floor = float(np.percentile(grad, float(d["gradient_noise_pct"])))
+        thr = max(float(d["gradient_thresh"]), floor * float(d["gradient_noise_mult"]))
+        return (grad >= thr).astype(np.uint8) * 255
+
+    def grad_fixed():
+        """ノイズ床を見ない固定しきい値。
+
+        強い反射があると画面全体の勾配分布が持ち上がり、適応しきい値が名刺の境界
+        （反射で弱くなっている）まで切り落としてしまう。そのときの取りこぼし対策。
+        ノイズを拾いやすいので、適応版で取れなかったときだけ使う。
+        """
+        return (_gradient() >= int(d["gradient_thresh"])).astype(np.uint8) * 255
 
     def auto_canny():
         med = float(np.median(gray))
@@ -169,7 +280,13 @@ def _edge_strategies(gray, d):
             lo, hi = max(0, lo - 10), min(255, hi + 20)
         return cv2.Canny(gray, lo, hi)
 
-    return (("canny", fixed), ("grad_norm", grad_norm), ("auto_canny", auto_canny))
+    strategies = [("canny", fixed), ("grad_norm", grad_norm)]
+    # 固定しきい値は反射があるときだけ。ノイズを拾いやすいうえ、名刺が写っていない
+    # フレーム（＝検出ループの大半）で毎回走らせると 1 フレームの処理時間が伸びる。
+    if _has_glare():
+        strategies.append(("grad_fixed", grad_fixed))
+    strategies.append(("auto_canny", auto_canny))
+    return tuple(strategies)
 
 
 # ── 文字らしさ ────────────────────────────────────────────────────────────────
@@ -309,6 +426,8 @@ def _best_quad(bgr, edges, frame_area: float, d: dict, prev_quad: Quad | None) -
         quad = _approx_quad(cnt, float(d["approx_epsilon"]))
         if quad is None:
             continue
+        if bool(d["refine_corners"]):
+            quad = refine_quad(cnt, quad)
 
         area_ratio = quad_area(quad) / frame_area
         if not (float(d["min_area_ratio"]) <= area_ratio <= float(d["max_area_ratio"])):
@@ -353,6 +472,33 @@ def _best_quad(bgr, edges, frame_area: float, d: dict, prev_quad: Quad | None) -
             best = cand
 
     return best
+
+
+def fill_ratio(quad: Quad, width: int, height: int) -> float:
+    """名刺が「その向きで写せる最大の大きさ」の何割を占めているか 0-1。
+
+    面積比をそのまま使うと向きで不公平になる。16:9 の横長カメラでは、横型の名刺は
+    画面の 93% まで占められるのに対し、縦型は最大でも 34% にしかならない（長辺を
+    画面の高さに合わせても横に余白が残るため）。同じしきい値を当てると、縦型だけ
+    「もう少し近づけてください」が出続ける。
+
+    そこで名刺の長辺が「その向きで取り得る最大の長さ」の何割かで測る。この値なら
+    向きに関係なく「画面いっぱいに写せていれば 1.0」になる。
+    """
+    top, right, bottom, left = quad_sides(quad)
+    horiz = (top + bottom) / 2.0
+    vert = (left + right) / 2.0
+    long_px = max(horiz, vert)
+    if long_px <= 0 or width <= 0 or height <= 0:
+        return 0.0
+    aspect = max(1.0, quad_aspect(quad))
+    if horiz >= vert:                      # 長辺が横向き
+        limit = min(float(width), aspect * float(height))
+    else:                                  # 長辺が縦向き（縦型の名刺）
+        limit = min(float(height), aspect * float(width))
+    if limit <= 0:
+        return 0.0
+    return float(min(1.0, long_px / limit))
 
 
 def is_inside_frame(quad: Quad, width: int, height: int, margin: float | None = None) -> bool:

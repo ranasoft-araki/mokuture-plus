@@ -33,6 +33,7 @@ class FrameMetrics:
     brightness: float = 0.0     # 名刺領域の輝度 上位5%点 0-255
     glare_ratio: float = 0.0    # 白飛び画素の割合 0-1
     area_ratio: float = 0.0     # 画面に占める名刺の面積比 0-1
+    fill_ratio: float = 0.0     # その向きで写せる最大に対する大きさ 0-1（向きに依存しない）
     aspect: float = 0.0         # 名刺の縦横比（長辺/短辺）
     text_regions: int = 0       # 内部で見つかった文字らしい領域の数
     motion: float = 0.0         # 直前フレームからの四隅移動量（画面短辺に対する比）

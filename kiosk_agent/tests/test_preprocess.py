@@ -50,16 +50,34 @@ def test_横書きの縦型名刺は回さない(scene):
     assert angle == 0
 
 
-def test_90度倒れた名刺は起こす(scene):
+def test_縦長の画像は回さない(scene):
+    """縦型の名刺を回してはいけない。
+
+    射影だけでは「縦書きの名刺」と「横書きの名刺が横倒し」を区別できない。
+    縦書きを回すと全部の文字が横倒しになって読めなくなる（実測で 8 行中 3 行に
+    落ちた）ので、縦長のまま OCR に渡し、行ごとに向きを判断させる。
+    """
     bgr, _truth, _spec = scene("landscape_ja")
     det = detect_card(bgr)
     assert det is not None
     card, _angle, _factor = rectify(bgr, det.quad)
     sideways = cv2.rotate(card, cv2.ROTATE_90_CLOCKWISE)
     fixed, angle = normalize_orientation(sideways)
-    assert angle == 90
-    # 起こした結果は元と同じく横長になる
-    assert fixed.shape[1] > fixed.shape[0]
+    assert angle == 0
+    assert fixed.shape == sideways.shape
+
+
+@pytest.mark.ocr
+def test_横倒しの名刺でも文字は読める(ocr_engine, scene):
+    """向きを直さない代わりに、OCR 側が行ごとに起こして読むことの確認。"""
+    from card.ocr import get_engine
+    bgr, _truth, _spec = scene("landscape_ja")
+    card, _angle, _factor = rectify(bgr, detect_card(bgr).quad)
+    sideways = cv2.rotate(card, cv2.ROTATE_90_CLOCKWISE)
+    lines = get_engine().run(make_variant(sideways, "color"))
+    text = "\n".join(l.text for l in lines).replace(" ", "")
+    assert "株式会社サンプル商会" in text
+    assert "山田太郎" in text
 
 
 def test_180度回転は形を変えない(scene):

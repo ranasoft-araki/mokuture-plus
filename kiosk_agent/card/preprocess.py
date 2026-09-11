@@ -54,17 +54,26 @@ def _row_profile_score(gray) -> float:
 def normalize_orientation(bgr) -> tuple[np.ndarray, int]:
     """文字が横に並ぶ向きへ 90 度単位で回す。(画像, 回した角度) を返す。
 
-    角度は反時計回りの度数（0 または 90）。180 度はここでは扱わない。
+    **縦型（縦長）の名刺は回さない。** 射影だけでは「縦書きの名刺」と「横書きの
+    名刺が横倒しになっている」を区別できず、縦書きを回すと全部の文字が横倒しに
+    なって 読めなくなる（実測で 8 行中 3 行しか読めなくなった）。
+
+    縦長のまま OCR に渡せば、縦長の枠は行ごとに「縦書き」と「倒れた横書き」の
+    両方で読まれ、確からしいほうが採られる（card/ocr/paddle_onnx.py）。つまり
+    どちらの名刺でも取りこぼさない。ここで無理に判断しない。
+
+    横長に写っている場合だけ、射影が明確に「行が縦に並んでいる」と言うときに回す。
     """
+    if bgr.shape[0] > bgr.shape[1]:
+        return bgr, 0
+
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     rotated = cv2.rotate(bgr, cv2.ROTATE_90_COUNTERCLOCKWISE)
     gray_r = cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY)
 
     s0 = _row_profile_score(gray)
     s90 = _row_profile_score(gray_r)
-    # 横長に写っているならまず 0 度を優先し、明確に上回るときだけ回す
-    bias = 1.15 if bgr.shape[1] >= bgr.shape[0] else 0.90
-    if s90 > s0 * bias:
+    if s90 > s0 * 1.15:
         return rotated, 90
     return bgr, 0
 

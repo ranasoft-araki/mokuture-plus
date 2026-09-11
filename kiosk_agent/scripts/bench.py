@@ -173,7 +173,8 @@ def show_metrics(bgr) -> None:
     print(f"  ピント         {m.focus:8.1f}   （quality.focus_min = {settings.get('quality.focus_min')}）")
     print(f"  明るさ(上位5%) {m.brightness:8.1f}   （quality.brightness_min = {settings.get('quality.brightness_min')}）")
     print(f"  白飛び率       {m.glare_ratio:8.3f}   （quality.glare_max = {settings.get('quality.glare_max')}）")
-    print(f"  面積比         {m.area_ratio:8.3f}   （quality.capture_area_min = {settings.get('quality.capture_area_min')}）")
+    print(f"  占有率         {m.fill_ratio:8.3f}   （quality.capture_fill_min = {settings.get('quality.capture_fill_min')}）")
+    print(f"  面積比         {m.area_ratio:8.3f}   （参考。向きで変わるので判定には使わない）")
     print(f"  縦横比         {m.aspect:8.3f}   （detection.aspect_min/max = "
           f"{settings.get('detection.aspect_min')}/{settings.get('detection.aspect_max')}）")
     print(f"  文字領域数     {m.text_regions:8d}   （detection.min_text_regions = {settings.get('detection.min_text_regions')}）")

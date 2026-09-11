@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from card import settings
-from card.detect import quad_motion
+from card.detect import fill_ratio, quad_motion
 from card.types import CaptureState, Detection, FrameMetrics, Quad
 
 # 画面に出す案内。spec の文言をそのまま使う（en は補助表示用）。
@@ -122,11 +122,13 @@ def evaluate(
     focus, bright, glare = region_metrics(bgr, quad)
     motion = quad_motion(prev_quad, quad, short_side) if prev_quad is not None else 1.0
     base = detection.metrics
+    fill = fill_ratio(quad, w, h)
     metrics = FrameMetrics(
         focus=focus,
         brightness=bright,
         glare_ratio=glare,
         area_ratio=base.area_ratio,
+        fill_ratio=fill,
         aspect=base.aspect,
         text_regions=base.text_regions,
         motion=motion,
@@ -135,9 +137,11 @@ def evaluate(
     margin = float(d["margin_px"])
     if not all(margin <= x <= (w - margin) and margin <= y <= (h - margin) for x, y in quad):
         return "out_of_frame", metrics
-    if base.area_ratio < float(q["capture_area_min"]):
+    # 大きさは面積比ではなく「その向きで写せる最大に対する割合」で見る。
+    # 面積比だと縦型の名刺が原理的に不利になる（detect.fill_ratio の説明を参照）。
+    if fill < float(q["capture_fill_min"]):
         return "too_small", metrics
-    if base.area_ratio > float(q["capture_area_max"]):
+    if fill > float(q["capture_fill_max"]):
         return "too_large", metrics
     if bright < float(q["brightness_min"]):
         return "dark", metrics
