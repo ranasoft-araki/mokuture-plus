@@ -285,6 +285,12 @@ def skin_mask(bgr):
             .astype(np.uint8) * 255)
 
 
+def has_skin(bgr, min_ratio: float = 0.005) -> bool:
+    """肌らしい画素がまとまって写っているか。重い処理へ進む前の足切り。"""
+    m = _skin_bool(bgr, settings.get("detection")["skin_luma_max"])
+    return float(np.count_nonzero(m)) / float(m.size) >= min_ratio
+
+
 def skin_boundary_edges(bgr):
     """肌と肌でないものの境目をエッジとして返す。
 
@@ -577,12 +583,10 @@ def _detect_at_scale(bgr, prev_quad: Quad | None) -> Detection | None:
     best_overall: Detection | None = None
     stop_area = float(d["strategy_stop_area"])
     # 肌の境目は予備の戦略でしか使わないので、肌がほとんど写っていないフレーム
-    # （＝検出ループの大半）では作らない。
+    # （＝検出ループの大半）ではモルフォロジーまで進まずに切り上げる。
     skin_edges = None
-    if bool(d["use_skin_boundary"]):
-        edges_from_skin = skin_boundary_edges(bgr)
-        if np.count_nonzero(edges_from_skin) > 0:
-            skin_edges = edges_from_skin
+    if bool(d["use_skin_boundary"]) and has_skin(bgr):
+        skin_edges = skin_boundary_edges(bgr)
     for _name, make_edges in _edge_strategies(gray, d, skin_edges):
         edges = make_edges()
         # 途切れた輪郭をつなぐ。実機では名刺の 1 辺が背景（手のひら・白い壁）と

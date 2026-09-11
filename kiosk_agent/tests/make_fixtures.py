@@ -588,8 +588,9 @@ def _build_raw(name: str):
             fy = y0 + (0.30 + 0.18 * k) * h
             d.rounded_rectangle([x1 - 0.09 * w, fy, x1 + 0.8 * w, fy + 0.11 * h],
                                 radius=26, fill=skin)
-        # 親指: 上辺を表からつまむ
-        d.rounded_rectangle([x0 + 0.12 * w, y0 - 0.16 * h, x0 + 0.72 * w, y0 + 0.06 * h],
+        # 親指: 上辺を表からつまむ。縁をつまむだけで、印刷面へは深く入らない
+        # （深く入れると社名ごと隠れてしまい、持ち方として不自然になる）。
+        d.rounded_rectangle([x0 + 0.14 * w, y0 - 0.16 * h, x0 + 0.44 * w, y0 + 0.02 * h],
                             radius=30, fill=skin)
         return scene, quad, spec
 

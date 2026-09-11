@@ -190,6 +190,11 @@ def test_手ぶれの上限は手に持つ前提で決めてある(scene, monkey
     assert det is not None
 
     limit = float(settings.get("quality.motion_max"))
+    # 既定値そのものを固定する。実機の録画では、手に持って差し出した名刺の
+    # 連続検出中の移動量が中央値 0.010・上side 0.02 台まで振れていた。机置き前提の
+    # 0.012 だと「動かさずにお待ちください」が出続けて撮影に進まない。
+    assert limit >= 0.02, "手に持った名刺の揺れ（実測で 0.02 台）を通せない"
+    assert limit <= 0.05, "これ以上緩めるとブレた画像が OCR に流れる"
     short = min(frame.shape[0], frame.shape[1])
     # 上限の 2 倍だけ四隅をずらした「直前のフレーム」を作れば moving になる
     shifted = [(x + limit * 2 * short, y) for x, y in det.quad]
@@ -329,7 +334,8 @@ def test_生成りやクラフト紙の名刺を肌と間違えない(scene):
         frame = _detect_frame(bgr)
         scale = frame.shape[1] / bgr.shape[1]
         want = [(x * scale, y * scale) for x, y in truth]
-        assert skin_ratio(frame, want) < float(settings.get("detection.max_skin_ratio")),             f"紙 {paper} が肌と判定されている"
+        assert skin_ratio(frame, want) < float(settings.get("detection.max_skin_ratio")), (
+            f"紙 {paper} が肌と判定されている")
         assert detect_card(frame) is not None, f"紙 {paper} の名刺が検出できない"
 
 
