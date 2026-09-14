@@ -35,6 +35,10 @@ from card.types import Detection, FrameMetrics, Quad
 
 Box = tuple[int, int, int, int]
 
+# 文字から決めた候補の点数。縁から決めた候補と比べるためのものではない
+# （縁で見つかったときはそもそもここへ来ない）ので、固定値でよい。
+_TEXT_SCORE = 0.5
+
 
 def text_boxes(gray) -> list[Box]:
     """文字らしい連結成分の矩形 (x, y, w, h) を返す。
@@ -59,7 +63,7 @@ def text_boxes(gray) -> list[Box]:
         x, y, w, h, area = (int(v) for v in stats[i])
         if h < h_min or h > h_max:
             continue
-        if w < 2 or w > w_max:
+        if w < float(d["text_min_width_px"]) or w > w_max:
             continue
         ratio = w / float(h)
         if ratio > ar_max or ratio < 1.0 / ar_max:
@@ -139,12 +143,13 @@ def row_count(boxes: list[Box]) -> int:
     """かたまりが何行に分かれているか。1 行しかないものは名刺ではない。"""
     if not boxes:
         return 0
+    gap = float(settings.get("detection.text_row_gap"))
     mh = float(np.median([b[3] for b in boxes]))
     centers = sorted(b[1] + b[3] / 2.0 for b in boxes)
     rows = 1
     last = centers[0]
     for c in centers[1:]:
-        if c - last > mh * 0.8:
+        if c - last > mh * gap:
             rows += 1
             last = c
     return rows
@@ -179,6 +184,14 @@ def detect_by_text(bgr) -> Detection | None:
     pts = []
     for x, y, w, h in group:
         pts += [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+    # 文字そのものが画面の端に達していたら、名刺は見切れていて読めない文字がある。
+    # 外へ広げたあとの矩形で見ても意味がない（余白ぶん必ず端に当たる）ので、
+    # 文字の位置で判断する。
+    margin = float(d["margin_px"])
+    clipped = (min(p[0] for p in pts) <= margin
+               or max(p[0] for p in pts) >= width - margin
+               or min(p[1] for p in pts) <= margin
+               or max(p[1] for p in pts) >= height - margin)
     (cx, cy), (rw, rh), angle = cv2.minAreaRect(np.array(pts, np.float32))
     pad = mh * float(d["text_pad_ratio"])
     rect = ((cx, cy), (rw + 2 * pad, rh + 2 * pad), angle)
@@ -189,16 +202,22 @@ def detect_by_text(bgr) -> Detection | None:
         return None
 
     from card.detect import quad_aspect, skin_ratio        # 循環 import を避ける
+    aspect = quad_aspect(quad)
+    # 名刺の「文字が入る範囲」は正方形に近いことも横長なこともあるが、細長い帯に
+    # はならない。レシートのような細長い印刷物を落とすための上限。
+    if aspect > float(d["text_max_region_aspect"]):
+        return None
     if skin_ratio(bgr, quad) > float(d["max_skin_ratio"]):
         return None                    # 顔や手のひらの上の模様を文字と見ない
 
     metrics = FrameMetrics(
         area_ratio=area_ratio,
-        aspect=quad_aspect(quad),
+        aspect=aspect,
         text_regions=len(group),
         text_height=mh,
+        text_clipped=clipped,
     )
-    return Detection(quad=quad, metrics=metrics, score=0.5, source="text")
+    return Detection(quad=quad, metrics=metrics, score=_TEXT_SCORE, source="text")
 
 
 def _order(box) -> Quad:

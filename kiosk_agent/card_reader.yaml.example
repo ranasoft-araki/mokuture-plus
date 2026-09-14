@@ -92,6 +92,8 @@ detection:
   text_block_size: 25
   text_c: 10
   text_min_height_px: 3
+  text_min_width_px: 2
+  text_row_gap: 0.8
   text_max_height_ratio: 0.12
   text_max_width_ratio: 0.30
   text_max_aspect: 10.0
@@ -101,6 +103,8 @@ detection:
   text_link_x: 3.0
   text_link_y: 5.0
   text_pad_ratio: 2.5
+  # 文字が入る範囲の縦横比の上限(レシートのような細長い印刷物を落とす)。
+  text_max_region_aspect: 2.4
   # 密なかたまりのすぐ外にある文字を取り込む距離(字高の倍数)と回数。
   text_absorb_ratio_x: 2.0
   text_absorb_ratio_y: 16.0
@@ -109,6 +113,9 @@ detection:
   # 写っていたら、その上の文字を名刺と見ない。
   text_veto_min_area: 0.10
   text_veto_support: 0.70
+  # 拾った文字のこの割合以上がその物体の上にあるときだけ止める。
+  text_veto_overlap: 0.60
+  text_veto_max: 4
   # この面積比以上で見つかったら残りのエッジ抽出戦略は試さない。
   strategy_stop_area: 0.12
   # この点数の候補が出たら同じエッジ画像の残りは調べない（速度のため）。

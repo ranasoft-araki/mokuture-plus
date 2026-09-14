@@ -604,6 +604,30 @@ def _build_raw(name: str):
             card, plain_background(SCENE_W, SCENE_H, spec.bg))
         return scene, quad, spec
 
+    if name == "receipt":
+        # レシート。文字が密に並んでいるが細長い。文字だけを見て名刺と
+        # 取り違えないことの確認用（縁からは名刺の縦横比にならないので落ちる）。
+        paper = Image.new("RGB", (420, 1400), (252, 252, 250))
+        d = ImageDraw.Draw(paper)
+        d.text((30, 40), "ご利用明細", font=font(34, bold=True), fill=(20, 20, 20))
+        small = font(26)
+        for i in range(22):
+            d.text((30, 110 + i * 54), f"商品{i + 1}　　　　{(i + 1) * 130}円",
+                   font=small, fill=(30, 30, 30))
+        img, _ = place_on_background(paper, plain, scale=0.30)
+        return img, None, None
+
+    if name == "card_half_out":
+        # 名刺が画面から大きくはみ出している。縁も背景と同系色で取れないので
+        # 文字から位置を決めることになるが、読めない文字がある以上
+        # 撮影に進んではいけない（案内は「名刺全体が入るように」）。
+        spec = CardSpec()
+        card = render_card(spec)
+        img, quad = place_on_background(
+            card, plain_background(SCENE_W, SCENE_H, spec.bg),
+            scale=1.10, offset=(0.35, 0.0))
+        return img, quad, spec
+
     if name == "blank_card":
         # 名刺と同じ大きさ・縦横比の無地の紙。四角形の判定だけでは弾けないので、
         # 「内部に文字らしい領域がある」条件が効いているかを確かめるためのケース。
@@ -624,7 +648,7 @@ PATTERNS = [
     "glare", "blurry", "dark", "too_small",
     "multi_phone", "no_corporate_suffix", "small_name", "with_kana", "vertical_writing",
     "held_in_hand", "held_in_hand_portrait", "no_edges",
-    "not_a_card_paper", "not_a_card_phone", "blank_card", "empty_desk",
+    "not_a_card_paper", "not_a_card_phone", "receipt", "blank_card", "empty_desk",
 ]
 
 

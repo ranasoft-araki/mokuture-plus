@@ -133,12 +133,16 @@ def evaluate(
         text_regions=base.text_regions,
         motion=motion,
         text_height=base.text_height,
+        text_clipped=base.text_clipped,
     )
 
     if detection.source == "text":
-        # 文字のかたまりから決めた四隅は名刺の縁ではない。画面の端に接していても
-        # 「はみ出している」とは限らず（余白ぶん外へ広げた結果である）、占有率も
-        # 名刺の大きさを表さない。代わりに「字が読める大きさか」だけを見る。
+        # 文字のかたまりから決めた四隅は名刺の縁ではない。広げたあとの矩形は
+        # 余白ぶん必ず画面の端に当たるので、見切れの判定は「文字そのものが
+        # 端に達しているか」で行う。大きさも占有率では測れないので、
+        # 「字が読める大きさか」で見る。
+        if base.text_clipped:
+            return "out_of_frame", metrics
         if base.text_height < float(q["text_height_min"]):
             return "too_small", metrics
     else:

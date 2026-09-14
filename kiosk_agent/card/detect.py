@@ -585,6 +585,16 @@ def _detect_at_scale(bgr, prev_quad: Quad | None) -> Detection | None:
     # 「名刺ではない別の物体がはっきり写っている」ことの記録（文字ベース検出の抑止）
     veto: list = []
     stop_area = float(d["strategy_stop_area"])
+    # 辺の裏付けを測るしきい値は、画像ごとのノイズ床に合わせる（固定値ではコントラスト
+    # の低い名刺とノイズの多い映像を同時に扱えない）。段差を測る画像は、輪郭を拾ったの
+    # と同じ「正規化後」のものを使う。生の輝度で測ると、暗所の名刺（縁の差が 5 程度）
+    # で段差なしと判定してしまう。エッジ抽出ごとに作り直す必要は無いので 1 度だけ作る。
+    support_gray = _stretch(gray, float(d["normalize_lo_pct"]), float(d["normalize_hi_pct"]))
+    grad_ref = cv2.morphologyEx(support_gray, cv2.MORPH_GRADIENT,
+                                cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+    edge_thresh = max(float(d["gradient_thresh"]),
+                      float(np.percentile(grad_ref, 85)) * float(d["edge_support_mult"]))
+    support_ref = (support_gray, edge_thresh)
     # 肌の境目は予備の戦略でしか使わないので、肌がほとんど写っていないフレーム
     # （＝検出ループの大半）ではモルフォロジーまで進まずに切り上げる。
     skin_edges = None
@@ -597,7 +607,7 @@ def _detect_at_scale(bgr, prev_quad: Quad | None) -> Detection | None:
         # クロージング（膨張→収縮）で穴を閉じてから輪郭を拾う。
         edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, close_kernel)
         edges = cv2.dilate(edges, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)), iterations=1)
-        found = _best_quad(bgr, gray, edges, frame_area, d, prev_quad, veto)
+        found = _best_quad(bgr, gray, edges, frame_area, d, prev_quad, support_ref, veto)
         if found is not None and (best_overall is None or found.score > best_overall.score):
             best_overall = found
         # 名刺らしい大きさで見つかったらそこで打ち切る。小さな四角形（名刺の中の
@@ -606,36 +616,58 @@ def _detect_at_scale(bgr, prev_quad: Quad | None) -> Detection | None:
             break
     if best_overall is not None:
         return best_overall
-    if veto:
-        # A4 の書類やスマートフォンの画面のように、外形がはっきり測れていて
-        # かつ名刺の形ではないものが写っている。その上の文字を名刺と見ない。
-        return None
     # 紙の縁では四角形が組めなかった。名刺を手に持つと縁が指・逆光・同系色の
     # 背景で消えるので、実機ではここに落ちてくるほうが多い。文字の並びから
     # 位置を決め直す（card/text_detect.py）。
-    from card.text_detect import detect_by_text
-    return detect_by_text(bgr)
+    #
+    # text_detect は OTA で後から届く。バックエンドの配信リストの更新が
+    # 端末へのコード配信より遅れると、この import だけが失敗しうる。その場合は
+    # 「文字からは決められない」として扱い、キオスク本体は動かし続ける。
+    try:
+        from card.text_detect import detect_by_text
+    except ImportError:
+        return None
+    found = detect_by_text(bgr)
+    if found is None:
+        return None
+    # A4 の書類やスマートフォンの画面のように、外形がはっきり測れていて名刺の
+    # 形ではない物体が写っていて、拾った文字がその中にあるなら、それは名刺の
+    # 文字ではない。物体が画面の別の場所にあるだけなら止めない（無条件に
+    # 止めると、縁が壊れている本物の名刺まで落ちる）。
+    for bad in veto:
+        if _overlap_ratio(found.quad, bad, bgr.shape) < float(d["text_veto_overlap"]):
+            continue
+        # 重なっていた。その四角形が本当に「外形」なのか（辺に段差があるか）を
+        # ここで初めて測る。毎フレーム測ると 1 フレームの処理が 3 割伸びるため。
+        if edge_support(support_gray, bad, edge_thresh,
+                        window=int(d["edge_support_window"])) >= float(d["text_veto_support"]):
+            return None
+    return found
+
+
+def _overlap_ratio(quad: Quad, other: Quad, shape) -> float:
+    """quad のうち other と重なっている割合 0-1。"""
+    a = np.zeros(shape[:2], np.uint8)
+    b = np.zeros(shape[:2], np.uint8)
+    cv2.fillPoly(a, [np.array(quad, np.int32)], 255)
+    cv2.fillPoly(b, [np.array(other, np.int32)], 255)
+    own = int(np.count_nonzero(a))
+    if own == 0:
+        return 0.0
+    return int(np.count_nonzero(cv2.bitwise_and(a, b))) / own
 
 
 def _best_quad(bgr, gray, edges, frame_area: float, d: dict,
-               prev_quad: Quad | None, veto: list | None = None) -> Detection | None:
+               prev_quad: Quad | None, support_ref, veto: list | None = None) -> Detection | None:
     """1 つのエッジ画像から最良の名刺候補を選ぶ。条件を満たすものが無ければ None。
 
-    veto を渡すと「はっきりした外形を持つのに名刺の形ではないもの」（A4 の書類、
-    スマートフォンの画面など）をそこへ記録する。文字ベースの検出は紙の縁を見ない
-    ので、こうした物体の上の文字を名刺と取り違えうる。外形が測れている以上は
-    「名刺ではない」と判定できるので、その根拠として使う。
+    veto を渡すと「大きくて四隅が直角に近いのに名刺の形ではない四角形」をそこへ
+    記録する。文字ベースの検出は紙の縁を見ないので、A4 の書類やスマートフォンの
+    画面の上の文字を名刺と取り違えうる。その照合に使う。ここでは記録するだけで、
+    辺の裏付け（重い）は文字ベースの検出まで進んだときにだけ測る。
     """
     h, w = bgr.shape[:2]
-    # 辺の裏付けを測るしきい値も、画像ごとのノイズ床に合わせる（固定値では
-    # コントラストの低い名刺と、ノイズの多い映像を同時に扱えない）。
-    # 段差を測る画像は、輪郭を拾ったのと同じ「正規化後」のものを使う。生の輝度で
-    # 測ると、暗所の名刺（縁の差が 5 程度しかない）で段差なしと判定してしまう。
-    support_gray = _stretch(gray, float(d["normalize_lo_pct"]), float(d["normalize_hi_pct"]))
-    base = cv2.morphologyEx(support_gray, cv2.MORPH_GRADIENT,
-                            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
-    edge_thresh = max(float(d["gradient_thresh"]),
-                      float(np.percentile(base, 85)) * float(d["edge_support_mult"]))
+    support_gray, edge_thresh = support_ref
     contours = _find_contours(edges)
     if contours is None or len(contours) == 0:
         return None
@@ -662,13 +694,12 @@ def _best_quad(bgr, gray, edges, frame_area: float, d: dict,
             if not (float(d["aspect_min"]) <= aspect <= float(d["aspect_max"])):
                 # 名刺の形ではない。ただし大きくて四隅が直角に近く、辺に本当の
                 # 段差があるなら「別の物体がはっきり写っている」ことの証拠になる。
-                if (veto is not None and not veto
+                if (veto is not None
+                        and len(veto) < int(d["text_veto_max"])
                         and area_ratio >= float(d["text_veto_min_area"])
-                        and all(60.0 <= a <= 120.0 for a in angles)):
-                    sup = edge_support(support_gray, quad, edge_thresh,
-                                       window=int(d["edge_support_window"]))
-                    if sup >= float(d["text_veto_support"]):
-                        veto.append((area_ratio, aspect, sup))
+                        and all(float(d["min_corner_angle_deg"]) <= a
+                                <= float(d["max_corner_angle_deg"]) for a in angles)):
+                    veto.append(quad)
                 continue
 
             lo, hi = float(d["min_corner_angle_deg"]), float(d["max_corner_angle_deg"])

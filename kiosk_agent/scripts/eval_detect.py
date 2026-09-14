@@ -32,8 +32,11 @@ def iou_quad(a, b, shape) -> float:
 # 名刺ではないので検出されてはいけないもの。
 # blank_card は「文字が無いだけで形は名刺そのもの」なので四隅は持っているが、
 # 検出されてはいけない。四隅の有無から期待値を推測できないため明示する。
-NOT_A_CARD = {"not_a_card_paper", "not_a_card_phone", "blank_card", "empty_desk"}
+NOT_A_CARD = {"not_a_card_paper", "not_a_card_phone", "receipt",
+              "blank_card", "empty_desk"}
 # 検出できなくてよいもの（案内は画面全体の明るさから出る）
+# 検出はされるが撮影には進まないもの（見切れ）。位置の正しさは問わない。
+NOT_CAPTURABLE = {"card_half_out"}
 MAY_MISS = {"dark"}
 
 
@@ -77,7 +80,7 @@ def main() -> int:
 
         if expect == "none":
             ok = got == "no"
-        elif name in MAY_MISS:
+        elif name in MAY_MISS or name in NOT_CAPTURABLE:
             ok = True
         elif det is not None and det.source == "text":
             # 文字から決めた四隅は名刺の縁ではなく「文字が入る範囲」なので、

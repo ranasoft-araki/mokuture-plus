@@ -38,7 +38,8 @@ DETECTABLE = [
 #   not_a_card_phone : スマートフォンの画面（縦横比が違う）
 #   blank_card       : 名刺と同じ大きさの無地の紙（縦横比では弾けない）
 #   empty_desk       : 何も置かれていない机
-NOT_A_CARD = ["not_a_card_paper", "not_a_card_phone", "blank_card", "empty_desk"]
+NOT_A_CARD = ["not_a_card_paper", "not_a_card_phone", "receipt",
+              "blank_card", "empty_desk"]
 
 
 def _detect_frame(bgr):
@@ -484,3 +485,51 @@ def test_文字の切り出しは罫線やロゴを文字と数えない(scene):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     assert len(dominant_cluster(text_boxes(gray), gray.shape)) < int(
         settings.get("detection.text_min_boxes"))
+
+
+def test_レシートは文字が多くても名刺と見ない(scene):
+    """細長い印刷物。文字だけを見ていると名刺と取り違える。
+
+    縁からは名刺の縦横比にならないので落ちるが、縁が取れないときに文字へ
+    落ちてくるため、文字が入る範囲の縦横比にも上限を置いている。
+    """
+    bgr, _truth, _spec = scene("receipt")
+    assert detect_card(_detect_frame(bgr)) is None
+
+
+def test_見切れた名刺は撮影に進まない(scene):
+    """名刺が画面から大きくはみ出している。
+
+    文字から決めた四隅は余白ぶん必ず画面の端に当たるので、見切れの判定は
+    「文字そのものが端に達しているか」で行う。ここが効いていないと、
+    半分しか写っていない名刺を読み取って項目を落とす。
+    """
+    bgr, _truth, _spec = scene("card_half_out")
+    frame = _detect_frame(bgr)
+    det = detect_card(frame)
+    assert det is not None and det.source == "text"
+    state, _m = evaluate(frame, det, prev_quad=det.quad)
+    assert state == "out_of_frame"
+    assert message(state)[0] == GUIDANCE["out_of_frame"][0]
+
+
+def test_名刺でない物体が別の場所にあっても名刺は検出できる(scene):
+    """「名刺でない外形」を見つけたら一律に止める作りにすると、縁が壊れている
+    だけの本物の名刺まで落ちる（実際に落ちた）。拾った文字がその物体の上に
+    あるときだけ止めること。
+    """
+    import make_fixtures as mf
+    from PIL import ImageDraw
+    spec = mf.CardSpec()
+    card = mf.render_card(spec)
+    # 縁が取れない名刺（背景と同じ明るさ）の隣に、はっきりした別の四角形を置く
+    img, _quad = mf.place_on_background(
+        card, mf.plain_background(mf.SCENE_W, mf.SCENE_H, spec.bg),
+        scale=0.40, offset=(-0.28, 0.0))
+    d = ImageDraw.Draw(img)
+    d.rectangle([int(mf.SCENE_W * 0.66), int(mf.SCENE_H * 0.20),
+                 int(mf.SCENE_W * 0.97), int(mf.SCENE_H * 0.86)],
+                fill=(70, 70, 74))
+    bgr = cv2.cvtColor(np.asarray(mf.simulate_camera(img)), cv2.COLOR_RGB2BGR)
+    det = detect_card(_detect_frame(bgr))
+    assert det is not None, "別の物体に引きずられて名刺を落としている"

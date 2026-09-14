@@ -38,6 +38,7 @@ class FrameMetrics:
     text_regions: int = 0       # 内部で見つかった文字らしい領域の数
     motion: float = 0.0         # 直前フレームからの四隅移動量（画面短辺に対する比）
     text_height: float = 0.0    # 字の高さの中央値(px)。文字ベースの検出でだけ入る
+    text_clipped: bool = False  # 文字が画面の端に達している（＝名刺が見切れている）
 
 
 @dataclass(frozen=True)
