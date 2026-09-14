@@ -2,7 +2,7 @@ import csv
 import io
 import logging
 from datetime import date, datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from jose import JWTError
 from pydantic import BaseModel, field_validator
@@ -12,14 +12,11 @@ from sqlalchemy import select, func, delete
 from app.database import get_db
 from app.middleware.tenant import get_current_user
 from app.models.reception import ReceptionLog
-from app.models.notification import NotificationSetting, PushSubscription
 from app.models.user import User
-from app.services.slack import SlackNotifier
-from app.services.webpush import send_push
 from app.services.auth import create_decision_token, decode_token
-from app.services.crypto import decrypt_dict
-from app.services.honorific import with_honorific
 from app.services import events as event_bus
+from app.services import reception_notify
+from app.services.timeutil import iso_z
 from app.config import settings
 
 router = APIRouter(prefix="/reception", tags=["reception"])
@@ -110,6 +107,19 @@ class ReceptionCreate(BaseModel):
     department: str | None = None
     method: str = "form"
 
+    @field_validator("staff")
+    @classmethod
+    def staff_trim(cls, v: str | None) -> str | None:
+        """訪問先担当者名は前後空白を落として保存する。
+
+        担当者ごとの通知先(`staff_notification_routes.staff_name`)は保存時に必ず strip される
+        ので、受付側に空白が残ると突き合わせに失敗して**代理通知だけ飛ばない**（1通目は
+        strip して引くので届く＝原因に気づけない）。入口で揃えておく。"""
+        if v is None:
+            return None
+        v = v.strip()
+        return v[:255] if v else None
+
     @field_validator("department")
     @classmethod
     def department_len(cls, v: str | None) -> str | None:
@@ -147,6 +157,8 @@ class ReceptionOut(BaseModel):
     state: str
     staff_notes: str | None
     created_at: str
+    # 代理通知(応答が無いときのエスカレーション)を送った時刻。未送信は None。
+    escalated_at: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -154,6 +166,7 @@ class ReceptionOut(BaseModel):
 @router.post("", response_model=ReceptionOut, status_code=201)
 async def create_reception(
     body: ReceptionCreate,
+    background: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -162,8 +175,9 @@ async def create_reception(
     await db.commit()
     await db.refresh(log)
 
-    await _notify_slack(user.tenant_id, log, db)
-    await _notify_push(user.tenant_id, log, db)
+    # 宛先(訪問先担当者ごと/テナント共通)の決定を含めてキオスク受付と同じ経路を通す。
+    # メール/Webhook はタイムアウトが長いので、キオスク側と同様レスポンス送出後に送る。
+    background.add_task(reception_notify.fire_reception_notifications, user.tenant_id, log)
 
     _publish_reception(user.tenant_id)
     return _log_out(log)
@@ -498,88 +512,6 @@ async def today_stats(user: User = Depends(get_current_user), db: AsyncSession =
     return {"date": today.isoformat(), "count": count}
 
 
-async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:
-    vapid_result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "vapid",
-        )
-    )
-    vapid_setting = vapid_result.scalar_one_or_none()
-    private_key = ""
-    if vapid_setting and vapid_setting.config_json and vapid_setting.config_json != "{}":
-        try:
-            vapid_config = decrypt_dict(vapid_setting.config_json)
-            private_key = vapid_config.get("private_key", "")
-        except Exception:
-            pass
-    if not private_key:
-        private_key = settings.vapid_private_key
-    if not private_key:
-        return
-
-    subs_result = await db.execute(
-        select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
-    )
-    subs = subs_result.scalars().all()
-    if not subs:
-        return
-
-    title = "来客のお知らせ"
-    body = f"{with_honorific(log.visitor_name)}（{log.company or '—'}）が受付を完了しました。"
-    if log.department:
-        body += f" 部署：{log.department}"
-    if log.purpose:
-        body += f" 用件：{log.purpose}"
-
-    data, actions = build_decision_push_extras(tenant_id, log)
-    for sub in subs:
-        await send_push(
-            endpoint=sub.endpoint,
-            p256dh=sub.p256dh,
-            auth=sub.auth_key,
-            title=title,
-            body=body,
-            url=f"/{tenant_id}/admin/reception",
-            private_key=private_key,
-            subject=settings.vapid_subject,
-            tag=f"reception-{log.id}",
-            data=data,
-            actions=actions,
-        )
-
-
-async def _notify_slack(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:
-    result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "slack",
-        )
-    )
-    setting = result.scalar_one_or_none()
-    if setting is None or not setting.config_json or setting.config_json == "{}":
-        return
-    try:
-        config = decrypt_dict(setting.config_json)
-        # 送信先未確定(Bot連携済だがチャンネル未選択 等)はエラーではないので静かに終了。
-        has_dest = bool(config.get("bot_access_token") and config.get("channel_id")) or bool(config.get("webhook_url"))
-        if not has_dest:
-            return
-        msg = SlackNotifier.build_reception_message(
-            visitor_name=log.visitor_name,
-            company=log.company,
-            host_name=log.staff,
-            when=log.created_at,
-            department=log.department,
-        )
-        ok = await SlackNotifier.send_to_config(config, msg)
-        if not ok:
-            # 受付は失敗させない(best-effort)。秘密情報(Bot Token/Webhook URL)はログに出さない。
-            logger.warning("Slack reception notification failed (tenant=%s, reception=%s)", tenant_id, log.id)
-    except Exception:
-        logger.warning("Slack reception notification error (tenant=%s, reception=%s)", tenant_id, log.id)
-
-
 def _log_out(r: ReceptionLog) -> dict:
     return {
         "id": r.id,
@@ -592,4 +524,5 @@ def _log_out(r: ReceptionLog) -> dict:
         "state": r.state,
         "staff_notes": r.staff_notes,
         "created_at": r.created_at.isoformat() if r.created_at else "",
+        "escalated_at": iso_z(getattr(r, "escalated_at", None)),
     }

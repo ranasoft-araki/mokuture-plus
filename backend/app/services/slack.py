@@ -18,15 +18,15 @@ from __future__ import annotations
 
 import logging
 import urllib.parse
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 import httpx
 
 from app.config import settings
 from app.services.honorific import with_honorific
+from app.services.timeutil import format_jst
 
 logger = logging.getLogger(__name__)
-_JST = timezone(timedelta(hours=9))
 
 _AUTHORIZE_ENDPOINT = "https://slack.com/oauth/v2/authorize"
 _ACCESS_ENDPOINT = "https://slack.com/api/oauth.v2.access"
@@ -315,10 +315,15 @@ class SlackNotifier:
         host_name: str | None = None,
         when: datetime | None = None,
         department: str | None = None,
+        escalated_from: str | None = None,
     ) -> str:
         """Reception notification text. Company / department / host lines are omitted when
-        blank; name + time are always present (see 作業指示 §7)."""
-        lines = [":bell: 来客がありました", ""]
+        blank; name + time are always present (see 作業指示 §7).
+
+        `escalated_from` を渡すと代理通知(応答が無いときのエスカレーション)の文面になる
+        — 見出しを「応答がありません」に変え、末尾で元の訪問先担当者名を示す。"""
+        head = ":warning: 受付に応答がありません（代理通知）" if escalated_from else ":bell: 来客がありました"
+        lines = [head, ""]
         if (company or "").strip():
             lines.append(f"会社名：{company.strip()}")
         lines.append(f"お名前：{with_honorific(visitor_name)}")
@@ -326,19 +331,10 @@ class SlackNotifier:
             lines.append(f"訪問先部署：{department.strip()}")
         if (host_name or "").strip():
             lines.append(f"訪問先：{host_name.strip()}")
-        lines.append(f"時刻：{_format_jst(when)}")
+        lines.append(f"時刻：{format_jst(when)}")
         lines.append("")
-        lines.append("対応をお願いします。")
+        if escalated_from:
+            lines.append(f"「{escalated_from}」宛の受付に応答がありません。代わりに対応をお願いします。")
+        else:
+            lines.append("対応をお願いします。")
         return "\n".join(lines)
-
-
-def _format_jst(when: datetime | None) -> str:
-    """Format a timestamp as JST 'YYYY/MM/DD HH:MM'. Naive datetimes are assumed UTC
-    (DB `func.now()` stores UTC); None means 'now'."""
-    if when is None:
-        dt = datetime.now(_JST)
-    else:
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=timezone.utc)
-        dt = when.astimezone(_JST)
-    return dt.strftime("%Y/%m/%d %H:%M")

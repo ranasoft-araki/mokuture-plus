@@ -890,6 +890,10 @@ export default function ReceptionLogsPage() {
                         <span style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                           {r.visitor_name}
                           {r.staff_notes && <span style={{ fontSize: 10, fontWeight: 600, background: "#fef9c3", color: "#854d0e", border: "1px solid #fef08a", borderRadius: 4, padding: "1px 6px" }}>メモあり</span>}
+                          {r.escalated_at && (
+                            // 応答が無かったため代理担当者へ転送済み（通知設定「担当者ごとの通知先」）。
+                            <span style={{ fontSize: 10, fontWeight: 600, background: "#eef2ff", color: "#4338ca", border: "1px solid #c7d2fe", borderRadius: 4, padding: "1px 6px" }}>代理通知済</span>
+                          )}
                           {agingLevel === "alert" && (
                             <span style={{ fontSize: 10, fontWeight: 600, background: "#fff7ed", color: "#c2410c", border: "1px solid #fed7aa", borderRadius: 4, padding: "1px 6px" }}>15分以上待機中</span>
                           )}

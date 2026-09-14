@@ -520,6 +520,20 @@ export const api = {
     request<{ ok: boolean; channel_name: string }>("/notifications/slack/channel", { method: "POST", body: JSON.stringify({ channel_id }) }, token),
   disconnectSlack: (token: string) =>
     request<{ ok: boolean }>("/notifications/slack/disconnect", { method: "POST" }, token),
+
+  // 訪問先担当者ごとの通知先 / 代理通知（応答が無いときのエスカレーション）。
+  getStaffRoutes: (token: string) =>
+    request<StaffNotificationRoutesResponse>("/notifications/staff-routes", {}, token),
+  saveStaffRoute: (token: string, body: StaffRouteInput) =>
+    request<{ ok: boolean; route: StaffNotificationRoute }>(
+      "/notifications/staff-routes", { method: "PUT", body: JSON.stringify(body) }, token),
+  deleteStaffRoute: (token: string, routeId: string) =>
+    request<{ ok: boolean }>(
+      `/notifications/staff-routes/${encodeURIComponent(routeId)}`, { method: "DELETE" }, token),
+  testStaffRoute: (token: string, staff_name: string, stage: "primary" | "fallback") =>
+    request<StaffRouteTestResult>(
+      "/notifications/staff-routes/test",
+      { method: "POST", body: JSON.stringify({ staff_name, stage }) }, token),
   updateChatworkSettings: (token: string, api_token: string, room_id: string) =>
     request("/notifications/settings/chatwork", { method: "PUT", body: JSON.stringify({ api_token, room_id }) }, token),
   testChatworkNotification: (token: string) =>
@@ -811,6 +825,54 @@ export interface ReceptionLog extends ReceptionCreate {
   state: string;
   staff_notes: string | null;
   created_at: string;
+  /** 代理通知(応答が無いときのエスカレーション)を送った時刻。未送信は null。 */
+  escalated_at?: string | null;
+}
+
+/** 訪問先担当者ごとの通知先と代理通知の設定（管理画面「通知設定」）。 */
+export interface StaffNotificationRoute {
+  id: string;
+  staff_name: string;
+  slack_channel_id: string;
+  slack_channel_name: string;
+  email: string;
+  /** Webhook URL が設定済みか。URL 自体は秘密情報なのでサーバから返さない。 */
+  webhook_configured: boolean;
+  /** テナント共通の通知先(Slack/Webhook/プッシュ)へも送るか。 */
+  include_default: boolean;
+  /** 応答が無いときに転送する代理担当者名（空＝代理通知しない）。 */
+  fallback_staff_name: string;
+  /** 代理通知までの待機秒。0 = 代理通知しない。 */
+  escalate_after_sec: number;
+  /** 受付設定の担当者リストから消えた担当者（キオスクでは選ばれない）。 */
+  orphan: boolean;
+  updated_at: string | null;
+}
+
+export interface StaffNotificationRoutesResponse {
+  staff_list: string[];
+  routes: StaffNotificationRoute[];
+  slack: { bot_connected: boolean; default_channel_name: string };
+  smtp_enabled: boolean;
+  default_escalate_sec: number;
+  min_escalate_sec: number;
+  max_escalate_sec: number;
+}
+
+export interface StaffRouteTestResult {
+  ok: boolean;
+  results: { channel: string; target: string; ok: boolean; error?: string }[];
+}
+
+export interface StaffRouteInput {
+  staff_name: string;
+  slack_channel_id?: string;
+  email?: string;
+  /** null/未指定=変更しない（既存を維持）、""=解除、URL=差し替え。 */
+  webhook_url?: string | null;
+  include_default?: boolean;
+  fallback_staff_name?: string;
+  escalate_after_sec?: number;
 }
 
 export interface Locker {

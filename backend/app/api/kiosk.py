@@ -38,12 +38,12 @@ from app.models.notification import NotificationSetting, PushSubscription
 from app.models.visitor_appointment import VisitorAppointment
 from app.models.room import MeetingRoom
 from app.services.slack import SlackNotifier
-from app.services.honorific import with_honorific
 from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
 from app.services.webpush import send_push
 from app.services.auth import hash_password, verify_password, create_decision_token
 from app.services import events as event_bus
+from app.services import reception_notify
 from app.config import settings
 
 _PIN_RE = re.compile(r"^\d{4}$")
@@ -525,6 +525,19 @@ class ReceptionCreate(BaseModel):
     method: str = "form"
     appointment_id: str | None = None
 
+    @field_validator("staff")
+    @classmethod
+    def staff_trim(cls, v: str | None) -> str | None:
+        """訪問先担当者名は前後空白を落として保存する。
+
+        担当者ごとの通知先(`staff_notification_routes.staff_name`)は保存時に必ず strip される
+        ので、受付側に空白が残ると突き合わせに失敗して**代理通知だけ飛ばない**（1通目は
+        strip して引くので届く＝原因に気づけない）。入口で揃えておく。"""
+        if v is None:
+            return None
+        v = v.strip()
+        return v[:255] if v else None
+
     @field_validator("department")
     @classmethod
     def department_len(cls, v: str | None) -> str | None:
@@ -635,10 +648,11 @@ async def kiosk_reception(
     await db.commit()
     await db.refresh(log)
 
-    # 通知はレスポンス送出後にバックグラウンドで送る（Slack / Web Push / Webhook, best-effort）。
+    # 通知はレスポンス送出後にバックグラウンドで送る（Slack / Web Push / Webhook / メール, best-effort）。
     # inline で await すると通知の往復ぶんキオスク(agent)の応答待ちが延び、10秒プロキシタイムアウトを
     # 超えてキオスクに「リモートAPIに接続できません」が出る（配達系と同じ理由で非ブロック化する）。
-    background.add_task(_fire_reception_notifications, tenant.id, log)
+    # 宛先(訪問先担当者ごと/テナント共通)の決定を含めて services/reception_notify.py に集約している。
+    background.add_task(reception_notify.fire_reception_notifications, tenant.id, log)
 
     # 管理画面(SSE)へ「受付が増えた」を即 push（ニアリアルタイム連動・best-effort）。
     event_bus.publish(tenant.id, {"type": "reception"})
@@ -1018,150 +1032,10 @@ async def kiosk_mirror_lockers(
     return {"ok": True, "updated": len(items)}
 
 
-async def _notify_slack(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:
-    result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "slack",
-        )
-    )
-    setting = result.scalar_one_or_none()
-    if setting is None or not setting.config_json or setting.config_json == "{}":
-        return
-    try:
-        config = decrypt_dict(setting.config_json)
-        # 送信先が確定していない場合(Bot連携済だがチャンネル未選択 等)はエラーではないので静かに終了。
-        has_dest = bool(config.get("bot_access_token") and config.get("channel_id")) or bool(config.get("webhook_url"))
-        if not has_dest:
-            return
-        msg = SlackNotifier.build_reception_message(
-            visitor_name=log.visitor_name,
-            company=log.company,
-            host_name=log.staff,
-            when=log.created_at,
-            department=log.department,
-        )
-        # 署名シークレット設定時のみ、受付/電話/お断りの対応ボタン(Block Kit)を付ける。
-        # Bot Token 経路のときだけ(webhook はインタラクション不可)。押下は署名トークンで検証。
-        blocks = None
-        if settings.slack_signing_secret and config.get("bot_access_token") and config.get("channel_id"):
-            from app.api.reception import decision_actions
-            token = create_decision_token(log.id, tenant_id)
-            blocks = SlackNotifier.build_reception_blocks(msg, decision_actions(log), token)
-        ok = await SlackNotifier.send_to_config(config, msg, blocks=blocks)
-        if not ok:
-            # 受付は失敗させない(best-effort)。エラーは残すが Bot Token/Webhook URL は絶対に出さない。
-            logger.warning("Slack reception notification failed (tenant=%s, reception=%s)", tenant_id, log.id)
-    except Exception:
-        # decrypt/整形エラー等。秘密情報を含めないため exc_info は付けない。
-        logger.warning("Slack reception notification error (tenant=%s, reception=%s)", tenant_id, log.id)
-
-
-async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:
-    """Fire Web Push to all registered subscriptions for this tenant."""
-    # Get VAPID keys (from per-tenant setting or global config)
-    vapid_result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "vapid",
-        )
-    )
-    vapid_setting = vapid_result.scalar_one_or_none()
-    private_key = ""
-    if vapid_setting and vapid_setting.config_json and vapid_setting.config_json != "{}":
-        try:
-            vapid_config = decrypt_dict(vapid_setting.config_json)
-            private_key = vapid_config.get("private_key", "")
-        except Exception:
-            pass
-    if not private_key:
-        private_key = settings.vapid_private_key
-    if not private_key:
-        return
-
-    subs_result = await db.execute(
-        select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
-    )
-    subs = subs_result.scalars().all()
-    if not subs:
-        return
-
-    title = "来客のお知らせ"
-    body = f"{with_honorific(log.visitor_name)}（{log.company or '—'}）が受付を完了しました。"
-    if log.department:
-        body += f" 部署：{log.department}"
-    if log.purpose:
-        body += f" 用件：{log.purpose}"
-
-    from app.api.reception import build_decision_push_extras
-    data, actions = build_decision_push_extras(tenant_id, log)
-    for sub in subs:
-        await send_push(
-            endpoint=sub.endpoint,
-            p256dh=sub.p256dh,
-            auth=sub.auth_key,
-            title=title,
-            body=body,
-            url=f"/{tenant_id}/admin/reception",
-            private_key=private_key,
-            subject=settings.vapid_subject,
-            tag=f"reception-{log.id}",
-            data=data,
-            actions=actions,
-        )  # fire-and-forget: ignore (bool, str) return
-
-
 async def _send_webhook(url: str, data: dict) -> None:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(url, json=data)
-    except Exception:
-        pass
-
-
-async def _notify_webhook(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:
-    result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "webhook",
-        )
-    )
-    setting = result.scalar_one_or_none()
-    if setting is None or not setting.config_json or setting.config_json == "{}":
-        return
-    try:
-        config = decrypt_dict(setting.config_json)
-        webhook_url = config.get("webhook_url", "")
-        if webhook_url:
-            payload = {
-                "event": "reception",
-                "tenant_id": tenant_id,
-                "visitor_name": log.visitor_name,
-                "company": log.company,
-                "staff": log.staff,
-                "department": log.department,
-                "purpose": log.purpose,
-                "method": log.method,
-                "created_at": log.created_at.isoformat() if log.created_at else None,
-            }
-            await _send_webhook(webhook_url, payload)
-    except Exception:
-        pass
-
-
-async def _fire_reception_notifications(tenant_id: str, log: ReceptionLog) -> None:
-    """受付通知(Slack / Web Push / Webhook)をレスポンス送出後に新しいDBセッションで送る（BackgroundTasks 用）。
-
-    inline で await すると通知の往復時間ぶんキオスク(agent)の応答待ちが延び、10秒プロキシタイムアウトを
-    超えて「リモートAPIに接続できません」を招く（Slack chat.postMessage は未参加chの join+retry で最大
-    ~30s、Web Push は死んだ購読を逐次送信）。配達系(_fire_delivery_notifications)と同様に非ブロック化する。
-    log は呼び出し元で commit 済み（AsyncSessionLocal は expire_on_commit=False なので列値は失効せず、
-    別セッションの本関数からも安全に読める）。各チャネルは best-effort（失敗しても受付は成立済み）。"""
-    try:
-        async with AsyncSessionLocal() as db:
-            await _notify_slack(tenant_id, log, db)
-            await _notify_push(tenant_id, log, db)
-            await _notify_webhook(tenant_id, log, db)
     except Exception:
         pass
 

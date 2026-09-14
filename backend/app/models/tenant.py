@@ -78,4 +78,5 @@ class Tenant(Base):
     lockers = relationship("Locker", back_populates="tenant", cascade="all, delete-orphan")
     notification_settings = relationship("NotificationSetting", back_populates="tenant", cascade="all, delete-orphan")
     push_subscriptions = relationship("PushSubscription", back_populates="tenant", cascade="all, delete-orphan")
+    staff_notification_routes = relationship("StaffNotificationRoute", back_populates="tenant", cascade="all, delete-orphan")
     inquiries = relationship("Inquiry", back_populates="tenant", cascade="all, delete-orphan")

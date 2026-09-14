@@ -36,6 +36,17 @@ class AppointmentCreate(BaseModel):
     notes: Optional[str] = None
     duration_minutes: Optional[int] = None
 
+    @field_validator("staff")
+    @classmethod
+    def staff_trim(cls, v: Optional[str]) -> Optional[str]:
+        """担当者名の前後空白を落とす。QR受付はこの値をそのまま受付ログの `staff` に載せるため、
+        担当者ごとの通知先(strip 済みで保存される)との突き合わせに空白が紛れないようにする。"""
+        if v is None:
+            return None
+        # 空文字は None にしない: PATCH は `is not None` で代入するため、None にすると
+        # 「担当者を空にする」操作が黙って無視される。
+        return v.strip()[:255]
+
     @field_validator("visitor_name")
     @classmethod
     def name_not_empty(cls, v: str) -> str:
@@ -55,6 +66,15 @@ class AppointmentUpdate(BaseModel):
     notes: Optional[str] = None
     status: Optional[str] = None
     duration_minutes: Optional[int] = None
+
+    @field_validator("staff")
+    @classmethod
+    def staff_trim(cls, v: Optional[str]) -> Optional[str]:
+        """作成時(`AppointmentCreate.staff`)と同じく前後空白を落とす。
+        担当者ごとの通知先との突き合わせは strip 済みの名前を前提にしている。"""
+        if v is None:
+            return None
+        return v.strip()[:255]
 
 
 class MeetingRoomResponse(BaseModel):

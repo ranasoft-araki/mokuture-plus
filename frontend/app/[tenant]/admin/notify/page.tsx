@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
-import { api } from "@/lib/api";
+import { api, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffRouteTestResult } from "@/lib/api";
 import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, type PushStatus } from "@/lib/push";
 import { getAccessToken } from "@/lib/auth";
 
@@ -353,6 +353,391 @@ function PushPanel({ authToken }: { authToken: string }) {
               {error}
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 担当者ごとの通知先 / 代理通知 ─────────────────────────────────────
+// キオスクで来訪者が選んだ訪問先担当者(reception_logs.staff)ごとに宛先を割り当てる。
+// 設定の無い担当者は従来どおりテナント共通の通知先だけに通知される。
+const ESCALATE_CHOICES = [
+  { sec: 30, label: "30秒" },
+  { sec: 60, label: "1分" },
+  { sec: 120, label: "2分" },
+  { sec: 180, label: "3分" },
+  { sec: 300, label: "5分" },
+  { sec: 600, label: "10分" },
+];
+
+const selectStyle: React.CSSProperties = {
+  width: "100%", height: 34, border: "1px solid #d8d3c7", borderRadius: 7,
+  background: "#fffefb", padding: "0 8px", fontSize: 12.5, color: "#2d2a24",
+  fontFamily: '"Noto Sans JP", system-ui, sans-serif',
+};
+
+function testBtnStyle(busy: boolean): React.CSSProperties {
+  return {
+    padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6,
+    cursor: busy ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559",
+    opacity: busy ? 0.6 : 1,
+  };
+}
+
+function channelLabel(channel: string): string {
+  return channel === "slack" ? "Slack" : channel === "email" ? "メール" : "Webhook";
+}
+
+function formatEscalate(sec: number): string {
+  return sec % 60 === 0 ? `${sec / 60}分` : `${sec}秒`;
+}
+
+type RouteDraft = {
+  slack_channel_id: string;
+  email: string;
+  /** null=変更しない（既存を維持）、""=解除、URL=差し替え。URL自体はサーバから返らない。 */
+  webhook_url: string | null;
+  include_default: boolean;
+  fallback_staff_name: string;
+  escalate_after_sec: number;
+};
+
+function draftFrom(route: StaffNotificationRoute | undefined, defaultSec: number): RouteDraft {
+  return {
+    slack_channel_id: route?.slack_channel_id ?? "",
+    email: route?.email ?? "",
+    webhook_url: null,
+    include_default: route?.include_default ?? true,
+    fallback_staff_name: route?.fallback_staff_name ?? "",
+    escalate_after_sec: route?.escalate_after_sec ?? defaultSec,
+  };
+}
+
+function routeSummary(route: StaffNotificationRoute | undefined): string {
+  if (!route) return "未設定（全体の通知先のみ）";
+  const parts: string[] = [];
+  if (route.slack_channel_name || route.slack_channel_id) {
+    parts.push(`Slack ${route.slack_channel_name || route.slack_channel_id}`);
+  }
+  if (route.email) parts.push(`メール ${route.email}`);
+  if (route.webhook_configured) parts.push("Webhook");
+  if (parts.length === 0) parts.push("個別の宛先なし");
+  if (route.include_default) parts.push("全体にも送る");
+  return parts.join(" ・ ");
+}
+
+function StaffRoutesPanel({ authToken }: { authToken: string }) {
+  const [data, setData] = useState<StaffNotificationRoutesResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState<RouteDraft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState("");
+  const [testResult, setTestResult] = useState<{ staff: string; result: StaffRouteTestResult } | null>(null);
+  const [channels, setChannels] = useState<{ id: string; name: string; is_private: boolean }[] | null>(null);
+  // 解除は取り消せないので2段階にする（Slack連携解除と同じ方式。JSダイアログは使わない）。
+  const [confirmClear, setConfirmClear] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    if (!authToken) return;
+    setLoading(true);
+    try {
+      setData(await api.getStaffRoutes(authToken));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "設定の読み込みに失敗しました");
+    } finally {
+      setLoading(false);
+    }
+  }, [authToken]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  // チャンネル一覧は編集を開いた時にだけ取りに行く（Slack API の往復を無駄に増やさない）。
+  const openEditor = async (staff: string) => {
+    const route = data?.routes.find((r) => r.staff_name === staff);
+    setDraft(draftFrom(route, data?.default_escalate_sec ?? 60));
+    setEditing(staff);
+    setTestResult(null);
+    setConfirmClear(null);
+    setError("");
+    if (channels === null && data?.slack.bot_connected) {
+      try {
+        const res = await api.getSlackChannels(authToken);
+        setChannels(res.channels);
+      } catch {
+        setChannels([]); // 取得できなくても既存の選択は保持したまま編集を続けられる
+      }
+    }
+  };
+
+  const save = async () => {
+    if (!editing || !draft) return;
+    setSaving(true);
+    setError("");
+    try {
+      await api.saveStaffRoute(authToken, { staff_name: editing, ...draft });
+      setEditing(null);
+      setDraft(null);
+      await reload();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "保存に失敗しました");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clearRoute = async (routeId: string) => {
+    setSaving(true);
+    setError("");
+    try {
+      await api.deleteStaffRoute(authToken, routeId);
+      setEditing(null);
+      setDraft(null);
+      setConfirmClear(null);
+      await reload();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "解除に失敗しました");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const runTest = async (staff: string, stage: "primary" | "fallback") => {
+    setTesting(`${staff}:${stage}`);
+    setError("");
+    setTestResult(null);
+    try {
+      setTestResult({ staff, result: await api.testStaffRoute(authToken, staff, stage) });
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "テスト送信に失敗しました");
+    } finally {
+      setTesting("");
+    }
+  };
+
+  if (loading) {
+    return <div style={{ padding: "20px 0", color: "#a8a198", fontSize: 13 }}>読み込み中…</div>;
+  }
+  if (!data) {
+    return <div style={{ padding: "20px 0", color: "#a84238", fontSize: 13 }}>{error || "設定を読み込めませんでした"}</div>;
+  }
+
+  // 受付設定の担当者リスト＋（リストから消えたが設定だけ残っている担当者）を並べる。
+  const orphans = data.routes.filter((r) => r.orphan).map((r) => r.staff_name);
+  const names = [...data.staff_list, ...orphans];
+
+  if (names.length === 0) {
+    return (
+      <div style={{ padding: "16px 18px", background: "#f4f1ea", border: "1px solid #efece5", borderRadius: 8, fontSize: 12.5, color: "#6b6559", lineHeight: 1.8 }}>
+        担当者が登録されていません。「受付設定」の担当者リストに追加すると、ここで担当者ごとの通知先を設定できます。
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ padding: "12px 14px", background: "#f4f1ea", border: "1px solid #efece5", borderRadius: 8, fontSize: 11.5, color: "#6b6559", lineHeight: 1.8, marginBottom: 16 }}>
+        キオスクで来訪者が選んだ訪問先担当者ごとに、通知の届け先を変えられます。設定していない担当者は全体の通知先だけに届きます。
+        応答が無いときは、指定した代理担当者の通知先へ自動で転送します。
+      </div>
+
+      {!data.slack.bot_connected && (
+        <div style={{ padding: "10px 14px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.25)", borderRadius: 8, color: "#7a5c00", fontSize: 12, marginBottom: 14 }}>
+          Slackが未連携のため、担当者ごとのチャンネル指定は使えません。上の「Slackに追加」で連携してください。
+        </div>
+      )}
+      {!data.smtp_enabled && (
+        <div style={{ padding: "10px 14px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.25)", borderRadius: 8, color: "#7a5c00", fontSize: 12, marginBottom: 14 }}>
+          メール送信(SMTP)が未設定のため、メール宛先を登録しても送信されません。運営にSMTPの設定をご依頼ください。
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {names.map((staff) => {
+          const route = data.routes.find((r) => r.staff_name === staff);
+          const isEditing = editing === staff;
+          const others = names.filter((n) => n !== staff);
+          return (
+            <div key={staff} style={{ border: "1px solid #efece5", borderRadius: 9, background: "#fffefb", overflow: "hidden" }}>
+              <div className="adm-toolbar" style={{ padding: "12px 14px", alignItems: "center", gap: 10 }}>
+                <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    {staff}
+                    {route?.orphan && <MkPill tone="warn" dot={false}>受付設定に無い担当者</MkPill>}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3, wordBreak: "break-all" }}>{routeSummary(route)}</div>
+                  {route?.fallback_staff_name && route.escalate_after_sec > 0 && (
+                    <div style={{ fontSize: 11.5, color: "#6b6559", marginTop: 3 }}>
+                      応答が無ければ {formatEscalate(route.escalate_after_sec)}後に「{route.fallback_staff_name}」へ代理通知
+                    </div>
+                  )}
+                </div>
+                <MkPill tone={route ? "live" : "off"}>{route ? "設定済" : "未設定"}</MkPill>
+                <MkBtn size="sm" onClick={() => (isEditing ? setEditing(null) : openEditor(staff))}>
+                  {isEditing ? "閉じる" : "編集"}
+                </MkBtn>
+              </div>
+
+              {isEditing && draft && (
+                <div style={{ borderTop: "1px solid #efece5", padding: "16px 14px", background: "#fdfcf9" }}>
+                  <div className="adm-cols-2">
+                    <Field label="Slackチャンネル" hint={data.slack.bot_connected ? "この担当者宛の受付をこのチャンネルへ送ります" : "Slack連携後に選択できます"}>
+                      <select
+                        value={draft.slack_channel_id}
+                        disabled={!data.slack.bot_connected}
+                        onChange={(e) => setDraft({ ...draft, slack_channel_id: e.target.value })}
+                        style={selectStyle}
+                      >
+                        <option value="">送らない</option>
+                        {draft.slack_channel_id && !(channels ?? []).some((c) => c.id === draft.slack_channel_id) && (
+                          <option value={draft.slack_channel_id}>{route?.slack_channel_name || draft.slack_channel_id}</option>
+                        )}
+                        {(channels ?? []).map((c) => (
+                          <option key={c.id} value={c.id}>{c.is_private ? "🔒 " : "# "}{c.name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="メール" hint="複数はカンマ区切り（最大5件）">
+                      <TextInput
+                        placeholder="tanaka@example.co.jp"
+                        value={draft.email}
+                        onChange={(v) => setDraft({ ...draft, email: v })}
+                      />
+                    </Field>
+                    <Field
+                      label="Webhook URL"
+                      hint={
+                        route?.webhook_configured
+                          ? draft.webhook_url === null
+                            ? "設定済み。URLは安全のため表示しません（変更するときだけ入力）"
+                            : draft.webhook_url === ""
+                              ? "保存すると解除されます"
+                              : "保存すると新しいURLに差し替わります"
+                          : "この担当者宛の受付だけを外部システムへPOSTします（任意）"
+                      }
+                    >
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <TextInput
+                            placeholder={route?.webhook_configured ? "設定済み（変更するときだけ入力）" : "https://hooks.example.com/..."}
+                            mono
+                            value={draft.webhook_url ?? ""}
+                            onChange={(v) => setDraft({ ...draft, webhook_url: v })}
+                          />
+                        </div>
+                        {route?.webhook_configured && (
+                          <button
+                            type="button"
+                            onClick={() => setDraft({ ...draft, webhook_url: draft.webhook_url === null ? "" : null })}
+                            style={testBtnStyle(false)}
+                          >
+                            {draft.webhook_url === null ? "解除" : "取り消し"}
+                          </button>
+                        )}
+                      </div>
+                    </Field>
+                    <Field label="代理通知先（応答が無いとき）" hint="別の担当者を指定します。転送は1段のみで、代理の代理は辿りません">
+                      <select
+                        value={draft.fallback_staff_name}
+                        onChange={(e) => setDraft({ ...draft, fallback_staff_name: e.target.value })}
+                        style={selectStyle}
+                      >
+                        <option value="">代理通知しない</option>
+                        {others.map((n) => <option key={n} value={n}>{n}</option>)}
+                      </select>
+                    </Field>
+                    {draft.fallback_staff_name !== "" && (
+                      <Field label="代理通知までの時間" hint="この時間を過ぎても 受付/電話/お断り の応答が無ければ代理へ送ります">
+                        <select
+                          value={String(draft.escalate_after_sec)}
+                          onChange={(e) => setDraft({ ...draft, escalate_after_sec: Number(e.target.value) })}
+                          style={selectStyle}
+                        >
+                          {ESCALATE_CHOICES.map((c) => <option key={c.sec} value={c.sec}>{c.label}</option>)}
+                        </select>
+                      </Field>
+                    )}
+                  </div>
+
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 9, marginTop: 14, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={draft.include_default}
+                      onChange={(e) => setDraft({ ...draft, include_default: e.target.checked })}
+                      style={{ marginTop: 2 }}
+                    />
+                    <span style={{ fontSize: 12.5, color: "#2d2a24", lineHeight: 1.7 }}>
+                      全体（テナント共通）の通知先にも送る
+                      <span style={{ display: "block", fontSize: 11, color: "#a8a198" }}>
+                        OFF にすると、この担当者宛の受付では共通のSlack・Webhook・プッシュ通知を送りません
+                      </span>
+                    </span>
+                  </label>
+
+                  <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <MkBtn variant="primary" size="sm" onClick={save} disabled={saving}>
+                      {saving ? "保存中…" : "保存"}
+                    </MkBtn>
+                    {route && (
+                      <>
+                        <button
+                          onClick={() => runTest(staff, "primary")}
+                          disabled={testing !== ""}
+                          style={testBtnStyle(testing !== "")}
+                        >
+                          {testing === `${staff}:primary` ? "送信中…" : "テスト送信"}
+                        </button>
+                        {route.fallback_staff_name && route.escalate_after_sec > 0 && (
+                          <button
+                            onClick={() => runTest(staff, "fallback")}
+                            disabled={testing !== ""}
+                            style={testBtnStyle(testing !== "")}
+                          >
+                            {testing === `${staff}:fallback` ? "送信中…" : "代理通知をテスト"}
+                          </button>
+                        )}
+                        {confirmClear === route.id ? (
+                          <>
+                            <span style={{ fontSize: 12, color: "#a84238" }}>
+                              この担当者の個別設定を解除します（以後は全体の通知先だけに届きます）
+                            </span>
+                            <MkBtn variant="danger" size="sm" onClick={() => clearRoute(route.id)} disabled={saving}>
+                              {saving ? "解除中…" : "解除する"}
+                            </MkBtn>
+                            <MkBtn size="sm" onClick={() => setConfirmClear(null)} disabled={saving}>
+                              やめる
+                            </MkBtn>
+                          </>
+                        ) : (
+                          <MkBtn variant="danger" size="sm" onClick={() => setConfirmClear(route.id)} disabled={saving}>
+                            設定を解除
+                          </MkBtn>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  {testResult?.staff === staff && (
+                    <div style={{ marginTop: 12, padding: "10px 14px", background: testResult.result.ok ? "#eaf0e8" : "#f6e0dc", border: `1px solid ${testResult.result.ok ? "rgba(74,124,78,0.25)" : "rgba(168,66,56,0.3)"}`, borderRadius: 8, fontSize: 12, color: testResult.result.ok ? "#3a6240" : "#a84238" }}>
+                      {testResult.result.results.map((r, i) => (
+                        <div key={i} style={{ lineHeight: 1.8 }}>
+                          {r.ok ? "✓" : "×"} {channelLabel(r.channel)}：{r.target}{r.error ? `（${r.error}）` : ""}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {error && (
+        <div style={{ marginTop: 12, padding: "10px 14px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 8, color: "#a84238", fontSize: 12 }}>
+          {error}
         </div>
       )}
     </div>
@@ -1027,6 +1412,19 @@ export default function AdminNotifyPage() {
           )}
         </MkCard>
 
+        {/* Per-staff notification routes (訪問先担当者ごとの通知先 + 代理通知) */}
+        <MkCard style={{ gridColumn: "span 2" }}>
+          <MkSectionTitle
+            title="担当者ごとの通知先"
+            subtitle="訪問先担当者ごとに届け先を分け、応答が無いときは代理担当者へ転送する"
+          />
+          {authToken ? (
+            <StaffRoutesPanel authToken={authToken} />
+          ) : (
+            <div style={{ padding: "20px 0", color: "#a8a198", fontSize: 13 }}>認証が必要です。ページを再読み込みしてください。</div>
+          )}
+        </MkCard>
+
         {/* Custom Webhook */}
         <MkCard style={{ gridColumn: "span 2" }}>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 18 }}>
@@ -1057,12 +1455,14 @@ export default function AdminNotifyPage() {
                 <pre style={{ fontSize: 10.5, color: "#2d2a24", margin: 0, lineHeight: 1.6, fontFamily: "monospace", whiteSpace: "pre-wrap" }}>{`{
   "event": "reception",
   "tenant_id": "...",
+  "reception_id": "...",
   "visitor_name": "佐々木 美咲",
   "company": "アルチザン株式会社",
   "staff": "田中 誠",
+  "department": "営業部",
   "purpose": "打ち合わせ",
   "method": "form",
-  "created_at": "2026-01-01T10:00:00"
+  "created_at": "2026-01-01T10:00:00Z"
 }`}</pre>
               </div>
             </div>
@@ -1074,6 +1474,7 @@ export default function AdminNotifyPage() {
                   <li>自社システムへのリアルタイム通知に利用できます</li>
                   <li>HTTP POST（JSON形式）で受付情報を送信します</li>
                   <li>送信失敗時もキオスク受付処理はブロックしません</li>
+                  <li>応答が無く代理通知された場合は <code>event</code> が <code>reception_escalated</code> になり <code>escalated_from</code>（元の担当者名）が付きます</li>
                 </ul>
               </div>
             </div>

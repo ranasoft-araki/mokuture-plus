@@ -83,6 +83,7 @@ mokuture/
 │       │   ├── reception.py   ← /reception (受付ログ一覧)
 │       │   ├── events.py      ← /events/stream (SSE: 管理画面の受付/ロッカー ニアリアルタイム連動)
 │       │   ├── notifications.py ← /notifications (Slack/Chatwork 設定)
+│       │   ├── staff_routes.py ← /notifications/staff-routes (担当者ごとの通知先・代理通知の設定)
 │       │   ├── lockers.py     ← /lockers (ロッカー制御モック)
 │       │   ├── inquiries.py   ← /inquiries (共通問い合わせフォーム: 公開送信・管理閲覧)
 │       │   ├── push.py        ← /push (Web Push 購読管理)
@@ -94,7 +95,8 @@ mokuture/
 │       │   ├── device.py      ← Device (token, status=承認状態, hardware_id), Locker
 │       │   ├── reception.py   ← ReceptionLog (visitor_name, company, staff, purpose, state)
 │       │   ├── inquiry.py     ← Inquiry (共通問い合わせフォーム受信)
-│       │   └── notification.py ← NotificationSetting, PushSubscription
+│       │   ├── notification.py ← NotificationSetting, PushSubscription
+│       │   └── staff_route.py  ← StaffNotificationRoute (担当者ごとの通知先・代理通知先)
 │       ├── middleware/
 │       │   └── tenant.py      ← JWT 検証・テナント分離 (get_current_user)
 │       └── services/
@@ -332,11 +334,12 @@ mokuture/
 - **schedules** — 曜日・時間帯ごとのプレイリスト割当
 - **devices** — キオスク端末 (token, **status**=`pending`承認待ち/`active`承認済み, **hardware_id**=物理端末の安定ID(冪等な再登録用) nullable, last_seen_at, force_update_at)。PIN列は廃止。status/hardware_id は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS`)で追加。既存端末は `active` で埋まる
 - **lockers** — ロッカー (door_number=gpio_pin, state, **name**=表示ラベル, **pin_hash**=bcrypt(4桁PIN) nullable, **occupied**=利用中フラグ, **occupied_at**)
-- **reception_logs** — 受付ログ (visitor_name, company, staff, **department**(訪問先部署), purpose, method, **state**, staff_notes, appointment_id, **decided_at**)。`department` は来訪者が受付フォームで選んだ訪問先部署(管理画面「受付設定」の `department_list` から選択)。カラム追加は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS.reception_logs`)。受付ログ一覧/詳細・CSV・Slack/Push/Webhook 通知にも `部署` を出す。`state`: `received | notified | accepted(受付=参ります) | phone(電話=対応不可・電話番号案内) | declined(お断り=営業お断り+フォーム案内) | completed | cancelled`。`decided_at`=スタッフが応答した時刻(nullable)。state/decided_at は素の型でDB制約なし＝カラム追加は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS`)で対応済み。`method`: `form | qr | calendar | delivery(配達呼出) | dropoff(置き配)`。**置き配(dropoff)** は `notify-delivery`/`occupy-delivery` が `visitor_name="置き配"`/`company=ロッカーラベル`/`purpose="解錠PIN: XXXX（受付端末: …）"`/`state="completed"` で記録する＝**スタッフが通知を見逃しても管理画面の受付ログから解錠PINを後追いできる**。一時的PIN(受取で端末が破棄し無効化)のため通知本文と同じく平文で載せる(`_log_delivery_dropoff`)。誰かの応答を待つ受付ではないので受付/電話ボタンは出さない
+- **reception_logs** — 受付ログ (visitor_name, company, staff, **department**(訪問先部署), purpose, method, **state**, staff_notes, appointment_id, **decided_at**)。`department` は来訪者が受付フォームで選んだ訪問先部署(管理画面「受付設定」の `department_list` から選択)。カラム追加は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS.reception_logs`)。受付ログ一覧/詳細・CSV・Slack/Push/Webhook 通知にも `部署` を出す。`state`: `received | notified | accepted(受付=参ります) | phone(電話=対応不可・電話番号案内) | declined(お断り=営業お断り+フォーム案内) | completed | cancelled`。`decided_at`=スタッフが応答した時刻(nullable)。**`escalated_at`**=代理通知(エスカレーション)を送った時刻(nullable)。`escalated_at` は二重送信の防止も兼ねる＝スイーパーが**送信前に先に確定・commit** する。state/decided_at は素の型でDB制約なし＝カラム追加は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS`)で対応済み。`method`: `form | qr | calendar | delivery(配達呼出) | dropoff(置き配)`。**置き配(dropoff)** は `notify-delivery`/`occupy-delivery` が `visitor_name="置き配"`/`company=ロッカーラベル`/`purpose="解錠PIN: XXXX（受付端末: …）"`/`state="completed"` で記録する＝**スタッフが通知を見逃しても管理画面の受付ログから解錠PINを後追いできる**。一時的PIN(受取で端末が破棄し無効化)のため通知本文と同じく平文で載せる(`_log_delivery_dropoff`)。誰かの応答を待つ受付ではないので受付/電話ボタンは出さない
 - **inquiries** — mokuture 共通問い合わせフォーム受信 (tenant_id, name, company, email, phone, message, **state**=`new|read|archived`, created_at)。公開送信 `POST /inquiries/public/{slug}`、管理閲覧 `GET /inquiries`。キオスク「営業お断り」画面が案内する共通フォーム(`/{slug}/inquiry`)の受け皿。テーブルは起動時 `create_all` で自動作成
 - **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired, meeting_room_id FK nullable)
 - **meeting_rooms** — 会議室 (name, location, capacity, color, description, is_active, **map_image_url**=館内マップ画像URL nullable)
 - **notification_settings** — 通知先設定 (Fernet 暗号化, `type` で種別)。受付: `slack`/`chatwork`/`webhook`/`vapid`。配達専用: `slack_delivery`/`chatwork_delivery`/`webhook_delivery`(未設定時は受付用にフォールバック)、`push_delivery`(`{enabled}` プッシュ通知ON/OFF, 既定ON)。**`slack`(受付)は OAuth 連携で `{team_id, team_name, bot_access_token, bot_user_id, channel_id, channel_name, auth_method:"bot", created_at, updated_at}` を暗号化保存**(専用テーブルは作らず既存 row を拡張＝マイグレーション不要)。`bot_access_token` は API レスポンス・ログに一切出さない。旧・手入力 `{webhook_url}` の row も送信は後方互換で動く(`SlackNotifier.send_to_config` が bot/webhook を自動判別)
+- **staff_notification_routes** — **訪問先担当者ごとの通知先と代理通知設定**。`(tenant_id, staff_name)` で一意(`main.py` の起動時に `CREATE UNIQUE INDEX IF NOT EXISTS ix_staff_routes_tenant_staff`)。`staff_name` は `tenants.staff_list`(キオスクの訪問先ドロップダウン) の1件＝`reception_logs.staff` と突き合わせる。宛先は `config_json`(Fernet 暗号化)に `{slack_channel_id, slack_channel_name, email, webhook_url}`。**`webhook_url` は API レスポンスに出さない**(`webhook_configured` の真偽だけ)＝CLAUDE.md「秘密情報」方針。`include_default`(既定 true)=テナント共通の通知先(Slack/Webhook/**プッシュ**)へも送るか、`fallback_staff_name`=応答が無いときに転送する代理担当者(**1段のみ・連鎖しない**)、`escalate_after_sec`(既定 60、0=代理通知しない、30〜3600)。**行が無い担当者は従来どおり共通の通知先だけ**(後方互換)。テーブルは起動時 `create_all` で自動作成
 - **push_subscriptions** — Web Push 購読情報
 
 ---
@@ -390,6 +393,10 @@ mokuture/
 | GET | /notifications/slack/channels | JWT | 通知先候補チャンネル一覧 `{channels:[{id,name,is_private,is_member}]}`(`conversations.list`, 公開=channels:read/非公開=groups:read)。管理画面のチャンネル選択用 |
 | POST | /notifications/slack/channel | JWT | 通知先チャンネル確定 `{channel_id}`。`conversations.info`で名称取得＋公開ch未参加なら`conversations.join`→`{channel_id, channel_name}`保存→`{ok, channel_name}` |
 | POST | /notifications/slack/disconnect | JWT | Slack連携解除(type=slack の row 削除。Bot Token 破棄) |
+| GET | /notifications/staff-routes | JWT | **担当者ごとの通知先の一覧**。`{staff_list, routes:[{id,staff_name,slack_channel_id,slack_channel_name,email,webhook_configured,include_default,fallback_staff_name,escalate_after_sec,orphan,updated_at}], slack:{bot_connected,default_channel_name}, smtp_enabled, default_escalate_sec, min/max_escalate_sec}`。`orphan`=受付設定の担当者リストから消えた担当者(UIで注意表示) |
+| PUT | /notifications/staff-routes | JWT | **担当者1人ぶんの通知先を upsert**(担当者名がキー)。`{staff_name, slack_channel_id?, email?, webhook_url?, include_default?, fallback_staff_name?, escalate_after_sec?}`。Slackチャンネルは `conversations.info` で名称解決＋公開ch未参加なら `conversations.join`(best-effort)。**`webhook_url` は3状態**: 未指定/`null`=変更しない(既存を維持)・`""`=解除・URL=差し替え（**URL は GET で返さない**ので画面が値を持てないため）。**それ以外の項目は省略すると既定値に戻る**(フル置換。画面は常に全項目を送る)。メールはカンマ区切り最大5件で**1件でも形式不正なら 422**(`staff_routing.validate_emails`。保存済みを読む `parse_emails` は寛容)、Webhookは http(s) 必須、`escalate_after_sec` は 0 または 30〜3600、代理に自分自身を指定すると 422。同一担当者への同時 PUT は一意制約違反を拾って既存行の更新にフォールバック |
+| DELETE | /notifications/staff-routes/{route_id} | JWT | 担当者ごとの設定を解除(以後は共通の通知先だけに送られる) |
+| POST | /notifications/staff-routes/test | JWT | **宛先ごとのテスト送信**。`{staff_name, stage:"primary"|"fallback"}` → `{ok, results:[{channel,target,ok,error?}]}`。**受付ログは作らない**(保存しない `ReceptionLog` で文面だけ実運用と揃える)・応答ボタンは付けない。代理未設定で `stage="fallback"` は 400 |
 | POST | /notifications/slack/interactions | なし(署名検証) | **受付通知の対応ボタン(受付/電話/お断り)押下の受け口**。Slack が Block Kit ボタン押下時にPOSTする。`X-Slack-Signature`(v0, `SLACK_SIGNING_SECRET`)＋5分リプレイ防止で検証→ボタン`value`の署名トークン(`create_decision_token`)で受付ログ→テナント特定→`_apply_decision`(冪等)→`response_url`で元メッセージを「対応済み」に置換(ボタン除去)、即200。`SLACK_SIGNING_SECRET`未設定時は404 |
 | GET/POST | /lockers | JWT | ロッカー管理 (name 永続化, occupied/has_pin 返却)。旧DB台帳CRUD・後方互換で残置 |
 | GET | /lockers/status | JWT | **ロッカー状況(表示専用)**。ローカルファースト化で端末が真実の源＝各端末が best-effort でミラーした占有スナップショット(`devices.locker_state_json`)を**端末ごとに集計**して返す `{devices:[{device_id,device_name,location,updated_at,lockers:[{id,door_number,name,occupied,has_pin,kind}],total,occupied_count,available_count}]}`。管理画面「ロッカー」メニューの表示元。管理・解錠操作は行わない(端末側で完結) |
@@ -596,6 +603,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - `AdminShell.tsx` の `NavId` 型・`NAV_SETTINGS`・`NAV_PATHS`・`NavIcon` を一括管理。
 - ページを追加したら 4 箇所全て更新すること。
 - 現在の設定メニュー: 通知設定 / **受付設定** / 基本設定
+- **通知設定(`notify`)** に「担当者ごとの通知先」カード(`StaffRoutesPanel`)がある。行は「受付設定」の担当者リスト(`staff_list`)から生成するので、**担当者を増減したら両画面が連動する**(消えた担当者の設定は `orphan` として残り、注意表示つきで編集/解除できる)。
 - 運用メニューに **ロッカー**(`locker`)を配置。ローカルファースト化後は**読み取り専用の「ロッカー状況」ビュー**(`admin/locker/page.tsx`、`GET /lockers/status`、端末ごとにグルーピング・15s自動更新)。旧DBモデル前提のCRUD(作成/削除/開錠/施錠)は廃止し、施錠・解錠・PINは各キオスク端末で管理(端末が真実の源)。`NavId`/`NAV_OPS`/`NAV_PATHS`/`NavIcon` の4箇所に配線済み
 - 運用メニューに **問い合わせ**(`inquiries`)を追加（`AdminShell` の `NavId`/`NAV_OPS`/`NAV_PATHS`/`NavIcon` の4箇所を更新済み）。
 - **受付設定(`kiosk-settings`)** に「受付電話番号(`kiosk_phone_number`)」「問い合わせフォームURL(外部・任意, `inquiry_form_url`)」を追加。
@@ -639,6 +647,25 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - **送信**: `SlackNotifier.build_reception_blocks(text, actions, token)` が本文セクション＋`actions`ブロック(ボタン)を生成。ボタン `value` に `"{action}|{token}"`(token=`create_decision_token`)。ボタンの選択肢は `reception.decision_actions(log)`（QR予約=受付/電話の2択、非QR=3択、push と共用）。受付=primary/お断り=danger。
 - **押下受け口**: `POST /api/notifications/slack/interactions`（未認証）。`_verify_slack_signature`(v0 HMAC-SHA256, `SLACK_SIGNING_SECRET`, 5分リプレイ防止)→`value`の署名トークン検証→`ReceptionLog`特定(テナント越境不可)→`_apply_decision`→`response_url` で元メッセージを「✅ 対応済み：受付/電話/お断り（押した人）」に置換(ボタン除去)。**Slackの3秒制限のため response_url 更新は `BackgroundTasks` で背後送信し即200**。
 - **必要な手動設定**: ① Render env に `SLACK_SIGNING_SECRET`(Slack App の Basic Information → Signing Secret) を設定。② Slack App → **Interactivity & Shortcuts を ON**、Request URL に `https://mokuture-plus-api.onrender.com/api/notifications/slack/interactions` を登録。追加スコープ不要(既存 `chat:write` で更新可)。
+
+### 担当者ごとの通知先と代理通知（エスカレーション）
+
+受付通知の宛先は元々「テナントに1つ」だったが、**来訪者がキオスクで選んだ訪問先担当者ごと**に Slack チャンネル / メール / Webhook を割り当てられる。さらに**応答が無いまま時間切れ**になったら、指定した**代理担当者**の通知先へ自動転送する（GitHub issue #1）。
+
+- **宛先の決定は `services/staff_routing.py` に集約**。`resolve_primary(db, tenant_id, staff_name)` が通常の宛先、`resolve_fallback(...)` が代理の宛先を `Destinations{slack_channels, emails, webhooks, use_default, routed_to}` で返す。`slack_send_configs(default_config, dest)` が実際に `SlackNotifier.send_to_config` へ渡す設定列を組む。
+- **送信は `services/reception_notify.py` に集約**。`notify_reception(db, tenant_id, log, stage="primary"|"fallback")` が Slack / Web Push / Webhook / メールへ一括ファンアウトする。**キオスク受付(`kiosk.kiosk_reception`)と管理画面からの手動受付(`reception.create_reception`)の両方がここを通る**（以前は両ファイルに `_notify_slack`/`_notify_push` がほぼ同じ形で重複しており、宛先を担当者別に拡張するとズレる一方だったので統合した）。どちらも `BackgroundTasks` で非ブロック送信（メール20s/Webhook5sのタイムアウトを受付経路に持ち込まない）。
+- **統合による意図的な挙動変更**: 管理画面から手動作成した受付(`POST /reception`)も、キオスク受付と同じく Slack の対応ボタン(Block Kit)・Webhook・メールが付く（従来は Slack テキスト＋Web Push のみ）。通知も `BackgroundTasks` 化した。
+- **Slack は既存の OAuth 連携(Bot Token)を使い回し、チャンネルだけ差し替える**＝**追加スコープ不要**。担当者チャンネルへ送る config は `{bot_access_token, channel_id}` のみにして `webhook_url` を落とす（旧Webhook設定へフォールバックして共通チャンネルへ二重投稿するのを防ぐ）。Bot Token が無い（旧Webhook連携だけの）テナントでは担当者ごとのチャンネル指定は成立しないので黙って捨てる。共通の通知先と同じチャンネルになる場合は重複送信しない。
+- **`include_default`（既定 ON・担当者ごとにOFF可）**でテナント共通の通知先へも送るかを決める。**OFF のときは共通の Slack・Webhook に加えて Web Push も送らない**（プッシュは購読が担当者と結び付いていないため担当者別に割れない＝「共通の通知先」として扱う）。**代理通知のときだけは `include_default` に関わらず必ず Web Push を送る**（誰も応答していない状態なので手元の端末へ届けるのが安全側）。代理通知のプッシュは `tag` を `reception-{id}-esc` にして元の通知を上書きしない。
+- **代理通知は「別の担当者を指定」方式・1段のみ**（`fallback_staff_name`）。代理の代理は辿らないのでループしない。代理担当者にルートが無い/宛先が空のときは**テナント共通の通知先へ落とす**（無言の空振りを避ける）。自分自身を代理には指定できない（API が 422）。
+- **発火は「受付ごとのタイマー」ではなく定期スイープ**（`services/escalation.py`、15秒間隔、`main.lifespan` が起動・停止）。受付ごとに `asyncio.sleep` する方式だと Render の再デプロイ/再起動で待機中のタスクが消え、**安全網が一番必要なときに黙って効かなくなる**。スイープなら再起動後も未処理ぶんを拾い直せる。対象は **`staff_notification_routes` との JOIN で「代理通知が設定された担当者宛」に限定**したうえで、`state ∈ (received, notified)` かつ `escalated_at IS NULL` かつ `method ∉ (delivery, dropoff)` かつ直近24時間、1周期あたり最大50件。**JOIN で絞るのが重要**: 代理設定の無い担当者宛や担当者未選択の未応答ログは `escalated_at` が永久に NULL のままなので（来客に直接応対して誰も 受付/電話/お断り を押さない受付はそのまま残る）、絞らないと毎周期そちらが LIMIT の枠を先に埋め、本来送るべき受付が永久に選ばれなくなる。cutoff は **naive-UTC** で渡す（SQLAlchemy はモデルの `DateTime(timezone=False)` から `$1::TIMESTAMP WITHOUT TIME ZONE` にキャストするため、aware を渡すと asyncpg 側で壊れる）。**代理通知を設定しているテナントが1つも無ければ JOIN の結果が0件で終わる**（`staff_notification_routes` が空なら走査するものが無い）。担当者名の突き合わせは `func.trim(reception_logs.staff)` で行う——ルート側(`staff_name`)は保存時に必ず strip されるため、受付側に前後空白が残ると**代理通知だけ静かに落ちる**（1通目は `get_route` が strip して引くので届いてしまい原因に気づけない）。新規受付は `ReceptionCreate.staff` / `AppointmentCreate.staff` の strip バリデータで入口から揃え、過去データは JOIN 側の trim で拾う。
+- **冪等性は `reception_logs.escalated_at`**。**「まだ未応答・未エスカレーション」を条件にした `UPDATE` で先に確定・commit** してから送る。条件付きなのは、対象を読んでから送るまでの await の間にスタッフが応答を commit しうるため（単一ワーカーでもリクエストは並行する）。更新件数が0なら送らない。**この順序は意図的に at-most-once**＝commit と送信の間でプロセスが落ちるとその1件は送られない。逆にすると送信成功後の commit 失敗で15秒ごとに鳴り続けうるので、鳴りすぎるより取りこぼす側に倒している（通知は全経路 best-effort）。代理通知後は SSE(`{"type":"reception"}`)を publish し、管理画面「受付ログ」に**「代理通知済」バッジ**が即出る。
+- **前提: uvicorn `--workers 1`**（Dockerfile。in-memory pub/sub と同じ前提）。複数ワーカー化する場合は、このスイープが各ワーカーで走らないよう担当プロセスを決めるかロックを入れること。
+- **文面**: `SlackNotifier.build_reception_message(..., escalated_from=...)` に元の担当者名を渡すと見出しが `:warning: 受付に応答がありません（代理通知）` になり、末尾が「「{担当者}」宛の受付に応答がありません。代わりに対応をお願いします。」になる。メールは `reception_notify.build_reception_email`（来社予定QRメールと同じ和モダンHTML・`?respond={id}` 付きの受付ログリンク）。JST 表記は `services/timeutil.format_jst`（Slack・メール共通。以前 slack.py にあった `_format_jst` を公開名として timeutil へ移した）。
+- **管理画面**: 「通知設定」の**担当者ごとの通知先**カード（`StaffRoutesPanel` @ `admin/notify/page.tsx`）。受付設定の担当者リストを行に並べ、行の「編集」でインライン編集（Slackチャンネルは `GET /notifications/slack/channels` を**編集を開いた時だけ**取得）。**宛先ごとの成否が出るテスト送信**（通常／代理）付き。Slack未連携・SMTP未設定はカード上部で明示する。「設定を解除」は取り消せないので**2段階確認**にしている（JSダイアログ禁止ルールに従いインライン。Slack連携解除と同じ方式）。
+- **後方互換**: 担当者ごとの設定を1件も作らなければ挙動は従来どおり（共通の通知先だけ・代理通知なし）。担当者リストから名前が消えても設定行は残り、一覧に `orphan`（「受付設定に無い担当者」）として出す。
+- **配達の呼び出し・置き配は対象外**（`log.staff` が無いので宛先ルーティングは働かず、スイープも `method` で明示的に除外する。従来どおり `_fire_delivery_notifications`）。
+- **Webhook ペイロードの変更**: 受付 Webhook に `reception_id` が増え、`created_at` は `iso_z()` の単一 `Z` 形式に揃えた（従来は naive/aware で `...` と `...+00:00` が混在していた）。代理通知では `event` が `reception_escalated` になり `escalated_from`(元の担当者名) が付く。管理画面「カスタムWebhook」のサンプル表示も同じ形に更新済み。
 
 ### DB マイグレーション
 - Alembic 未導入のため、カラム追加は Neon Console または `mcp__Neon__run_sql` で手動 `ALTER TABLE`。

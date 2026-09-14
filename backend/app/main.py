@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,7 @@ from app.config import settings
 from app.database import engine, Base, AsyncSessionLocal
 from app.api import api_router
 from app.middleware.readonly import ReadOnlyGuardMiddleware
+from app.services.escalation import run_escalation_loop
 
 
 # Alembic 未導入のため、起動時に冪等な軽量カラム追加を適用する。
@@ -45,6 +47,8 @@ _ENSURE_COLUMNS = {
         "decided_at": "TIMESTAMP",
         # 来訪者が選んだ訪問先部署。
         "department": "VARCHAR(255)",
+        # 代理通知(応答が無いときのエスカレーション)を送った時刻。二重送信の防止も兼ねる。
+        "escalated_at": "TIMESTAMP",
     },
     "devices": {
         # 承認フロー。既存端末は 'active' で埋めて後方互換を保つ。
@@ -87,6 +91,16 @@ def _ensure_schema(sync_conn) -> None:
             ))
         except Exception:
             pass  # 列未追加/型差異などがあっても致命的ではない
+
+    # 担当者ごとの通知先: (tenant_id, staff_name) は1行だけ（upsert の前提）。
+    if "staff_notification_routes" in tables:
+        try:
+            sync_conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_staff_routes_tenant_staff "
+                "ON staff_notification_routes (tenant_id, staff_name)"
+            ))
+        except Exception:
+            pass  # 既存の重複データ等で作成できなくても致命的ではない
 
     # 承認フロー: (tenant_id, hardware_id) の重複登録を防ぐ一意インデックス。
     # hardware_id が NULL の行(手動作成端末)は Postgres/SQLite とも「相異なる」扱いのため衝突しない。
@@ -183,7 +197,14 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_ensure_schema)
     await _seed_demo_master_data()
-    yield
+    # 代理通知(応答が無い受付のエスカレーション)の定期スイープ。単一ワーカー前提。
+    escalation_task = asyncio.create_task(run_escalation_loop())
+    try:
+        yield
+    finally:
+        escalation_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await escalation_task
 
 
 limiter = Limiter(key_func=get_remote_address)
