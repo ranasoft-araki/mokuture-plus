@@ -454,6 +454,10 @@ def test_文字から決めたときは字の大きさで近さを見る(scene, 
 
     代わりに「字が読める大きさか」を見る。ここが効いていないと、遠くの小さな
     名刺でも撮影に進んで、読めない画像を OCR にかけ続けることになる。
+
+    しきい値は画面幅に対する比で持つ。OCR がかかるのは検出フレームではなく
+    撮影画像なので、検出フレームの画素数で決め打ちにすると、実機で「画面から
+    はみ出すほど近づけないと認識しない」状態になる（実際になった）。
     """
     bgr, _truth, _spec = scene("no_edges")
     frame = _detect_frame(bgr)
@@ -461,7 +465,7 @@ def test_文字から決めたときは字の大きさで近さを見る(scene, 
     assert det is not None and det.source == "text"
     assert evaluate(frame, det, det.quad)[0] == "steady"
 
-    monkeypatch.setenv("CARD_QUALITY__TEXT_HEIGHT_MIN", "999")
+    monkeypatch.setenv("CARD_QUALITY__TEXT_HEIGHT_MIN_RATIO", "0.5")
     settings.reload()
     assert evaluate(frame, det, det.quad)[0] == "too_small"
 

@@ -148,8 +148,8 @@ quality:
   stable_frames: 3
   capture_cooldown_sec: 1.5
   # 文字ベースで見つけたときの「近づいてください」の判定（字が読める大きさか）。
-  # 検出フレーム(640px 幅)での字の高さ。
-  text_height_min: 5.5
+  # 画面幅に対する字の高さの比。0.0055 × 640px = 3.5px。上げると寄る必要が出る。
+  text_height_min_ratio: 0.0055
 
 preprocess:
   output_width: 1024

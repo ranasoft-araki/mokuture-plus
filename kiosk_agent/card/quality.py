@@ -146,7 +146,9 @@ def evaluate(
         # 利用者は何もできないが、誤って撮ってしまっても受理判定（氏名か社名が
         # 取れていること）で弾かれて撮り直しになるだけで、損得が釣り合わない。
         # text_clipped は記録だけ残す。
-        if base.text_height < float(q["text_height_min"]):
+        # 大きさは「字が読める大きさか」で見る。しきい値は画面幅に対する比で持つ
+        # （検出フレームの幅を変えても挙動が変わらないように）。
+        if base.text_height < float(q["text_height_min_ratio"]) * float(w):
             return "too_small", metrics
     else:
         margin = float(d["margin_px"])
