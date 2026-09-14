@@ -291,7 +291,9 @@ def test_手に持った名刺は肌の境目が無いと検出できない(scen
     assert det is not None
     assert _iou(det.quad, want, frame.shape) > 0.85
 
+    # 肌の境目だけを切り分けたいので、文字ベースの予備も止める
     monkeypatch.setenv("CARD_DETECTION__USE_SKIN_BOUNDARY", "false")
+    monkeypatch.setenv("CARD_DETECTION__TEXT_FALLBACK", "false")
     settings.reload()
     assert detect_card(frame) is None
 
@@ -311,7 +313,9 @@ def test_縦型の名刺を手に持った場合も肌の境目で検出でき�
     assert det is not None
     assert _iou(det.quad, want, frame.shape) > 0.80
 
+    # 肌の境目だけを切り分けたいので、文字ベースの予備も止める
     monkeypatch.setenv("CARD_DETECTION__USE_SKIN_BOUNDARY", "false")
+    monkeypatch.setenv("CARD_DETECTION__TEXT_FALLBACK", "false")
     settings.reload()
     assert detect_card(frame) is None
 
@@ -412,3 +416,71 @@ def test_占有率は向きで変わらない():
     # 小さければどちらの向きでも小さい
     assert fill_ratio([(0, 0), (100, 0), (100, 60), (0, 60)], w, h) < 0.3
     assert fill_ratio([(0, 0), (60, 0), (60, 100), (0, 100)], w, h) < 0.3
+
+
+# ── 文字から位置を決める経路（紙の縁が使えないとき）──────────────────────────
+
+def test_縁が見えない名刺は文字の並びから見つける(scene, monkeypatch):
+    """名刺と背景が同じ明るさで、輪郭からは四角形が絶対に組めない絵。
+
+    実機では逆光の窓や白いシャツを背にするとこれに近くなる。利用者から
+    「外枠の認識自体が難しいので文字を認識したほうが早いのでは」と指摘が
+    あり、実際の失敗画面ではエッジ側の候補が 1 つも通っていなかった。
+    """
+    bgr, truth, _spec = scene("no_edges")
+    frame = _detect_frame(bgr)
+    scale = frame.shape[1] / bgr.shape[1]
+    want = [(x * scale, y * scale) for x, y in truth]
+
+    det = detect_card(frame)
+    assert det is not None
+    assert det.source == "text"
+    # 四隅は名刺の縁ではないので重なり具合ではなく「はみ出していないか」で見る
+    own = np.zeros(frame.shape[:2], np.uint8)
+    card = np.zeros(frame.shape[:2], np.uint8)
+    cv2.fillPoly(own, [np.array(det.quad, np.int32)], 255)
+    cv2.fillPoly(card, [np.array(want, np.int32)], 255)
+    inside = np.count_nonzero(cv2.bitwise_and(own, card)) / np.count_nonzero(own)
+    assert inside > 0.90, "切り出す範囲が名刺からはみ出している"
+
+    monkeypatch.setenv("CARD_DETECTION__TEXT_FALLBACK", "false")
+    settings.reload()
+    assert detect_card(frame) is None
+
+
+def test_文字から決めたときは字の大きさで近さを見る(scene, monkeypatch):
+    """四隅が名刺の縁でないので、占有率では「近づいてください」を判定できない。
+
+    代わりに「字が読める大きさか」を見る。ここが効いていないと、遠くの小さな
+    名刺でも撮影に進んで、読めない画像を OCR にかけ続けることになる。
+    """
+    bgr, _truth, _spec = scene("no_edges")
+    frame = _detect_frame(bgr)
+    det = detect_card(frame)
+    assert det is not None and det.source == "text"
+    assert evaluate(frame, det, det.quad)[0] == "steady"
+
+    monkeypatch.setenv("CARD_QUALITY__TEXT_HEIGHT_MIN", "999")
+    settings.reload()
+    assert evaluate(frame, det, det.quad)[0] == "too_small"
+
+
+def test_名刺でない物体の上の文字は名刺と見ない(scene):
+    """A4 の書類やスマートフォンの画面には文字が密に並んでいる。
+
+    どちらも外形がはっきり測れていて、その形が名刺ではない。文字だけを見ると
+    取り違えるので、「名刺でない外形がはっきり写っている」ことを根拠に止める。
+    """
+    for pattern in ("not_a_card_paper", "not_a_card_phone"):
+        bgr, _truth, _spec = scene(pattern)
+        assert detect_card(_detect_frame(bgr)) is None, pattern
+
+
+def test_文字の切り出しは罫線やロゴを文字と数えない(scene):
+    """中空の図形（飾り罫・枠）を文字として数えると、無地の紙でも反応してしまう。"""
+    from card.text_detect import text_boxes, dominant_cluster
+    bgr, _truth, _spec = scene("blank_card")
+    frame = _detect_frame(bgr)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    assert len(dominant_cluster(text_boxes(gray), gray.shape)) < int(
+        settings.get("detection.text_min_boxes"))

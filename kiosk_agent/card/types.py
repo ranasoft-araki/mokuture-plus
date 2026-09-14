@@ -37,6 +37,7 @@ class FrameMetrics:
     aspect: float = 0.0         # 名刺の縦横比（長辺/短辺）
     text_regions: int = 0       # 内部で見つかった文字らしい領域の数
     motion: float = 0.0         # 直前フレームからの四隅移動量（画面短辺に対する比）
+    text_height: float = 0.0    # 字の高さの中央値(px)。文字ベースの検出でだけ入る
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,9 @@ class Detection:
     quad: Quad
     metrics: FrameMetrics
     score: float = 0.0          # 候補の確からしさ 0-1（複数候補の順位付け用）
+    # 四隅をどう決めたか。"edge"=紙の縁 / "text"=文字のかたまり。
+    # text のときは四隅が名刺の縁とは一致しないので、撮影可否の条件が変わる。
+    source: str = "edge"
 
 
 @dataclass(frozen=True)

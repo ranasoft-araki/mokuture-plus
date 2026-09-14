@@ -132,17 +132,26 @@ def evaluate(
         aspect=base.aspect,
         text_regions=base.text_regions,
         motion=motion,
+        text_height=base.text_height,
     )
 
-    margin = float(d["margin_px"])
-    if not all(margin <= x <= (w - margin) and margin <= y <= (h - margin) for x, y in quad):
-        return "out_of_frame", metrics
-    # 大きさは面積比ではなく「その向きで写せる最大に対する割合」で見る。
-    # 面積比だと縦型の名刺が原理的に不利になる（detect.fill_ratio の説明を参照）。
-    if fill < float(q["capture_fill_min"]):
-        return "too_small", metrics
-    if fill > float(q["capture_fill_max"]):
-        return "too_large", metrics
+    if detection.source == "text":
+        # 文字のかたまりから決めた四隅は名刺の縁ではない。画面の端に接していても
+        # 「はみ出している」とは限らず（余白ぶん外へ広げた結果である）、占有率も
+        # 名刺の大きさを表さない。代わりに「字が読める大きさか」だけを見る。
+        if base.text_height < float(q["text_height_min"]):
+            return "too_small", metrics
+    else:
+        margin = float(d["margin_px"])
+        if not all(margin <= x <= (w - margin) and margin <= y <= (h - margin)
+                   for x, y in quad):
+            return "out_of_frame", metrics
+        # 大きさは面積比ではなく「その向きで写せる最大に対する割合」で見る。
+        # 面積比だと縦型の名刺が原理的に不利になる（detect.fill_ratio の説明を参照）。
+        if fill < float(q["capture_fill_min"]):
+            return "too_small", metrics
+        if fill > float(q["capture_fill_max"]):
+            return "too_large", metrics
     if bright < float(q["brightness_min"]):
         return "dark", metrics
     if glare > float(q["glare_max"]) or bright > float(q["brightness_max"]):

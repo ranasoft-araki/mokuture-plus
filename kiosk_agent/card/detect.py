@@ -563,7 +563,8 @@ def detect_card(bgr, prev_quad: Quad | None = None) -> Detection | None:
             return None
         inv = 1.0 / ratio
         quad = tuple((x * inv, y * inv) for x, y in det.quad)
-        return Detection(quad=quad, metrics=det.metrics, score=det.score)  # type: ignore[arg-type]
+        return Detection(quad=quad, metrics=det.metrics, score=det.score,
+                         source=det.source)  # type: ignore[arg-type]
     return _detect_at_scale(bgr, prev_quad)
 
 
@@ -581,6 +582,8 @@ def _detect_at_scale(bgr, prev_quad: Quad | None) -> Detection | None:
     close_k = max(3, int(d["close_kernel"]) | 1)
     close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (close_k, close_k))
     best_overall: Detection | None = None
+    # 「名刺ではない別の物体がはっきり写っている」ことの記録（文字ベース検出の抑止）
+    veto: list = []
     stop_area = float(d["strategy_stop_area"])
     # 肌の境目は予備の戦略でしか使わないので、肌がほとんど写っていないフレーム
     # （＝検出ループの大半）ではモルフォロジーまで進まずに切り上げる。
@@ -594,19 +597,35 @@ def _detect_at_scale(bgr, prev_quad: Quad | None) -> Detection | None:
         # クロージング（膨張→収縮）で穴を閉じてから輪郭を拾う。
         edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, close_kernel)
         edges = cv2.dilate(edges, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)), iterations=1)
-        found = _best_quad(bgr, gray, edges, frame_area, d, prev_quad)
+        found = _best_quad(bgr, gray, edges, frame_area, d, prev_quad, veto)
         if found is not None and (best_overall is None or found.score > best_overall.score):
             best_overall = found
         # 名刺らしい大きさで見つかったらそこで打ち切る。小さな四角形（名刺の中の
         # 枠線や背景の一部）で止めてしまうと、本体を見つける機会を失う。
         if best_overall is not None and best_overall.metrics.area_ratio >= stop_area:
             break
-    return best_overall
+    if best_overall is not None:
+        return best_overall
+    if veto:
+        # A4 の書類やスマートフォンの画面のように、外形がはっきり測れていて
+        # かつ名刺の形ではないものが写っている。その上の文字を名刺と見ない。
+        return None
+    # 紙の縁では四角形が組めなかった。名刺を手に持つと縁が指・逆光・同系色の
+    # 背景で消えるので、実機ではここに落ちてくるほうが多い。文字の並びから
+    # 位置を決め直す（card/text_detect.py）。
+    from card.text_detect import detect_by_text
+    return detect_by_text(bgr)
 
 
 def _best_quad(bgr, gray, edges, frame_area: float, d: dict,
-               prev_quad: Quad | None) -> Detection | None:
-    """1 つのエッジ画像から最良の名刺候補を選ぶ。条件を満たすものが無ければ None。"""
+               prev_quad: Quad | None, veto: list | None = None) -> Detection | None:
+    """1 つのエッジ画像から最良の名刺候補を選ぶ。条件を満たすものが無ければ None。
+
+    veto を渡すと「はっきりした外形を持つのに名刺の形ではないもの」（A4 の書類、
+    スマートフォンの画面など）をそこへ記録する。文字ベースの検出は紙の縁を見ない
+    ので、こうした物体の上の文字を名刺と取り違えうる。外形が測れている以上は
+    「名刺ではない」と判定できるので、その根拠として使う。
+    """
     h, w = bgr.shape[:2]
     # 辺の裏付けを測るしきい値も、画像ごとのノイズ床に合わせる（固定値では
     # コントラストの低い名刺と、ノイズの多い映像を同時に扱えない）。
@@ -639,10 +658,19 @@ def _best_quad(bgr, gray, edges, frame_area: float, d: dict,
                 continue
 
             aspect = quad_aspect(quad)
+            angles = quad_angles(quad)
             if not (float(d["aspect_min"]) <= aspect <= float(d["aspect_max"])):
+                # 名刺の形ではない。ただし大きくて四隅が直角に近く、辺に本当の
+                # 段差があるなら「別の物体がはっきり写っている」ことの証拠になる。
+                if (veto is not None and not veto
+                        and area_ratio >= float(d["text_veto_min_area"])
+                        and all(60.0 <= a <= 120.0 for a in angles)):
+                    sup = edge_support(support_gray, quad, edge_thresh,
+                                       window=int(d["edge_support_window"]))
+                    if sup >= float(d["text_veto_support"]):
+                        veto.append((area_ratio, aspect, sup))
                 continue
 
-            angles = quad_angles(quad)
             lo, hi = float(d["min_corner_angle_deg"]), float(d["max_corner_angle_deg"])
             if any(a < lo or a > hi for a in angles):
                 continue

@@ -594,6 +594,16 @@ def _build_raw(name: str):
                             radius=30, fill=skin)
         return scene, quad, spec
 
+    if name == "no_edges":
+        # 名刺とまったく同じ明るさの背景。紙の縁に明暗差が無いので、輪郭からは
+        # 絶対に四角形が組めない。実機では逆光の窓や白いシャツを背にすると
+        # これに近い状態になる。文字の並びから位置を決められるかを見るための絵。
+        spec = CardSpec()
+        card = render_card(spec)
+        scene, quad = place_on_background(
+            card, plain_background(SCENE_W, SCENE_H, spec.bg))
+        return scene, quad, spec
+
     if name == "blank_card":
         # 名刺と同じ大きさ・縦横比の無地の紙。四角形の判定だけでは弾けないので、
         # 「内部に文字らしい領域がある」条件が効いているかを確かめるためのケース。
@@ -613,7 +623,7 @@ PATTERNS = [
     "white_card", "colored_card", "wood_background", "skewed",
     "glare", "blurry", "dark", "too_small",
     "multi_phone", "no_corporate_suffix", "small_name", "with_kana", "vertical_writing",
-    "held_in_hand", "held_in_hand_portrait",
+    "held_in_hand", "held_in_hand_portrait", "no_edges",
     "not_a_card_paper", "not_a_card_phone", "blank_card", "empty_desk",
 ]
 

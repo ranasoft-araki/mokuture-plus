@@ -85,6 +85,30 @@ detection:
   # 上げると生成り・クラフト紙の名刺が読めなくなる。
   skin_reject_luma_max: 165
   min_text_regions: 3
+  # 紙の縁で四角形が組めなかったときに、文字の並びから名刺の位置を決める。
+  # 手に持った名刺は縁が指・逆光・同系色の背景で消えることが多く、実機の失敗画面
+  # ではエッジ側の候補が 1 つも通らなかった。詳しくは card/text_detect.py を参照。
+  text_fallback: true
+  text_block_size: 25
+  text_c: 10
+  text_min_height_px: 3
+  text_max_height_ratio: 0.12
+  text_max_width_ratio: 0.30
+  text_max_aspect: 10.0
+  text_min_fill: 0.12
+  text_min_boxes: 20
+  text_min_rows: 2
+  text_link_x: 3.0
+  text_link_y: 5.0
+  text_pad_ratio: 2.5
+  # 密なかたまりのすぐ外にある文字を取り込む距離(字高の倍数)と回数。
+  text_absorb_ratio_x: 2.0
+  text_absorb_ratio_y: 16.0
+  text_absorb_passes: 3
+  # 名刺の形ではないが外形がはっきりしている物体(A4 の書類・スマホの画面)が
+  # 写っていたら、その上の文字を名刺と見ない。
+  text_veto_min_area: 0.10
+  text_veto_support: 0.70
   # この面積比以上で見つかったら残りのエッジ抽出戦略は試さない。
   strategy_stop_area: 0.12
   # この点数の候補が出たら同じエッジ画像の残りは調べない（速度のため）。
@@ -114,6 +138,9 @@ quality:
   # 読み取りに失敗したら自動で撮り直すので、ここは短め（検出間隔 120ms × 3 ≒ 0.4 秒）。
   stable_frames: 3
   capture_cooldown_sec: 1.5
+  # 文字ベースで見つけたときの「近づいてください」の判定（字が読める大きさか）。
+  # 検出フレーム(640px 幅)での字の高さ。
+  text_height_min: 5.5
 
 preprocess:
   output_width: 1024

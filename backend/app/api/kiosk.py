@@ -140,6 +140,7 @@ BUNDLE_FILES = [
     "card/api.py",
     "card/defaults.py",
     "card/detect.py",
+    "card/text_detect.py",
     "card/dicts.py",
     "card/extract.py",
     "card/pipeline.py",
