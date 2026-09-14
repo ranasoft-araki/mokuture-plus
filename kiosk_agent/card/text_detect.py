@@ -74,8 +74,26 @@ def text_boxes(gray) -> list[Box]:
     return out
 
 
-def dominant_cluster(boxes: list[Box], shape) -> list[Box]:
+def _ring_level(gray, box: Box) -> float:
+    """文字のすぐ外側（＝その文字が乗っている紙）の明るさ。"""
+    x, y, w, h = box
+    pad = max(2, h // 2)
+    hh, ww = gray.shape[:2]
+    y0, y1 = max(0, y - pad), min(hh, y + h + pad)
+    x0, x1 = max(0, x - pad), min(ww, x + w + pad)
+    patch = gray[y0:y1, x0:x1]
+    if patch.size == 0:
+        return 0.0
+    # 文字そのものは暗いので、上側の分位を取れば紙の明るさになる
+    return float(np.percentile(patch, 75))
+
+
+def dominant_cluster(boxes: list[Box], shape, gray=None) -> tuple[list[Box], list[Box]]:
     """近い文字どうしをつなぎ、いちばん数の多いかたまりを返す。
+
+    戻り値は (密なかたまり, そのまわりの文字を取り込んだもの)。前者は名刺の
+    本文が固まっている場所で、背景のノイズが混じりにくい。見切れの判定には
+    こちらを使う。
 
     つなぐ距離は「その画像の字の高さ」を単位にする。画素で決め打ちにすると、
     名刺が画面に大きく写っているときと小さいときで挙動が変わってしまう。
@@ -83,7 +101,7 @@ def dominant_cluster(boxes: list[Box], shape) -> list[Box]:
     """
     d = settings.get("detection")
     if len(boxes) < int(d["text_min_boxes"]):
-        return []
+        return [], []
     mh = float(np.median([b[3] for b in boxes]))
     mask = np.zeros(shape[:2], np.uint8)
     for x, y, w, h in boxes:
@@ -93,7 +111,7 @@ def dominant_cluster(boxes: list[Box], shape) -> list[Box]:
     mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_RECT, (kx, ky)))
     n, lab, _stats, _cent = cv2.connectedComponentsWithStats(mask, 8)
     if n <= 1:
-        return []
+        return [], []
     height, width = shape[:2]
     groups: dict[int, list[Box]] = {}
     for b in boxes:
@@ -102,40 +120,52 @@ def dominant_cluster(boxes: list[Box], shape) -> list[Box]:
         if i:
             groups.setdefault(i, []).append(b)
     if not groups:
-        return []
-    return _absorb(max(groups.values(), key=len), boxes, mh)
+        return [], []
+    core = max(groups.values(), key=len)
+    return core, _absorb(core, boxes, mh, gray)
 
 
-def _absorb(group: list[Box], boxes: list[Box], mh: float) -> list[Box]:
+def _absorb(group: list[Box], boxes: list[Box], mh: float, gray=None) -> list[Box]:
     """かたまりの近くにある文字を取り込む。
 
-    名刺は「社名・氏名」と「連絡先」の間が大きく空く組み方が多い。つなぐ距離を
-    その空きに合わせて広げると、こんどは背景の文字まで拾ってしまう。そこで
-    いったん密なかたまりを作ってから、その矩形のすぐ外にある文字だけを
-    取り込む形にする。離れていても「同じ列にある」ものは入り、横に並んだ
-    別の物体の文字は入らない。
+    名刺は「社名・氏名」と「連絡先」の間が大きく空く組み方が多い。最初につなぐ
+    距離をその空きに合わせて広げると、こんどは背景の文字まで拾ってしまう。そこで
+    いったん密なかたまりを作ってから、そのすぐ外にある文字だけを取り込む。
+
+    距離は**かたまりの外接矩形からではなく、すでに入っている文字のうち
+    いちばん近いものから**測る。外接矩形から測ると、端の 1 文字を取り込むたびに
+    矩形が広がり、次のまわりがまた広がる…と連鎖して画面全体に届いてしまう
+    （実機の映像で実際にそうなり、領域が画面いっぱいになって撮影できなくなった）。
+
+    横は狭く、縦は広く取る。名刺で大きく空くのは行間（縦）であって、横に離れた
+    文字は別の物体であることが多い。
     """
     d = settings.get("detection")
-    # 横は狭く、縦は広く取り込む。名刺で大きく空くのは行間（縦）であって、
-    # 横に離れた文字は別の物体であることが多い。横も広げると、実機の映像で
-    # 背景の文字まで飲み込んで領域が画面いっぱいになり、検出できなくなった。
     reach_x = mh * float(d["text_absorb_ratio_x"])
     reach_y = mh * float(d["text_absorb_ratio_y"])
     chosen = list(group)
     rest = [b for b in boxes if b not in chosen]
+    # 「同じ紙の上にあるか」で絞る。距離だけで取り込むと、実機の映像では
+    # ブラインドの桟やシャツの襟を文字として拾って、領域が画面いっぱいになった。
+    if gray is not None and rest:
+        tol = float(d["text_absorb_level_tol"])
+        level = float(np.median([_ring_level(gray, b) for b in chosen]))
+        rest = [b for b in rest if abs(_ring_level(gray, b) - level) <= tol]
     for _ in range(int(d["text_absorb_passes"])):
         if not rest:
             break
-        xs = [b[0] for b in chosen] + [b[0] + b[2] for b in chosen]
-        ys = [b[1] for b in chosen] + [b[1] + b[3] for b in chosen]
-        x0, x1 = min(xs) - reach_x, max(xs) + reach_x
-        y0, y1 = min(ys) - reach_y, max(ys) + reach_y
-        take = [b for b in rest
-                if x0 <= b[0] + b[2] / 2 <= x1 and y0 <= b[1] + b[3] / 2 <= y1]
-        if not take:
+        cur = np.asarray(chosen, dtype=np.float64)
+        cand = np.asarray(rest, dtype=np.float64)
+        # 矩形どうしの隙間（重なっていれば 0）を全組み合わせで出す
+        gap_x = np.abs((cand[:, None, 0] + cand[:, None, 2] / 2)
+                       - (cur[None, :, 0] + cur[None, :, 2] / 2))             - (cand[:, None, 2] + cur[None, :, 2]) / 2
+        gap_y = np.abs((cand[:, None, 1] + cand[:, None, 3] / 2)
+                       - (cur[None, :, 1] + cur[None, :, 3] / 2))             - (cand[:, None, 3] + cur[None, :, 3]) / 2
+        near = ((gap_x <= reach_x) & (gap_y <= reach_y)).any(axis=1)
+        if not near.any():
             break
-        chosen += take
-        rest = [b for b in rest if b not in take]
+        chosen += [b for b, ok in zip(rest, near) if ok]
+        rest = [b for b, ok in zip(rest, near) if not ok]
     return chosen
 
 
@@ -173,7 +203,7 @@ def detect_by_text(bgr) -> Detection | None:
     height, width = bgr.shape[:2]
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     boxes = text_boxes(gray)
-    group = dominant_cluster(boxes, gray.shape)
+    core, group = dominant_cluster(boxes, gray.shape, gray)
     if len(group) < int(d["text_min_boxes"]):
         return None
     rows = row_count(group)
@@ -184,14 +214,16 @@ def detect_by_text(bgr) -> Detection | None:
     pts = []
     for x, y, w, h in group:
         pts += [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
-    # 文字そのものが画面の端に達していたら、名刺は見切れていて読めない文字がある。
-    # 外へ広げたあとの矩形で見ても意味がない（余白ぶん必ず端に当たる）ので、
-    # 文字の位置で判断する。
+    # 見切れているか。判定には取り込み後ではなく**密なかたまり**を使う。
+    # 取り込み後は背景のノイズ（ブラインドの桟・襟）まで入ることがあり、実機の
+    # 映像ではそれが画面の端に届いて、まともに写っている名刺まで
+    # 「全体が入るように」で止まってしまった。密なかたまりは名刺の本文が
+    # 固まっている場所なので、ここが端に達していれば本当に見切れている。
     margin = float(d["margin_px"])
-    clipped = (min(p[0] for p in pts) <= margin
-               or max(p[0] for p in pts) >= width - margin
-               or min(p[1] for p in pts) <= margin
-               or max(p[1] for p in pts) >= height - margin)
+    cxs = [b[0] for b in core] + [b[0] + b[2] for b in core]
+    cys = [b[1] for b in core] + [b[1] + b[3] for b in core]
+    clipped = (min(cxs) <= margin or max(cxs) >= width - margin
+               or min(cys) <= margin or max(cys) >= height - margin)
     (cx, cy), (rw, rh), angle = cv2.minAreaRect(np.array(pts, np.float32))
     pad = mh * float(d["text_pad_ratio"])
     rect = ((cx, cy), (rw + 2 * pad, rh + 2 * pad), angle)

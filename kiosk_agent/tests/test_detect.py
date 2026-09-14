@@ -483,8 +483,8 @@ def test_文字の切り出しは罫線やロゴを文字と数えない(scene):
     bgr, _truth, _spec = scene("blank_card")
     frame = _detect_frame(bgr)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    assert len(dominant_cluster(text_boxes(gray), gray.shape)) < int(
-        settings.get("detection.text_min_boxes"))
+    _core, group = dominant_cluster(text_boxes(gray), gray.shape)
+    assert len(group) < int(settings.get("detection.text_min_boxes"))
 
 
 def test_レシートは文字が多くても名刺と見ない(scene):
@@ -497,20 +497,24 @@ def test_レシートは文字が多くても名刺と見ない(scene):
     assert detect_card(_detect_frame(bgr)) is None
 
 
-def test_見切れた名刺は撮影に進まない(scene):
-    """名刺が画面から大きくはみ出している。
+def test_見切れた名刺でも写っている範囲は読み取りに進む(scene):
+    """名刺が画面から大きくはみ出している状態。
 
-    文字から決めた四隅は余白ぶん必ず画面の端に当たるので、見切れの判定は
-    「文字そのものが端に達しているか」で行う。ここが効いていないと、
-    半分しか写っていない名刺を読み取って項目を落とす。
+    文字から位置を決めるときは名刺の縁が見えないので、「名刺が切れている」のか
+    「画面の端にたまたま文字（ブラインドの桟・襟など）がある」のかを区別できない。
+    見切れを理由に止める作りにしたところ、実機の映像では後者で止まって
+    まったく読み取れなくなった。誤って止めると利用者は何もできないが、誤って
+    撮っても受理判定で弾かれて撮り直しになるだけなので、止めない側に倒す。
+
+    見切れていること自体は text_clipped に記録して、後から判断できるようにする。
     """
     bgr, _truth, _spec = scene("card_half_out")
     frame = _detect_frame(bgr)
     det = detect_card(frame)
     assert det is not None and det.source == "text"
-    state, _m = evaluate(frame, det, prev_quad=det.quad)
-    assert state == "out_of_frame"
-    assert message(state)[0] == GUIDANCE["out_of_frame"][0]
+    state, m = evaluate(frame, det, prev_quad=det.quad)
+    assert m.text_clipped is True, "見切れていることが記録されていない"
+    assert state == "steady"
 
 
 def test_名刺でない物体が別の場所にあっても名刺は検出できる(scene):

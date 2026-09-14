@@ -106,6 +106,8 @@ detection:
   # 文字が入る範囲の縦横比の上限(レシートのような細長い印刷物を落とす)。
   text_max_region_aspect: 2.4
   # 密なかたまりのすぐ外にある文字を取り込む距離(字高の倍数)と回数。
+  # 取り込む文字は「かたまりと同じ明るさの紙の上」にあること。輝度差の上限。
+  text_absorb_level_tol: 26.0
   text_absorb_ratio_x: 2.0
   text_absorb_ratio_y: 16.0
   text_absorb_passes: 3
