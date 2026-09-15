@@ -200,6 +200,11 @@ def record_utterance(
 
         if speech_started_at is None:
             # ── まだ話し始めていない ──
+            # ここでも「入力を終了」を見る。話す前に押されたときに、発話開始待ちの
+            # 5 秒を待たせてしまうと、画面のボタンが効かないように見える。
+            if should_stop is not None and should_stop():
+                stop_reason = "no_speech"
+                break
             pre_roll.append(frame)
             if speaking:
                 speech_started_at = t

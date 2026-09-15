@@ -249,13 +249,29 @@ def test_cancel_stops_and_discards(client, engine, feed):
 
 
 def test_stop_finishes_recording_early(client, engine, feed):
+    """話している途中で「入力を終了」→ そこまでを発話として認識する。"""
     feed(silence(200) + tone(8000))
     sid = start(client)
     client.post(f"/voice/session/{sid}/listen", json={"field": "company"})
-    time.sleep(0.05)
+    wait_for(client, sid, phases=("speaking",))
     client.post(f"/voice/session/{sid}/stop")
     state = wait_for(client, sid)
     assert state["phase"] == "done"
+    assert state["result"]["stop_reason"] == "manual"
+
+
+def test_stop_before_speaking_asks_to_try_again(client, engine, feed):
+    """話す前に「入力を終了」→ 発話開始待ちを待たされず、すぐ再入力を促される。"""
+    feed(silence(9000))
+    sid = start(client)
+    client.post(f"/voice/session/{sid}/listen", json={"field": "company"})
+    started = time.monotonic()
+    client.post(f"/voice/session/{sid}/stop")
+    state = wait_for(client, sid)
+    assert state["phase"] == "error"
+    assert state["error_code"] == "no_speech"
+    # 発話開始待ち(5 秒)を消化していないこと
+    assert time.monotonic() - started < 3.0
 
 
 def test_retry_counts_up(client, engine, feed):

@@ -116,6 +116,18 @@ def test_manual_stop_finishes_immediately(clock):
     assert seg.speech_ms > 0
 
 
+def test_stop_before_speaking_ends_immediately(clock):
+    """話す前に「入力を終了」を押したら、発話開始待ちを待たずに終わる。
+
+    待たせると画面のボタンが効いていないように見える。
+    """
+    seg = record(silence(9000), clock, should_stop=lambda: True)
+    assert seg.stop_reason == "no_speech"
+    assert seg.speech_ms == 0
+    # 発話開始待ち(5 秒)を消化していないこと
+    assert seg.total_ms < 1000
+
+
 def test_cancel_discards_everything(clock):
     """キャンセルは録音を捨てる。"""
     calls = {"n": 0}

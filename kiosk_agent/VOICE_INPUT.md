@@ -359,6 +359,8 @@ kiosk_agent/VOICE_INPUT.md              この文書
 | `kiosk_agent/updater.py` | `MANAGED_FILES` に `voice/*.py` 13 件を追加（OTA 配信対象）。`_RESTART_DIRS` には入れない（別プロセスのため） |
 | `kiosk_agent/pyproject.toml` | optional extra `voice` を追加 |
 | `kiosk_agent/install.sh` | 音声セットアップの案内を追加 |
+| `backend/app/api/kiosk.py` | `BUNDLE_FILES` に `voice/*.py` 13 件を追加（agent 側と並び順まで一致させる） |
+| `kiosk_agent/tests/test_ota_list.py` | `voice/` を再起動対象の例外にし、その根拠（自己再起動の仕組み）を検証する test を追加 |
 | `.gitignore` | `voice_input.yaml` / `staff_readings.yaml` / `vendor/whisper.cpp/` / 展開後の Vosk / metrics を除外 |
 | `.gitattributes` | 音声モデルと vendor tarball を Git LFS 管理に |
 
@@ -376,7 +378,8 @@ kiosk_agent/VOICE_INPUT.md              この文書
 | 名刺読み取り（`card/`） | **なし**。ボタンが 1 つ増えて横に並ぶだけ |
 | ロッカー・配達・呼び出し・アイドル | **なし** |
 | 受付フォームの通常入力 | **なし**。五十音キーボード・部署チップ・ご用件チップはそのまま |
-| バックエンド / 管理画面 | **なし**（1 行も変更していない） |
+| バックエンド | OTA の配信リスト（`kiosk.py` の `BUNDLE_FILES`）に `voice/*.py` を足しただけ。配信リストは agent と backend の 2 か所にあり、ズレると「その端末だけ古いコード」になるため両方に足す必要がある（`tests/test_ota_list.py` が一致を検証する） |
+| 管理画面 | **なし**（1 行も変更していない） |
 | キオスクエージェント本体 | 配信リストが増えるだけ。音声サービスが落ちても本体は無関係 |
 | 端末の CPU | 待受時ほぼ 0%。認識中だけ 1〜2 秒間 CPU を使う（同時実行は 1 件に制限） |
 

@@ -124,7 +124,6 @@ class Session:
         engine_name = whisper_cpp.ENGINE_NAME
         model = whisper_cpp.model_name()
         seg = None
-        started = time.monotonic()
 
         try:
             try:
@@ -241,7 +240,6 @@ class Session:
             if seg is not None:
                 seg.clear()
             self.touch()
-            _ = started
 
     def _on_level(self, level: float, db: float) -> None:
         self.level = level

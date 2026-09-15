@@ -2581,6 +2581,9 @@ function openVoiceInput({ initial, onApply }) {
     staff:       ["訪問先", "Host"],
   };
 
+  // 使える項目が 1 つも無いのに開かれたら、何もせず閉じる(ボタンは出ないはずだが保険)。
+  if (!STEPS.length) return { close() {} };
+
   let sessionId = null, closed = false, stepIdx = 0;
   // intro → arming → listening/speaking → recognizing → review / error
   let phase = "intro";
@@ -2698,26 +2701,46 @@ function openVoiceInput({ initial, onApply }) {
     try { await voiceApi("POST", `/voice/session/${sessionId}/retry`); } catch {}
     startListening();
   }
+
+  // 録音中の「もう一度話す」(言い直し)。走っている録音を畳んでから録り直す。
+  // サービスは録音中の listen を 409 で撥ねる(二重送信よけ)ので、畳み終わるのを待つ。
+  async function restartListening() {
+    stopPolling();
+    try { await voiceApi("POST", `/voice/session/${sessionId}/cancel`); } catch {}
+    const RUNNING = ["arming", "listening", "speaking", "recognizing"];
+    for (let i = 0; i < 20 && !closed; i++) {
+      try {
+        const s = await voiceApi("GET", `/voice/session/${sessionId}/state`);
+        if (!RUNNING.includes(s.phase)) break;
+      } catch { break; }
+      await new Promise(r => setTimeout(r, 50));
+    }
+    if (closed) return;
+    retry();
+  }
+  // 実験ログ(§12)。セッションを破棄する前に送り終える必要があるので Promise を返す。
+  // 破棄が先に届くと 404 になって「タッチへ切り替えた」件数が落ちる。
   function sendEvent(kind, wasEdited) {
-    if (!sessionId) return;
-    voiceApi("POST", `/voice/session/${sessionId}/event`, {
+    if (!sessionId) return Promise.resolve();
+    return voiceApi("POST", `/voice/session/${sessionId}/event`, {
       result: kind, edited: !!wasEdited, field: fieldName(),
     }).catch(() => {});
   }
 
   // ── 確定して次の項目へ ────────────────────────────────────────────────
-  function acceptStep() {
+  async function acceptStep() {
     const el = g("v-edit");
     const finalText = el ? el.value.trim() : draft;
     values[fieldName()] = finalText;
     edited[fieldName()] = !!(result && finalText !== (result.text || ""));
-    sendEvent("confirm", edited[fieldName()]);
+    const sent = sendEvent("confirm", edited[fieldName()]);
     result = null; errCode = null;
     if (stepIdx + 1 < STEPS.length) {
       stepIdx += 1;
       phase = "intro";
       render();
     } else {
+      await sent;               // 記録してから破棄する
       close({ apply: true });
     }
   }
@@ -2727,16 +2750,17 @@ function openVoiceInput({ initial, onApply }) {
     stepIdx -= 1; phase = "intro"; result = null; errCode = null; render();
   }
 
-  function toKeyboard() {
+  async function toKeyboard() {
     // 認識結果を受付フォームへ入れ、既存の五十音キーボードで直してもらう。
     const el = g("v-edit");
     if (el) values[fieldName()] = el.value.trim();
-    sendEvent("fallback_touch", true);
-    close({ apply: true, focus: fieldName() });
+    const field = fieldName();
+    await sendEvent("fallback_touch", true);
+    close({ apply: true, focus: field });
   }
 
-  function quitToTouch() {
-    sendEvent("fallback_touch", false);
+  async function quitToTouch() {
+    await sendEvent("fallback_touch", false);
     close({ apply: true });
   }
 
@@ -2832,6 +2856,7 @@ function openVoiceInput({ initial, onApply }) {
         <div style="width:80%;max-width:760px">${meterHtml()}</div>
         <div style="display:flex;gap:18px;margin-top:8px">
           ${btn("v-stop", "入力を終了", "primary")}
+          ${btn("v-restart", "もう一度話す")}
           ${btn("v-cancel", "キャンセル")}
         </div>
       </div>`;
@@ -2929,6 +2954,7 @@ function openVoiceInput({ initial, onApply }) {
     on("v-quit", quitToTouch);
     on("v-start", startListening);
     on("v-stop", stopRecording);
+    on("v-restart", restartListening);
     on("v-cancel", cancelRecording);
     on("v-accept", acceptStep);
     on("v-again", retry);
