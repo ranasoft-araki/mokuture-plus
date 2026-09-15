@@ -1,3 +1,14 @@
 # かな漢字変換の全面辞書。EUC-JP のため改行変換(CRLF)や差分表示を無効化し、
 # バイナリ資産として扱う(破損防止・diff肥大化防止)。
 kiosk_agent/SKK-JISYO.L -text -diff
+
+# 音声認識(実験導入)のモデル実体。ggml-small-q5_1.bin は 180MB 超で GitHub の
+# 1ファイル 100MB 上限に引っかかるため、音声モデルは Git LFS で管理する。
+# 取得元とハッシュは kiosk_agent/scripts/fetch_voice_models.py に固定してある。
+kiosk_agent/voice_models/*.bin filter=lfs diff=lfs merge=lfs -text
+kiosk_agent/voice_models/*.zip filter=lfs diff=lfs merge=lfs -text
+
+# whisper.cpp は上流の配布 tarball をそのまま資産として持つ。ソースを展開して
+# 置くと 1,881 ファイル増えて clone が重くなるため、固定版の tarball 1 個だけを
+# LFS に入れ、scripts/install_voice.sh が展開してビルドする(バージョン固定 = 再現性)。
+kiosk_agent/vendor/*.tar.gz filter=lfs diff=lfs merge=lfs -text
