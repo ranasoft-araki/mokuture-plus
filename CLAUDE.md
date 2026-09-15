@@ -722,3 +722,4 @@ NEXT_PUBLIC_API_URL=http://localhost:8001/api/v1
 - 修正を行ったら自動でデプロイまで行うこと
 - **JavaScriptダイアログ禁止**: `confirm()` / `alert()` / `prompt()` は使用しないこと。確認は独自モーダル、エラーはインライン表示またはトースト通知で実装すること。
 - 常に改修後は回収の「意図」通りに修正出来ているかテストエージェントにチェックしてもらってOKを貰ってから報告をする
+- **GitHub issue を起点に対応したら、完了後に必ずその issue へ対応結果をコメントで追記すること。** 書く内容は「何ができるようになったか（利用者目線）／注意点・既存挙動の変更／要ユーザー作業（env 追加など）／commit ハッシュ」。**issue はクローズせず追記まで**（クローズの判断は依頼者に委ねる）。`gh` CLI は未インストールなので GitHub REST API (`POST /repos/ranasoft-araki/mokuture-plus/issues/<番号>/comments`) を使う。認証トークンは `git credential fill` (stdin に `protocol=https` と `host=github.com` の2行＋空行を流す) で Git の資格情報マネージャから取り出し、`Authorization: Bearer <token>` で送る＝**トークンは出力・ログに絶対に出さない**。本文は日本語・改行が壊れないよう **JSON ファイルに包んで `curl --data-binary @file`** で POST する。201 が返れば成功で、レスポンスの `html_url` がコメントの URL。
