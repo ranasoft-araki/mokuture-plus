@@ -26,6 +26,19 @@ card = [
     "onnxruntime>=1.17",
     "PyYAML>=6.0",
 ]
+# 音声入力（QR無し来訪者の受付フォームを声で埋める / 実験導入）。
+# 入っていなくても音声サービスは動く（PyYAML が無ければ voice_input.yaml を読まず
+# 既定値のまま、webrtcvad が無ければエネルギーVAD、vosk が無ければ第3・4段階が無効）。
+# 録音は arecord（alsa-utils）を使うので Python 依存は増やしていない。
+voice = [
+    "PyYAML>=6.0",
+    # 任意: 入っていれば VAD を webrtcvad に切り替えられる
+    # "webrtcvad-wheels>=2.0.14",
+    # 任意: 第3・4段階（画面操作・担当者名）で使う
+    # "vosk>=0.3.45",
+    # 任意: arecord が使えない環境の予備
+    # "sounddevice>=0.4.6",
+]
 dev = [
     "pytest>=8.0",
     "Pillow>=10.0",      # tests/make_fixtures.py が架空名刺の画像を作るのに使う

@@ -1,0 +1,39 @@
+[Unit]
+Description=mokuture+ Voice Input (experimental, local only)
+# キオスク本体とは独立させる。音声サービスが落ちても受付は従来どおり動くべきで、
+# 逆に本体の再起動(OTA 適用など)で認識中の音声入力を巻き込む必要もない。
+# 音声サービス側は自分のソースが差し替わったのを検知して自分で終了する。
+After=network.target sound.target
+# 異常終了が続くときに再起動を繰り返して CPU を焼かないようにする
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=USER
+WorkingDirectory=AGENT_DIR
+# 127.0.0.1 だけに bind する(音声 API を LAN から見せない)。ホストとポートは
+# voice_input.yaml / 環境変数 VOICE_SERVER__BIND_HOST・VOICE_SERVER__PORT でも
+# 変えられるが、外向きにはしないこと。
+ExecStart=VENV/bin/python -m voice.server
+Restart=always
+RestartSec=3
+EnvironmentFile=-AGENT_DIR/.env
+Environment=PYTHONUNBUFFERED=1
+# マイク(ALSA)を使うために audio グループが要る。install_voice.sh が USER を
+# audio グループへ入れる。
+SupplementaryGroups=audio
+
+# 実験機能なので、できる範囲で権限を絞る。
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+# 匿名メトリクス(~/.mokuture-voice/metrics.jsonl)だけ書けるようにする。
+# 先頭の "-" は「無ければ黙って飛ばす」印(install_voice.sh が作る)。
+ReadWritePaths=-HOME_DIR/.mokuture-voice
+# whisper.cpp へ渡す WAV は tmpfs(/dev/shm)に置く。PrivateTmp=yes により
+# /dev/shm もこのプロセス専用になり、他のプロセスからは見えない。
+
+[Install]
+WantedBy=multi-user.target

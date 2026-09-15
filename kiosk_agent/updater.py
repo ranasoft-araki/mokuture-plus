@@ -64,11 +64,36 @@ MANAGED_FILES = [
     "card/ocr/tesseract.py",
     # 辞書は運用中に現場で追記されうる。OTA で上書きされると消えてしまうため
     # 配信対象に入れない(初期セットは install / git pull で入る)。
+    #
+    # 音声入力(実験導入)。**別プロセス**(mokuture-voice.service / 127.0.0.1:8181)で
+    # 動くが、コードはここに置いてあるので OTA で配れる。エージェント本体の再起動では
+    # 音声サービスは新しいコードにならないため、音声サービス側が自分のソースの
+    # ハッシュ変化を検知して自ら終了し、systemd に起こし直してもらう
+    # (voice/server.py の _watch_sources)。
+    # whisper.cpp のバイナリ・ggml モデル・Vosk モデルは OTA では配れない(サイズと
+    # ビルドの都合)。それらは scripts/install_voice.sh の担当。
+    "voice/__init__.py",
+    "voice/api.py",
+    "voice/capture.py",
+    "voice/defaults.py",
+    "voice/metrics.py",
+    "voice/quality.py",
+    "voice/server.py",
+    "voice/session.py",
+    "voice/settings.py",
+    "voice/textnorm.py",
+    "voice/types.py",
+    "voice/vad.py",
+    "voice/whisper_cpp.py",
+    # 端末ごとに現場で調整する設定(voice_input.yaml / staff_readings.yaml)は
+    # 上書きしたくないので配信対象に入れない。
 ]
 
 # Changing these files requires a service restart to take effect.
 RESTART_FILES = {"main.py", "updater.py", "gpio.py", "sync.py", "state.py", "config.py", "locker_store.py"}
 # card/ 配下はすべて Python なので、変更があれば再起動する（下の apply() が判定）。
+# voice/ は別プロセスなので**ここには入れない**。エージェントを再起動しても音声
+# サービスは入れ替わらず、音声サービス側が自分で気づいて再起動する。
 _RESTART_DIRS = ("card",)
 
 NORMAL_INTERVAL = 1800   # 30 min between normal checks

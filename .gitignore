@@ -46,6 +46,25 @@ kiosk_agent/tests/fixtures/
 # 配布するのは card_reader.yaml.example のほう。
 kiosk_agent/card_reader.yaml
 
+# 端末ごとの音声入力設定(マイクのデバイス名・しきい値・使うモデル)。
+# 配布するのは voice_input.yaml.example のほう。
+kiosk_agent/voice_input.yaml
+
+# 担当者の読み仮名。実在の社員の氏名・読み・部署が入るのでコミット禁止。
+# 配布するのは staff_readings.yaml.example（記入例は架空の人物）のほう。
+kiosk_agent/staff_readings.yaml
+
+# whisper.cpp の展開先とビルド成果物。配信するのは vendor/*.tar.gz(固定版ソース)
+# だけで、バイナリは端末ごとに install_voice.sh がビルドする(aarch64 専用のため)。
+kiosk_agent/vendor/whisper.cpp/
+
+# Vosk モデルの展開先(zip を fetch_voice_models.py --extract で開いたもの)。
+# リポジトリに入っているのは zip のほう。
+kiosk_agent/voice_models/vosk-model-small-ja-0.22/
+
+# 音声入力の匿名メトリクス(端末内にだけ置く。既定は ~/.mokuture-voice/)
+kiosk_agent/**/metrics.jsonl*
+
 # Misc
 .DS_Store
 *.log

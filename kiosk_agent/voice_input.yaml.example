@@ -1,0 +1,97 @@
+# mokuture+ 音声入力(実験導入)の設定
+#
+#   cp voice_input.yaml.example voice_input.yaml
+#   （編集したら） sudo systemctl restart mokuture-voice
+#
+# ここに書いたキーだけが既定値(voice/defaults.py)を上書きする。書いていない項目は
+# 既定のまま。打ち間違えたキーは無視され、その旨が /voice/status の config_notes に出る。
+#
+# 環境変数でも上書きできる(こちらが最優先):
+#   VOICE_WHISPER__MODEL_PATH=/path/to/ggml-small-q5_1.bin
+#   VOICE_AUDIO__DEVICE=plughw:1,0
+#   VOICE_VAD__SILENCE_SEC=0.6
+
+# 音声入力ごと止めるスイッチ。false にすると画面から「音声で入力」が消える。
+enabled: true
+
+server:
+  # 127.0.0.1 以外にしないこと。音声 API が端末の外から見えるようになる。
+  bind_host: 127.0.0.1
+  port: 8181
+  # キオスク画面のオリジン。agent のポートを変えたらここも合わせる。
+  allowed_origins:
+    - http://localhost:8080
+    - http://127.0.0.1:8080
+
+audio:
+  # `arecord -L` で出てくる名前。USB マイクは plughw:1,0 や sysdefault:CARD=USB など。
+  # default のままで拾えていれば変えなくてよい。
+  device: default
+  sample_rate: 16000
+  channels: 1
+  # auto = arecord → sounddevice の順に試す
+  backend: auto
+  # 受付開始音の回り込みを避けるため、録音の頭を捨てる長さ(ms)
+  start_guard_ms: 250
+  # マイクの入力が小さすぎるときだけ 1.5〜3.0 に上げる。上げすぎると歪む。
+  input_gain: 1.0
+
+vad:
+  # auto = webrtcvad があればそれ、無ければエネルギーVAD
+  engine: auto
+  # 話し始めるのを待つ時間(秒)
+  start_timeout_sec: 5.0
+  # 話し終わったと判断する無音(秒)。0.5〜0.8 の範囲で調整する。
+  # 短くすると反応が速いが、言いよどみで切れやすい。
+  silence_sec: 0.7
+  # 1 項目の最大録音時間(秒)
+  max_record_sec: 10.0
+  # これより短い発話は「短すぎる」として再入力を促す(秒)
+  min_speech_sec: 0.35
+  # ロビーが騒がしいときは speech_margin_db を上げる(拾いにくくなるが誤検出が減る)。
+  # 声が小さい人が多いときは下げる。
+  speech_margin_db: 9.0
+  silence_margin_db: 5.0
+
+whisper:
+  # ── モデルの切り替えはここ ──────────────────────────────────────────────
+  # base  : voice_models/ggml-base-q5_1.bin   (57MB / Pi 5 で 3 秒発話 約 1.2〜2.0 秒)
+  # small : voice_models/ggml-small-q5_1.bin  (181MB / 同 約 3.5〜6 秒・精度は上)
+  # model_name はメトリクスに出る識別子。モデルを変えたら必ず一緒に変える。
+  model_path: voice_models/ggml-base-q5_1.bin
+  model_name: whisper-base-q5
+  binary: vendor/whisper.cpp/build/bin/whisper-cli
+  language: ja
+  # Pi 5 は 4 コア。他の処理と食い合うようなら 3 に落とす。
+  threads: 4
+  timeout_sec: 10.0
+  beam_size: 1
+  # 音声と中間 JSON の置き場。tmpfs(RAM)にすること。ディスクに残さない。
+  tmp_dir: /dev/shm
+
+vosk:
+  # 第3・4段階(担当者名・画面操作)。zip を展開すると使えるようになる:
+  #   .venv/bin/python scripts/fetch_voice_models.py --extract
+  model_path: voice_models/vosk-model-small-ja-0.22
+  model_name: vosk-small-ja-0.22
+
+quality:
+  # 自動確定してよいかの判定(§7)。厳しくすると誤入力は減るが再入力が増える。
+  avg_token_prob_min: 0.45
+  no_speech_max: 0.60
+  repeat_ratio_max: 0.55
+  max_chars_per_sec: 12.0
+  min_speech_ratio: 0.20
+
+metrics:
+  # 実証実験の匿名ログ。個人を特定できる値は構造的に書けないようにしてある。
+  enabled: true
+  path: ~/.mokuture-voice/metrics.jsonl
+  max_bytes: 2000000
+  keep_files: 3
+
+staff:
+  # 担当者の読み仮名(第3段階)。社員マスターに読み仮名が無いため、端末ローカルの
+  # このファイルに読みがある担当者だけを音声照合の対象にする。
+  readings_path: staff_readings.yaml
+  max_candidates: 3
