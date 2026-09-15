@@ -86,6 +86,18 @@ export async function ensureFreshToken(): Promise<string | null> {
   return token;
 }
 
+/** 未設定(undefined/null/"")のパラメータを落としてクエリ文字列にする。 */
+function _qs(params?: object): string {
+  if (!params) return "";
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params as Record<string, unknown>)) {
+    if (v === undefined || v === null || v === "") continue;
+    sp.set(k, String(v));
+  }
+  const q = sp.toString();
+  return q ? `?${q}` : "";
+}
+
 async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
   if (token && _blockedByReadonly(path, init?.method, token)) {
     throw new Error("この環境は閲覧専用です。操作できるのは「来社予定」のみです。");
@@ -162,6 +174,28 @@ export const api = {
     request<AuthResponse>("/auth/operator/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   resellerLogin: (reseller_id: string, password: string) =>
     request<AuthResponse>("/auth/reseller/login", { method: "POST", body: JSON.stringify({ reseller_id, password }) }),
+
+  // 分析ログ(実証実験・製品改善 / ANALYTICS.md)。運営のみが参照できる。
+  // 匿名セッションと行動イベントだけを扱い、氏名・会社名・担当者などは API 側に存在しない。
+  listAnalyticsSessions: (token: string, params?: AnalyticsFilters & { offset?: number; limit?: number }) =>
+    request<AnalyticsSessionList>(`/analytics/sessions${_qs(params)}`, {}, token),
+  getAnalyticsSession: (token: string, sessionId: string) =>
+    request<AnalyticsSessionDetail>(`/analytics/sessions/${encodeURIComponent(sessionId)}`, {}, token),
+  getAnalyticsSummary: (token: string, params?: AnalyticsFilters) =>
+    request<AnalyticsSummary>(`/analytics/summary${_qs(params)}`, {}, token),
+  getAnalyticsUptime: (token: string, params?: { tenant_id?: string; device_id?: string; date_from?: string; date_to?: string }) =>
+    request<{ items: AnalyticsUptimeItem[] }>(`/analytics/uptime${_qs(params)}`, {}, token),
+  /** CSV/JSON をダウンロードする（JWT が要るので <a href> ではなく fetch → Blob）。 */
+  downloadAnalyticsExport: async (
+    token: string,
+    params: AnalyticsFilters & { kind: "sessions" | "events"; fmt: "csv" | "json" },
+  ): Promise<{ blob: Blob; filename: string }> => {
+    const res = await _fetch(`/analytics/export${_qs(params)}`, {}, token);
+    if (!res.ok) throw new Error("エクスポートに失敗しました");
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const match = /filename="?([^";]+)"?/.exec(disposition);
+    return { blob: await res.blob(), filename: match ? match[1] : `${params.kind}.${params.fmt}` };
+  },
 
   // Operator API (運営)
   getOperatorStats: (token: string) =>
@@ -1143,4 +1177,132 @@ export function setCachedKioskSettings(tenantSlug: string, s: PublicTenantSettin
   try {
     localStorage.setItem(`${_SETTINGS_KEY}_${tenantSlug}`, JSON.stringify(s));
   } catch {}
+}
+
+
+/* ─ 分析ログ（実証実験・製品改善 / ANALYTICS.md） ────────────────────────────
+   **個人情報の項目は存在しない**（氏名・会社名・担当者・入力値は API が返さない）。 */
+
+export interface AnalyticsFilters {
+  tenant_id?: string;
+  device_id?: string;
+  outcome?: string;
+  entry_method?: string;
+  ui_version?: string;
+  date_from?: string;
+  date_to?: string;
+}
+
+export interface AnalyticsSession {
+  id: string;
+  tenant_id: string;
+  tenant_name: string | null;
+  site_id: string;
+  device_id: string | null;
+  device_name: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_ms: number | null;
+  outcome: string | null;
+  entry_method: string | null;
+  app_version: string | null;
+  ui_version: string | null;
+  flow_version: string | null;
+  client_tz_offset_min: number | null;
+  first_screen_id: string | null;
+  last_screen_id: string | null;
+  event_count: number;
+  error_count: number;
+  screen_count: number;
+  back_count: number;
+  notified: boolean;
+  staff_response: string | null;
+  staff_response_ms: number | null;
+  answer_clarity: string | null;
+  answer_confidence: string | null;
+  answer_assistance: string | null;
+}
+
+export interface AnalyticsEvent {
+  event_id: string;
+  session_id: string;
+  sequence_no: number;
+  client_occurred_at: string | null;
+  server_received_at: string | null;
+  event_source: string;
+  device_id: string | null;
+  app_version: string | null;
+  ui_version: string | null;
+  event_name: string;
+  screen_id: string | null;
+  previous_screen_id: string | null;
+  element_id: string | null;
+  field_id: string | null;
+  input_method: string | null;
+  result: string | null;
+  error_code: string | null;
+  screen_dwell_ms: number | null;
+  duration_ms: number | null;
+  retry_count: number | null;
+  recovered: boolean | null;
+  question_id: string | null;
+  answer_code: string | null;
+}
+
+export interface AnalyticsSessionList {
+  total: number;
+  items: AnalyticsSession[];
+}
+
+export interface AnalyticsSessionDetail {
+  session: AnalyticsSession;
+  events: AnalyticsEvent[];
+}
+
+export interface AnalyticsStat {
+  count: number;
+  avg: number | null;
+  median: number | null;
+  p90: number | null;
+}
+
+export interface AnalyticsSummary {
+  sessions_started: number;
+  completed: number;
+  completion_rate: number | null;
+  abandon_rate: number | null;
+  error_rate: number | null;
+  error_recovery_rate: number | null;
+  duration_ms: AnalyticsStat;
+  staff_response_ms: AnalyticsStat;
+  self_reported_unassisted: {
+    rate: number | null;
+    answered: number;
+    response_rate: number | null;
+    unassisted: number;
+  };
+  by_entry_method: Record<string, {
+    started: number;
+    completed: number;
+    completion_rate: number | null;
+    duration_median: number | null;
+    duration_p90: number | null;
+  }>;
+  survey: Record<string, { answered: number; response_rate: number | null; counts: Record<string, number> }>;
+}
+
+export interface AnalyticsUptimeItem {
+  device_id: string;
+  device_name: string | null;
+  tenant_id: string;
+  tenant_name: string | null;
+  samples: number;
+  powered_sec: number;
+  healthy_sec: number;
+  offline_sec: number;
+  uptime_rate: number | null;
+  restart_count: number;
+  cpu_percent_avg: number | null;
+  cpu_temp_max: number | null;
+  disk_free_mb_min: number | null;
 }

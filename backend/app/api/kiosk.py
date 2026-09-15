@@ -44,6 +44,8 @@ from app.services.webpush import send_push
 from app.services.auth import hash_password, verify_password, create_decision_token
 from app.services import events as event_bus
 from app.services import reception_notify
+from app.services import analytics as analytics_service
+from app.services import analytics_link
 from app.config import settings
 
 _PIN_RE = re.compile(r"^\d{4}$")
@@ -91,6 +93,34 @@ def _generate_delivery_pin() -> str:
     return f"{secrets.randbelow(10000):04d}"
 
 
+def _remember_analytics_session(
+    tenant: Tenant,
+    session_id: str | None,
+    reception_log_id: str,
+    device: Device | None = None,
+) -> None:
+    """分析ログの匿名セッションと受付ログIDの対応を **メモリにだけ** 覚える。
+
+    通知の成否(`notification_succeeded`/`failed`/`retried`)をサーバ側から匿名セッションへ
+    書き戻すための一時参照。永続化しないので逆引き（匿名セッション→氏名・担当者）は
+    成立しない。詳細は ANALYTICS.md §2 / services/analytics_link.py。
+    """
+    if not session_id:
+        return
+    try:
+        analytics_link.remember(
+            reception_log_id,
+            analytics_link.SessionRef(
+                session_id=session_id,
+                tenant_id=tenant.id,
+                site_id=tenant.id,
+                device_id=device.id if device is not None else None,
+            ),
+        )
+    except Exception:
+        pass  # 分析ログの都合で受付を止めない
+
+
 def _mirror_int(v) -> int | None:
     """ミラー item の door_number/id を安全に int 化（数値でなければ None）。"""
     try:
@@ -125,6 +155,7 @@ _BUNDLE_GITHUB_RAW = os.environ.get(
 # Files distributed via OTA (relative to kiosk_agent root); order is stable for hashing.
 BUNDLE_FILES = [
     "static/kiosk.html",
+    "static/analytics.js",  # 行動ログ(匿名)のロガー。kiosk.html が script タグで読み込む
     "static/tap.mp3",   # タップ操作音の音源(木琴C6の単音。VSQ plus+のフリー効果音を加工)。kiosk.html が /tap.mp3 で再生
     "main.py",
     "updater.py",
@@ -133,6 +164,11 @@ BUNDLE_FILES = [
     "state.py",
     "config.py",
     "locker_store.py",  # ロッカーのローカル状態・ミラーペイロード生成。agent の MANAGED_FILES と一致させる
+    # 端末稼働ログ(ANALYTICS.md §9)。main.py がこれらを import するので**必ず一緒に配る**
+    # (main.py だけ新しくなると import 失敗でエージェントが起動しなくなる)。
+    "analytics.py",
+    "sysinfo.py",
+    "watchdog.py",
     # 名刺読み取り(QR無し来訪の受付フォーム自動入力)。agent の updater.MANAGED_FILES と
     # 同じ並びにしておくこと(片方だけ足すと、その端末だけ古いコードのまま動く)。
     # 依存パッケージと OCR モデルは OTA では配らない(install.sh / fetch_ocr_models.py の担当)。
@@ -524,6 +560,19 @@ class ReceptionCreate(BaseModel):
     department: str | None = None
     method: str = "form"
     appointment_id: str | None = None
+    # 分析ログ(ANALYTICS.md)の匿名セッションID。**DB には保存しない**。
+    # 通知の成否イベントを匿名セッションへ紐づけるためだけに、プロセス内 TTL マップ
+    # (services/analytics_link.py) へ一時的に覚えさせる。受付ログ(個人情報)側には残さない
+    # ＝匿名セッションから氏名・会社名・担当者を逆引きできない。
+    analytics_session_id: str | None = None
+
+    @field_validator("analytics_session_id")
+    @classmethod
+    def analytics_session_id_len(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        return v[:36] if v else None
 
     @field_validator("staff")
     @classmethod
@@ -620,7 +669,7 @@ async def kiosk_reception(
     db: AsyncSession = Depends(get_db),
 ):
     """Submit a reception form entry using device token authentication."""
-    tenant, _ = ctx
+    tenant, device = ctx
     log = ReceptionLog(
         tenant_id=tenant.id,
         visitor_name=body.visitor_name,
@@ -647,6 +696,10 @@ async def kiosk_reception(
 
     await db.commit()
     await db.refresh(log)
+
+    # 分析ログ: 「この受付はどの匿名セッションの操作だったか」をプロセス内 TTL マップへ。
+    # 永続化しないので、匿名セッション ↔ 受付ログ(氏名等) の逆引きは成立しない。
+    _remember_analytics_session(tenant, body.analytics_session_id, log.id, device)
 
     # 通知はレスポンス送出後にバックグラウンドで送る（Slack / Web Push / Webhook / メール, best-effort）。
     # inline で await すると通知の往復ぶんキオスク(agent)の応答待ちが延び、10秒プロキシタイムアウトを
@@ -688,6 +741,8 @@ async def kiosk_reception_status(
 
 class CallStaffBody(BaseModel):
     message: str | None = None
+    # 分析ログの匿名セッションID。DB には保存しない（ReceptionCreate と同じ扱い）。
+    analytics_session_id: str | None = None
 
 
 @router.post("/call-staff")
@@ -720,6 +775,9 @@ async def kiosk_call_staff(
     db.add(log)
     await db.commit()
     await db.refresh(log)
+
+    # 分析ログ: 匿名セッションとの一時対応（メモリのみ・ANALYTICS.md §2）
+    _remember_analytics_session(tenant, body.analytics_session_id, log.id, device)
 
     # 管理画面(SSE)へ「受付(配達呼び出し)が増えた」を即 push（best-effort）。
     event_bus.publish(tenant.id, {"type": "reception"})
@@ -1032,12 +1090,14 @@ async def kiosk_mirror_lockers(
     return {"ok": True, "updated": len(items)}
 
 
-async def _send_webhook(url: str, data: dict) -> None:
+async def _send_webhook(url: str, data: dict) -> bool:
+    """best-effort な Webhook POST。送信できたら True（URL はログに出さない）。"""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(url, json=data)
+            resp = await client.post(url, json=data)
+        return resp.status_code < 400
     except Exception:
-        pass
+        return False
 
 
 # ── Generic-message notify helpers (staff call etc.) ───────────────────────────
@@ -1063,8 +1123,10 @@ async def _first_configured_setting(
 async def _notify_slack_text(
     tenant_id: str, text: str, db: AsyncSession, types: tuple[str, ...] = ("slack",),
     decision: tuple[list[dict], str] | None = None,
-) -> None:
+) -> bool | None:
     """Send a plain text message to the first configured Slack webhook among ``types``.
+
+    戻り値は分析ログ用: True=送信成功 / False=失敗 / None=未設定(送らなかった)。
 
     Best-effort. ``types`` is an ordered preference (e.g. delivery-specific first,
     then the normal reception destination as fallback). ``decision`` = (actions, token)
@@ -1072,7 +1134,7 @@ async def _notify_slack_text(
     (Block Kit)を付ける。押下は受付通知と同じ interactions エンドポイントで処理される。"""
     setting = await _first_configured_setting(tenant_id, types, db)
     if setting is None:
-        return
+        return None
     try:
         config = decrypt_dict(setting.config_json)
         blocks = None
@@ -1081,9 +1143,9 @@ async def _notify_slack_text(
             actions, dtoken = decision
             blocks = SlackNotifier.build_reception_blocks(text, actions, dtoken)
         # Bot Token(chat.postMessage) と 旧Webhook のどちらの設定でも送れる(webhook はボタン無し)。
-        await SlackNotifier.send_to_config(config, text, blocks=blocks)
+        return bool(await SlackNotifier.send_to_config(config, text, blocks=blocks))
     except Exception:
-        pass
+        return False
 
 
 async def _push_delivery_enabled(tenant_id: str, db: AsyncSession) -> bool:
@@ -1110,8 +1172,10 @@ async def _notify_push_text(
     tenant_id: str, title: str, body: str, url_tenant_id: str, db: AsyncSession,
     url: str | None = None, data: dict | None = None, actions: list | None = None,
     tag: str | None = None,
-) -> None:
+) -> bool | None:
     """Fire Web Push with a plain title/body to all subscriptions. Best-effort.
+
+    戻り値は分析ログ用: True=1件以上送れた / False=全滅 / None=購読・鍵が無く送らなかった。
 
     ``url`` は通知タップ時に開くURL。未指定なら受付ログ一覧を開く。``data``/``actions``/``tag``
     を渡すと、通知に 受付/電話 アクションボタン(SWが署名トークンで応答)を付けられる
@@ -1135,15 +1199,16 @@ async def _notify_push_text(
         if not private_key:
             private_key = settings.vapid_private_key
         if not private_key:
-            return
+            return None
 
         subs_result = await db.execute(
             select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
         )
         subs = subs_result.scalars().all()
         if not subs:
-            return
+            return None
 
+        any_ok = False
         for sub in subs:
             try:
                 await send_push(
@@ -1159,55 +1224,59 @@ async def _notify_push_text(
                     data=data,
                     actions=actions,
                 )
+                any_ok = True
             except Exception:
                 pass
+        return any_ok
     except Exception:
-        pass
+        return False
 
 
 async def _notify_webhook_event(
     tenant_id: str, payload: dict, db: AsyncSession, types: tuple[str, ...] = ("webhook",)
-) -> None:
+) -> bool | None:
     """POST an arbitrary event payload to the first configured webhook among ``types``.
 
     Best-effort. ``types`` is an ordered preference (delivery-specific first, then
     the normal reception destination as fallback)."""
     setting = await _first_configured_setting(tenant_id, types, db)
     if setting is None:
-        return
+        return None
     try:
         config = decrypt_dict(setting.config_json)
         webhook_url = config.get("webhook_url", "")
-        if webhook_url:
-            await _send_webhook(webhook_url, payload)
+        if not webhook_url:
+            return None
+        return await _send_webhook(webhook_url, payload)
     except Exception:
-        pass
+        return False
 
 
 async def _notify_chatwork_text(
     tenant_id: str, text: str, db: AsyncSession, types: tuple[str, ...] = ("chatwork",)
-) -> None:
+) -> bool | None:
     """Post a message to the first configured Chatwork room among ``types``.
 
     Best-effort. ``types`` is an ordered preference (delivery-specific first, then
     the normal reception destination as fallback)."""
     setting = await _first_configured_setting(tenant_id, types, db)
     if setting is None:
-        return
+        return None
     try:
         config = decrypt_dict(setting.config_json)
         api_token = config.get("api_token", "")
         room_id = config.get("room_id", "")
         if not api_token or not room_id:
-            return
+            return None
         async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(
+            resp = await client.post(
                 f"https://api.chatwork.com/v2/rooms/{room_id}/messages",
                 headers={"X-ChatWorkToken": api_token},
                 data={"body": text},
             )
+        return resp.status_code < 400
     except Exception:
-        pass
+        return False
 
 
 async def _log_delivery_dropoff(
@@ -1286,14 +1355,49 @@ async def _fire_delivery_notifications(
                 _notify_webhook_event(tenant_id, webhook_payload, db, types=("webhook_delivery", "webhook")),
                 _notify_chatwork_text(tenant_id, text, db, types=("chatwork_delivery", "chatwork")),
             ]
+            channels = ["slack", "webhook", "chatwork"]
             if await _push_delivery_enabled(tenant_id, db):
+                channels.append("push")
                 tasks.append(_notify_push_text(
                     tenant_id, title, text, tenant_id, db, push_url,
                     data=push_data, actions=push_actions, tag=push_tag,
                 ))
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        # 分析ログ: 配達の呼び出し(decision_log)に匿名セッションが紐づいていれば通知結果を残す。
+        # 置き配(dropoff)は受付セッションを伴わないので記録しない。
+        if decision_log is not None:
+            await _record_delivery_analytics(decision_log.id, channels, results)
     except Exception:
         pass
+
+
+async def _record_delivery_analytics(
+    reception_log_id: str, channels: list[str], results: list
+) -> None:
+    """配達呼び出し通知の成否を匿名セッションへ記録する（best-effort）。
+
+    受付ログIDから匿名セッションを引けるのは `analytics_link` のプロセス内 TTL マップだけ
+    （永続化しない＝逆引き不可）。引けなければ何もしない。"""
+    try:
+        ref = analytics_link.lookup(reception_log_id)
+        if ref is None:
+            return
+        for channel, outcome in zip(channels, results):
+            if outcome is None or isinstance(outcome, BaseException):
+                # None=未設定(送らなかった) / 例外=想定外。未設定は記録しない。
+                if outcome is None:
+                    continue
+                ok = False
+            else:
+                ok = bool(outcome)
+            await analytics_service.record_backend_event(
+                ref,
+                "notification_succeeded" if ok else "notification_failed",
+                result="succeeded" if ok else "failed",
+                element_id=channel,
+            )
+    except Exception:
+        logger.warning("analytics: delivery notification result not recorded")
 
 
 # ── OTA bundle endpoints ───────────────────────────────────────────────────────

@@ -54,6 +54,8 @@ button{font-family:inherit}
 }
 </style>
 <script src="/jsqr.min.js"></script>
+<!-- 行動ログ(匿名)。OTA 未着などで 404 でも kiosk 本体は従来どおり動く(AN が no-op に落ちる)。 -->
+<script src="/analytics.js"></script>
 </head>
 <body>
 <div id="sw"><div id="sc"></div></div>
@@ -85,6 +87,49 @@ let TRANSITION_TYPE = "fade";
 let CLEANUPS = [];
 let CURRENT_SCREEN = "idle";
 
+// ─── 分析ログ(匿名・ANALYTICS.md) ────────────────────────────────────────────
+// 実体は /analytics.js。読み込めなかった端末では全メソッドを no-op に落とし、
+// 受付は従来どおり動かす(ログが取れないだけ)。**個人情報は一切渡さない**
+// (氏名・会社名・担当者・入力値・QRトークン・名刺/カメラ画像は AN に渡さない)。
+const AN = (() => {
+  if (typeof MKAnalytics !== "undefined" && MKAnalytics) return MKAnalytics;
+  const stub = {};
+  ["init","sessionId","isActive","startSession","endSession","screenView","action","back","help",
+   "retry","assistance","deadTap","inputStarted","inputCompleted","validationError","errorRecovered",
+   "apiError","unexpectedError","notificationRequested","staffResponded","feedbackViewed",
+   "feedbackSubmitted","feedbackSkipped","feedbackTimeout","bindAutoTracking","flush","onPageHide"]
+    .forEach(k => { stub[k] = () => {}; });
+  return stub;
+})();
+// 次に idle へ戻るときの終了理由(completed/cancelled/timeout)。go() が読んで消費する。
+let AN_END_REASON = null;
+// セッションの入口(touch/qr/card)。idle から抜けるときに使う。
+let AN_ENTRY_METHOD = "touch";
+const anEnd = (reason) => { AN_END_REASON = reason; };
+const anEntry = (method) => { AN_ENTRY_METHOD = method; };
+// 「最初の操作」でセッションを開始する。既に開始済みなら何もしない。
+// いま表示中の画面を起点として screen_viewed も出す（welcome の滞在時間を残すため）。
+function anEnsureSession(method) {
+  try {
+    if (AN.isActive()) return;
+    anEntry(method);
+    AN.startSession(method);
+    AN.screenView(CURRENT_SCREEN);
+  } catch (e) { /* ログで受付を止めない */ }
+}
+// ページ読み込みごとのランダムID。エージェントがブラウザ起動/リロードを見分けるのに使う。
+const PAGE_ID = (() => {
+  try { return (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)); }
+  catch (e) { return String(Date.now()) + String(Math.random()).slice(2); }
+})();
+// キオスク画面(UI)の版数ラベル。UIバージョン別の完了率・滞在時間を比べるための目印。
+// 画面構成を大きく変えたらここを上げる(既定 default)。
+const UI_VERSION = "default";
+// 受付完了後アンケート。端末単位で切りたいときは localStorage に kiosk_feedback="off"。
+const FEEDBACK_ENABLED = (() => {
+  try { return localStorage.getItem("kiosk_feedback") !== "off"; } catch (e) { return true; }
+})();
+
 function getMasterVolumeLevel() {
   const pct = getStoredVolumePercent();
   return pct / 100;
@@ -111,6 +156,8 @@ let _kioskHeartbeatTimer = null;
 function kioskHeartbeatPayload() {
   return {
     screen: CURRENT_SCREEN,
+    page_id: PAGE_ID,          // ブラウザ起動/リロードの検出(分析ログ)
+    ui_version: UI_VERSION,
     hidden: !!document.hidden,
     focused: document.hasFocus ? !!document.hasFocus() : true,
     href: location.pathname + location.search,
@@ -580,9 +627,11 @@ function homeBtnHtml(id) {
 function homeBtnCornerHtml(id) {
   return `<div style="position:absolute;top:28px;right:80px;z-index:5">${homeBtnHtml(id)}</div>`;
 }
-function bindHomeBtn(id) {
+// ホーム(待機画面へ戻る)。途中の画面では「利用者が自分でやめた」= cancelled、
+// 結果画面（受付/電話/お断り/歓迎）からは受付が成立しているので completed として記録する。
+function bindHomeBtn(id, reason = "cancelled") {
   const b = document.getElementById(id);
-  if (b) b.addEventListener("click", () => { cleanup(); go("idle"); });
+  if (b) b.addEventListener("click", () => { anEnd(reason); cleanup(); go("idle"); });
 }
 
 // ─── Navigate ─────────────────────────────────────────────────────────────────
@@ -635,6 +684,22 @@ function softEnter(el) {
 
 function go(screen, data = {}) {
   finishPendingTransition();
+  // 分析ログ: 匿名セッションの開始/終了と画面遷移。**失敗しても画面遷移は続ける**。
+  // スタッフ専用の設定画面は丸ごと対象外(Wi-Fiパスワード等を含むため記録しない)。
+  if (screen !== "kiosk-settings") {
+    try {
+      if (screen === "idle") {
+        if (AN.isActive()) AN.endSession(AN_END_REASON || "abandoned");
+        AN_END_REASON = null;
+        AN_ENTRY_METHOD = "touch";
+      } else if (!AN.isActive() && screen !== "welcome" && screen !== "pending" && screen !== "suspended") {
+        // idle → welcome は人感センサー(PIR)でも起きる＝利用者の操作とは限らないので、
+        // welcome ではまだ開始しない。QR検出/ボタン操作の時点で anEnsureSession が開始する。
+        AN.startSession(AN_ENTRY_METHOD);
+      }
+      AN.screenView(screen);
+    } catch (e) { /* ログで受付を止めない */ }
+  }
   // ブランド色を CSS 変数へ(フォーカスリング等の <style> ルールが参照)。テナント変更にも追従。
   try {
     const bcv = ST.brand_color || "#4a7c4e", de = document.documentElement.style;
@@ -660,6 +725,7 @@ function go(screen, data = {}) {
     else if (screen === "resultPhone")    showResultPhone(data);
     else if (screen === "resultDecline")  showResultDecline(data);
     else if (screen === "complete")       showComplete(data);
+    else if (screen === "feedback")       showFeedback(data);
     else if (screen === "kiosk-settings") showKioskSettings();
   }
 
@@ -845,14 +911,23 @@ function showIdle() {
   const root = document.getElementById("idle-root");
 
   let advanced = false;
-  function advance() { if (advanced) return; advanced = true; cleanup(); go("welcome"); }
-  onSc("click", advance);
+  // byTouch=true(画面タップ)のときだけ匿名セッションを開始する。PIR による自動遷移は
+  // 「利用者の操作」ではないので、ようこそ画面で実際に操作した時点で開始する。
+  function advance(byTouch) {
+    if (advanced) return;
+    advanced = true;
+    if (byTouch) anEntry("touch");
+    cleanup();
+    go("welcome");
+    if (byTouch) anEnsureSession("touch");
+  }
+  onSc("click", () => advance(true));
 
   // 人感センサー(PIR)ポーリング: 来訪を検知したら受付メニューへ自動遷移
   every(700, async () => {
     try {
       const r = MOCK ? { motion_detected: false } : await fetch("/device/pir").then(res => res.ok ? res.json() : null);
-      if (r && r.motion_detected) advance();
+      if (r && r.motion_detected) advance(false);
     } catch {}
   });
   if (ITEMS.length === 0) return;
@@ -1123,7 +1198,7 @@ function showWelcome() {
       [document.getElementById("qr-cnt-lbl"), document.getElementById("qr-cnt-s")].forEach(el => { if (el) el.style.color = urgent ? T.urgent : T.muted; });
     };
     update();
-    idleId = setTimeout(() => { stopStream(); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
+    idleId = setTimeout(() => { anEnd("timeout"); stopStream(); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
     countId = setInterval(() => { c--; if (c <= 0) { clearInterval(countId); return; } update(); }, 1000);
   }
   CLEANUPS.push(() => { disposed = true; clearTimeout(idleId); clearInterval(countId); clearTimeout(cooldownId); stopStream(); });
@@ -1182,9 +1257,9 @@ ${errBanner}
 </div>`;
     rescale();
     document.getElementById("qr-clk").textContent = fmtClock();
-    document.getElementById("wel-back").addEventListener("click", () => { stopStream(); cleanup(); go("idle"); });
+    document.getElementById("wel-back").addEventListener("click", () => { anEnd("cancelled"); stopStream(); cleanup(); go("idle"); });
     bindHomeBtn("wel-home");
-    document.getElementById("wel-form").addEventListener("click", () => { stopStream(); cleanup(); go("top"); });
+    document.getElementById("wel-form").addEventListener("click", () => { anEnsureSession("touch"); stopStream(); cleanup(); go("top"); });
     if (MOCK) { const mb = document.getElementById("qr-mock"); if (mb) mb.addEventListener("click", () => { stopStream(); handleQR("appt:mock"); }); }
     onSc("click", resetIdle);
     if (stream) { const vid = document.getElementById("qr-vid"); if (vid) { vid.srcObject = stream; vid.play().catch(() => {}); } }
@@ -1268,19 +1343,31 @@ ${errBanner}
     if (!token) { stopStream(); cleanup(); boot(); return; }
 
     const parsed = parseQR(raw);
-    if (!parsed) { pauseScan("未対応のQRコードです。ご予約時にお送りしたQRコードをかざしてください。", QR_UNSUPPORTED_COOLDOWN_MS); return; }
+    if (!parsed) {
+      // 読み取れた文字列そのものは記録しない（コードだけ）。
+      anEnsureSession("qr");
+      AN.validationError("qr_scan", "qr_unsupported");
+      pauseScan("未対応のQRコードです。ご予約時にお送りしたQRコードをかざしてください。", QR_UNSUPPORTED_COOLDOWN_MS);
+      return;
+    }
+    anEnsureSession("qr");
+    AN.inputCompleted("qr_scan", "qr");
 
     if (parsed.kind === "appt") {
       submitting = true; refreshCam();
       try {
         const appt = await apiGet("/proxy/appointment/" + encodeURIComponent(parsed.token), token);
+        AN.notificationRequested();
         const rec = await apiPost("/proxy/reception", {
           visitor_name: appt.visitor_name, company: appt.company || "", purpose: appt.purpose || "",
           staff: appt.staff || "", method: "appointment", appointment_id: appt.id,
+          // 匿名セッションID。通知の成否をこのセッションへ書き戻すためだけに使い、DB には保存しない。
+          analytics_session_id: AN.sessionId(),
         }, token);
         stopStream(); cleanup();
         go("calling", { name: appt.visitor_name, staff: appt.staff || "", room: appt.meeting_room || null, scheduledAt: appt.scheduled_at || null, method: "appointment", receptionId: rec?.id });
       } catch (e) {
+        AN.apiError("api_5xx", { fieldId: "qr_scan" });   // 本文・URLは送らない
         pauseScan(e.message || "予約情報の取得に失敗しました", QR_ERROR_COOLDOWN_MS);
       }
       return;
@@ -1289,9 +1376,11 @@ ${errBanner}
     // walkin: name パラメータ付きURL
     submitting = true; refreshCam();
     try {
-      const rec = await apiPost("/proxy/reception", { visitor_name: parsed.name, company: parsed.company, purpose: parsed.purpose, method: "qr" }, token);
+      AN.notificationRequested();
+      const rec = await apiPost("/proxy/reception", { visitor_name: parsed.name, company: parsed.company, purpose: parsed.purpose, method: "qr", analytics_session_id: AN.sessionId() }, token);
       stopStream(); cleanup(); go("calling", { name: parsed.name, staff: "", method: "qr", receptionId: rec?.id });
     } catch (e) {
+      AN.apiError("api_5xx", { fieldId: "qr_scan" });
       pauseScan(e.message || "受付処理に失敗しました", QR_ERROR_COOLDOWN_MS);
     }
   }
@@ -1328,7 +1417,7 @@ function showTop() {
     <div style="align-self:flex-start">${homeBtnHtml("top-home")}</div>
   </div>
   <div id="tiles" style="flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:28px;padding:44px 80px;min-height:0">
-    ${TILES.map((t, i) => `<button data-ti="${i}" style="background:${t.primary ? T.dark : T.canvas};color:${t.primary ? "#fff" : T.ink};border:2px solid ${t.primary ? T.dark : T.border};border-radius:28px;padding:56px 44px;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;position:relative;cursor:pointer;text-align:left;overflow:hidden">
+    ${TILES.map((t, i) => `<button data-ti="${i}" data-ev="top-${t.screen}" style="background:${t.primary ? T.dark : T.canvas};color:${t.primary ? "#fff" : T.ink};border:2px solid ${t.primary ? T.dark : T.border};border-radius:28px;padding:56px 44px;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;position:relative;cursor:pointer;text-align:left;overflow:hidden">
       <div style="width:150px;height:150px;border-radius:32px;background:${t.primary ? "rgba(255,255,255,.1)" : bc + "1a"};color:${t.primary ? "#fff" : bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.15)">${t.icon}</div></div>
       <div>
         <div style="font-size:58px;font-weight:600;letter-spacing:-1px;line-height:1.1">${t.label}</div>
@@ -1365,7 +1454,7 @@ function showTop() {
       [document.getElementById("top-cnt-lbl"), document.getElementById("top-cnt-s")].forEach(el => { if (el) el.style.color = urgent ? T.urgent : T.muted; });
     };
     update();
-    idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
+    idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
     countId = setInterval(() => { c--; if (c <= 0) { clearInterval(countId); return; } update(); }, 1000);
   }
   CLEANUPS.push(() => { clearTimeout(idleId); clearInterval(countId); });
@@ -1389,7 +1478,7 @@ function showTop() {
 function showLockerMode() {
   const bc = ST.brand_color;
   let idleId;
-  function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
+  function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
   CLEANUPS.push(() => clearTimeout(idleId));
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
   <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center"><button id="lm-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button><div style="flex:1"></div>${homeBtnHtml("lm-home")}</div>
@@ -1437,7 +1526,7 @@ function showLocker(mode) {
 
   function resetIdle() {
     clearTimeout(idleId);
-    idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
+    idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
   }
   function stopDoorWatch() {
     if (doorWatchId) {
@@ -1613,7 +1702,7 @@ function showLocker(mode) {
       const demoDeposit = ST.is_demo && !resultGuide;
       const dn = document.getElementById("lk-done");
       if (dn) dn.addEventListener("click", () => {
-        if (demoDeposit) { goDemoPickup(); } else { cleanup(); go("idle"); }
+        if (demoDeposit) { goDemoPickup(); } else { goAfterResult(); }
       });
       const total = Math.max(6, ST.kiosk_complete_timeout_sec);
       const barEl = document.getElementById("lk-bar"), cntEl = document.getElementById("lk-cnt");
@@ -1622,7 +1711,7 @@ function showLocker(mode) {
         let c = total;
         every(1000, () => {
           c--;
-          if (c <= 0) { cleanup(); go("idle"); return; }
+          if (c <= 0) { goAfterResult(); return; }
           if (barEl) barEl.style.width = `${(c / total) * 100}%`;
           if (cntEl) cntEl.textContent = c;
         });
@@ -1630,7 +1719,7 @@ function showLocker(mode) {
         // デモ: お預け完了を数秒見せてから、取り出し操作への案内を挟んで pickup へ。
         resultTimer = setTimeout(goDemoPickup, 3500);
       } else {
-        resultTimer = setTimeout(() => { cleanup(); go("idle"); }, total * 1000);
+        resultTimer = setTimeout(() => { goAfterResult(); }, total * 1000);
       }
     } else if (view === "pinset" || view === "pininput") {
       sc.querySelectorAll("[data-pk]").forEach(b => b.addEventListener("click", () => handleKey(b.dataset.pk)));
@@ -1640,6 +1729,8 @@ function showLocker(mode) {
   function handleKey(k) {
     if (busy) return;
     resetIdle();
+    // 入力開始だけを記録する（押された数字は渡さない。ロガー側でも [data-pk] は除外）。
+    if (!pin) AN.inputStarted("locker_pin", "touch");
     if (k === "⌫") { pin = pin.slice(0, -1); err = ""; render(); }
     else if (k === "→") { if (pin.length === 4) submitPin(); }
     else if (pin.length < 4) { pin += k; err = ""; render(); }  // 4桁入力後は「決定」待ち
@@ -1668,10 +1759,17 @@ function showLocker(mode) {
         resultGuide = true;
         resultTitle = "解錠しました"; resultSub = `${sel.name} の扉が開きました。扉の右側を押して開け、お荷物をお受け取りください。`;
       }
+      AN.inputCompleted("locker_pin", "touch");
+      AN.errorRecovered("locker_pin");   // 番号違いのあとに通ったら「修正完了」として残る
       busy = false; view = "result"; render();
     } catch (e) {
       busy = false; pin = "";
       const msg = e && e.message ? e.message : "";
+      // 記録するのはエラーコードだけ（入力された暗証番号は渡さない）。
+      AN.validationError("locker_pin",
+        msg === "invalid pin" ? "pin_mismatch"
+        : msg === "already occupied" ? "locker_occupied"
+        : msg === "not occupied" ? "no_locker_available" : "unknown");
       err = msg === "invalid pin" ? "暗証番号が違います。もう一度お試しください。"
           : msg === "already occupied" ? "このロッカーは使用中です。"
           : msg === "not occupied" ? "このロッカーは空いています。"
@@ -1736,7 +1834,7 @@ function showDelivery() {
   let view = "loading";  // loading | choose | pick | openwait | sending | result | error
   let sel = null, err = "", resultTitle = "", resultSub = "";
   let idleId, resultTimer = null, callId = null, lastView = "loading";
-  function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
+  function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
   CLEANUPS.push(() => { clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); });
 
   const shell = (inner) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
@@ -1852,8 +1950,8 @@ function showDelivery() {
         resultTimer = setTimeout(() => { cleanup(); go("resultPhone", {}); }, Math.max(30, ST.kiosk_complete_timeout_sec * 3) * 1000);
       }
     } else if (view === "result") {
-      document.getElementById("dl-done").addEventListener("click", () => { cleanup(); go("idle"); });
-      resultTimer = setTimeout(() => { cleanup(); go("idle"); }, Math.max(6, ST.kiosk_complete_timeout_sec) * 1000);
+      document.getElementById("dl-done").addEventListener("click", () => { goAfterResult(); });
+      resultTimer = setTimeout(() => { goAfterResult(); }, Math.max(6, ST.kiosk_complete_timeout_sec) * 1000);
     }
   }
 
@@ -1868,19 +1966,24 @@ function showDelivery() {
     await forceLockLocker(sel.door_number);   // 物理施錠(通常ロッカーの「扉を閉めました」と同経路)
     try {
       await devicePost(`/device/locker/${encodeURIComponent(sel.id)}/occupy-delivery`);
+      AN.inputCompleted("delivery_method", "touch");
       resultTitle = "お預け完了"; resultSub = "施錠しました。担当者がお受け取りします（暗証番号は不要です）。";
       view = "result"; render();
     } catch (e) {
+      AN.apiError("locker_open_failed", { fieldId: "delivery_method" });
       err = (e && e.message) || ""; view = "error"; render();
     }
   }
   async function callStaff() {
     view = "sending"; render();
     try {
-      const r = await apiPost("/proxy/call-staff", { message: "" }, token);
+      AN.notificationRequested();
+      // analytics_session_id は通知の成否をこの匿名セッションへ書き戻すためだけに送る（DB非保存）。
+      const r = await apiPost("/proxy/call-staff", { message: "", analytics_session_id: AN.sessionId() }, token);
       callId = (r && r.id) || null;   // 応答(受付/電話)ポーリング用の受付ID
       view = "wait"; render();        // お待ちください画面へ(応答をポーリング)
     } catch (e) {
+      AN.apiError("api_5xx", { fieldId: "delivery_method" });
       resultTitle = "通知に失敗しました"; resultSub = "恐れ入りますが、受付スタッフへお声がけください。";
       view = "result"; render();
     }
@@ -2528,7 +2631,7 @@ function showReception(initPurpose) {
   const SMALL = withKata({あ:"ぁ",い:"ぃ",う:"ぅ",え:"ぇ",お:"ぉ",つ:"っ",や:"ゃ",ゆ:"ゅ",よ:"ょ",わ:"ゎ",ぁ:"あ",ぃ:"い",ぅ:"う",ぇ:"え",ぉ:"お",っ:"つ",ゃ:"や",ゅ:"ゆ",ょ:"よ",ゎ:"わ"});
   const g = id => document.getElementById(id);
 
-  function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
+  function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
   CLEANUPS.push(() => clearTimeout(idleId));
   resetIdle();
 
@@ -2814,12 +2917,19 @@ function showReception(initPurpose) {
     g("rec-back").addEventListener("click", () => { cleanup(); go("top"); });
     bindHomeBtn("rec-home");
     const cardBtn = g("rec-card");
-    if (cardBtn) cardBtn.addEventListener("click", () => { resetIdle(); openCardCapture({ onConfirm: applyCardValues }); });
+    if (cardBtn) cardBtn.addEventListener("click", () => { resetIdle(); AN.inputStarted("card_capture", "card"); openCardCapture({ onConfirm: applyCardValues }); });
     Object.keys(KEY).forEach(id => {
       const el = g(id); if (!el) return;
       const ev = el.tagName === "SELECT" ? "change" : "input";
-      el.addEventListener(ev, () => { form[KEY[id]] = el.value; resetIdle(); });
-      el.addEventListener("focus", () => { resetIdle(); focusedField = id; });
+      el.addEventListener(ev, () => {
+        form[KEY[id]] = el.value;
+        resetIdle();
+        // 未入力エラーを出していた項目に入力が入った＝修正完了（値そのものは見ない）。
+        if (el.value.trim()) AN.errorRecovered(KEY[id]);
+      });
+      // 入力方法は「画面内キーボード」か「選択(担当者のドロップダウン)」かで分ける。
+      const inputMethod = el.tagName === "SELECT" ? "touch" : "keyboard";
+      el.addEventListener("focus", () => { resetIdle(); focusedField = id; AN.inputStarted(KEY[id], inputMethod); });
       // blur イベントは無視 - スクリーン外クリック時のみ focusedField をクリア
       // タッチイベントで強制フォーカス
       el.addEventListener("touchstart", (e) => { e.preventDefault(); focusedField = id; el.focus(); });
@@ -2827,14 +2937,18 @@ function showReception(initPurpose) {
     // 部署チップ: ご用件と同じく、選択で form.department を更新しチップのスタイルのみ差し替える。
     // 同じチップを再タップで選択解除(任意項目のため)。キーボード対象外。
     const deptChips = sc.querySelectorAll("#f-dept-chips [data-dept]");
+    deptChips.forEach((btn, i) => btn.setAttribute("data-ev", "f-dept-" + i));
     deptChips.forEach(btn => btn.addEventListener("click", () => {
       form.department = form.department === btn.dataset.dept ? "" : btn.dataset.dept; resetIdle();
+      if (form.department) AN.inputCompleted("department", "touch");
       deptChips.forEach(b => b.setAttribute("style", chipStyle(b.dataset.dept === form.department)));
     }));
     // ご用件チップ: 選択で form.purpose を更新し、全チップのスタイルのみ更新(テキスト入力を再描画しない)。
     const chips = sc.querySelectorAll("#f-purpose-chips [data-purpose]");
+    chips.forEach((btn, i) => btn.setAttribute("data-ev", "f-purpose-" + i));
     chips.forEach(btn => btn.addEventListener("click", () => {
       form.purpose = btn.dataset.purpose; resetIdle();
+      AN.inputCompleted("purpose", "touch");
       chips.forEach(b => b.setAttribute("style", chipStyle(b.dataset.purpose === form.purpose)));
     }));
     g("rec-send").addEventListener("click", handleSubmit);
@@ -2866,15 +2980,31 @@ function showReception(initPurpose) {
 
   async function handleSubmit() {
     if (submitting) return;
-    if (!form.visitor_name.trim()) { errMsg = "お名前を入力してください"; render(); return; }
+    if (!form.visitor_name.trim()) {
+      // 記録するのは「どの項目で・どのエラーが出たか」だけ。入力値は保存しない。
+      AN.validationError("visitor_name", "required");
+      errMsg = "お名前を入力してください"; render(); return;
+    }
     const token = localStorage.getItem(TOKEN_KEY);
     if (!token) { cleanup(); boot(); return; }
     submitting = true; render();
+    AN.inputCompleted("visitor_name", "keyboard");
+    if (form.company.trim()) AN.inputCompleted("company", "keyboard");
+    if (form.staff.trim()) AN.inputCompleted("staff", "touch");
+    const startedAt = Date.now();
     try {
-      const res = await apiPost("/proxy/reception", { visitor_name: form.visitor_name, company: form.company, purpose: form.purpose, staff: form.staff, department: form.department, method: "form" }, token);
+      AN.notificationRequested();
+      const res = await apiPost("/proxy/reception", {
+        visitor_name: form.visitor_name, company: form.company, purpose: form.purpose,
+        staff: form.staff, department: form.department, method: "form",
+        // 匿名セッションID。通知の成否をこのセッションへ書き戻すためだけに使う（DB非保存）。
+        analytics_session_id: AN.sessionId(),
+      }, token);
       cleanup();
       go("calling", { name: form.visitor_name, staff: form.staff, department: form.department, method: "form", receptionId: res?.id });
     } catch (e) {
+      // エラー本文には入力値が混ざりうるので送らない（固定コードと所要時間だけ）。
+      AN.apiError("api_5xx", { durationMs: Date.now() - startedAt });
       errMsg = e.message || "受付に失敗しました";
       submitting = false; render();
     }
@@ -2955,13 +3085,14 @@ function showCalling(data) {
     if (done) return;
     try {
       const r = await apiGet("/proxy/reception/" + encodeURIComponent(rid), token);
-      if (r && r.state === "accepted")      { done = true; cleanup(); go("resultOk", data); }
-      else if (r && r.state === "phone")    { done = true; cleanup(); go("resultPhone", data); }
-      else if (r && r.state === "declined") { done = true; cleanup(); go("resultDecline", data); }
+      // 応答が確定した瞬間を記録する（通知送信からの経過時間はロガーが計る）。担当者名は送らない。
+      if (r && r.state === "accepted")      { done = true; AN.staffResponded("accepted"); cleanup(); go("resultOk", data); }
+      else if (r && r.state === "phone")    { done = true; AN.staffResponded("phone"); cleanup(); go("resultPhone", data); }
+      else if (r && r.state === "declined") { done = true; AN.staffResponded("declined"); cleanup(); go("resultDecline", data); }
     } catch (_) { /* 通信不調は無視。下のタイムアウトで必ず離脱する */ }
   });
   // 無応答フォールバック: 通知の応答が時間切れなら電話案内へ(来訪者が電話で呼び出せる)→自動でidle復帰。
-  later(90000, () => { if (done) return; done = true; cleanup(); go("resultPhone", data); });
+  later(90000, () => { if (done) return; done = true; AN.staffResponded("timeout"); cleanup(); go("resultPhone", data); });
 }
 
 // ─── RESULT: OK (スタッフが「すぐ伺います」) ─────────────────────────────────
@@ -2989,10 +3120,10 @@ function showResultOk(data) {
   <div style="margin-top:54px;display:flex;align-items:center;gap:14px;color:${T.muted};font-size:18px">${ICO.clock}<span>待機画面に戻るまで</span><span id="ok-cnt" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${bc}">${count}</span><span>秒</span></div>
 </div>`;
   rescale();
-  bindHomeBtn("ok-home");
+  bindHomeBtn("ok-home", "completed");
   every(1000, () => {
     count--;
-    if (count <= 0) { cleanup(); go("idle"); return; }
+    if (count <= 0) { goAfterResult(); return; }
     const c = document.getElementById("ok-cnt"); if (c) c.textContent = count;
   });
 }
@@ -3024,10 +3155,10 @@ function showResultPhone(data) {
   <div style="margin-top:50px;display:flex;align-items:center;gap:14px;color:${T.muted};font-size:18px">${ICO.clock}<span>待機画面に戻るまで</span><span id="ph-cnt" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${bc}">${count}</span><span>秒</span></div>
 </div>`;
   rescale();
-  bindHomeBtn("ph-home");
+  bindHomeBtn("ph-home", "completed");
   every(1000, () => {
     count--;
-    if (count <= 0) { cleanup(); go("idle"); return; }
+    if (count <= 0) { goAfterResult(); return; }
     const c = document.getElementById("ph-cnt"); if (c) c.textContent = count;
   });
 }
@@ -3068,10 +3199,11 @@ function showResultDecline(data) {
   </div>
 </div>`;
   rescale();
-  bindHomeBtn("dc-home");
+  bindHomeBtn("dc-home", "completed");
   every(1000, () => {
     count--;
-    if (count <= 0) { cleanup(); go("idle"); return; }
+    // お断り(declined)の後にはアンケートを出さない(ANALYTICS.md §8)。
+    if (count <= 0) { anEnd("completed"); cleanup(); go("idle"); return; }
     const c = document.getElementById("dc-cnt"); if (c) c.textContent = count;
   });
 }
@@ -3144,18 +3276,141 @@ function showComplete(data) {
   </div>
 </div>`;
   rescale();
-  bindHomeBtn("cmp-home");
+  bindHomeBtn("cmp-home", "completed");
   const cmpEl = sc.firstElementChild;
   if (cmpEl) cmpEl.style.animation = "slide-in-up 1.2s cubic-bezier(.2,.9,.3,1) both";
   every(1000, () => {
     count--;
-    if (count <= 0) { cleanup(); go("idle"); return; }
+    if (count <= 0) { goAfterResult(); return; }
     const cEl = document.getElementById("cnt"), bEl = document.getElementById("bar");
     const urgent = count <= 5;
     if (cEl) { cEl.textContent = count; cEl.style.color = urgent ? T.urgent : bc; }
     if (bEl) { bEl.style.width = `${(count / returnSec) * 100}%`; bEl.style.background = urgent ? T.urgent : bc; }
   });
 }
+
+// ─── FEEDBACK (受付完了後アンケート・任意回答) ────────────────────────────────
+// 「お断り(declined)」以外のすべての終了パターンの直後に、1問ずつ表示する。
+// すべて任意回答で、常に「回答せず終了」を出す。未回答は unknown として扱い、
+// 行動ログからスタッフ支援の有無を推測しない(ANALYTICS.md §8)。
+// 保存されるのは **質問IDと回答コードだけ**（自由記述は無い）。
+const FEEDBACK_QUESTIONS = [
+  {
+    id: "clarity", jp: "操作方法は分かりやすかったですか？", en: "Was this easy to use?",
+    options: [
+      { code: "very_clear",   label: "とても分かりやすい" },
+      { code: "clear",        label: "分かりやすい" },
+      { code: "neutral",      label: "どちらともいえない" },
+      { code: "unclear",      label: "分かりにくい" },
+      { code: "very_unclear", label: "とても分かりにくい" },
+    ],
+  },
+  {
+    id: "confidence", jp: "安心して受付を進められましたか？", en: "Did you feel at ease?",
+    options: [
+      { code: "very_secure",      label: "とても安心できた" },
+      { code: "secure",           label: "安心できた" },
+      { code: "neutral",          label: "どちらともいえない" },
+      { code: "slightly_anxious", label: "少し不安だった" },
+      { code: "very_anxious",     label: "とても不安だった" },
+    ],
+  },
+  {
+    id: "assistance", jp: "受付操作中にスタッフの手助けを受けましたか？", en: "Did a staff member help you?",
+    options: [
+      { code: "none",     label: "受けていない" },
+      { code: "received", label: "受けた" },
+    ],
+  },
+];
+// 1問あたりの制限時間(秒)。放置された端末が次の来訪者にアンケートを見せ続けないための上限。
+const FEEDBACK_QUESTION_SEC = 20;
+
+// 結果画面のあとの遷移。アンケートを出す条件を1か所に集約する。
+function goAfterResult() {
+  cleanup();
+  if (FEEDBACK_ENABLED && !MOCK && AN.isActive()) { go("feedback"); return; }
+  anEnd("completed");
+  go("idle");
+}
+
+function showFeedback() {
+  const bc = ST.brand_color;
+  let index = 0;
+  let timer = null, countId = null;
+
+  const finish = () => {
+    if (timer) clearTimeout(timer);
+    if (countId) clearInterval(countId);
+    anEnd("completed");   // アンケートの回答有無は完了判定に影響しない
+    cleanup();
+    go("idle");
+  };
+
+  // 「回答せず終了」= 残りの設問をまとめて skipped として記録してから終了する。
+  const skipAll = () => {
+    for (let i = index; i < FEEDBACK_QUESTIONS.length; i++) AN.feedbackSkipped(FEEDBACK_QUESTIONS[i].id);
+    finish();
+  };
+
+  const answer = (code) => {
+    AN.feedbackSubmitted(FEEDBACK_QUESTIONS[index].id, code);
+    index += 1;
+    if (index >= FEEDBACK_QUESTIONS.length) { finish(); return; }
+    render();
+  };
+
+  function render() {
+    const q = FEEDBACK_QUESTIONS[index];
+    AN.feedbackViewed(q.id);
+    let count = FEEDBACK_QUESTION_SEC;
+    sc.innerHTML = `
+<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
+  <div style="padding:56px 110px 0;flex-shrink:0;display:flex;align-items:flex-end;gap:28px">
+    <div>
+      <div style="font-size:20px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;font-family:Inter,system-ui,sans-serif">QUESTION ${index + 1} / ${FEEDBACK_QUESTIONS.length}</div>
+      <div style="font-size:26px;color:${T.sub};margin-top:14px">ご協力のお願い（任意・${FEEDBACK_QUESTIONS.length}問）</div>
+    </div>
+    <div style="flex:1"></div>
+    <div style="display:flex;gap:10px;align-items:center">
+      ${FEEDBACK_QUESTIONS.map((_, i) => `<div style="width:${i === index ? 56 : 18}px;height:10px;border-radius:5px;background:${i <= index ? bc : T.border};transition:width .3s"></div>`).join("")}
+    </div>
+  </div>
+  <div style="flex:1;display:flex;flex-direction:column;justify-content:center;padding:0 110px;min-height:0">
+    <div style="font-size:66px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.25">${escHtml(q.jp)}</div>
+    <div style="font-size:30px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:10px">${escHtml(q.en)}</div>
+    <div data-stagger style="display:flex;flex-wrap:wrap;gap:22px;margin-top:56px">
+      ${q.options.map(o => `<button data-ev="fb-${q.id}-${o.code}" data-ans="${o.code}" style="flex:1 1 300px;min-width:300px;min-height:150px;padding:28px 34px;border-radius:24px;border:2px solid ${T.borderStrong};background:${T.canvas};color:${T.ink};font-size:38px;font-weight:600;font-family:inherit;cursor:pointer">${escHtml(o.label)}</button>`).join("")}
+    </div>
+  </div>
+  <div style="padding:0 110px 48px;flex-shrink:0;display:flex;align-items:center;gap:28px">
+    <button id="fb-skip" data-ev="fb-skip" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">回答せず終了</button>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:14px;color:${T.muted};font-size:20px">${ICO.clock}<span>自動で終了するまで</span><span id="fb-cnt" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:${T.sub}">${count}</span><span>秒</span></div>
+  </div>
+</div>`;
+    rescale();
+    sc.querySelectorAll("[data-ans]").forEach(btn => btn.addEventListener("click", () => answer(btn.dataset.ans)));
+    document.getElementById("fb-skip").addEventListener("click", skipAll);
+
+    if (timer) clearTimeout(timer);
+    if (countId) clearInterval(countId);
+    // 制限時間で打ち切り。未回答の設問は timeout として記録する(推測はしない)。
+    timer = setTimeout(() => {
+      for (let i = index; i < FEEDBACK_QUESTIONS.length; i++) AN.feedbackTimeout(FEEDBACK_QUESTIONS[i].id);
+      finish();
+    }, FEEDBACK_QUESTION_SEC * 1000);
+    countId = setInterval(() => {
+      count--;
+      const el = document.getElementById("fb-cnt");
+      if (el) { el.textContent = Math.max(0, count); el.style.color = count <= 5 ? T.urgent : T.sub; }
+    }, 1000);
+    CLEANUPS.push(() => { clearTimeout(timer); clearInterval(countId); });
+  }
+
+  render();
+}
+
 // ─── SUSPENDED ────────────────────────────────────────────────────────────────
 function showSuspended() {
   CURRENT_SCREEN = "suspended";
@@ -4266,6 +4521,40 @@ async function bootMock() {
   go("idle");
 }
 
+// 分析ログ(匿名)の起動。?mock=1 のプレビューでは送らない(本番データを汚さないため)。
+// 送信先は同一オリジンのエージェント(/device/analytics/events)で、デバイストークンは
+// ブラウザのコードに持たせない(ANALYTICS.md §7)。二重起動しないよう1回だけ実行する。
+let _anStarted = false;
+function startAnalytics() {
+  if (_anStarted || MOCK) return;
+  _anStarted = true;
+  try {
+    const an = (CFG && CFG.analytics) || {};
+    AN.init({
+      enabled: true,
+      appVersion: (CFG && CFG.app_version) || null,
+      uiVersion: UI_VERSION,
+      idleTimeoutSec: ST.kiosk_idle_timeout_sec || 60,
+      flushMs: (an.flush_sec || 15) * 1000,
+      maxBatch: an.max_batch || 200,
+    });
+    AN.bindAutoTracking(sc);   // 操作要素のタップを委譲で拾う(キーボード/変換候補は除外)
+    // 離脱時は溜まっているぶんを送るだけ。**session_abandoned は出さない**
+    // (リロードと区別できないため。再読込なら次の起動で同じセッションを復元する)。
+    window.addEventListener("pagehide", () => AN.onPageHide());
+    // 想定外の JS 例外。**メッセージ・スタックトレースは送らない**(入力値が混ざりうる)。
+    window.addEventListener("error", () => AN.unexpectedError("unknown"));
+    window.addEventListener("unhandledrejection", () => AN.unexpectedError("unknown"));
+    // 受付アプリの起動完了を1回だけ知らせる（端末ログの app_started）。
+    // ページ読み込み(browser_started/page_reloaded)とは別に「アプリが立ち上がりきった」を残す。
+    fetch("/device/kiosk-heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...kioskHeartbeatPayload(), booted: true }),
+    }).catch(() => {});
+  } catch (e) { /* ログで起動を止めない */ }
+}
+
 async function boot() {
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:#0a0806;display:flex;align-items:center;justify-content:center"><div style="color:rgba(255,255,255,.3);font-size:18px">読み込み中…</div></div>`;
   rescale();
@@ -4310,6 +4599,7 @@ async function boot() {
     if (!localStorage.getItem(TOKEN_KEY)) { return boot(); }
     if (settings) Object.assign(ST, settings);
     showDemoBadge();
+    startAnalytics();
     if (sched?.device_name) localStorage.setItem(NAME_KEY, sched.device_name);
     if (sched?.pending) {
       showPending(sched?.device_name);
