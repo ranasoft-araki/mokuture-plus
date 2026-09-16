@@ -90,6 +90,11 @@ class Destinations:
     slack_channels: tuple[tuple[str, str], ...] = ()   # (channel_id, channel_name)
     emails: tuple[str, ...] = ()
     webhooks: tuple[str, ...] = ()
+    chatwork_rooms: tuple[str, ...] = ()
+    # Web Push を届ける管理ユーザーの id。購読はユーザーのブラウザに紐づくため、
+    # 「担当者ごとのプッシュ」はこの結びつけで実現する。空なら従来どおり
+    # テナント内の全購読へ（use_default に従う）。
+    push_user_ids: tuple[str, ...] = ()
     use_default: bool = True
     # 実際に宛先を提供した担当者名（代理通知の文面に出す）。
     routed_to: str = ""
@@ -97,7 +102,10 @@ class Destinations:
     @property
     def has_direct(self) -> bool:
         """担当者個別の宛先を1つでも持っているか。"""
-        return bool(self.slack_channels or self.emails or self.webhooks)
+        return bool(
+            self.slack_channels or self.emails or self.webhooks
+            or self.chatwork_rooms or self.push_user_ids
+        )
 
 
 @dataclass(frozen=True)
@@ -130,10 +138,14 @@ def _destinations_from(route: StaffNotificationRoute, *, use_default: bool) -> D
     channel_id = (config.get("slack_channel_id") or "").strip()
     channel_name = (config.get("slack_channel_name") or channel_id).strip()
     webhook = (config.get("webhook_url") or "").strip()
+    chatwork_room = (config.get("chatwork_room_id") or "").strip()
+    push_user_id = (getattr(route, "push_user_id", None) or "").strip()
     return Destinations(
         slack_channels=((channel_id, channel_name),) if channel_id else (),
         emails=tuple(parse_emails(config.get("email"))),
         webhooks=(webhook,) if webhook else (),
+        chatwork_rooms=(chatwork_room,) if chatwork_room else (),
+        push_user_ids=(push_user_id,) if push_user_id else (),
         use_default=use_default,
         routed_to=route.staff_name,
     )
@@ -239,4 +251,27 @@ def slack_send_configs(default_config: dict, dest: Destinations) -> list[tuple[d
             if default_channel:
                 seen.add(default_channel)
             out.append((default_config, default_config.get("channel_name") or "既定の通知先"))
+    return out
+
+
+def chatwork_send_rooms(default_config: dict, dest: Destinations) -> list[tuple[str, str]]:
+    """投稿する Chatwork ルームの (room_id, 宛先ラベル) 一覧。
+
+    Slack と同じ考え方で、API トークンはテナント共通のものを使い回し、担当者ごとに
+    差し替えるのはルームだけ。共通ルームと同じ ID になる場合は重複投稿しない。
+    """
+    default_room = (default_config.get("room_id") or "").strip()
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    for room_id in dest.chatwork_rooms:
+        room_id = (room_id or "").strip()
+        if not room_id or room_id in seen:
+            continue
+        seen.add(room_id)
+        out.append((room_id, f"ルーム {room_id}"))
+
+    if dest.use_default and default_room and default_room not in seen:
+        seen.add(default_room)
+        out.append((default_room, "既定の通知先"))
     return out

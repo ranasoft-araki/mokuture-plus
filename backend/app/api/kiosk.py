@@ -42,6 +42,7 @@ from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
 from app.services.webpush import send_push
 from app.services.auth import hash_password, verify_password, create_decision_token
+from app.services import chatwork as chatwork_service
 from app.services import events as event_bus
 from app.services import reception_notify
 from app.config import settings
@@ -1190,24 +1191,15 @@ async def _notify_chatwork_text(
     """Post a message to the first configured Chatwork room among ``types``.
 
     Best-effort. ``types`` is an ordered preference (delivery-specific first, then
-    the normal reception destination as fallback)."""
-    setting = await _first_configured_setting(tenant_id, types, db)
-    if setting is None:
+    the normal reception destination as fallback).
+
+    送信の実体は `services/chatwork.py`（受付通知の担当者ごとのルーム指定と同じ経路）。
+    ここは配達の呼び出し専用の入口で、宛先の選び方だけが違う。
+    """
+    config = await chatwork_service.load_config(db, tenant_id, types)
+    if not config:
         return
-    try:
-        config = decrypt_dict(setting.config_json)
-        api_token = config.get("api_token", "")
-        room_id = config.get("room_id", "")
-        if not api_token or not room_id:
-            return
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(
-                f"https://api.chatwork.com/v2/rooms/{room_id}/messages",
-                headers={"X-ChatWorkToken": api_token},
-                data={"body": text},
-            )
-    except Exception:
-        pass
+    await chatwork_service.send_message(config.get("api_token", ""), config.get("room_id", ""), text)
 
 
 async def _log_delivery_dropoff(

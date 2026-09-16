@@ -1,4 +1,4 @@
-"""受付通知のファンアウト（Slack / Web Push / Webhook / メール）。
+"""受付通知のファンアウト（Slack / Chatwork / Web Push / Webhook / メール）。
 
 キオスク受付(`api/kiosk.kiosk_reception`)と管理画面からの手動受付(`api/reception.create_reception`)
 の**両方がここを通る**。以前は両ファイルに `_notify_slack` / `_notify_push` がほぼ同じ形で重複して
@@ -26,6 +26,7 @@ from app.database import AsyncSessionLocal
 from app.models.notification import NotificationSetting, PushSubscription
 from app.models.reception import ReceptionLog
 from app.models.tenant import Tenant
+from app.services import chatwork
 from app.services import email as email_service
 from app.services import staff_routing
 from app.services.crypto import decrypt_dict
@@ -62,6 +63,7 @@ async def notify_reception(
     escalated_from = (log.staff or "").strip() if stage == FALLBACK else ""
 
     await _notify_slack(db, tenant_id, log, dest, escalated_from)
+    await _notify_chatwork(db, tenant_id, log, dest, escalated_from)
     await _notify_push(db, tenant_id, log, dest, escalated_from)
     await _notify_webhook(db, tenant_id, log, dest, escalated_from)
     await _notify_email(db, tenant_id, log, dest, escalated_from)
@@ -131,7 +133,7 @@ async def _notify_slack(
 
 # ── Web Push ───────────────────────────────────────────────────────────────────
 
-async def _vapid_private_key(db: AsyncSession, tenant_id: str) -> str:
+async def vapid_private_key(db: AsyncSession, tenant_id: str) -> str:
     result = await db.execute(
         select(NotificationSetting).where(
             NotificationSetting.tenant_id == tenant_id,
@@ -149,25 +151,91 @@ async def _vapid_private_key(db: AsyncSession, tenant_id: str) -> str:
     return settings.vapid_private_key
 
 
+async def push_targets(
+    db: AsyncSession, tenant_id: str, dest: Destinations, escalated_from: str
+) -> list[PushSubscription]:
+    """この通知で実際にプッシュする購読を選ぶ。
+
+    担当者ごとの宛先が決まっているときはそのユーザーの端末だけに絞る。絞った結果が
+    0 件（＝その人がまだプッシュを許可していない）のときは、黙って誰にも届かない
+    ほうが危険なので全購読へ落とす。
+    """
+    stmt = select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
+    all_subs = list((await db.execute(stmt)).scalars().all())
+    if not all_subs:
+        return []
+
+    targeted: list[PushSubscription] = []
+    if dest.push_user_ids:
+        wanted = set(dest.push_user_ids)
+        targeted = [s for s in all_subs if s.user_id and s.user_id in wanted]
+
+    # 全購読へも送るか:
+    #   - 「共通の通知先へも送る」が ON
+    #   - 代理通知なのに宛先が絞れなかった（空振りさせない安全網）
+    send_all = bool(dest.use_default) or bool(escalated_from and not targeted)
+    if not send_all:
+        return targeted          # 絞り込みだけ（未設定なら空＝送らない。従来どおり）
+
+    chosen = list(targeted)
+    seen = {s.endpoint for s in chosen}
+    chosen.extend(s for s in all_subs if s.endpoint not in seen)
+    return chosen
+
+
+# ── Chatwork ───────────────────────────────────────────────────────────────────
+
+async def _notify_chatwork(
+    db: AsyncSession, tenant_id: str, log: ReceptionLog, dest: Destinations, escalated_from: str
+) -> None:
+    """担当者ごとの Chatwork ルーム（+ 設定に従いテナント共通ルーム）へ投稿する。
+
+    API トークンはテナント共通のものを使い回し、担当者ごとに差し替えるのはルームだけ
+    （Slack と同じ考え方）。トークンが未設定なら何もしない。
+    """
+    config = await chatwork.load_config(db, tenant_id)
+    token = (config.get("api_token") or "").strip()
+    if not token:
+        return
+    rooms = staff_routing.chatwork_send_rooms(config, dest)
+    if not rooms:
+        return
+
+    text = chatwork.build_reception_message(
+        visitor_name=log.visitor_name,
+        company=log.company,
+        host_name=dest.routed_to or log.staff,
+        when=log.created_at,
+        department=log.department,
+        escalated_from=escalated_from or None,
+    )
+    for room_id, _label in rooms:
+        await chatwork.send_message(token, room_id, text)
+
+
+# ── Web Push ───────────────────────────────────────────────────────────────────
+
 async def _notify_push(
     db: AsyncSession, tenant_id: str, log: ReceptionLog, dest: Destinations, escalated_from: str
 ) -> None:
-    """テナントに登録された全端末へ Web Push。
+    """Web Push を送る。
 
-    プッシュは端末(購読)単位で担当者と結び付いていないため宛先の担当者別分割はできない。
-    通常の受付では「テナント共通の通知先へも送る」設定に従い、代理通知では**必ず**送る
-    （誰も応答していない状態なので、手元の端末へ届けるのが安全側）。
+    購読(`push_subscriptions`)はブラウザ＝**ログインした管理ユーザー**に紐づく。担当者は
+    `tenants.staff_list` のただの名前でアカウントを持たないため、担当者ごとのプッシュは
+    「この担当者あては誰の端末へ」という結びつけ(`push_user_id`)で実現する。
+
+      - 担当者にプッシュ先ユーザーが設定されている → そのユーザーの購読へ
+      - 加えて「共通の通知先へも送る」が ON なら、テナント内の全購読へ
+      - 代理通知は誰も応答していない状態なので、宛先が絞れないときは全購読へ送る
+        （手元の端末に届くほうが安全側）
+
+    同じ端末(endpoint)が二重に該当しても 1 回だけ送る。
     """
-    if not escalated_from and not dest.use_default:
-        return
-    private_key = await _vapid_private_key(db, tenant_id)
+    private_key = await vapid_private_key(db, tenant_id)
     if not private_key:
         return
 
-    subs_result = await db.execute(
-        select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
-    )
-    subs = subs_result.scalars().all()
+    subs = await push_targets(db, tenant_id, dest, escalated_from)
     if not subs:
         return
 

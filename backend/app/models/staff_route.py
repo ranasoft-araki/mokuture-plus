@@ -25,8 +25,16 @@ class StaffNotificationRoute(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     staff_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    # 暗号化 JSON: {slack_channel_id, slack_channel_name, email, webhook_url}
+    # 暗号化 JSON: {slack_channel_id, slack_channel_name, email, webhook_url, chatwork_room_id}
     config_json: Mapped[str] = mapped_column(Text, default="{}")
+    # 担当者ごとの Web Push 宛先。
+    # プッシュの購読(`push_subscriptions`)はブラウザ＝**ログインした管理ユーザー**に紐づく。
+    # 担当者は `tenants.staff_list` のただの名前でアカウントを持たないため、「この担当者
+    # あての通知を誰の端末へ出すか」をここで結びつける。未設定(NULL)なら従来どおり
+    # テナント共通の購読すべてへ送る(include_default に従う)。
+    push_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     # テナント共通の通知先(Slack/Webhook/プッシュ)へも送るか。既定 True＝従来の動きを維持。
     include_default: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # 代理通知先＝別の担当者名。応答が無いとき、その担当者の通知先へ1段だけ転送する(連鎖しない)。

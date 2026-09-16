@@ -21,14 +21,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.middleware.tenant import require_roles
+from app.models.notification import PushSubscription
 from app.models.reception import ReceptionLog
 from app.models.staff_route import StaffNotificationRoute
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.services import chatwork as chatwork_service
 from app.services import reception_notify, staff_routing
 from app.services import email as email_service
 from app.services.crypto import encrypt_dict
 from app.services.slack import SlackApiError, SlackNotifier
+from app.services.webpush import send_push
 from app.services.staff_routing import (
     DEFAULT_ESCALATE_SEC,
     MAX_ESCALATE_SEC,
@@ -47,13 +50,29 @@ _MAX_WEBHOOK_URL = 512
 class StaffRouteBody(BaseModel):
     staff_name: str
     slack_channel_id: str = ""
+    # Chatwork のルーム ID。API トークンはテナント共通のものを使い回し、担当者ごとに
+    # 差し替えるのはルームだけ(Slack と同じ考え方)。"" で解除。
+    chatwork_room_id: str = ""
     email: str = ""
+    # Web Push を届ける管理ユーザー。購読はユーザーのブラウザに紐づくため、担当者
+    # (ただの名前)とユーザーをここで結びつける。"" で解除＝共通の購読へ。
+    push_user_id: str = ""
     # Webhook URL は秘密情報としてレスポンスに出さない(CLAUDE.md「秘密情報の暗号化」)ので、
     # 画面は値を持たずに編集できる必要がある。None=変更しない / ""=解除 / URL=差し替え。
     webhook_url: str | None = None
     include_default: bool = True
     fallback_staff_name: str = ""
     escalate_after_sec: int = DEFAULT_ESCALATE_SEC
+
+    @field_validator("chatwork_room_id")
+    @classmethod
+    def chatwork_room_numeric(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            return ""
+        if not re.fullmatch(r"[0-9]{1,20}", v):
+            raise ValueError("Chatwork のルーム ID は数字で入力してください")
+        return v
 
     @field_validator("staff_name")
     @classmethod
@@ -121,6 +140,8 @@ def _route_out(route: StaffNotificationRoute, known_staff: set[str]) -> dict:
         "staff_name": route.staff_name,
         "slack_channel_id": config.get("slack_channel_id", ""),
         "slack_channel_name": config.get("slack_channel_name", ""),
+        "chatwork_room_id": config.get("chatwork_room_id", ""),
+        "push_user_id": getattr(route, "push_user_id", None) or "",
         "email": config.get("email", ""),
         # Webhook URL 自体は返さない（設定の有無だけ）。CLAUDE.md「秘密情報」方針。
         "webhook_configured": bool(config.get("webhook_url")),
@@ -155,6 +176,17 @@ async def list_staff_routes(
     routes = [_route_out(r, known) for r in result.scalars()]
 
     slack_config = await staff_routing.load_default_slack_config(db, user.tenant_id)
+    chatwork_config = await chatwork_service.load_config(db, user.tenant_id)
+    push_users = await _push_user_options(user.tenant_id, db)
+
+    # 退職などでユーザーが消えた後も id は行に残る（本番 DB は ALTER ADD COLUMN のため
+    # ON DELETE SET NULL が効かない）。そのまま返すと画面のプルダウンが空欄になり、
+    # 保存し直した瞬間に 422 になる。選べない id は「未指定」として見せる。
+    known_user_ids = {u["id"] for u in push_users}
+    for row in routes:
+        if row["push_user_id"] and row["push_user_id"] not in known_user_ids:
+            row["push_user_id"] = ""
+
     return {
         "staff_list": staff_list,
         "routes": routes,
@@ -163,11 +195,41 @@ async def list_staff_routes(
             "bot_connected": bool(slack_config.get("bot_access_token")),
             "default_channel_name": slack_config.get("channel_name", ""),
         },
+        "chatwork": {
+            # トークンはテナント共通。未設定なら担当者ごとのルーム指定は使えない。
+            "connected": bool(chatwork_config.get("api_token")),
+            "default_room_id": chatwork_config.get("room_id", ""),
+        },
+        # 担当者ごとの Web Push 先に選べる管理ユーザー。購読していない人も選べるが、
+        # 選んでも届かないので画面で注意を出せるよう has_push を返す。
+        "users": push_users,
         "smtp_enabled": settings.smtp_enabled,
         "default_escalate_sec": DEFAULT_ESCALATE_SEC,
         "min_escalate_sec": MIN_ESCALATE_SEC,
         "max_escalate_sec": MAX_ESCALATE_SEC,
     }
+
+
+async def _push_user_options(tenant_id: str, db: AsyncSession) -> list[dict]:
+    """プッシュ先に指定できるユーザー一覧（購読の有無つき）。"""
+    users = (await db.execute(
+        select(User).where(User.tenant_id == tenant_id).order_by(User.name, User.email)
+    )).scalars().all()
+    subscribed = set((await db.execute(
+        select(PushSubscription.user_id).where(PushSubscription.tenant_id == tenant_id)
+    )).scalars().all())
+    return [
+        {
+            "id": u.id,
+            "name": (u.name or "").strip() or u.email,
+            "email": u.email,
+            "role": u.role,
+            "has_push": u.id in subscribed,
+        }
+        for u in users
+        # キオスク端末用アカウントは人ではないのでプッシュ先に出さない。
+        if u.role != "kiosk"
+    ]
 
 
 @router.put("")
@@ -205,6 +267,26 @@ async def upsert_staff_route(
         except SlackApiError:
             channel_name = channel_id
 
+    # Chatwork はテナント共通のトークンを使い回す。未連携のままルームだけ指定しても
+    # 届かないので、保存の時点で気付けるようにする（Slack と同じ扱い）。
+    chatwork_room = (body.chatwork_room_id or "").strip()
+    if chatwork_room:
+        chatwork_config = await chatwork_service.load_config(db, user.tenant_id)
+        if not chatwork_config.get("api_token"):
+            raise HTTPException(
+                status_code=400,
+                detail="Chatworkが未連携です。先に「通知設定」のChatworkでAPIトークンを登録してください。",
+            )
+
+    # プッシュ先ユーザーは自テナントの実在ユーザーだけ（テナント越境を防ぐ）。
+    push_user_id = (body.push_user_id or "").strip()
+    if push_user_id:
+        target_user = (await db.execute(
+            select(User).where(User.id == push_user_id, User.tenant_id == user.tenant_id)
+        )).scalar_one_or_none()
+        if target_user is None:
+            raise HTTPException(status_code=422, detail="プッシュ通知先のユーザーが見つかりません")
+
     def apply(target: StaffNotificationRoute) -> None:
         """body の内容を行へ反映する。webhook_url 未指定はその行の現在値を維持する。"""
         current = route_config(target)
@@ -212,9 +294,11 @@ async def upsert_staff_route(
         target.config_json = encrypt_dict({
             "slack_channel_id": channel_id,
             "slack_channel_name": channel_name,
+            "chatwork_room_id": chatwork_room,
             "email": ",".join(emails),
             "webhook_url": webhook,
         })
+        target.push_user_id = push_user_id or None
         target.include_default = body.include_default
         target.fallback_staff_name = body.fallback_staff_name or None
         target.escalate_after_sec = body.escalate_after_sec
@@ -244,6 +328,154 @@ async def upsert_staff_route(
 
     tenant = await _get_tenant(user, db)
     return {"ok": True, "route": _route_out(route, set(_staff_list(tenant)))}
+
+
+# ── 担当者マスター ─────────────────────────────────────────────────────────────
+# 担当者リストの実体は `tenants.staff_list`（カンマ区切り）で、キオスクの訪問先
+# ドロップダウン・受付ログの突き合わせ・ここの通知先設定が同じ文字列を共有する。
+# 編集の場は「通知設定」に集約し、「受付設定」側は読み取り専用にした（issue #1）。
+
+class StaffListBody(BaseModel):
+    """担当者リストを丸ごと置き換える（追加・削除・並べ替えを 1 回で反映する）。"""
+
+    names: list[str]
+
+    @field_validator("names")
+    @classmethod
+    def names_valid(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for raw in v:
+            name = (raw or "").strip()
+            if not name:
+                continue
+            if len(name) > _MAX_STAFF_NAME:
+                raise ValueError("担当者名が長すぎます")
+            # 保存形式がカンマ区切りなので、名前にカンマが入ると壊れる。
+            if "," in name:
+                raise ValueError("担当者名にカンマは使えません")
+            if name in out:
+                raise ValueError(f"担当者名が重複しています: {name}")
+            out.append(name)
+        if len(out) > 200:
+            raise ValueError("担当者は最大200名までです")
+        return out
+
+
+class StaffRenameBody(BaseModel):
+    from_name: str
+    to_name: str
+
+    @field_validator("from_name", "to_name")
+    @classmethod
+    def name_valid(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("担当者名は必須です")
+        if len(v) > _MAX_STAFF_NAME:
+            raise ValueError("担当者名が長すぎます")
+        if "," in v:
+            raise ValueError("担当者名にカンマは使えません")
+        return v
+
+
+@router.put("/staff")
+async def replace_staff_list(
+    body: StaffListBody,
+    user: User = Depends(require_roles("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """担当者リストを置き換える（追加・削除・並べ替え）。
+
+    リストから消えた担当者は、その担当者あての通知先設定も一緒に片付ける。残しておくと
+    キオスクでは選べないのに設定だけ残り、代理通知先として参照され続けてしまう。
+    """
+    tenant = await _get_tenant(user, db)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="テナントが見つかりません")
+
+    before = set(_staff_list(tenant))
+    after = body.names
+    removed = before - set(after)
+
+    tenant.staff_list = ",".join(after) or None
+
+    if removed:
+        routes = (await db.execute(
+            select(StaffNotificationRoute).where(
+                StaffNotificationRoute.tenant_id == user.tenant_id
+            )
+        )).scalars().all()
+        for route in routes:
+            if route.staff_name in removed:
+                await db.delete(route)
+            elif (route.fallback_staff_name or "") in removed:
+                # 代理通知先が居なくなった＝転送先を失う。黙って転送が止まるより、
+                # 設定を外して画面上で「未設定」と分かるようにする。
+                route.fallback_staff_name = None
+                route.updated_at = utcnow_naive()
+
+    await db.commit()
+    return {"ok": True, "staff_list": after, "removed": sorted(removed)}
+
+
+@router.post("/staff/rename")
+async def rename_staff(
+    body: StaffRenameBody,
+    user: User = Depends(require_roles("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """担当者名を変更し、通知先設定と代理通知先の参照も追随させる。
+
+    過去の受付ログ（`reception_logs.staff`）は当時の記録なので書き換えない。ただし
+    **まだ応答されていない受付だけ**は新しい名前に追随させる。そうしないと、その受付の
+    代理通知が旧名で設定を探して見つけられず、安全網が黙って外れる。
+    """
+    tenant = await _get_tenant(user, db)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="テナントが見つかりません")
+
+    names = _staff_list(tenant)
+    if body.from_name not in names:
+        raise HTTPException(status_code=404, detail="担当者が見つかりません")
+    if body.to_name != body.from_name and body.to_name in names:
+        raise HTTPException(status_code=409, detail="同じ名前の担当者がすでに居ます")
+    if body.to_name == body.from_name:
+        return {"ok": True, "staff_list": names}
+
+    tenant.staff_list = ",".join(body.to_name if n == body.from_name else n for n in names)
+
+    routes = (await db.execute(
+        select(StaffNotificationRoute).where(StaffNotificationRoute.tenant_id == user.tenant_id)
+    )).scalars().all()
+    for route in routes:
+        touched = False
+        if route.staff_name == body.from_name:
+            route.staff_name = body.to_name
+            touched = True
+        if (route.fallback_staff_name or "") == body.from_name:
+            route.fallback_staff_name = body.to_name
+            touched = True
+        if touched:
+            route.updated_at = utcnow_naive()
+
+    pending = (await db.execute(
+        select(ReceptionLog).where(
+            ReceptionLog.tenant_id == user.tenant_id,
+            ReceptionLog.staff == body.from_name,
+            ReceptionLog.state == "received",
+        )
+    )).scalars().all()
+    for log in pending:
+        log.staff = body.to_name
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        # 同名の行が既にある（(tenant_id, staff_name) の一意制約）。
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="同じ名前の設定がすでにあります")
+
+    return {"ok": True, "staff_list": _staff_list(tenant), "pending_updated": len(pending)}
 
 
 @router.delete("/{route_id}", status_code=200)
@@ -314,6 +546,61 @@ async def test_staff_route(
     for config, label in staff_routing.slack_send_configs(slack_config, dest):
         ok = await SlackNotifier.send_to_config(config, text)
         results.append({"channel": "slack", "target": label, "ok": bool(ok)})
+
+    chatwork_config = await chatwork_service.load_config(db, user.tenant_id)
+    chatwork_rooms = staff_routing.chatwork_send_rooms(chatwork_config, dest)
+    if chatwork_rooms:
+        token = (chatwork_config.get("api_token") or "").strip()
+        cw_text = chatwork_service.build_reception_message(
+            visitor_name=sample.visitor_name,
+            company=sample.company,
+            host_name=sample.staff,
+            when=sample.created_at,
+            escalated_from=escalated_from or None,
+        ) + "\n（これはテスト送信です）"
+        for room_id, label in chatwork_rooms:
+            if not token:
+                results.append({
+                    "channel": "chatwork", "target": label, "ok": False,
+                    "error": "ChatworkのAPIトークンが未設定です",
+                })
+                continue
+            ok = await chatwork_service.send_message(token, room_id, cw_text)
+            results.append({"channel": "chatwork", "target": label, "ok": bool(ok)})
+
+    # Web Push は実運用と同じ絞り込み（担当者→ユーザー→その人の端末）で送る。
+    push_subs = await reception_notify.push_targets(db, user.tenant_id, dest, escalated_from)
+    if dest.push_user_ids or push_subs:
+        private_key = await reception_notify.vapid_private_key(db, user.tenant_id)
+        if not private_key:
+            results.append({
+                "channel": "push", "target": "プッシュ通知", "ok": False,
+                "error": "プッシュ通知が未設定です（通知設定で有効化してください）",
+            })
+        elif not push_subs:
+            results.append({
+                "channel": "push", "target": "プッシュ通知", "ok": False,
+                "error": "届け先の端末がありません（対象ユーザーがまだプッシュを許可していません）",
+            })
+        else:
+            sent = 0
+            for sub in push_subs:
+                try:
+                    await send_push(
+                        endpoint=sub.endpoint, p256dh=sub.p256dh, auth=sub.auth_key,
+                        title="通知テスト",
+                        body=f"「{body.staff_name}」宛の通知テストです。",
+                        url=f"/{user.tenant_id}/admin/reception",
+                        private_key=private_key, subject=settings.vapid_subject,
+                        tag="staff-route-test",
+                    )
+                    sent += 1
+                except Exception:
+                    pass
+            results.append({
+                "channel": "push", "target": f"{len(push_subs)}台", "ok": sent > 0,
+                **({} if sent else {"error": "送信できませんでした"}),
+            })
 
     for url in dest.webhooks:
         payload = reception_notify.build_webhook_payload(user.tenant_id, sample, escalated_from)

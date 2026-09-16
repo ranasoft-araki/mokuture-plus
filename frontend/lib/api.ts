@@ -530,6 +530,15 @@ export const api = {
   deleteStaffRoute: (token: string, routeId: string) =>
     request<{ ok: boolean }>(
       `/notifications/staff-routes/${encodeURIComponent(routeId)}`, { method: "DELETE" }, token),
+  /** 担当者リストを丸ごと置き換える（追加・削除・並べ替え）。編集の場は「通知設定」。 */
+  replaceStaffList: (token: string, names: string[]) =>
+    request<{ ok: boolean; staff_list: string[]; removed: string[] }>(
+      "/notifications/staff-routes/staff", { method: "PUT", body: JSON.stringify({ names }) }, token),
+  /** 担当者名の変更。通知先設定・代理通知先・未応答の受付も追随する。 */
+  renameStaff: (token: string, from_name: string, to_name: string) =>
+    request<{ ok: boolean; staff_list: string[]; pending_updated?: number }>(
+      "/notifications/staff-routes/staff/rename",
+      { method: "POST", body: JSON.stringify({ from_name, to_name }) }, token),
   testStaffRoute: (token: string, staff_name: string, stage: "primary" | "fallback") =>
     request<StaffRouteTestResult>(
       "/notifications/staff-routes/test",
@@ -835,6 +844,10 @@ export interface StaffNotificationRoute {
   staff_name: string;
   slack_channel_id: string;
   slack_channel_name: string;
+  /** Chatwork のルーム ID。API トークンはテナント共通のものを使い回す。 */
+  chatwork_room_id: string;
+  /** Web Push を届ける管理ユーザーの id（""=共通の購読へ）。購読はユーザーのブラウザに紐づく。 */
+  push_user_id: string;
   email: string;
   /** Webhook URL が設定済みか。URL 自体は秘密情報なのでサーバから返さない。 */
   webhook_configured: boolean;
@@ -849,10 +862,22 @@ export interface StaffNotificationRoute {
   updated_at: string | null;
 }
 
+/** 担当者ごとのプッシュ先に指定できる管理ユーザー。 */
+export interface StaffPushUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  /** この人がブラウザでプッシュを許可済みか。false だと指定しても届かない。 */
+  has_push: boolean;
+}
+
 export interface StaffNotificationRoutesResponse {
   staff_list: string[];
   routes: StaffNotificationRoute[];
   slack: { bot_connected: boolean; default_channel_name: string };
+  chatwork: { connected: boolean; default_room_id: string };
+  users: StaffPushUser[];
   smtp_enabled: boolean;
   default_escalate_sec: number;
   min_escalate_sec: number;
@@ -867,6 +892,8 @@ export interface StaffRouteTestResult {
 export interface StaffRouteInput {
   staff_name: string;
   slack_channel_id?: string;
+  chatwork_room_id?: string;
+  push_user_id?: string;
   email?: string;
   /** null/未指定=変更しない（既存を維持）、""=解除、URL=差し替え。 */
   webhook_url?: string | null;

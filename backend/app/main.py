@@ -50,6 +50,12 @@ _ENSURE_COLUMNS = {
         # 代理通知(応答が無いときのエスカレーション)を送った時刻。二重送信の防止も兼ねる。
         "escalated_at": "TIMESTAMP",
     },
+    "staff_notification_routes": {
+        # 担当者ごとの Web Push 宛先(管理ユーザー)。購読は端末ではなくユーザーに紐づくため、
+        # 「この担当者あての通知を誰の端末へ出すか」をここで結びつける。
+        # 既存行は NULL = 従来どおりテナント共通の購読すべてへ送る。
+        "push_user_id": "VARCHAR(36)",
+    },
     "devices": {
         # 承認フロー。既存端末は 'active' で埋めて後方互換を保つ。
         "status": "VARCHAR(16) DEFAULT 'active'",
