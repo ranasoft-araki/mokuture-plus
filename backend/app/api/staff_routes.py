@@ -1,8 +1,12 @@
 """担当者ごとの通知先と代理通知の設定 API（管理画面「通知設定」の「担当者ごとの通知先」）。
 
 `tenants.staff_list`（キオスクの訪問先ドロップダウン）の各担当者に、Slack チャンネル /
-メール / Webhook を割り当てる。応答が無いときに転送する代理担当者と待機秒数もここで決める。
+Chatwork ルーム / メール / Webhook / Web Push の宛先ユーザーを割り当てる。応答が無いときに
+転送する代理担当者と待機秒数もここで決める。
 行が無い担当者は従来どおりテナント共通の通知先だけに通知される（後方互換）。
+
+担当者リスト自体の編集（追加・改名・削除・並べ替え）もここが持つ。以前は「受付設定」でしか
+編集できず、宛先を決める画面と担当者を足す画面が別だった。
 
 送信そのものは `services/reception_notify.py`、宛先の解決は `services/staff_routing.py`。
 """
@@ -14,7 +18,7 @@ from datetime import datetime, timezone
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,7 +30,9 @@ from app.models.reception import ReceptionLog
 from app.models.staff_route import StaffNotificationRoute
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.models.visitor_appointment import VisitorAppointment
 from app.services import chatwork as chatwork_service
+from app.services.escalation import PENDING_STATES
 from app.services import reception_notify, staff_routing
 from app.services import email as email_service
 from app.services.crypto import encrypt_dict
@@ -176,7 +182,7 @@ async def list_staff_routes(
     routes = [_route_out(r, known) for r in result.scalars()]
 
     slack_config = await staff_routing.load_default_slack_config(db, user.tenant_id)
-    chatwork_config = await chatwork_service.load_config(db, user.tenant_id)
+    chatwork_token = await chatwork_service.load_api_token(db, user.tenant_id)
     push_users = await _push_user_options(user.tenant_id, db)
 
     # 退職などでユーザーが消えた後も id は行に残る（本番 DB は ALTER ADD COLUMN のため
@@ -197,8 +203,8 @@ async def list_staff_routes(
         },
         "chatwork": {
             # トークンはテナント共通。未設定なら担当者ごとのルーム指定は使えない。
-            "connected": bool(chatwork_config.get("api_token")),
-            "default_room_id": chatwork_config.get("room_id", ""),
+            # 共通ルームは「配達の呼び出し」専用で、受付通知は担当者ごとのルームだけへ送る。
+            "connected": bool(chatwork_token),
         },
         # 担当者ごとの Web Push 先に選べる管理ユーザー。購読していない人も選べるが、
         # 選んでも届かないので画面で注意を出せるよう has_push を返す。
@@ -271,8 +277,7 @@ async def upsert_staff_route(
     # 届かないので、保存の時点で気付けるようにする（Slack と同じ扱い）。
     chatwork_room = (body.chatwork_room_id or "").strip()
     if chatwork_room:
-        chatwork_config = await chatwork_service.load_config(db, user.tenant_id)
-        if not chatwork_config.get("api_token"):
+        if not await chatwork_service.load_api_token(db, user.tenant_id):
             raise HTTPException(
                 status_code=400,
                 detail="Chatworkが未連携です。先に「通知設定」のChatworkでAPIトークンを登録してください。",
@@ -437,10 +442,16 @@ async def rename_staff(
     names = _staff_list(tenant)
     if body.from_name not in names:
         raise HTTPException(status_code=404, detail="担当者が見つかりません")
-    if body.to_name != body.from_name and body.to_name in names:
-        raise HTTPException(status_code=409, detail="同じ名前の担当者がすでに居ます")
     if body.to_name == body.from_name:
         return {"ok": True, "staff_list": names}
+    if body.to_name in names:
+        raise HTTPException(status_code=409, detail="同じ名前の担当者がすでに居ます")
+    # 担当者リストだけでなく**設定行**も見る。リストから消えても設定だけ残っている
+    # 担当者(orphan)と同じ名前へ改名すると (tenant_id, staff_name) が重複し、以後
+    # `get_route()` の scalar_one_or_none() が MultipleResultsFound を投げて、
+    # その担当者宛の通知が全経路サイレントに止まる。
+    if await staff_routing.get_route(db, user.tenant_id, body.to_name) is not None:
+        raise HTTPException(status_code=409, detail="同じ名前の通知先設定がすでにあります")
 
     tenant.staff_list = ",".join(body.to_name if n == body.from_name else n for n in names)
 
@@ -458,15 +469,30 @@ async def rename_staff(
         if touched:
             route.updated_at = utcnow_naive()
 
+    # まだ応答されていない受付。状態の集合と突き合わせ方(trim)は代理通知のスイープ
+    # (`services/escalation.py`)と必ず揃える。片方だけズレると、改名した担当者の
+    # 未応答受付だけ代理通知が静かに落ちる。
     pending = (await db.execute(
         select(ReceptionLog).where(
             ReceptionLog.tenant_id == user.tenant_id,
-            ReceptionLog.staff == body.from_name,
-            ReceptionLog.state == "received",
+            func.trim(ReceptionLog.staff) == body.from_name,
+            ReceptionLog.state.in_(PENDING_STATES),
         )
     )).scalars().all()
     for log in pending:
         log.staff = body.to_name
+
+    # これから受け付ける来社予定も追随させる。予約の `staff` はキオスク受付時に
+    # そのまま `reception_logs.staff` になるので、ここを旧名のまま残すと
+    # 「登録済みの予約だけ担当者ごとの宛先も代理通知も効かない」状態になる。
+    upcoming = (await db.execute(
+        select(VisitorAppointment).where(
+            VisitorAppointment.tenant_id == user.tenant_id,
+            func.trim(VisitorAppointment.staff) == body.from_name,
+        )
+    )).scalars().all()
+    for appt in upcoming:
+        appt.staff = body.to_name
 
     try:
         await db.commit()
@@ -475,7 +501,12 @@ async def rename_staff(
         await db.rollback()
         raise HTTPException(status_code=409, detail="同じ名前の設定がすでにあります")
 
-    return {"ok": True, "staff_list": _staff_list(tenant), "pending_updated": len(pending)}
+    return {
+        "ok": True,
+        "staff_list": _staff_list(tenant),
+        "pending_updated": len(pending),
+        "appointments_updated": len(upcoming),
+    }
 
 
 @router.delete("/{route_id}", status_code=200)
@@ -547,10 +578,9 @@ async def test_staff_route(
         ok = await SlackNotifier.send_to_config(config, text)
         results.append({"channel": "slack", "target": label, "ok": bool(ok)})
 
-    chatwork_config = await chatwork_service.load_config(db, user.tenant_id)
-    chatwork_rooms = staff_routing.chatwork_send_rooms(chatwork_config, dest)
+    chatwork_rooms = staff_routing.chatwork_send_rooms(dest)
     if chatwork_rooms:
-        token = (chatwork_config.get("api_token") or "").strip()
+        token = await chatwork_service.load_api_token(db, user.tenant_id)
         cw_text = chatwork_service.build_reception_message(
             visitor_name=sample.visitor_name,
             company=sample.company,

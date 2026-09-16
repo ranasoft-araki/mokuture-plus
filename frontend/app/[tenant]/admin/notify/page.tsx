@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
-import { api, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffRouteTestResult } from "@/lib/api";
+import { api, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffPushUser, type StaffRouteTestResult } from "@/lib/api";
 import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, type PushStatus } from "@/lib/push";
 import { getAccessToken } from "@/lib/auth";
 
@@ -420,7 +420,10 @@ function draftFrom(route: StaffNotificationRoute | undefined, defaultSec: number
   };
 }
 
-function routeSummary(route: StaffNotificationRoute | undefined): string {
+function routeSummary(
+  route: StaffNotificationRoute | undefined,
+  users: StaffPushUser[] = [],
+): string {
   if (!route) return "未設定（全体の通知先のみ）";
   const parts: string[] = [];
   if (route.slack_channel_name || route.slack_channel_id) {
@@ -429,6 +432,10 @@ function routeSummary(route: StaffNotificationRoute | undefined): string {
   if (route.chatwork_room_id) parts.push(`Chatwork ルーム${route.chatwork_room_id}`);
   if (route.email) parts.push(`メール ${route.email}`);
   if (route.webhook_configured) parts.push("Webhook");
+  if (route.push_user_id) {
+    const u = users.find((x) => x.id === route.push_user_id);
+    parts.push(`プッシュ ${u ? u.name : "指定ユーザー"}`);
+  }
   if (parts.length === 0) parts.push("個別の宛先なし");
   if (route.include_default) parts.push("全体にも送る");
   return parts.join(" ・ ");
@@ -582,15 +589,17 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
   // 解除は取り消せないので2段階にする（Slack連携解除と同じ方式。JSダイアログは使わない）。
   const [confirmClear, setConfirmClear] = useState<string | null>(null);
 
-  const reload = useCallback(async () => {
+  // quiet=true は「読み込み中…」に落とさずデータだけ差し替える。担当者の追加・
+  // 並べ替えのたびにパネル全体がアンマウントされ、開いていた編集欄が閉じるのを防ぐ。
+  const reload = useCallback(async (quiet = false) => {
     if (!authToken) return;
-    setLoading(true);
+    if (!quiet) setLoading(true);
     try {
       setData(await api.getStaffRoutes(authToken));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "設定の読み込みに失敗しました");
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, [authToken]);
 
@@ -680,7 +689,7 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
       <StaffMasterEditor
         authToken={authToken}
         names={data.staff_list}
-        onChanged={reload}
+        onChanged={() => reload(true)}
         onError={setError}
       />
 
@@ -714,7 +723,7 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
                     {staff}
                     {route?.orphan && <MkPill tone="warn" dot={false}>受付設定に無い担当者</MkPill>}
                   </div>
-                  <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3, wordBreak: "break-all" }}>{routeSummary(route)}</div>
+                  <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3, wordBreak: "break-all" }}>{routeSummary(route, data.users)}</div>
                   {route?.fallback_staff_name && route.escalate_after_sec > 0 && (
                     <div style={{ fontSize: 11.5, color: "#6b6559", marginTop: 3 }}>
                       応答が無ければ {formatEscalate(route.escalate_after_sec)}後に「{route.fallback_staff_name}」へ代理通知
@@ -750,7 +759,7 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
                       label="Chatworkルーム"
                       hint={
                         data.chatwork.connected
-                          ? "この担当者宛の受付をこのルームへ送ります（ルームIDは数字）"
+                          ? "この担当者宛の受付をこのルームへ送ります（ルームIDは数字）。受付通知がChatworkへ届くのは、ここにルームを設定した担当者だけです"
                           : "上の「Chatwork」でAPIトークンを登録すると使えます"
                       }
                     >
@@ -763,7 +772,7 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
                     </Field>
                     <Field
                       label="プッシュ通知の宛先"
-                      hint="プッシュはブラウザ（ログインした人）に届きます。この担当者あてを誰の端末に出すか選んでください"
+                      hint="プッシュはブラウザ（ログインした人）に届きます。指定すると、この担当者あてはその人の端末だけに送ります（下の「全体の通知先にも送る」に関わらず）"
                     >
                       <select
                         value={draft.push_user_id}

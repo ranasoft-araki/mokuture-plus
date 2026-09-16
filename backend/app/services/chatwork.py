@@ -30,32 +30,50 @@ API_BASE = "https://api.chatwork.com/v2"
 _TIMEOUT = 10.0
 
 
+async def _read_setting(db: AsyncSession, tenant_id: str, type_: str) -> dict | None:
+    """1 種類ぶんの設定を復号して返す。行が無い/壊れているなら None。"""
+    result = await db.execute(
+        select(NotificationSetting).where(
+            NotificationSetting.tenant_id == tenant_id,
+            NotificationSetting.type == type_,
+        )
+    )
+    setting = result.scalar_one_or_none()
+    if setting is None:
+        return None
+    try:
+        return decrypt_dict(setting.config_json)
+    except Exception:
+        logger.warning("chatwork config decrypt failed (tenant=%s, type=%s)", tenant_id, type_)
+        return None
+
+
 async def load_config(
     db: AsyncSession, tenant_id: str, types: tuple[str, ...] = ("chatwork",)
 ) -> dict:
-    """テナントの Chatwork 設定を復号して返す。`types` の順に最初に見つかったもの。
+    """配達の呼び出し用: `types` の順で**最初に見つかった行**を返す。
 
-    配達の呼び出しは ("chatwork_delivery", "chatwork") の順で引く（配達専用ルームが
-    あればそちら、無ければ共通ルーム）。受付通知は ("chatwork",) だけを見る。
+    「行はあるがルーム未設定なら、次の候補へ流さずそこで終わる」という従来の挙動
+    (`api/kiosk.py` の `_first_configured_setting`)をそのまま保つ。ここを「不完全な行は
+    飛ばす」に変えると、配達専用ルームを空にしているテナントの配達通知が受付用ルームへ
+    流れ出してしまう。
     """
     for type_ in types:
-        result = await db.execute(
-            select(NotificationSetting).where(
-                NotificationSetting.tenant_id == tenant_id,
-                NotificationSetting.type == type_,
-            )
-        )
-        setting = result.scalar_one_or_none()
-        if setting is None:
-            continue
-        try:
-            config = decrypt_dict(setting.config_json)
-        except Exception:
-            logger.warning("chatwork config decrypt failed (tenant=%s, type=%s)", tenant_id, type_)
-            continue
-        if (config.get("api_token") or "").strip() and (config.get("room_id") or "").strip():
+        config = await _read_setting(db, tenant_id, type_)
+        if config is not None:
             return config
     return {}
+
+
+async def load_api_token(db: AsyncSession, tenant_id: str) -> str:
+    """テナント共通の API トークン。担当者ごとのルームへ投稿するのに使う。
+
+    **ルーム ID とは切り離して取る。** 共通ルームが空でも、担当者ごとのルームが
+    設定されていれば送れなければならない（両方揃った行だけを返すと、トークンだけ
+    登録したテナントで担当者ルームへ1通も届かなくなる）。
+    """
+    config = await _read_setting(db, tenant_id, "chatwork")
+    return (config or {}).get("api_token", "").strip()
 
 
 async def send_message(api_token: str, room_id: str, text: str) -> bool:
@@ -81,6 +99,17 @@ async def send_message(api_token: str, room_id: str, text: str) -> bool:
         return False
 
 
+def escape_tags(value: str | None) -> str:
+    """Chatwork 記法のタグ文字を無効化する。
+
+    本文は来訪者がキオスクで入力した氏名・会社名をそのまま含む。`[/info]` や
+    `[To:12345]` のような文字列を入れられると、カードを途中で閉じたり他人へ
+    メンションを飛ばしたりできてしまう。角括弧を全角に寄せて無害化する
+    （Chatwork にはエスケープ記法が無いため）。
+    """
+    return (value or "").replace("[", "［").replace("]", "］")
+
+
 def build_reception_message(
     visitor_name: str,
     company: str | None = None,
@@ -97,16 +126,18 @@ def build_reception_message(
     head = "受付に応答がありません（代理通知）" if escalated_from else "来客がありました"
     lines: list[str] = []
     if (company or "").strip():
-        lines.append(f"会社名：{company.strip()}")
-    lines.append(f"お名前：{with_honorific(visitor_name)}")
+        lines.append(f"会社名：{escape_tags(company.strip())}")
+    lines.append(f"お名前：{escape_tags(with_honorific(visitor_name))}")
     if (department or "").strip():
-        lines.append(f"訪問先部署：{department.strip()}")
+        lines.append(f"訪問先部署：{escape_tags(department.strip())}")
     if (host_name or "").strip():
-        lines.append(f"訪問先：{host_name.strip()}")
+        lines.append(f"訪問先：{escape_tags(host_name.strip())}")
     lines.append(f"時刻：{format_jst(when)}")
     lines.append("")
     if escalated_from:
-        lines.append(f"「{escalated_from}」宛の受付に応答がありません。代わりに対応をお願いします。")
+        lines.append(
+            f"「{escape_tags(escalated_from)}」宛の受付に応答がありません。代わりに対応をお願いします。"
+        )
     else:
         lines.append("対応をお願いします。")
     body = "\n".join(lines)

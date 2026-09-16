@@ -156,31 +156,32 @@ async def push_targets(
 ) -> list[PushSubscription]:
     """この通知で実際にプッシュする購読を選ぶ。
 
-    担当者ごとの宛先が決まっているときはそのユーザーの端末だけに絞る。絞った結果が
-    0 件（＝その人がまだプッシュを許可していない）のときは、黙って誰にも届かない
-    ほうが危険なので全購読へ落とす。
+    **担当者にプッシュ先ユーザーが設定されていれば、その人の端末だけに送る。**
+    `include_default`(共通の通知先へも送る) が ON でも全員には広げない。Slack や
+    Chatwork は「担当者のチャンネル＋共通チャンネル」と足し算に意味があるが、
+    プッシュの「共通」はテナント内の全購読＝絞り込みの上位集合なので、足すと
+    担当者ごとの指定が必ず無意味になる（既定が ON なので、そのままでは機能が死ぬ）。
+
+    絞った結果が 0 件（指定した人がまだプッシュを許可していない／退職して購読ごと
+    消えた）のときは、黙って誰にも届かないほうが危険なので `include_default` に
+    従って全購読へ落とす。代理通知は誰も応答していない状態なので、絞れなければ
+    `include_default` に関わらず全購読へ送る。
     """
     stmt = select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
     all_subs = list((await db.execute(stmt)).scalars().all())
     if not all_subs:
         return []
 
-    targeted: list[PushSubscription] = []
     if dest.push_user_ids:
         wanted = set(dest.push_user_ids)
         targeted = [s for s in all_subs if s.user_id and s.user_id in wanted]
+        if targeted:
+            return targeted
 
-    # 全購読へも送るか:
-    #   - 「共通の通知先へも送る」が ON
-    #   - 代理通知なのに宛先が絞れなかった（空振りさせない安全網）
-    send_all = bool(dest.use_default) or bool(escalated_from and not targeted)
-    if not send_all:
-        return targeted          # 絞り込みだけ（未設定なら空＝送らない。従来どおり）
-
-    chosen = list(targeted)
-    seen = {s.endpoint for s in chosen}
-    chosen.extend(s for s in all_subs if s.endpoint not in seen)
-    return chosen
+    # ここから先は「担当者ごとの指定が無い／効かなかった」場合。
+    if dest.use_default or escalated_from:
+        return all_subs
+    return []
 
 
 # ── Chatwork ───────────────────────────────────────────────────────────────────
@@ -188,23 +189,26 @@ async def push_targets(
 async def _notify_chatwork(
     db: AsyncSession, tenant_id: str, log: ReceptionLog, dest: Destinations, escalated_from: str
 ) -> None:
-    """担当者ごとの Chatwork ルーム（+ 設定に従いテナント共通ルーム）へ投稿する。
+    """担当者ごとに設定された Chatwork ルームへ投稿する。
 
     API トークンはテナント共通のものを使い回し、担当者ごとに差し替えるのはルームだけ
-    （Slack と同じ考え方）。トークンが未設定なら何もしない。
+    （Slack と同じ考え方）。**共通ルームへは送らない** — 理由は
+    `staff_routing.chatwork_send_rooms()` を参照。
     """
-    config = await chatwork.load_config(db, tenant_id)
-    token = (config.get("api_token") or "").strip()
-    if not token:
-        return
-    rooms = staff_routing.chatwork_send_rooms(config, dest)
+    rooms = staff_routing.chatwork_send_rooms(dest)
     if not rooms:
+        return
+    token = await chatwork.load_api_token(db, tenant_id)
+    if not token:
         return
 
     text = chatwork.build_reception_message(
         visitor_name=log.visitor_name,
         company=log.company,
-        host_name=dest.routed_to or log.staff,
+        # 訪問先は「来訪者が選んだ担当者」を出す。代理通知でも本文の末尾で
+        # 「『{元の担当者}』宛の受付に応答がありません」と続くので、ここを代理の人に
+        # すると 1 通の中で辻褄が合わなくなる（Slack 側も log.staff を使っている）。
+        host_name=log.staff,
         when=log.created_at,
         department=log.department,
         escalated_from=escalated_from or None,

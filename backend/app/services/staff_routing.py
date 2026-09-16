@@ -254,24 +254,23 @@ def slack_send_configs(default_config: dict, dest: Destinations) -> list[tuple[d
     return out
 
 
-def chatwork_send_rooms(default_config: dict, dest: Destinations) -> list[tuple[str, str]]:
+def chatwork_send_rooms(dest: Destinations) -> list[tuple[str, str]]:
     """投稿する Chatwork ルームの (room_id, 宛先ラベル) 一覧。
 
-    Slack と同じ考え方で、API トークンはテナント共通のものを使い回し、担当者ごとに
-    差し替えるのはルームだけ。共通ルームと同じ ID になる場合は重複投稿しない。
+    **担当者ごとに設定されたルームだけ**を返す。テナント共通の Chatwork ルームは
+    足さない。Slack と違い、受付通知が Chatwork へ流れる経路はこれまで存在せず
+    （共通ルームは「配達の呼び出し」専用だった）、共通ルームを既定の宛先にすると
+    **Chatwork を登録済みの全テナントで、何も設定していないのに受付ごとに鳴り始める**。
+    受付を Chatwork へ流したい担当者にルームを設定する、という明示的な opt-in にする。
+
+    API トークンだけはテナント共通のものを使い回す（担当者ごとに発行させない）。
     """
-    default_room = (default_config.get("room_id") or "").strip()
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
-
     for room_id in dest.chatwork_rooms:
         room_id = (room_id or "").strip()
         if not room_id or room_id in seen:
             continue
         seen.add(room_id)
         out.append((room_id, f"ルーム {room_id}"))
-
-    if dest.use_default and default_room and default_room not in seen:
-        seen.add(default_room)
-        out.append((default_room, "既定の通知先"))
     return out

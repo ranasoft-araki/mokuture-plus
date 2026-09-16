@@ -60,7 +60,7 @@ async def test_キオスク端末アカウントはプッシュ先候補に出�
 async def test_一覧にChatworkの連携状態が出る(client, tenant):
     await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": "111"})
     data = client.get(API).json()
-    assert data["chatwork"] == {"connected": True, "default_room_id": "111"}
+    assert data["chatwork"]["connected"] is True
 
 
 # ── 担当者マスター ─────────────────────────────────────────────────────────────
@@ -268,3 +268,112 @@ async def test_消えたユーザーのプッシュ先は未指定として返�
     row = client.get(API).json()["routes"][0]
 
     assert row["push_user_id"] == ""
+
+
+# ── 改名の追随（代理通知の安全網を外さないこと） ─────────────────────────────
+
+async def test_設定だけ残る担当者と同名への改名を拒む(client, tenant):
+    """リストから消えても設定行は残る(orphan)。同名へ改名すると
+    (tenant_id, staff_name) が重複し、以後 get_route() が MultipleResultsFound を
+    投げて、その担当者宛の通知が全経路サイレントに止まる。"""
+    await set_staff_list(tenant.id, ["田中太郎"])
+    await add_route(tenant.id, "田中太郎", config={"email": "a@example.test"})
+    await add_route(tenant.id, "佐藤花子", config={"email": "b@example.test"})  # orphan
+
+    r = client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "佐藤花子"})
+
+    assert r.status_code == 409
+    async with AsyncSessionLocal() as db:
+        assert await staff_routing.get_route(db, tenant.id, "佐藤花子") is not None  # 例外にならない
+    assert await staff_list_of(tenant.id) == ["田中太郎"]
+
+
+async def test_改名は来社予定にも追随する(client, tenant):
+    """予約の staff はキオスク受付時にそのまま受付ログの staff になる。旧名のまま
+    残すと、登録済みの予約だけ担当者ごとの宛先も代理通知も効かない。"""
+    from datetime import datetime, timedelta, timezone
+    from app.models.visitor_appointment import VisitorAppointment
+    import uuid as _uuid
+
+    await set_staff_list(tenant.id, ["田中太郎"])
+    async with AsyncSessionLocal() as db:
+        appt = VisitorAppointment(
+            id=str(_uuid.uuid4()), tenant_id=tenant.id,
+            visitor_name="来客 花子", staff="田中太郎",
+            scheduled_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=1),
+        )
+        db.add(appt)
+        await db.commit()
+
+    r = client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "田中 太郎"})
+
+    assert r.json()["appointments_updated"] == 1
+    async with AsyncSessionLocal() as db:
+        assert (await db.get(VisitorAppointment, appt.id)).staff == "田中 太郎"
+
+
+async def test_改名はnotified状態の受付にも追随する(client, tenant):
+    """追随する状態の集合は代理通知のスイープ(PENDING_STATES)と揃える。"""
+    from app.services.escalation import PENDING_STATES
+
+    assert "notified" in PENDING_STATES
+    await set_staff_list(tenant.id, ["田中太郎"])
+    notified = await add_reception(tenant.id, "田中太郎", state="notified")
+
+    client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "田中 太郎"})
+
+    async with AsyncSessionLocal() as db:
+        assert (await db.get(ReceptionLog, notified.id)).staff == "田中 太郎"
+
+
+async def test_改名は前後空白付きの受付も拾う(client, tenant):
+    """スイープ側が func.trim() で拾っている行を、改名だけ取りこぼさないこと。"""
+    await set_staff_list(tenant.id, ["田中太郎"])
+    padded = await add_reception(tenant.id, " 田中太郎 ", state="received")
+
+    client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "田中 太郎"})
+
+    async with AsyncSessionLocal() as db:
+        assert (await db.get(ReceptionLog, padded.id)).staff == "田中 太郎"
+
+
+# ── 他経路からの巻き戻し防止 ───────────────────────────────────────────────────
+
+async def test_受付設定のPATCHでは担当者リストを書き換えない(admin, tenant):
+    """デプロイ前に開かれていた古いタブが受付設定を保存しても、担当者リストを
+    その時点の内容で巻き戻さないこと。"""
+    from app.api.settings import router as settings_router
+    from app.middleware.tenant import get_current_user
+
+    await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
+    app = FastAPI()
+    app.include_router(settings_router, prefix="/api")
+    app.dependency_overrides[get_current_user] = lambda: admin
+
+    with TestClient(app) as c:
+        r = c.patch("/api/settings", json={"staff_list": "古い人", "purpose_list": "打ち合わせ"})
+
+    assert r.status_code == 200
+    assert await staff_list_of(tenant.id) == ["田中太郎", "佐藤花子"]
+    async with AsyncSessionLocal() as db:
+        assert (await db.get(Tenant, tenant.id)).purpose_list == "打ち合わせ"  # 他の項目は通る
+
+
+async def test_ユーザー削除でプッシュ宛先が外れる(admin, tenant):
+    """本番DBの push_user_id は ON DELETE SET NULL が効かない。残すと画面は
+    「指定しない」と出るのに、実際は宛先が解決できず届かない状態になる。"""
+    from app.api.users import router as users_router
+    from app.middleware.tenant import get_current_user
+
+    await set_staff_list(tenant.id, ["田中太郎"])
+    u = await add_user(tenant.id, "田中太郎")
+    await add_route(tenant.id, "田中太郎", push_user_id=u.id)
+
+    app = FastAPI()
+    app.include_router(users_router, prefix="/api")
+    app.dependency_overrides[get_current_user] = lambda: admin
+    with TestClient(app) as c:
+        assert c.delete(f"/api/users/{u.id}").status_code == 204
+
+    route = await route_of(tenant.id, "田中太郎")
+    assert route.push_user_id is None

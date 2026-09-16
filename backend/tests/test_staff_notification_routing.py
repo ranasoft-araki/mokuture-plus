@@ -70,7 +70,12 @@ async def test_担当者のルームへ送る(tenant, sent_chatwork, sent_push, 
     assert "テスト株式会社" in sent_chatwork[0][1]
 
 
-async def test_共通ルームにも送る設定なら両方へ(tenant, sent_chatwork, sent_push, no_slack):
+async def test_共通ルームには送らない(tenant, sent_chatwork, sent_push, no_slack):
+    """受付通知のChatworkは担当者ごとのルームだけ。
+
+    共通ルームを既定の宛先にすると、Chatworkを登録済みの全テナントで、何も設定して
+    いないのに受付ごとに鳴り始める（従来、受付→Chatworkの経路は存在しなかった）。
+    """
     await set_staff_list(tenant.id, ["田中太郎"])
     await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": "111"})
     await add_route(tenant.id, "田中太郎", config={"chatwork_room_id": "222"}, include_default=True)
@@ -78,29 +83,57 @@ async def test_共通ルームにも送る設定なら両方へ(tenant, sent_cha
     log = await add_reception(tenant.id, "田中太郎")
     await notify(tenant.id, log)
 
-    assert sorted(room for room, _ in sent_chatwork) == ["111", "222"]
+    assert [room for room, _ in sent_chatwork] == ["222"]
+
+
+async def test_ルート未設定なら何も送らない(tenant, sent_chatwork, sent_push, no_slack):
+    """設定を1件も作っていないテナントの挙動は従来どおり（Chatworkは鳴らない）。"""
+    await set_staff_list(tenant.id, ["田中太郎"])
+    await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": "111"})
+
+    log = await add_reception(tenant.id, "田中太郎")
+    await notify(tenant.id, log)
+
+    assert sent_chatwork == []
+
+
+async def test_共通ルームが空でも担当者ルームへ送る(tenant, sent_chatwork, sent_push, no_slack):
+    """トークンだけ登録し共通ルームは空、というテナントでも担当者ルームは機能する。"""
+    await set_staff_list(tenant.id, ["田中太郎"])
+    await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": ""})
+    await add_route(tenant.id, "田中太郎", config={"chatwork_room_id": "222"})
+
+    log = await add_reception(tenant.id, "田中太郎")
+    await notify(tenant.id, log)
+
+    assert [room for room, _ in sent_chatwork] == ["222"]
 
 
 async def test_同じルームなら二重投稿しない(tenant, sent_chatwork, sent_push, no_slack):
-    await set_staff_list(tenant.id, ["田中太郎"])
+    await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
     await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": "111"})
-    await add_route(tenant.id, "田中太郎", config={"chatwork_room_id": "111"}, include_default=True)
+    await add_route(tenant.id, "田中太郎", config={"chatwork_room_id": "222"})
 
     log = await add_reception(tenant.id, "田中太郎")
     await notify(tenant.id, log)
 
-    assert [room for room, _ in sent_chatwork] == ["111"]
+    assert [room for room, _ in sent_chatwork] == ["222"]
 
 
-async def test_ルート未設定なら共通ルームへ(tenant, sent_chatwork, sent_push, no_slack):
-    """設定を1件も作っていないテナントは従来どおりの挙動（後方互換）。"""
+async def test_来訪者の入力でChatwork記法を壊せない(tenant, sent_chatwork, sent_push, no_slack):
+    """氏名・会社名は来訪者がキオスクで打った文字列。タグを閉じたりメンションを
+    飛ばしたりできないこと。"""
     await set_staff_list(tenant.id, ["田中太郎"])
-    await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": "111"})
+    await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": ""})
+    await add_route(tenant.id, "田中太郎", config={"chatwork_room_id": "222"})
 
-    log = await add_reception(tenant.id, "田中太郎")
+    log = await add_reception(tenant.id, "田中太郎", visitor="[/info][To:99999]悪い人")
     await notify(tenant.id, log)
 
-    assert [room for room, _ in sent_chatwork] == ["111"]
+    body = sent_chatwork[0][1]
+    assert "[/info][To:99999]" not in body
+    assert body.count("[/info]") == 1, "カードが途中で閉じられている"
+    assert body.startswith("[info][title]")
 
 
 async def test_トークン未設定なら何も送らない(tenant, sent_chatwork, sent_push, no_slack):
@@ -144,7 +177,9 @@ async def test_担当者に紐づけたユーザーの端末だけに送る(tena
     assert sent_push == ["ep-tanaka"]
 
 
-async def test_共通にも送る設定なら全端末へ(tenant, sent_push, sent_chatwork, no_slack):
+async def test_共通にも送る設定でも指定した人だけに送る(tenant, sent_push, sent_chatwork, no_slack):
+    """include_default は既定 ON。ここで全購読を足すと、プッシュの「共通」は
+    絞り込みの上位集合なので担当者ごとの指定が必ず無意味になる（機能が死ぬ）。"""
     await set_staff_list(tenant.id, ["田中太郎"])
     tanaka = await add_user(tenant.id, "田中太郎")
     other = await add_user(tenant.id, "別の人")
@@ -155,8 +190,35 @@ async def test_共通にも送る設定なら全端末へ(tenant, sent_push, sen
     log = await add_reception(tenant.id, "田中太郎")
     await notify(tenant.id, log)
 
-    assert sorted(sent_push) == ["ep-other", "ep-tanaka"]
-    assert len(sent_push) == 2, "同じ端末へ二重に送っている"
+    assert sent_push == ["ep-tanaka"]
+
+
+async def test_指定した人が未購読なら共通の設定に従う(tenant, sent_push, sent_chatwork, no_slack):
+    """指定はしたがその人がまだプッシュを許可していない。黙って誰にも届かないより、
+    共通の設定に従って全端末へ出すほうが安全。"""
+    await set_staff_list(tenant.id, ["田中太郎"])
+    tanaka = await add_user(tenant.id, "田中太郎")     # 購読なし
+    other = await add_user(tenant.id, "別の人")
+    await add_push_subscription(tenant.id, other.id, "ep-other")
+    await add_route(tenant.id, "田中太郎", push_user_id=tanaka.id, include_default=True)
+
+    log = await add_reception(tenant.id, "田中太郎")
+    await notify(tenant.id, log)
+
+    assert sent_push == ["ep-other"]
+
+
+async def test_指定した人が未購読で共通OFFなら送らない(tenant, sent_push, sent_chatwork, no_slack):
+    await set_staff_list(tenant.id, ["田中太郎"])
+    tanaka = await add_user(tenant.id, "田中太郎")
+    other = await add_user(tenant.id, "別の人")
+    await add_push_subscription(tenant.id, other.id, "ep-other")
+    await add_route(tenant.id, "田中太郎", push_user_id=tanaka.id, include_default=False)
+
+    log = await add_reception(tenant.id, "田中太郎")
+    await notify(tenant.id, log)
+
+    assert sent_push == []
 
 
 async def test_ルート未設定なら従来どおり全端末へ(tenant, sent_push, sent_chatwork, no_slack):
@@ -259,3 +321,46 @@ async def test_ルームだけでも個別宛先とみなす(tenant):
     async with AsyncSessionLocal() as db:
         dest = await staff_routing.resolve_primary(db, tenant.id, "田中太郎")
     assert dest.has_direct is True
+
+
+# ── 改名したあとも代理通知が届くか（この機能の存在理由そのもの） ───────────────
+
+async def test_改名後もスイープが代理通知を出す(tenant, sent_chatwork, sent_push, no_slack, monkeypatch):
+    """改名が未応答の受付まで追随する理由は、このスイープが staff 名で設定を引くから。
+
+    中間状態(ログのstaffが書き換わった)だけを見るのではなく、実際にスイープを回して
+    代理通知が出るところまで通す。
+    """
+    from datetime import timedelta
+
+    from app.services import escalation
+    from app.services.timeutil import utcnow_naive
+    from app.models.reception import ReceptionLog
+    from app.api.staff_routes import rename_staff, StaffRenameBody
+
+    await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
+    tanaka_user = await add_user(tenant.id, "田中太郎")
+    sato_user = await add_user(tenant.id, "佐藤花子")
+    await add_push_subscription(tenant.id, sato_user.id, "ep-sato")
+    await add_route(tenant.id, "田中太郎", push_user_id=tanaka_user.id,
+                    include_default=False, fallback="佐藤花子", escalate_after_sec=30)
+    await add_route(tenant.id, "佐藤花子", push_user_id=sato_user.id, include_default=False)
+
+    log = await add_reception(tenant.id, "田中太郎", state="received")
+    # 代理通知の待ち時間を過ぎた状態にする
+    async with AsyncSessionLocal() as db:
+        row = await db.get(ReceptionLog, log.id)
+        row.created_at = utcnow_naive() - timedelta(minutes=5)
+        await db.commit()
+
+    # 改名（API 関数を直接呼ぶ。ここでは HTTP 経路は主題ではない）
+    async with AsyncSessionLocal() as db:
+        user = await db.get(type(tanaka_user), tanaka_user.id)
+        user.role = "admin"
+        await db.commit()
+        await rename_staff(StaffRenameBody(from_name="田中太郎", to_name="田中 太郎"), user, db)
+
+    sent = await escalation.sweep_once()
+
+    assert sent == 1, "改名後に代理通知が出ていない（安全網が外れている）"
+    assert sent_push == ["ep-sato"]

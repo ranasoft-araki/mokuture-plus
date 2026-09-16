@@ -49,10 +49,21 @@ from app.services.crypto import encrypt_dict  # noqa: E402
 
 @pytest_asyncio.fixture(autouse=True)
 async def fresh_db():
-    """テストごとに空のスキーマから始める。"""
+    """テストごとに空のスキーマから始める。
+
+    本番だけにある一意インデックス（`main.py` の `_ensure_schema` が生 SQL で作る。
+    モデル定義には無い）もここで作る。無いままだと「重複行ができてしまう」系のバグを
+    テストで踏めず、本番のインデックス頼みになる — しかもその作成は例外を握り潰す。
+    """
+    from sqlalchemy import text
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_staff_routes_tenant_staff "
+            "ON staff_notification_routes (tenant_id, staff_name)"
+        ))
     yield
 
 
