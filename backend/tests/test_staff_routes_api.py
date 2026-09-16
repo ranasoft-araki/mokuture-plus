@@ -36,12 +36,12 @@ async def route_of(tenant_id: str, name: str) -> StaffNotificationRoute | None:
 
 # ── 一覧 ───────────────────────────────────────────────────────────────────────
 
-async def test_一覧に担当者とユーザー候補が出る(client, tenant):
+async def test_一覧に担当者とユーザー候補が出る(staff_client, tenant):
     await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
     u = await add_user(tenant.id, "田中太郎")
     await add_push_subscription(tenant.id, u.id, "ep-1")
 
-    data = client.get(API).json()
+    data = staff_client.get(API).json()
 
     assert data["staff_list"] == ["田中太郎", "佐藤花子"]
     ids = {x["id"] for x in data["users"]}
@@ -51,39 +51,39 @@ async def test_一覧に担当者とユーザー候補が出る(client, tenant):
     assert data["chatwork"]["connected"] is False
 
 
-async def test_キオスク端末アカウントはプッシュ先候補に出ない(client, tenant):
+async def test_キオスク端末アカウントはプッシュ先候補に出ない(staff_client, tenant):
     await add_user(tenant.id, "キオスク", role="kiosk")
-    data = client.get(API).json()
+    data = staff_client.get(API).json()
     assert all(x["role"] != "kiosk" for x in data["users"])
 
 
-async def test_一覧にChatworkの連携状態が出る(client, tenant):
+async def test_一覧にChatworkの連携状態が出る(staff_client, tenant):
     await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": "111"})
-    data = client.get(API).json()
+    data = staff_client.get(API).json()
     assert data["chatwork"]["connected"] is True
 
 
 # ── 担当者マスター ─────────────────────────────────────────────────────────────
 
-async def test_担当者を追加できる(client, tenant):
+async def test_担当者を追加できる(staff_client, tenant):
     await set_staff_list(tenant.id, ["田中太郎"])
-    r = client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"]})
+    r = staff_client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"]})
     assert r.status_code == 200
     assert await staff_list_of(tenant.id) == ["田中太郎", "佐藤花子"]
 
 
-async def test_並べ替えできる(client, tenant):
+async def test_並べ替えできる(staff_client, tenant):
     await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
-    client.put(f"{API}/staff", json={"names": ["佐藤花子", "田中太郎"]})
+    staff_client.put(f"{API}/staff", json={"names": ["佐藤花子", "田中太郎"]})
     assert await staff_list_of(tenant.id) == ["佐藤花子", "田中太郎"]
 
 
-async def test_削除すると通知先設定も片付く(client, tenant):
+async def test_削除すると通知先設定も片付く(staff_client, tenant):
     await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
     await add_route(tenant.id, "田中太郎", config={"email": "a@example.test"})
     await add_route(tenant.id, "佐藤花子", config={"email": "b@example.test"})
 
-    r = client.put(f"{API}/staff", json={"names": ["田中太郎"]})
+    r = staff_client.put(f"{API}/staff", json={"names": ["田中太郎"]})
 
     assert r.status_code == 200
     assert r.json()["removed"] == ["佐藤花子"]
@@ -91,13 +91,13 @@ async def test_削除すると通知先設定も片付く(client, tenant):
     assert await route_of(tenant.id, "田中太郎") is not None
 
 
-async def test_削除された担当者への代理通知設定は外れる(client, tenant):
+async def test_削除された担当者への代理通知設定は外れる(staff_client, tenant):
     """転送先が居なくなったまま残すと、黙って代理通知が空振りする。"""
     await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
     await add_route(tenant.id, "田中太郎", config={"email": "a@example.test"},
                     fallback="佐藤花子", escalate_after_sec=60)
 
-    client.put(f"{API}/staff", json={"names": ["田中太郎"]})
+    staff_client.put(f"{API}/staff", json={"names": ["田中太郎"]})
 
     route = await route_of(tenant.id, "田中太郎")
     assert route.fallback_staff_name in (None, "")
@@ -108,9 +108,9 @@ async def test_削除された担当者への代理通知設定は外れる(clie
     (["田中,太郎"], "カンマ"),
     ([" " * 3], "空だけ"),
 ])
-async def test_不正な担当者名は弾く(client, tenant, names, reason):
+async def test_不正な担当者名は弾く(staff_client, tenant, names, reason):
     await set_staff_list(tenant.id, ["元の人"])
-    r = client.put(f"{API}/staff", json={"names": names})
+    r = staff_client.put(f"{API}/staff", json={"names": names})
     if reason == "空だけ":
         # 空白だけの要素は落として「全員削除」として成立する
         assert r.status_code == 200
@@ -120,13 +120,13 @@ async def test_不正な担当者名は弾く(client, tenant, names, reason):
         assert await staff_list_of(tenant.id) == ["元の人"], "失敗したのに書き換わっている"
 
 
-async def test_改名で設定と代理通知先が追随する(client, tenant):
+async def test_改名で設定と代理通知先が追随する(staff_client, tenant):
     await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
     await add_route(tenant.id, "田中太郎", config={"email": "a@example.test"})
     await add_route(tenant.id, "佐藤花子", config={"email": "b@example.test"},
                     fallback="田中太郎", escalate_after_sec=60)
 
-    r = client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "田中 太郎"})
+    r = staff_client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "田中 太郎"})
 
     assert r.status_code == 200
     assert await staff_list_of(tenant.id) == ["田中 太郎", "佐藤花子"]
@@ -136,13 +136,13 @@ async def test_改名で設定と代理通知先が追随する(client, tenant):
     assert sato.fallback_staff_name == "田中 太郎"
 
 
-async def test_改名は未応答の受付だけ追随させる(client, tenant):
+async def test_改名は未応答の受付だけ追随させる(staff_client, tenant):
     """進行中の受付の代理通知が、旧名で設定を探して空振りしないようにする。"""
     await set_staff_list(tenant.id, ["田中太郎"])
     pending = await add_reception(tenant.id, "田中太郎", state="received")
     done = await add_reception(tenant.id, "田中太郎", state="accepted")
 
-    r = client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "田中 太郎"})
+    r = staff_client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "田中 太郎"})
     assert r.json()["pending_updated"] == 1
 
     async with AsyncSessionLocal() as db:
@@ -151,51 +151,51 @@ async def test_改名は未応答の受付だけ追随させる(client, tenant):
         assert (await db.get(ReceptionLog, done.id)).staff == "田中太郎"
 
 
-async def test_居ない担当者の改名は404(client, tenant):
+async def test_居ない担当者の改名は404(staff_client, tenant):
     await set_staff_list(tenant.id, ["田中太郎"])
-    r = client.post(f"{API}/staff/rename", json={"from_name": "誰か", "to_name": "別の人"})
+    r = staff_client.post(f"{API}/staff/rename", json={"from_name": "誰か", "to_name": "別の人"})
     assert r.status_code == 404
 
 
-async def test_同名への改名は409(client, tenant):
+async def test_同名への改名は409(staff_client, tenant):
     await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
-    r = client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "佐藤花子"})
+    r = staff_client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "佐藤花子"})
     assert r.status_code == 409
     assert await staff_list_of(tenant.id) == ["田中太郎", "佐藤花子"]
 
 
 # ── 通知先の保存 ───────────────────────────────────────────────────────────────
 
-async def test_Chatworkのルームを保存できる(client, tenant):
+async def test_Chatworkのルームを保存できる(staff_client, tenant):
     await set_staff_list(tenant.id, ["田中太郎"])
     await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": "111"})
 
-    r = client.put(API, json={"staff_name": "田中太郎", "chatwork_room_id": "222"})
+    r = staff_client.put(API, json={"staff_name": "田中太郎", "chatwork_room_id": "222"})
 
     assert r.status_code == 200
     assert r.json()["route"]["chatwork_room_id"] == "222"
-    assert client.get(API).json()["routes"][0]["chatwork_room_id"] == "222"
+    assert staff_client.get(API).json()["routes"][0]["chatwork_room_id"] == "222"
 
 
-async def test_Chatwork未連携でルーム指定すると400(client, tenant):
+async def test_Chatwork未連携でルーム指定すると400(staff_client, tenant):
     """保存できてしまうと「設定したのに届かない」になる。"""
     await set_staff_list(tenant.id, ["田中太郎"])
-    r = client.put(API, json={"staff_name": "田中太郎", "chatwork_room_id": "222"})
+    r = staff_client.put(API, json={"staff_name": "田中太郎", "chatwork_room_id": "222"})
     assert r.status_code == 400
 
 
 @pytest.mark.parametrize("room", ["abc", "22-2", "1 2"])
-async def test_ルームIDが数字でなければ弾く(client, tenant, room):
+async def test_ルームIDが数字でなければ弾く(staff_client, tenant, room):
     await set_staff_list(tenant.id, ["田中太郎"])
-    r = client.put(API, json={"staff_name": "田中太郎", "chatwork_room_id": room})
+    r = staff_client.put(API, json={"staff_name": "田中太郎", "chatwork_room_id": room})
     assert r.status_code == 422
 
 
-async def test_プッシュ先ユーザーを保存できる(client, tenant):
+async def test_プッシュ先ユーザーを保存できる(staff_client, tenant):
     await set_staff_list(tenant.id, ["田中太郎"])
     u = await add_user(tenant.id, "田中太郎")
 
-    r = client.put(API, json={"staff_name": "田中太郎", "push_user_id": u.id})
+    r = staff_client.put(API, json={"staff_name": "田中太郎", "push_user_id": u.id})
 
     assert r.status_code == 200
     assert r.json()["route"]["push_user_id"] == u.id
@@ -203,18 +203,18 @@ async def test_プッシュ先ユーザーを保存できる(client, tenant):
     assert route.push_user_id == u.id
 
 
-async def test_プッシュ先を解除できる(client, tenant):
+async def test_プッシュ先を解除できる(staff_client, tenant):
     await set_staff_list(tenant.id, ["田中太郎"])
     u = await add_user(tenant.id, "田中太郎")
-    client.put(API, json={"staff_name": "田中太郎", "push_user_id": u.id})
+    staff_client.put(API, json={"staff_name": "田中太郎", "push_user_id": u.id})
 
-    client.put(API, json={"staff_name": "田中太郎", "push_user_id": ""})
+    staff_client.put(API, json={"staff_name": "田中太郎", "push_user_id": ""})
 
     route = await route_of(tenant.id, "田中太郎")
     assert route.push_user_id is None
 
 
-async def test_他テナントのユーザーはプッシュ先にできない(client, tenant):
+async def test_他テナントのユーザーはプッシュ先にできない(staff_client, tenant):
     import uuid as _uuid
     async with AsyncSessionLocal() as db:
         other = Tenant(id=str(_uuid.uuid4()), name="別会社", slug="o-" + _uuid.uuid4().hex[:6])
@@ -223,20 +223,20 @@ async def test_他テナントのユーザーはプッシュ先にできない(c
     foreign = await add_user(other.id, "よその人")
 
     await set_staff_list(tenant.id, ["田中太郎"])
-    r = client.put(API, json={"staff_name": "田中太郎", "push_user_id": foreign.id})
+    r = staff_client.put(API, json={"staff_name": "田中太郎", "push_user_id": foreign.id})
 
     assert r.status_code == 422
 
 
-async def test_既存のメールとWebhookを壊さない(client, tenant):
+async def test_既存のメールとWebhookを壊さない(staff_client, tenant):
     """Chatwork とプッシュを足しても、これまでの宛先は維持される。"""
     await set_staff_list(tenant.id, ["田中太郎"])
-    client.put(API, json={
+    staff_client.put(API, json={
         "staff_name": "田中太郎", "email": "a@example.test", "webhook_url": "https://example.test/hook",
     })
-    client.put(API, json={"staff_name": "田中太郎", "email": "a@example.test"})  # webhook 未指定＝維持
+    staff_client.put(API, json={"staff_name": "田中太郎", "email": "a@example.test"})  # webhook 未指定＝維持
 
-    row = client.get(API).json()["routes"][0]
+    row = staff_client.get(API).json()["routes"][0]
     assert row["email"] == "a@example.test"
     assert row["webhook_configured"] is True
 
@@ -259,20 +259,20 @@ async def test_一般ユーザーは触れない(tenant):
                       json={"from_name": "a", "to_name": "b"}).status_code == 403
 
 
-async def test_消えたユーザーのプッシュ先は未指定として返す(client, tenant):
+async def test_消えたユーザーのプッシュ先は未指定として返す(staff_client, tenant):
     """本番DBは ALTER ADD COLUMN のため ON DELETE SET NULL が効かない。
     そのまま返すとプルダウンが空欄になり、保存し直した瞬間に 422 になる。"""
     await set_staff_list(tenant.id, ["田中太郎"])
     await add_route(tenant.id, "田中太郎", push_user_id="deleted-user-id")
 
-    row = client.get(API).json()["routes"][0]
+    row = staff_client.get(API).json()["routes"][0]
 
     assert row["push_user_id"] == ""
 
 
 # ── 改名の追随（代理通知の安全網を外さないこと） ─────────────────────────────
 
-async def test_設定だけ残る担当者と同名への改名を拒む(client, tenant):
+async def test_設定だけ残る担当者と同名への改名を拒む(staff_client, tenant):
     """リストから消えても設定行は残る(orphan)。同名へ改名すると
     (tenant_id, staff_name) が重複し、以後 get_route() が MultipleResultsFound を
     投げて、その担当者宛の通知が全経路サイレントに止まる。"""
@@ -280,7 +280,7 @@ async def test_設定だけ残る担当者と同名への改名を拒む(client,
     await add_route(tenant.id, "田中太郎", config={"email": "a@example.test"})
     await add_route(tenant.id, "佐藤花子", config={"email": "b@example.test"})  # orphan
 
-    r = client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "佐藤花子"})
+    r = staff_client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "佐藤花子"})
 
     assert r.status_code == 409
     async with AsyncSessionLocal() as db:
@@ -288,7 +288,7 @@ async def test_設定だけ残る担当者と同名への改名を拒む(client,
     assert await staff_list_of(tenant.id) == ["田中太郎"]
 
 
-async def test_改名は来社予定にも追随する(client, tenant):
+async def test_改名は来社予定にも追随する(staff_client, tenant):
     """予約の staff はキオスク受付時にそのまま受付ログの staff になる。旧名のまま
     残すと、登録済みの予約だけ担当者ごとの宛先も代理通知も効かない。"""
     from datetime import datetime, timedelta, timezone
@@ -305,14 +305,14 @@ async def test_改名は来社予定にも追随する(client, tenant):
         db.add(appt)
         await db.commit()
 
-    r = client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "田中 太郎"})
+    r = staff_client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "田中 太郎"})
 
     assert r.json()["appointments_updated"] == 1
     async with AsyncSessionLocal() as db:
         assert (await db.get(VisitorAppointment, appt.id)).staff == "田中 太郎"
 
 
-async def test_改名はnotified状態の受付にも追随する(client, tenant):
+async def test_改名はnotified状態の受付にも追随する(staff_client, tenant):
     """追随する状態の集合は代理通知のスイープ(PENDING_STATES)と揃える。"""
     from app.services.escalation import PENDING_STATES
 
@@ -320,18 +320,18 @@ async def test_改名はnotified状態の受付にも追随する(client, tenant
     await set_staff_list(tenant.id, ["田中太郎"])
     notified = await add_reception(tenant.id, "田中太郎", state="notified")
 
-    client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "田中 太郎"})
+    staff_client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "田中 太郎"})
 
     async with AsyncSessionLocal() as db:
         assert (await db.get(ReceptionLog, notified.id)).staff == "田中 太郎"
 
 
-async def test_改名は前後空白付きの受付も拾う(client, tenant):
+async def test_改名は前後空白付きの受付も拾う(staff_client, tenant):
     """スイープ側が func.trim() で拾っている行を、改名だけ取りこぼさないこと。"""
     await set_staff_list(tenant.id, ["田中太郎"])
     padded = await add_reception(tenant.id, " 田中太郎 ", state="received")
 
-    client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "田中 太郎"})
+    staff_client.post(f"{API}/staff/rename", json={"from_name": "田中太郎", "to_name": "田中 太郎"})
 
     async with AsyncSessionLocal() as db:
         assert (await db.get(ReceptionLog, padded.id)).staff == "田中 太郎"
@@ -381,58 +381,58 @@ async def test_ユーザー削除でプッシュ宛先が外れる(admin, tenant
 
 # ── 楽観ロック（同時編集で相手の担当者を巻き込まない） ───────────────────────
 
-async def test_版が合わなければ担当者リストを書き換えない(client, tenant):
+async def test_版が合わなければ担当者リストを書き換えない(staff_client, tenant):
     """2人の管理者が同じ画面を開いている状況。リストは全置換なので、古い版のまま
     保存されると相手が追加した担当者とその通知先設定を巻き込んで消してしまう。"""
     await set_staff_list(tenant.id, ["田中太郎"])
-    stale = client.get(API).json()["staff_list_version"]
+    stale = staff_client.get(API).json()["staff_list_version"]
 
     # もう一方の管理者が先に追加した
-    client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"], "version": stale})
+    staff_client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"], "version": stale})
     await add_route(tenant.id, "佐藤花子", config={"email": "b@example.test"})
 
     # 古い版のまま「田中太郎を並べ替えただけ」の保存が来る
-    r = client.put(f"{API}/staff", json={"names": ["田中太郎"], "version": stale})
+    r = staff_client.put(f"{API}/staff", json={"names": ["田中太郎"], "version": stale})
 
     assert r.status_code == 409
     assert await staff_list_of(tenant.id) == ["田中太郎", "佐藤花子"]
     assert await route_of(tenant.id, "佐藤花子") is not None, "相手の通知先設定が消えた"
 
 
-async def test_版が合えば更新できる(client, tenant):
+async def test_版が合えば更新できる(staff_client, tenant):
     await set_staff_list(tenant.id, ["田中太郎"])
-    version = client.get(API).json()["staff_list_version"]
+    version = staff_client.get(API).json()["staff_list_version"]
 
-    r = client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"], "version": version})
+    r = staff_client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"], "version": version})
 
     assert r.status_code == 200
     assert r.json()["staff_list_version"] != version, "版が更新されていない"
     assert await staff_list_of(tenant.id) == ["田中太郎", "佐藤花子"]
 
 
-async def test_版を省略すれば従来どおり通る(client, tenant):
+async def test_版を省略すれば従来どおり通る(staff_client, tenant):
     """API を直接叩く運用を塞がない。管理画面は必ず送る。"""
     await set_staff_list(tenant.id, ["田中太郎"])
-    r = client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"]})
+    r = staff_client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"]})
     assert r.status_code == 200
 
 
-async def test_改名も版で守られる(client, tenant):
+async def test_改名も版で守られる(staff_client, tenant):
     await set_staff_list(tenant.id, ["田中太郎"])
-    stale = client.get(API).json()["staff_list_version"]
-    client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"], "version": stale})
+    stale = staff_client.get(API).json()["staff_list_version"]
+    staff_client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"], "version": stale})
 
-    r = client.post(f"{API}/staff/rename",
+    r = staff_client.post(f"{API}/staff/rename",
                     json={"from_name": "田中太郎", "to_name": "田中 太郎", "version": stale})
 
     assert r.status_code == 409
     assert await staff_list_of(tenant.id) == ["田中太郎", "佐藤花子"]
 
 
-async def test_並べ替えでも版が変わる(client, tenant):
+async def test_並べ替えでも版が変わる(staff_client, tenant):
     """順序はキオスクの表示順そのもの。内容が同じでも別の版として扱う。"""
     await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
-    v1 = client.get(API).json()["staff_list_version"]
-    client.put(f"{API}/staff", json={"names": ["佐藤花子", "田中太郎"], "version": v1})
-    v2 = client.get(API).json()["staff_list_version"]
+    v1 = staff_client.get(API).json()["staff_list_version"]
+    staff_client.put(f"{API}/staff", json={"names": ["佐藤花子", "田中太郎"], "version": v1})
+    v2 = staff_client.get(API).json()["staff_list_version"]
     assert v1 != v2

@@ -21,7 +21,7 @@ API = "/api/notifications"
 
 
 @pytest.fixture
-def client(admin):
+def settings_client(admin):
     from app.api.notifications import router
 
     app = FastAPI()
@@ -42,49 +42,49 @@ async def stored(tenant_id: str, type_: str = "chatwork") -> dict:
     return decrypt_dict(row.config_json) if row else {}
 
 
-async def test_トークンは伏せて返す(client, tenant):
+async def test_トークンは伏せて返す(settings_client, tenant):
     await set_notification_setting(tenant.id, "chatwork", {"api_token": "secret-token", "room_id": "111"})
-    data = client.get(f"{API}/settings").json()
+    data = settings_client.get(f"{API}/settings").json()
     assert data["chatwork"]["api_token"] == "***"
     assert data["chatwork"]["room_id"] == "111"
 
 
-async def test_ルームIDだけ変えてもトークンは消えない(client, tenant):
+async def test_ルームIDだけ変えてもトークンは消えない(settings_client, tenant):
     """入力欄にトークンは戻らないので、ルームだけ直す操作が普通に起きる。"""
     await set_notification_setting(tenant.id, "chatwork", {"api_token": "secret-token", "room_id": "111"})
 
-    r = client.put(f"{API}/settings/chatwork", json={"api_token": "", "room_id": "222"})
+    r = settings_client.put(f"{API}/settings/chatwork", json={"api_token": "", "room_id": "222"})
 
     assert r.status_code == 200
     assert await stored(tenant.id) == {"api_token": "secret-token", "room_id": "222"}
 
 
-async def test_空のまま保存しても設定は残る(client, tenant):
+async def test_空のまま保存しても設定は残る(settings_client, tenant):
     await set_notification_setting(tenant.id, "chatwork", {"api_token": "secret-token", "room_id": "111"})
 
-    r = client.put(f"{API}/settings/chatwork", json={"api_token": "", "room_id": ""})
+    r = settings_client.put(f"{API}/settings/chatwork", json={"api_token": "", "room_id": ""})
 
     assert r.status_code == 200
     assert await stored(tenant.id) == {"api_token": "secret-token", "room_id": "111"}
 
 
-async def test_トークンだけ差し替えられる(client, tenant):
+async def test_トークンだけ差し替えられる(settings_client, tenant):
     await set_notification_setting(tenant.id, "chatwork", {"api_token": "old", "room_id": "111"})
 
-    client.put(f"{API}/settings/chatwork", json={"api_token": "new", "room_id": ""})
+    settings_client.put(f"{API}/settings/chatwork", json={"api_token": "new", "room_id": ""})
 
     assert await stored(tenant.id) == {"api_token": "new", "room_id": "111"}
 
 
-async def test_新規登録は両方必須(client, tenant):
-    r = client.put(f"{API}/settings/chatwork", json={"api_token": "tok", "room_id": ""})
+async def test_新規登録は両方必須(settings_client, tenant):
+    r = settings_client.put(f"{API}/settings/chatwork", json={"api_token": "tok", "room_id": ""})
     assert r.status_code == 422
     assert await stored(tenant.id) == {}
 
 
-async def test_配達用も同じ扱い(client, tenant):
+async def test_配達用も同じ扱い(settings_client, tenant):
     await set_notification_setting(tenant.id, "chatwork_delivery", {"api_token": "dl-token", "room_id": "999"})
 
-    client.put(f"{API}/settings/chatwork_delivery", json={"api_token": "", "room_id": "888"})
+    settings_client.put(f"{API}/settings/chatwork_delivery", json={"api_token": "", "room_id": "888"})
 
     assert await stored(tenant.id, "chatwork_delivery") == {"api_token": "dl-token", "room_id": "888"}

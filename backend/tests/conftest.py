@@ -1,55 +1,62 @@
-"""バックエンドのテスト共通土台。
+"""バックエンドのテスト共通設定。
 
-本番の設定(.env)を読み込まないよう、**app を import する前に**環境変数を差し替える。
-DB はテスト専用の一時 SQLite ファイル（`:memory:` だと接続ごとに別 DB になり、
-TestClient とセットアップで別のデータを見てしまう）。
+**本番/開発DBには一切触らない**。`DATABASE_URL` を一時ファイルの SQLite へ上書きしてから
+`app` を import する（`backend/.env` の値より環境変数が優先される）。`:memory:` だと接続ごとに
+別 DB になり、テストクライアントとセットアップが別のデータを見てしまうのでファイルにする。
 
-外部サービス(Slack / Chatwork / Web Push / SMTP)へは一切出さない。送信関数は
-テスト側で差し替え、呼ばれた宛先だけを記録する。
+外部サービス(Slack / Chatwork / Web Push / SMTP)へは一切出さない。送信関数は各テストで
+差し替え、呼ばれた宛先だけを記録する。
+
+クライアントは 2 種類ある。
+  - `client`       … 本番と同じ app 全体へ ASGI で入る（分析ログの取り込み経路など）
+  - `staff_client` … 対象ルーターだけを載せ、認証を差し替える（担当者ごとの通知先など）
 """
 from __future__ import annotations
 
 import os
+import pathlib
+import sys
 import tempfile
 import uuid
-from pathlib import Path
 
-# ── app より先に環境を固める ───────────────────────────────────────────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="mokuture-test-"))
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DIR.as_posix()}/test.db"
-# Fernet の正規キー(テスト専用。本番の ENCRYPTION_KEY は読ませない)
-os.environ["ENCRYPTION_KEY"] = "SjNMbVJ0WUJ3ZEZ2S2VfWjlYcUEtN3BOc0dfMlR4VmM="
-os.environ["JWT_SECRET_KEY"] = "test-secret"
+import pytest
+
+BACKEND_DIR = pathlib.Path(__file__).resolve().parents[1]
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+# ── app を import する前に、必ずテスト用 DB / 鍵へ差し替える ──────────────────
+_TMP_DIR = pathlib.Path(tempfile.mkdtemp(prefix="mokuture-test-"))
+os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{(_TMP_DIR / 'test.db').as_posix()}"
+os.environ["JWT_SECRET_KEY"] = "test-only-secret-not-used-in-production"
+os.environ["ENCRYPTION_KEY"] = "dGVzdC1rZXktZm9yLXVuaXQtdGVzdHMtMzJieXRlcy0="
 os.environ["DEBUG"] = "false"
 # プッシュの鍵が空だと送信手前で打ち切られる。実際の送信関数はテストで差し替えるので、
 # 鍵の中身は「空でない」ことだけが意味を持つ。
 os.environ["VAPID_PRIVATE_KEY"] = "test-vapid-private-key"
-# SMTP は未設定＝無効のままにする(メール送信テストで外へ出さない)
-for key in ("SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"):
-    os.environ.pop(key, None)
+# SMTP は未設定＝無効のままにする（メール送信テストで外へ出さない）
+for _key in ("SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"):
+    os.environ.pop(_key, None)
 
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-# 本番と同じ import 経路を通してから create_all する。models パッケージの __init__ だけだと
-# visitor_appointments が読み込まれず、reception_logs の外部キーが解決できない。
-import app.main  # noqa: E402,F401
-
 from app.database import AsyncSessionLocal, Base, engine  # noqa: E402
+from app.main import app  # noqa: E402
 from app.middleware.tenant import get_current_user  # noqa: E402
+from app.models.device import Device  # noqa: E402
 from app.models.notification import NotificationSetting, PushSubscription  # noqa: E402
 from app.models.reception import ReceptionLog  # noqa: E402
 from app.models.staff_route import StaffNotificationRoute  # noqa: E402
 from app.models.tenant import Tenant  # noqa: E402
 from app.models.user import User  # noqa: E402
+from app.services.auth import create_access_token  # noqa: E402
 from app.services.crypto import encrypt_dict  # noqa: E402
 
 
-@pytest_asyncio.fixture(autouse=True)
+@pytest.fixture(autouse=True)
 async def fresh_db():
-    """テストごとに空のスキーマから始める。
+    """テストごとにテーブルを作り直す（テスト間で行が残らないように）。
 
     本番だけにある一意インデックス（`main.py` の `_ensure_schema` が生 SQL で作る。
     モデル定義には無い）もここで作る。無いままだと「重複行ができてしまう」系のバグを
@@ -65,18 +72,75 @@ async def fresh_db():
             "ON staff_notification_routes (tenant_id, staff_name)"
         ))
     yield
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
+async def client():
+    """app 全体へ ASGI で入るクライアント。"""
+    import httpx
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+        yield c
+
+
+@pytest.fixture
 async def tenant() -> Tenant:
     async with AsyncSessionLocal() as db:
-        t = Tenant(id=str(uuid.uuid4()), name="テスト社", slug="test-" + uuid.uuid4().hex[:6])
+        t = Tenant(
+            id=str(uuid.uuid4()),
+            slug="pilot",
+            name="実証実験テナント",
+            kiosk_idle_timeout_sec=60,
+        )
         db.add(t)
         await db.commit()
+        await db.refresh(t)
         return t
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
+async def device(tenant: Tenant) -> Device:
+    async with AsyncSessionLocal() as db:
+        d = Device(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant.id,
+            name="受付端末1",
+            token=uuid.uuid4().hex * 2,
+            status="active",
+        )
+        db.add(d)
+        await db.commit()
+        await db.refresh(d)
+        return d
+
+
+@pytest.fixture
+def kiosk_headers(device: Device) -> dict:
+    return {"X-Kiosk-Token": device.token}
+
+
+@pytest.fixture
+async def operator_headers() -> dict:
+    async with AsyncSessionLocal() as db:
+        u = User(
+            id=str(uuid.uuid4()),
+            tenant_id=None,
+            email="ops@example.test",
+            hashed_password="x",
+            role="operator",
+        )
+        db.add(u)
+        await db.commit()
+        token = create_access_token(tenant_id="", user_id=u.id, role="operator")
+    return {"Authorization": f"Bearer {token}"}
+
+
+# ── 管理画面 API 用（担当者ごとの通知先など） ─────────────────────────────────
+
+@pytest.fixture
 async def admin(tenant: Tenant) -> User:
     async with AsyncSessionLocal() as db:
         u = User(
@@ -89,14 +153,14 @@ async def admin(tenant: Tenant) -> User:
 
 
 @pytest.fixture
-def client(admin: User):
+def staff_client(admin: User):
     """担当者ごとの通知先 API を叩くクライアント（admin としてログイン済み）。"""
     from app.api.staff_routes import router
 
-    app = FastAPI()
-    app.include_router(router, prefix="/api")
-    app.dependency_overrides[get_current_user] = lambda: admin
-    with TestClient(app) as c:
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.dependency_overrides[get_current_user] = lambda: admin
+    with TestClient(test_app) as c:
         yield c
 
 

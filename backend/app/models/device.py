@@ -29,6 +29,10 @@ class Device(Base):
     # 端末テレメトリ（heartbeat で受信・管理画面の端末詳細に表示）。
     agent_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)   # エージェント版数
     ip_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)      # 端末が報告する LAN IP
+    # 分析ログ(ANALYTICS.md)で端末イベント/メトリクスから最新値をミラーする。
+    os_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)      # 例: "Debian GNU/Linux 12 (6.6.51-v8+)"
+    ui_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)      # キオスク画面(kiosk.html)の版数ラベル
+    last_boot_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # 直近の端末起動時刻(UTC naive)
     # 連続オンライン開始時刻（UTC naive）。heartbeat/各キオスクAPIのたびに get_kiosk_device が
     # 「3分超の空白があればリセット」して維持する＝連続稼働時間 = now - online_since。
     online_since: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

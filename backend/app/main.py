@@ -13,6 +13,7 @@ from app.database import engine, Base, AsyncSessionLocal
 from app.api import api_router
 from app.middleware.readonly import ReadOnlyGuardMiddleware
 from app.services.escalation import run_escalation_loop
+from app.services.analytics import run_analytics_sweeper_loop
 
 
 # Alembic 未導入のため、起動時に冪等な軽量カラム追加を適用する。
@@ -69,6 +70,10 @@ _ENSURE_COLUMNS = {
         "agent_version": "VARCHAR(32)",
         "ip_address": "VARCHAR(64)",
         "online_since": "TIMESTAMP",
+        # 分析ログ(ANALYTICS.md)で端末イベント/メトリクスから最新値をミラーする。
+        "os_version": "VARCHAR(64)",
+        "ui_version": "VARCHAR(32)",
+        "last_boot_at": "TIMESTAMP",
     },
 }
 
@@ -205,12 +210,17 @@ async def lifespan(app: FastAPI):
     await _seed_demo_master_data()
     # 代理通知(応答が無い受付のエスカレーション)の定期スイープ。単一ワーカー前提。
     escalation_task = asyncio.create_task(run_escalation_loop())
+    # 分析ログ: 終了イベントが来なかった匿名セッションを畳む定期スイープ（単一ワーカー前提）。
+    analytics_task = asyncio.create_task(run_analytics_sweeper_loop())
     try:
         yield
     finally:
         escalation_task.cancel()
+        analytics_task.cancel()
         with suppress(asyncio.CancelledError):
             await escalation_task
+        with suppress(asyncio.CancelledError):
+            await analytics_task
 
 
 limiter = Limiter(key_func=get_remote_address)

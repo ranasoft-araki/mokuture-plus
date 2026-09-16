@@ -34,11 +34,6 @@ dev = [
     "pytest-asyncio>=0.23.0",
 ]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q"
-asyncio_mode = "auto"
-
 [tool.ruff]
 line-length = 88
 target-version = "py311"
@@ -49,3 +44,10 @@ select = ["E", "F", "I", "UP"]
 [tool.black]
 line-length = 88
 target-version = ["py311"]
+
+[tool.pytest.ini_options]
+# テストは本番/開発DBに触らない（tests/conftest.py が DATABASE_URL を一時 SQLite へ上書きする）。
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
