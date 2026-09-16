@@ -377,3 +377,62 @@ async def test_ユーザー削除でプッシュ宛先が外れる(admin, tenant
 
     route = await route_of(tenant.id, "田中太郎")
     assert route.push_user_id is None
+
+
+# ── 楽観ロック（同時編集で相手の担当者を巻き込まない） ───────────────────────
+
+async def test_版が合わなければ担当者リストを書き換えない(client, tenant):
+    """2人の管理者が同じ画面を開いている状況。リストは全置換なので、古い版のまま
+    保存されると相手が追加した担当者とその通知先設定を巻き込んで消してしまう。"""
+    await set_staff_list(tenant.id, ["田中太郎"])
+    stale = client.get(API).json()["staff_list_version"]
+
+    # もう一方の管理者が先に追加した
+    client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"], "version": stale})
+    await add_route(tenant.id, "佐藤花子", config={"email": "b@example.test"})
+
+    # 古い版のまま「田中太郎を並べ替えただけ」の保存が来る
+    r = client.put(f"{API}/staff", json={"names": ["田中太郎"], "version": stale})
+
+    assert r.status_code == 409
+    assert await staff_list_of(tenant.id) == ["田中太郎", "佐藤花子"]
+    assert await route_of(tenant.id, "佐藤花子") is not None, "相手の通知先設定が消えた"
+
+
+async def test_版が合えば更新できる(client, tenant):
+    await set_staff_list(tenant.id, ["田中太郎"])
+    version = client.get(API).json()["staff_list_version"]
+
+    r = client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"], "version": version})
+
+    assert r.status_code == 200
+    assert r.json()["staff_list_version"] != version, "版が更新されていない"
+    assert await staff_list_of(tenant.id) == ["田中太郎", "佐藤花子"]
+
+
+async def test_版を省略すれば従来どおり通る(client, tenant):
+    """API を直接叩く運用を塞がない。管理画面は必ず送る。"""
+    await set_staff_list(tenant.id, ["田中太郎"])
+    r = client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"]})
+    assert r.status_code == 200
+
+
+async def test_改名も版で守られる(client, tenant):
+    await set_staff_list(tenant.id, ["田中太郎"])
+    stale = client.get(API).json()["staff_list_version"]
+    client.put(f"{API}/staff", json={"names": ["田中太郎", "佐藤花子"], "version": stale})
+
+    r = client.post(f"{API}/staff/rename",
+                    json={"from_name": "田中太郎", "to_name": "田中 太郎", "version": stale})
+
+    assert r.status_code == 409
+    assert await staff_list_of(tenant.id) == ["田中太郎", "佐藤花子"]
+
+
+async def test_並べ替えでも版が変わる(client, tenant):
+    """順序はキオスクの表示順そのもの。内容が同じでも別の版として扱う。"""
+    await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
+    v1 = client.get(API).json()["staff_list_version"]
+    client.put(f"{API}/staff", json={"names": ["佐藤花子", "田中太郎"], "version": v1})
+    v2 = client.get(API).json()["staff_list_version"]
+    assert v1 != v2

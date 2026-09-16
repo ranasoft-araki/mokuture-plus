@@ -10,6 +10,7 @@ Chatwork ルーム / メール / Webhook / Web Push の宛先ユーザーを割�
 
 送信そのものは `services/reception_notify.py`、宛先の解決は `services/staff_routing.py`。
 """
+import hashlib
 import logging
 import re
 import uuid
@@ -139,6 +140,17 @@ def _staff_list(tenant: Tenant | None) -> list[str]:
     return [n.strip() for n in raw.split(",") if n.strip()]
 
 
+def _staff_version(names: list[str]) -> str:
+    """担当者リストの版。楽観ロックに使う。
+
+    `tenants` に updated_at が無いのでカラムは足さず、内容そのものから作る
+    （並び順も含めて変われば別の版になる）。2 人の管理者が同じ画面を開いていて、
+    片方が追加したあとにもう片方が保存すると**相手の担当者と通知先設定を巻き込んで
+    消す**ため（リストは全置換）、版が違えば 409 で止める。
+    """
+    return hashlib.sha256(",".join(names).encode("utf-8")).hexdigest()[:16]
+
+
 def _route_out(route: StaffNotificationRoute, known_staff: set[str]) -> dict:
     config = route_config(route)
     return {
@@ -158,6 +170,17 @@ def _route_out(route: StaffNotificationRoute, known_staff: set[str]) -> dict:
         "orphan": route.staff_name not in known_staff,
         "updated_at": iso_z(route.updated_at or route.created_at),
     }
+
+
+def _check_staff_version(current: list[str], sent: str | None) -> None:
+    """画面が見ていた版と食い違っていたら止める。"""
+    if sent is None:
+        return
+    if sent != _staff_version(current):
+        raise HTTPException(
+            status_code=409,
+            detail="ほかの人が担当者を変更しました。画面を読み込み直してから、もう一度お試しください。",
+        )
 
 
 async def _get_tenant(user: User, db: AsyncSession) -> Tenant | None:
@@ -195,6 +218,8 @@ async def list_staff_routes(
 
     return {
         "staff_list": staff_list,
+        # 画面はこれを持ち回り、担当者リストを更新するときに送り返す（楽観ロック）。
+        "staff_list_version": _staff_version(staff_list),
         "routes": routes,
         "slack": {
             # 担当者ごとのチャンネル指定は Bot Token 経路でのみ成立する（Webhook はチャンネル固定）。
@@ -344,6 +369,9 @@ class StaffListBody(BaseModel):
     """担当者リストを丸ごと置き換える（追加・削除・並べ替えを 1 回で反映する）。"""
 
     names: list[str]
+    # 画面が最後に読んだ版。省略可（API を直接叩く運用を塞がないため）だが、
+    # 管理画面は必ず送る。一致しなければ 409。
+    version: str | None = None
 
     @field_validator("names")
     @classmethod
@@ -369,6 +397,7 @@ class StaffListBody(BaseModel):
 class StaffRenameBody(BaseModel):
     from_name: str
     to_name: str
+    version: str | None = None
 
     @field_validator("from_name", "to_name")
     @classmethod
@@ -398,7 +427,9 @@ async def replace_staff_list(
     if tenant is None:
         raise HTTPException(status_code=404, detail="テナントが見つかりません")
 
-    before = set(_staff_list(tenant))
+    current = _staff_list(tenant)
+    _check_staff_version(current, body.version)
+    before = set(current)
     after = body.names
     removed = before - set(after)
 
@@ -420,7 +451,12 @@ async def replace_staff_list(
                 route.updated_at = utcnow_naive()
 
     await db.commit()
-    return {"ok": True, "staff_list": after, "removed": sorted(removed)}
+    return {
+        "ok": True,
+        "staff_list": after,
+        "staff_list_version": _staff_version(after),
+        "removed": sorted(removed),
+    }
 
 
 @router.post("/staff/rename")
@@ -440,10 +476,11 @@ async def rename_staff(
         raise HTTPException(status_code=404, detail="テナントが見つかりません")
 
     names = _staff_list(tenant)
+    _check_staff_version(names, body.version)
     if body.from_name not in names:
         raise HTTPException(status_code=404, detail="担当者が見つかりません")
     if body.to_name == body.from_name:
-        return {"ok": True, "staff_list": names}
+        return {"ok": True, "staff_list": names, "staff_list_version": _staff_version(names)}
     if body.to_name in names:
         raise HTTPException(status_code=409, detail="同じ名前の担当者がすでに居ます")
     # 担当者リストだけでなく**設定行**も見る。リストから消えても設定だけ残っている
@@ -501,9 +538,11 @@ async def rename_staff(
         await db.rollback()
         raise HTTPException(status_code=409, detail="同じ名前の設定がすでにあります")
 
+    renamed = _staff_list(tenant)
     return {
         "ok": True,
-        "staff_list": _staff_list(tenant),
+        "staff_list": renamed,
+        "staff_list_version": _staff_version(renamed),
         "pending_updated": len(pending),
         "appointments_updated": len(upcoming),
     }

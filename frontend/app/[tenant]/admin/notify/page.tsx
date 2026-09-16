@@ -448,10 +448,12 @@ function routeSummary(
  * 別なのは分かりにくいので、編集をここへ集約した（受付設定側は読み取り専用）。
  */
 function StaffMasterEditor({
-  authToken, names, onChanged, onError,
+  authToken, names, version, onChanged, onError,
 }: {
   authToken: string;
   names: string[];
+  /** 最後に読んだ担当者リストの版。更新時に送り返して、他の人の変更を巻き込まない。 */
+  version: string;
   onChanged: () => Promise<void> | void;
   onError: (message: string) => void;
 }) {
@@ -472,6 +474,9 @@ function StaffMasterEditor({
       return true;
     } catch (e: unknown) {
       onError(e instanceof Error ? e.message : "担当者の更新に失敗しました");
+      // 失敗時も読み直す。ほかの人が変更していて 409 になった場合、画面が古い
+      // ままだと同じ操作を繰り返して同じところで止まるため、最新の内容を見せる。
+      await onChanged();
       return false;
     } finally {
       setBusy(false);
@@ -485,12 +490,12 @@ function StaffMasterEditor({
       onError("同じ名前の担当者がすでに居ます");
       return;
     }
-    if (await run(() => api.replaceStaffList(authToken, [...names, name]))) setAdding("");
+    if (await run(() => api.replaceStaffList(authToken, [...names, name], version))) setAdding("");
   };
 
   const remove = async (name: string) => {
     setConfirmRemove(null);
-    await run(() => api.replaceStaffList(authToken, names.filter((n) => n !== name)));
+    await run(() => api.replaceStaffList(authToken, names.filter((n) => n !== name), version));
   };
 
   const move = async (name: string, delta: number) => {
@@ -499,14 +504,14 @@ function StaffMasterEditor({
     if (i < 0 || j < 0 || j >= names.length) return;
     const next = [...names];
     [next[i], next[j]] = [next[j], next[i]];
-    await run(() => api.replaceStaffList(authToken, next));
+    await run(() => api.replaceStaffList(authToken, next, version));
   };
 
   const rename = async () => {
     const from = renaming;
     const to = renameTo.trim();
     if (!from || !to || from === to) { setRenaming(null); return; }
-    if (await run(() => api.renameStaff(authToken, from, to))) setRenaming(null);
+    if (await run(() => api.renameStaff(authToken, from, to, version))) setRenaming(null);
   };
 
   return (
@@ -689,6 +694,7 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
       <StaffMasterEditor
         authToken={authToken}
         names={data.staff_list}
+        version={data.staff_list_version}
         onChanged={() => reload(true)}
         onError={setError}
       />
@@ -1536,17 +1542,25 @@ export default function AdminNotifyPage() {
             <MkPill tone={cwConfigured ? "live" : "off"}>{cwConfigured ? "設定済" : "未設定"}</MkPill>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <Field label="API トークン" required>
+            <Field
+              label="API トークン"
+              required={!cwConfigured}
+              hint={cwConfigured ? "設定済み。安全のため表示しません（変更するときだけ入力）" : undefined}
+            >
               <TextInput
-                placeholder="Chatwork API トークン"
+                placeholder={cwConfigured ? "設定済み（変更するときだけ入力）" : "Chatwork API トークン"}
                 mono
                 value={cwApiToken}
                 onChange={setCwApiToken}
               />
             </Field>
-            <Field label="通知先ルーム ID" required>
+            <Field
+              label="通知先ルーム ID"
+              required={!cwConfigured}
+              hint={cwConfigured ? "変更するときだけ入力（空欄なら現在の設定のまま）" : undefined}
+            >
               <TextInput
-                placeholder="例: 312648719"
+                placeholder={cwConfigured ? "設定済み（変更するときだけ入力）" : "例: 312648719"}
                 mono
                 value={cwRoomId}
                 onChange={setCwRoomId}

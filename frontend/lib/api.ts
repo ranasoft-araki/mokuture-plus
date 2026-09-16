@@ -531,18 +531,20 @@ export const api = {
     request<{ ok: boolean }>(
       `/notifications/staff-routes/${encodeURIComponent(routeId)}`, { method: "DELETE" }, token),
   /** 担当者リストを丸ごと置き換える（追加・削除・並べ替え）。編集の場は「通知設定」。 */
-  replaceStaffList: (token: string, names: string[]) =>
-    request<{ ok: boolean; staff_list: string[]; removed: string[] }>(
-      "/notifications/staff-routes/staff", { method: "PUT", body: JSON.stringify({ names }) }, token),
+  replaceStaffList: (token: string, names: string[], version?: string) =>
+    request<{ ok: boolean; staff_list: string[]; staff_list_version: string; removed: string[] }>(
+      "/notifications/staff-routes/staff",
+      { method: "PUT", body: JSON.stringify({ names, version }) }, token),
   /** 担当者名の変更。通知先設定・代理通知先・未応答の受付も追随する。 */
-  renameStaff: (token: string, from_name: string, to_name: string) =>
-    request<{ ok: boolean; staff_list: string[]; pending_updated?: number }>(
+  renameStaff: (token: string, from_name: string, to_name: string, version?: string) =>
+    request<{ ok: boolean; staff_list: string[]; staff_list_version: string; pending_updated?: number }>(
       "/notifications/staff-routes/staff/rename",
-      { method: "POST", body: JSON.stringify({ from_name, to_name }) }, token),
+      { method: "POST", body: JSON.stringify({ from_name, to_name, version }) }, token),
   testStaffRoute: (token: string, staff_name: string, stage: "primary" | "fallback") =>
     request<StaffRouteTestResult>(
       "/notifications/staff-routes/test",
       { method: "POST", body: JSON.stringify({ staff_name, stage }) }, token),
+  /** 空欄の項目は現在値を維持する（トークンはマスクして返しているため）。 */
   updateChatworkSettings: (token: string, api_token: string, room_id: string) =>
     request("/notifications/settings/chatwork", { method: "PUT", body: JSON.stringify({ api_token, room_id }) }, token),
   testChatworkNotification: (token: string) =>
@@ -874,6 +876,8 @@ export interface StaffPushUser {
 
 export interface StaffNotificationRoutesResponse {
   staff_list: string[];
+  /** 担当者リストの版。更新時に送り返すと、他の人の変更を巻き込む前に 409 で止まる。 */
+  staff_list_version: string;
   routes: StaffNotificationRoute[];
   slack: { bot_connected: boolean; default_channel_name: string };
   chatwork: { connected: boolean; default_room_id: string };
