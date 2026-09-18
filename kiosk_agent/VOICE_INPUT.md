@@ -193,6 +193,18 @@ audio:
   file_path: samples/company.wav
 ```
 
+### スクリプトを直すときの注意（PowerShell の罠）
+
+`install_voice_windows.ps1` を編集するときは 2 点。テストで固定してあります。
+
+- **UTF-8 BOM 付きで保存する。** Windows PowerShell 5.1 は BOM が無い `.ps1` をシステムの
+  ANSI コードページ（日本語環境は cp932）として読むため、日本語コメントが化けて
+  **構文エラーで起動すらしません**。pwsh 7 は BOM 無しでも UTF-8 として読むので、
+  7 でだけ確認していると気づけません。検証は `powershell.exe`（5.1）で行ってください。
+- **外部コマンドは `Invoke-Native` で包む。** `$ErrorActionPreference='Stop'` のまま
+  ネイティブコマンドを呼ぶと、stderr へ 1 行書かれただけで `NativeCommandError` になり、
+  成功していても止まります（whisper-cli の `load_backend: ...`、uv の進捗表示が該当）。
+
 ### Windows で試すときの注意
 
 - **合成音声は人の声より認識しにくい**です。`--say` で多少崩れても実際の精度とは別物と考えてください（経路と整形・判定の確認用です）。

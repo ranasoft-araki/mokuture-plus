@@ -1,4 +1,9 @@
-# mokuture+ 音声入力 — Windows 開発機での動作試験セットアップ
+﻿# mokuture+ 音声入力 — Windows 開発機での動作試験セットアップ
+#
+# 【このファイルは UTF-8 BOM 付きで保存すること】
+# Windows PowerShell 5.1 は BOM が無いと .ps1 をシステムの ANSI コードページ(日本語環境は
+# cp932)として読むため、日本語コメントが化けて構文エラーになる。pwsh 7 は BOM 無しでも
+# UTF-8 として読むので、7 でだけ確認していると気づけない。
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\install_voice_windows.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\install_voice_windows.ps1 -NoMic
@@ -20,6 +25,21 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Invoke-Native {
+    <#
+      外部コマンドを実行する。
+
+      $ErrorActionPreference='Stop' のままネイティブコマンドを呼ぶと、そのコマンドが
+      stderr へ 1 行でも書いた時点で NativeCommandError となり、成功していても止まる
+      （whisper-cli の "load_backend: ..."、uv の進捗表示などが該当する）。
+      ここだけ既定に戻して実行し、成否は $LASTEXITCODE で判断する。
+    #>
+    param([Parameter(Mandatory = $true)][scriptblock]$Command)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & $Command } finally { $ErrorActionPreference = $prev }
+}
 
 $AgentDir = Split-Path -Parent $PSScriptRoot
 $Venv     = Join-Path $AgentDir ".venv"
@@ -46,7 +66,7 @@ if (-not (Test-Path $Python)) {
 # ── 1. モデルの確認 ───────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "--- モデルの確認 ---"
-& $Python (Join-Path $AgentDir "scripts\fetch_voice_models.py") --check
+Invoke-Native { & $Python (Join-Path $AgentDir "scripts\fetch_voice_models.py") --check }
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
     Write-Host "モデルが揃っていません。まず次を試してください:" -ForegroundColor Yellow
@@ -95,7 +115,8 @@ if (-not (Test-Path $WhisperExe)) {
     Write-Host "whisper-cli.exe が見つかりません。展開に失敗しています。" -ForegroundColor Red
     exit 1
 }
-& $WhisperExe --version 2>&1 | Select-Object -Last 1 | ForEach-Object { Write-Host "OK: $_" }
+$ver = Invoke-Native { & $WhisperExe --version 2>$null } | Select-Object -Last 1
+Write-Host "OK: $(if ($ver) { $ver } else { 'whisper-cli' })"
 
 # ── 3. マイク(sounddevice) ────────────────────────────────────────────────────
 Write-Host ""
@@ -103,16 +124,16 @@ Write-Host "--- マイク ---"
 if ($NoMic) {
     Write-Host "スキップしました (-NoMic)。WAV を使う試験だけ行えます。"
 } else {
-    $hasSd = & $Python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('sounddevice') else 1)"
-    if ($LASTEXITCODE -eq 0 -and (-not $Force)) {
+    Invoke-Native { & $Python -c "import sounddevice" 2>$null }
+    if (($LASTEXITCODE -eq 0) -and (-not $Force)) {
         Write-Host "sounddevice は導入済み"
     } else {
         # uv があればそちら、無ければ pip
         $uv = Get-Command uv -ErrorAction SilentlyContinue
         if ($uv) {
-            & uv pip install --python $Python sounddevice
+            Invoke-Native { & uv pip install --python $Python sounddevice }
         } else {
-            & $Python -m pip install sounddevice
+            Invoke-Native { & $Python -m pip install sounddevice }
         }
         if ($LASTEXITCODE -ne 0) {
             Write-Host "sounddevice を入れられませんでした。WAV を使う試験だけ行えます。" -ForegroundColor Yellow
@@ -135,7 +156,7 @@ if (-not (Test-Path $yaml)) {
 Write-Host ""
 Write-Host "=== 完了 ===" -ForegroundColor Cyan
 Write-Host ""
-& $Python (Join-Path $AgentDir "scripts\voice_selftest.py") --status
+Invoke-Native { & $Python (Join-Path $AgentDir "scripts\voice_selftest.py") --status }
 Write-Host ""
 Write-Host "試し方:"
 Write-Host "  読み上げ音で1往復 : $Python scripts\voice_selftest.py --say `"株式会社ラナソフトです`" --show-text"

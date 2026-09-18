@@ -153,3 +153,34 @@ def test_sounddeviceが無ければマイクは使えないと分かる(monkeypa
                         lambda: (False, "sounddevice が入っていません (pip install sounddevice)"))
     ok, detail = capture.available()
     assert not ok and "sounddevice" in detail
+
+
+# ── セットアップスクリプトが Windows PowerShell 5.1 で読めること ──────────────
+
+def test_ps1はUTF8_BOM付きで保存されている():
+    """Windows PowerShell 5.1 は BOM が無い .ps1 をシステムの ANSI コードページ
+    (日本語環境は cp932)として読む。日本語コメントが化けて**構文エラーで起動すら
+    しない**。pwsh 7 は BOM 無しでも UTF-8 として読むため、7 でだけ確認していると
+    気づけない。ここで落としておく。
+    """
+    ps1 = settings.AGENT_DIR / "scripts" / "install_voice_windows.ps1"
+    assert ps1.exists(), "セットアップスクリプトが無い"
+    assert ps1.read_bytes().startswith(b"\xef\xbb\xbf"), "UTF-8 BOM が無い"
+
+
+def test_ps1のネイティブ呼び出しはInvoke_Nativeを通している():
+    """$ErrorActionPreference='Stop' のままネイティブコマンドを呼ぶと、stderr へ
+    1 行書かれただけで NativeCommandError になり、成功していても止まる
+    (whisper-cli の "load_backend: ..."、uv の進捗表示が該当する)。
+    """
+    ps1 = settings.AGENT_DIR / "scripts" / "install_voice_windows.ps1"
+    text = ps1.read_bytes().decode("utf-8-sig")
+    assert "function Invoke-Native" in text
+
+    # `& $Python` / `& $WhisperExe` / `& uv` のような外部コマンド呼び出しが
+    # 素のまま残っていないこと（Invoke-Native の中に書かれているものは除く）。
+    for n, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped.startswith("& $") and not stripped.startswith("& uv"):
+            continue
+        assert "Invoke-Native" in line, f"{n} 行目の外部コマンドが素で呼ばれている: {stripped[:60]}"
