@@ -86,7 +86,12 @@ DEFAULTS: dict[str, Any] = {
     # whisper.cpp を使う(§3-1)。
     "whisper": {
         # kiosk_agent 直下からの相対パス(絶対パスも可)。
+        # Linux/Pi は install_voice.sh が vendor/whisper.cpp/ にビルドしたもの。
         "binary": "vendor/whisper.cpp/build/bin/whisper-cli",
+        # Windows での動作試験用。上流の配布バイナリ(同じ v1.9.3)を
+        # scripts/install_voice_windows.ps1 がここへ展開する。
+        # Windows ではこちらが優先される(空にすると binary を見る)。
+        "binary_windows": "vendor/whisper.cpp-win-x64/Release/whisper-cli.exe",
         "model_path": "voice_models/ggml-base-q5_1.bin",
         # メトリクスに出す識別子。モデルを変えたらここも変える(個人情報ではない)。
         "model_name": "whisper-base-q5",

@@ -115,6 +115,93 @@ curl -s http://127.0.0.1:8181/voice/status
 
 ---
 
+## 2-4. Windows 開発機での動作試験
+
+本番は Raspberry Pi ですが、**Windows でも同じコードで一通り試せます**。Pi を用意しなくても、
+録音 → VAD → whisper.cpp → 整形 → 採否判定 の経路と、キオスク画面の導線を確認できます。
+
+違いは 2 つだけで、設定ファイルは同じものが使えます。
+
+| | Raspberry Pi（本番） | Windows（動作試験） |
+|---|---|---|
+| 録音 | `arecord`（alsa-utils） | `sounddevice`（PortAudio） |
+| whisper-cli | ソースから自前ビルド | 上流の配布バイナリ（同じ v1.9.3） |
+
+### セットアップ
+
+```powershell
+cd kiosk_agent
+powershell -ExecutionPolicy Bypass -File scripts\install_voice_windows.ps1
+```
+
+やること: モデルの確認 → whisper.cpp の Windows x64 バイナリを取得（SHA-256 照合つき）→
+`sounddevice` を venv へ導入 → `voice_input.yaml` を作成。マイクを使わないなら `-NoMic`。
+
+### 試し方
+
+```powershell
+# 1) 状態を見る（マイク・バイナリ・モデルが揃っているか）
+.venv\Scripts\python scripts\voice_selftest.py --status
+
+# 2) 読み上げ音で1往復（マイク不要。Windows の音声合成で音源を作る）
+.venv\Scripts\python scripts\voice_selftest.py --say "株式会社ラナソフトです" --show-text
+
+# 3) 実際にマイクへ話しかけて1往復
+.venv\Scripts\python scripts\voice_selftest.py --mic --show-text
+
+# 4) 手元の WAV で1往復（16bit なら何 Hz・何chでも可。読み込み時に 16kHz モノラルへ直す）
+.venv\Scripts\python scripts\voice_selftest.py --wav sample.wav --show-text
+
+# 入力デバイスの一覧（voice_input.yaml の audio.device に書く値）
+.venv\Scripts\python scripts\voice_selftest.py --devices
+```
+
+出力例:
+
+```
+== 会社名をお話しください ==
+  （発話を検出）
+  音声 2562ms / うち発話 1620ms / 終了理由 silence
+  認識 6093ms / 発話終了から表示まで 6093ms / モデル whisper-base-q5
+  生の認識  : 株式会社はラナソフトです
+  入力欄の値: 株式会社はラナソフト
+  判定      : 採用（色=ok）
+  手がかり  : 平均トークン確率=0.782 / 無音率=0.37 / 1秒あたり文字数=6.17 / 繰り返し=0.1
+```
+
+### 画面から試す
+
+```powershell
+# 1) 音声サービス（別ウィンドウで）
+.venv\Scripts\python -m voice.server
+
+# 2) キオスク本体
+uv run uvicorn main:app --host 0.0.0.0 --port 8080
+```
+
+ブラウザで `http://localhost:8080` を開き、QR無し来訪者の受付フォームで「音声で入力」を押します。
+`curl http://127.0.0.1:8181/voice/status` が `available: true` ならボタンが出ます。
+
+### マイクを使わずに繰り返し試す
+
+`voice_input.yaml` で音源を固定すると、マイク無しでも毎回同じ音で経路を通せます。
+しきい値を触ったときの比較に便利です。
+
+```yaml
+audio:
+  backend: file
+  file_path: samples/company.wav
+```
+
+### Windows で試すときの注意
+
+- **合成音声は人の声より認識しにくい**です。`--say` で多少崩れても実際の精度とは別物と考えてください（経路と整形・判定の確認用です）。
+- **処理時間は Pi 5 の目安になりません。** CPU も命令セットも違います。性能の数字は必ず Pi 実機の `voice_bench.py` で取ってください。
+- systemd はありません。サービスの常駐・自動起動の確認は Pi 実機でのみ行えます。
+- Windows のバイナリは `vendor/whisper.cpp-win-x64/` に展開され、`.gitignore` 済みです（プラットフォーム固有の実行ファイルなのでリポジトリには入れません）。
+
+---
+
 ## 3. 起動・停止・再起動
 
 ```bash
@@ -344,8 +431,10 @@ kiosk_agent/vendor/
 kiosk_agent/mokuture-voice.service      systemd ユニット
 kiosk_agent/voice_input.yaml.example    設定の雛形
 kiosk_agent/staff_readings.yaml.example 担当者の読み仮名の雛形（第3段階）
-kiosk_agent/scripts/install_voice.sh    セットアップ
+kiosk_agent/scripts/install_voice.sh    セットアップ(Raspberry Pi)
+kiosk_agent/scripts/install_voice_windows.ps1  セットアップ(Windows 動作試験)
 kiosk_agent/scripts/fetch_voice_models.py  モデルの検証・取得
+kiosk_agent/scripts/voice_selftest.py   動作試験(録音→認識→整形→判定を1往復)
 kiosk_agent/scripts/voice_bench.py      性能計測
 kiosk_agent/tests/voice_input/          テスト（124 件）
 kiosk_agent/VOICE_INPUT.md              この文書
@@ -361,7 +450,7 @@ kiosk_agent/VOICE_INPUT.md              この文書
 | `kiosk_agent/install.sh` | 音声セットアップの案内を追加 |
 | `backend/app/api/kiosk.py` | `BUNDLE_FILES` に `voice/*.py` 13 件を追加（agent 側と並び順まで一致させる） |
 | `kiosk_agent/tests/test_ota_list.py` | `voice/` を再起動対象の例外にし、その根拠（自己再起動の仕組み）を検証する test を追加 |
-| `.gitignore` | `voice_input.yaml` / `staff_readings.yaml` / `vendor/whisper.cpp/` / 展開後の Vosk / metrics を除外 |
+| `.gitignore` | `voice_input.yaml` / `staff_readings.yaml` / `vendor/whisper.cpp/` / `vendor/whisper.cpp-win-x64/` / 展開後の Vosk / metrics を除外 |
 | `.gitattributes` | 音声モデルと vendor tarball を Git LFS 管理に |
 
 ---
@@ -450,6 +539,8 @@ git push origin master        # OTA で全端末の kiosk.html が戻る
 
 | 症状 | 見るところ |
 |---|---|
+| (Windows) `whisper-cli がありません` | `scripts\install_voice_windows.ps1` を実行 |
+| (Windows) マイクが見つからない | `uv pip install --python .venv\Scripts\python.exe sounddevice`。入れたあと `voice_selftest.py --devices` で番号を確認し `audio.device` に書く |
 | 「音声で入力」が出ない | `curl -s http://127.0.0.1:8181/voice/status` の `available` と `detail`。`microphone.available` が false ならマイク、`engines.whisper.available` が false ならビルドかモデル |
 | `whisper-cli がありません` | `bash scripts/install_voice.sh --build` |
 | `モデルがありません` | `git lfs pull` → `.venv/bin/python scripts/fetch_voice_models.py --check` |

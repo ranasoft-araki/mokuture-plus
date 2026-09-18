@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import platform
 import re
 import subprocess
 import tempfile
@@ -54,6 +55,15 @@ class EngineFailed(RuntimeError):
 
 
 def binary_path() -> Path:
+    """使う whisper-cli の場所。OS で持ち替える。
+
+    本番(Pi)は install_voice.sh がソースからビルドしたもの、Windows は上流の配布
+    バイナリ(同じ版)。同じ設定ファイルを両方で使えるよう、キーを分けてある。
+    """
+    if platform.system() == "Windows":
+        win = str(settings.get("whisper.binary_windows") or "").strip()
+        if win:
+            return settings.resolve_path(win)
     return settings.resolve_path(str(settings.get("whisper.binary")))
 
 
@@ -69,7 +79,9 @@ def available() -> tuple[bool, str]:
     """(使えるか, 理由)。理由に個人情報は含まない。"""
     b = binary_path()
     if not b.exists():
-        return False, f"whisper-cli がありません ({b.name}: scripts/install_voice.sh を実行)"
+        how = ("scripts/install_voice_windows.ps1 を実行"
+               if platform.system() == "Windows" else "scripts/install_voice.sh を実行")
+        return False, f"whisper-cli がありません ({b.name}: {how})"
     if not os.access(b, os.X_OK):
         return False, "whisper-cli に実行権限がありません"
     m = model_path()

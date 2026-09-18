@@ -81,9 +81,14 @@ def test_status_shape(client, engine, feed):
     assert s["timing"]["silence_sec"] == pytest.approx(0.7)
 
 
-def test_status_without_microphone_is_unavailable(client, engine):
-    """マイクが無い端末では available=false。画面はボタンを出さない。"""
+def test_status_without_microphone_is_unavailable(client, engine, monkeypatch):
+    """マイクが無い端末では available=false。画面はボタンを出さない。
+
+    実行環境にマイクがあるかどうかで結果が変わらないよう、可否そのものを差し替える
+    （開発機に sounddevice が入っていると本物のマイクが見つかってしまう）。
+    """
     capture.set_override(None)
+    monkeypatch.setattr(capture, "available", lambda: (False, "録音手段がありません"))
     s = client.get("/voice/status").json()
     assert s["available"] is False
     assert s["microphone"]["available"] is False

@@ -543,7 +543,8 @@ mokuture/
   対象にし、無ければ「設定不足」として担当者の音声入力そのものを無効にする。
 - しきい値は `voice/defaults.py` が唯一の定義で、`voice_input.yaml`(端末ごと・gitignore)と
   環境変数 `VOICE_<SECTION>__<KEY>` で上書きする(名刺と同じ作法)。
-- テストは `kiosk_agent/tests/voice_input/`(124件)。**実マイクも whisper バイナリも使わない**。
+- **Windows 開発機でも動作試験できる**。録音は `sounddevice`(arecord が無いので `auto` が自動で選ぶ)、whisper-cli は上流の配布バイナリ(タグ `b4938` = v1.9.3 と同じソース。`whisper.binary_windows` で持ち替え)。`scripts/install_voice_windows.ps1` が SHA-256 照合つきで展開する。`scripts/voice_selftest.py` が録音→認識→整形→判定を1往復させ、`--say` は Windows の音声合成(SAPI)で音源を作るのでマイクが無くても試せる。`audio.backend: file` なら WAV をマイクの代わりに流せる(同じ音で何度でも比較できる)。**処理時間は Pi 5 の目安にならない**(CPU も命令セットも違う)ので、性能の数字は必ず実機の `voice_bench.py` で取る。
+- テストは `kiosk_agent/tests/voice_input/`(158件)。**実マイクも whisper バイナリも使わない**。
   合成した波形を実時間で流すフェイクマイク(`capture.BufferStream(realtime=True)`)で録音ループを
   本番と同じ条件で回す。VAD 単体は時計を差し替えて待たずに検証する。
 

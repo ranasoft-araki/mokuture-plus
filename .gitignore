@@ -58,6 +58,10 @@ kiosk_agent/staff_readings.yaml
 # だけで、バイナリは端末ごとに install_voice.sh がビルドする(aarch64 専用のため)。
 kiosk_agent/vendor/whisper.cpp/
 
+# Windows 動作試験用の whisper.cpp 配布バイナリ(install_voice_windows.ps1 が展開する)。
+# プラットフォーム固有の実行ファイルなのでリポジトリには入れない。
+kiosk_agent/vendor/whisper.cpp-win-x64/
+
 # Vosk モデルの展開先(zip を fetch_voice_models.py --extract で開いたもの)。
 # リポジトリに入っているのは zip のほう。
 kiosk_agent/voice_models/vosk-model-small-ja-0.22/

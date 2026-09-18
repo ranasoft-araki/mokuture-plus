@@ -178,7 +178,9 @@ def test_timeout_raises(fake_cli, monkeypatch):
 
 def test_unavailable_when_binary_is_missing(tmp_path):
     cfg = settings.cfg()
+    # 両方潰す。OS によって見る側が変わるため(Windows は binary_windows が優先)。
     cfg["whisper"]["binary"] = str(tmp_path / "nope")
+    cfg["whisper"]["binary_windows"] = str(tmp_path / "nope.exe")
     ok, detail = whisper_cpp.available()
     assert not ok and "whisper-cli" in detail
 
@@ -193,6 +195,7 @@ def test_unavailable_when_model_is_missing(tmp_path, monkeypatch):
 
 def test_transcribe_refuses_when_unavailable(tmp_path):
     settings.cfg()["whisper"]["binary"] = str(tmp_path / "nope")
+    settings.cfg()["whisper"]["binary_windows"] = str(tmp_path / "nope.exe")
     with pytest.raises(whisper_cpp.EngineUnavailable):
         whisper_cpp.transcribe(seg())
 

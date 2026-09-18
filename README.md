@@ -196,6 +196,15 @@ bash kiosk_agent/scripts/install_voice.sh     # USB マイクを挿してから
 curl -s http://127.0.0.1:8181/voice/status    # available:true なら使える
 ```
 
+**Windows でも動作試験できます**（Pi を用意しなくても、録音〜認識〜整形〜判定の経路と
+画面の導線を確認できます）。
+
+```powershell
+cd kiosk_agent
+powershell -ExecutionPolicy Bypass -File scripts\install_voice_windows.ps1
+.venv\Scripts\python scripts\voice_selftest.py --say "株式会社ラナソフトです" --show-text
+```
+
 → インストール・マイク調整・性能計測・チェックリスト・元に戻す手順は
 [kiosk_agent/VOICE_INPUT.md](kiosk_agent/VOICE_INPUT.md)
 

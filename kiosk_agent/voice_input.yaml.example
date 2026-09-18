@@ -24,13 +24,18 @@ server:
     - http://127.0.0.1:8080
 
 audio:
-  # `arecord -L` で出てくる名前。USB マイクは plughw:1,0 や sysdefault:CARD=USB など。
+  # Raspberry Pi: `arecord -L` で出てくる名前。USB マイクは plughw:1,0 など。
+  # Windows(動作試験): 装置番号か名前の一部。番号は次で確認する
+  #   .venv\Scripts\python scripts\voice_selftest.py --devices
   # default のままで拾えていれば変えなくてよい。
   device: default
   sample_rate: 16000
   channels: 1
-  # auto = arecord → sounddevice の順に試す
+  # auto = arecord → sounddevice の順に試す(Windows は自動で sounddevice)
+  # file = 下の file_path の WAV をマイクの代わりに流す(動作試験用)
   backend: auto
+  # backend: file のときに読む WAV。マイクが無くても経路を通せる。
+  # file_path: samples/company.wav
   # 受付開始音の回り込みを避けるため、録音の頭を捨てる長さ(ms)
   start_guard_ms: 250
   # マイクの入力が小さすぎるときだけ 1.5〜3.0 に上げる。上げすぎると歪む。
@@ -60,7 +65,11 @@ whisper:
   # model_name はメトリクスに出る識別子。モデルを変えたら必ず一緒に変える。
   model_path: voice_models/ggml-base-q5_1.bin
   model_name: whisper-base-q5
+  # Linux/Pi: install_voice.sh がソースからビルドしたもの
   binary: vendor/whisper.cpp/build/bin/whisper-cli
+  # Windows(動作試験): install_voice_windows.ps1 が展開した配布バイナリ。
+  # Windows ではこちらが優先される。
+  binary_windows: vendor/whisper.cpp-win-x64/Release/whisper-cli.exe
   language: ja
   # Pi 5 は 4 コア。他の処理と食い合うようなら 3 に落とす。
   threads: 4

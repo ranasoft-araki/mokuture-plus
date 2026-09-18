@@ -3,11 +3,16 @@
 要件 §10 により、マイクを握るのはブラウザではなくこのサービス。Raspberry Pi OS に
 最初から入っている `arecord`(alsa-utils)をサブプロセスで回して生 PCM を読む。
 
-バックエンドは 3 つ:
+バックエンドは 4 つ:
   arecord      …… 既定。Pi 実機。追加の Python 依存が要らない
-  sounddevice  …… 任意。入っていれば使える(PortAudio)
-  none         …… どちらも無い環境(Windows 開発機など)。available() が False を返し、
-                   画面には「音声で入力」ボタンが出ない = 受付は従来どおり動く
+  sounddevice  …… Windows 開発機での動作試験。PortAudio 経由でマイクを開く
+  file         …… WAV を「マイクから入ってきた音」として流す。マイクが無くても
+                   録音ループから認識までを本番と同じ経路で通せる(何度でも同じ結果)
+  none         …… どれも使えない環境。available() が False を返し、画面には
+                   「音声で入力」ボタンが出ない = 受付は従来どおり動く
+
+`auto` は arecord → sounddevice の順に探す。Windows には arecord が無いので、
+`pip install sounddevice` さえ入っていれば自動で sounddevice を選ぶ。
 
 読み出しは背景スレッド + キュー。arecord が無言でハングしてもタイムアウトで
 抜けられるようにするため(ブロッキング read だと録音が終わらなくなる)。
@@ -22,7 +27,10 @@ import shutil
 import struct
 import subprocess
 import threading
+import time
+import wave
 from array import array
+from pathlib import Path
 from typing import Callable, Protocol
 
 from voice import settings
@@ -160,22 +168,26 @@ class ArecordStream:
 # ── sounddevice(任意) ────────────────────────────────────────────────────────
 
 class SoundDeviceStream:
-    """PortAudio 経由。arecord が使えない環境の予備。"""
+    """PortAudio 経由。arecord が無い環境（Windows 開発機）で使う。
+
+    デバイス指定は sounddevice の流儀に合わせる。数字なら装置番号、文字列なら名前の
+    部分一致。`default` / 空 なら OS の既定入力。
+    """
 
     def __init__(self, device: str, rate: int, channels: int) -> None:
         try:
             import sounddevice as sd  # type: ignore
         except ImportError as e:
-            raise CaptureUnavailable("sounddevice が入っていません") from e
+            raise CaptureUnavailable("sounddevice が入っていません (pip install sounddevice)") from e
         try:
             self._stream = sd.RawInputStream(
                 samplerate=rate, channels=channels, dtype="int16",
-                device=(None if device in ("", "default") else device),
+                device=parse_device(device),
                 blocksize=0,
             )
             self._stream.start()
         except Exception as e:
-            raise CaptureFailed(f"マイクを開けません: {type(e).__name__}") from e
+            raise CaptureFailed(f"マイクを開けません: {type(e).__name__}: {e}") from e
 
     def read(self, nbytes: int, timeout: float) -> bytes:
         frames = nbytes // SAMPLE_WIDTH
@@ -193,6 +205,104 @@ class SoundDeviceStream:
             self._stream.close()
         except Exception:
             pass
+
+
+def parse_device(device: str):
+    """設定の device 文字列を sounddevice へ渡せる形にする。
+
+    数字だけなら装置番号として整数で渡す（名前が日本語で環境によって化けるため、
+    番号指定が確実）。"default" と空文字は OS の既定入力（None）。
+    """
+    name = (device or "").strip()
+    if not name or name.lower() == "default":
+        return None
+    if name.isdigit():
+        return int(name)
+    return name
+
+
+# ── WAV をマイクの代わりに流す ────────────────────────────────────────────────
+
+class FileStream:
+    """WAV ファイルを「マイクから入ってきた音」として流す。
+
+    マイクが無い環境でも、録音ループ(VAD)から認識・整形・判定までを**本番と同じ経路**で
+    通せる。同じ音源なら毎回同じ結果になるので、しきい値を触ったときの比較にも使える。
+
+    実時間で刻む（本物のマイクと同じ速さで届く）。VAD には実時間で効く判定（開始音の
+    ガード・発話開始待ち）があるので、一気に流し込むとそれらを通過できない。
+    音が尽きたあとは無音を流し続け、通常どおり「無音で終了」に入る。
+    """
+
+    def __init__(self, path: Path, rate: int) -> None:
+        self._pcm = read_wav_as_pcm(path, rate)
+        self._pos = 0
+        self._rate = rate
+        self._t0: float | None = None
+        self._delivered = 0
+        self.closed = False
+
+    def read(self, nbytes: int, timeout: float) -> bytes:
+        if self._t0 is None:
+            self._t0 = time.monotonic()
+        due = self._t0 + (self._delivered + nbytes) / (self._rate * SAMPLE_WIDTH)
+        wait = due - time.monotonic()
+        if wait > 0:
+            time.sleep(min(wait, max(timeout, 0.0)))
+        self._delivered += nbytes
+
+        if self._pos >= len(self._pcm):
+            return b"\x00" * nbytes
+        out = self._pcm[self._pos:self._pos + nbytes]
+        self._pos += len(out)
+        if len(out) < nbytes:
+            out = out + b"\x00" * (nbytes - len(out))
+        return out
+
+    def close(self) -> None:
+        self.closed = True
+        self._pcm = b""
+
+
+def read_wav_as_pcm(path: Path, rate: int) -> bytes:
+    """WAV を 16bit・モノラル・指定サンプリングレートの PCM にして返す。
+
+    録音した音源をそのまま使えるよう、多チャンネルは平均してモノラル化し、
+    レートが違えば線形補間で合わせる（外部ライブラリを増やさないための簡易版。
+    動作試験には十分で、本番の経路では使わない）。
+    """
+    with wave.open(str(path), "rb") as w:
+        if w.getsampwidth() != SAMPLE_WIDTH:
+            raise CaptureFailed(
+                f"16bit の WAV を指定してください（このファイルは {w.getsampwidth() * 8}bit）"
+            )
+        channels = w.getnchannels()
+        src_rate = w.getframerate()
+        raw = w.readframes(w.getnframes())
+
+    samples = array("h")
+    samples.frombytes(raw[: len(raw) - (len(raw) % SAMPLE_WIDTH)])
+
+    if channels > 1:
+        mono = array("h", [0]) * (len(samples) // channels)
+        for i in range(len(mono)):
+            chunk = samples[i * channels:(i + 1) * channels]
+            mono[i] = int(sum(chunk) / channels)
+        samples = mono
+
+    if src_rate != rate and samples:
+        ratio = src_rate / rate
+        out_len = int(len(samples) / ratio)
+        resampled = array("h", [0]) * out_len
+        for i in range(out_len):
+            pos = i * ratio
+            left = int(pos)
+            frac = pos - left
+            right = min(left + 1, len(samples) - 1)
+            resampled[i] = int(samples[left] * (1 - frac) + samples[right] * frac)
+        samples = resampled
+
+    return samples.tobytes()
 
 
 # ── テスト用 ──────────────────────────────────────────────────────────────────
@@ -280,12 +390,37 @@ def available() -> tuple[bool, str]:
             return False, "arecord が見つかりません (sudo apt install alsa-utils)"
         return _probe_arecord()
     if backend == "sounddevice":
-        try:
-            import sounddevice  # type: ignore  # noqa: F401
-        except ImportError:
-            return False, "sounddevice が入っていません"
-        return True, "sounddevice"
+        return _probe_sounddevice()
+    if backend == "file":
+        path = _file_path()
+        if path is None:
+            return False, "audio.file_path が未設定です (動作試験用の WAV を指定してください)"
+        if not path.exists():
+            return False, f"音源が見つかりません ({path.name})"
+        return True, f"file ({path.name}) — 動作試験用。マイクは使いません"
     return False, "録音手段がありません (arecord も sounddevice も無い)"
+
+
+def _probe_sounddevice() -> tuple[bool, str]:
+    """入力デバイスが 1 つでもあるか確かめる。import が通るだけでは足りない。"""
+    try:
+        import sounddevice as sd  # type: ignore
+    except ImportError:
+        return False, "sounddevice が入っていません (pip install sounddevice)"
+    try:
+        wanted = parse_device(str(settings.get("audio.device") or ""))
+        info = sd.query_devices(wanted, "input")
+    except Exception as e:
+        return False, f"入力デバイスが見つかりません ({type(e).__name__})"
+    name = info.get("name", "?") if isinstance(info, dict) else "?"
+    return True, f"sounddevice ({name})"
+
+
+def _file_path() -> Path | None:
+    raw = str(settings.get("audio.file_path") or "").strip()
+    if not raw:
+        return None
+    return settings.resolve_path(raw)
 
 
 def _probe_arecord() -> tuple[bool, str]:
@@ -300,7 +435,25 @@ def _probe_arecord() -> tuple[bool, str]:
 
 
 def list_devices() -> list[str]:
-    """arecord -L の一覧。マイク選択手順(成果物 10)で使う。"""
+    """設定に書ける入力デバイス名の一覧。マイク選択手順で使う。
+
+    arecord なら `arecord -L` の名前、sounddevice なら「番号: 名前」を返す
+    （番号で指定するほうが確実。名前は環境によって化ける）。
+    """
+    backend = _backend()
+    if backend == "sounddevice":
+        try:
+            import sounddevice as sd  # type: ignore
+
+            out: list[str] = []
+            for i, d in enumerate(sd.query_devices()):
+                if int(d.get("max_input_channels", 0)) > 0:
+                    out.append(f"{i}: {d.get('name', '?')}")
+            return out[:40]
+        except Exception:
+            return []
+    if backend != "arecord":
+        return []
     try:
         r = subprocess.run(["arecord", "-L"], capture_output=True, text=True, timeout=5)
     except Exception:
@@ -329,6 +482,11 @@ def open_stream() -> Stream:
                 return ArecordStream(device, rate, channels)
             if backend == "sounddevice":
                 return SoundDeviceStream(device, rate, channels)
+            if backend == "file":
+                path = _file_path()
+                if path is None or not path.exists():
+                    raise CaptureUnavailable("動作試験用の音源(audio.file_path)がありません")
+                return FileStream(path, rate)
             raise CaptureUnavailable("録音手段がありません")
         except CaptureFailed as e:
             last = e
