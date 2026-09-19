@@ -1,0 +1,114 @@
+{
+  "_comment": [
+    "一文受付の精度評価セット。発話は作業指示 §19 のテストケース。",
+    "expect は『その発話から取れるべき値』。取れないのが正しい項目は null にしてある。",
+    "null が期待値の項目で値が入ったら『生成した』＝重大な失敗として数える。",
+    "実在の個人・法人は使わない（磯野木工所は利用者の自社名、他は架空）。"
+  ],
+  "staff_master": [
+    {"employee_id": "E00125", "name": "服部太郎", "name_kana": "はっとりたろう", "department": "営業部"},
+    {"employee_id": "E00318", "name": "服部健一", "name_kana": "はっとりけんいち", "department": "製造部"},
+    {"employee_id": "E00442", "name": "田中一郎", "name_kana": "たなかいちろう", "department": "総務部"},
+    {"employee_id": "E00501", "name": "佐藤花子", "name_kana": "さとうはなこ", "department": "総務部"}
+  ],
+  "purposes": ["打ち合わせ", "商談", "納品", "面接", "点検・工事", "その他"],
+  "cases": [
+    {
+      "id": "standard",
+      "label": "標準",
+      "utterance": "私、磯野木工所の荒木と申します。本日、服部様と打ち合わせのお約束で参りました",
+      "expect": {
+        "visitor_company": "磯野木工所", "visitor_name": "荒木",
+        "host_name_spoken": "服部", "purpose": "打ち合わせ", "has_appointment": true
+      },
+      "host_ambiguous": true
+    },
+    {
+      "id": "short",
+      "label": "短い表現",
+      "utterance": "磯野木工所の荒木です。服部さんに会いに来ました",
+      "expect": {
+        "visitor_company": "磯野木工所", "visitor_name": "荒木",
+        "host_name_spoken": "服部", "purpose": null, "has_appointment": null
+      },
+      "host_ambiguous": true
+    },
+    {
+      "id": "reordered",
+      "label": "語順の違い",
+      "utterance": "服部様との打ち合わせで参りました、磯野木工所の荒木です",
+      "expect": {
+        "visitor_company": "磯野木工所", "visitor_name": "荒木",
+        "host_name_spoken": "服部", "purpose": "打ち合わせ", "has_appointment": null
+      },
+      "host_ambiguous": true
+    },
+    {
+      "id": "delivery",
+      "label": "納品",
+      "utterance": "山田運送の田中です。総務部に荷物を届けに来ました",
+      "expect": {
+        "visitor_company": "山田運送", "visitor_name": "田中",
+        "host_name_spoken": null, "purpose": "納品", "has_appointment": null
+      }
+    },
+    {
+      "id": "no_company",
+      "label": "会社名なし",
+      "utterance": "荒木と申します。服部様とのお約束で参りました",
+      "expect": {
+        "visitor_company": null, "visitor_name": "荒木",
+        "host_name_spoken": "服部", "purpose": null, "has_appointment": true
+      },
+      "host_ambiguous": true
+    },
+    {
+      "id": "no_name",
+      "label": "氏名なし",
+      "utterance": "磯野木工所から来ました。服部様との打ち合わせです",
+      "expect": {
+        "visitor_company": "磯野木工所", "visitor_name": null,
+        "host_name_spoken": "服部", "purpose": "打ち合わせ", "has_appointment": null
+      },
+      "host_ambiguous": true
+    },
+    {
+      "id": "no_host",
+      "label": "担当者不明",
+      "utterance": "磯野木工所の荒木です。打ち合わせで来ました",
+      "expect": {
+        "visitor_company": "磯野木工所", "visitor_name": "荒木",
+        "host_name_spoken": null, "purpose": "打ち合わせ", "has_appointment": null
+      }
+    },
+    {
+      "id": "no_purpose",
+      "label": "用件不明",
+      "utterance": "磯野木工所の荒木です。服部様をお願いします",
+      "expect": {
+        "visitor_company": "磯野木工所", "visitor_name": "荒木",
+        "host_name_spoken": "服部", "purpose": null, "has_appointment": null
+      },
+      "host_ambiguous": true
+    },
+    {
+      "id": "host_only",
+      "label": "候補が複数",
+      "utterance": "服部様との約束で来ました",
+      "expect": {
+        "visitor_company": null, "visitor_name": null,
+        "host_name_spoken": "服部", "purpose": null, "has_appointment": true
+      },
+      "host_ambiguous": true
+    },
+    {
+      "id": "nothing",
+      "label": "発話にない情報",
+      "utterance": "打ち合わせで来ました",
+      "expect": {
+        "visitor_company": null, "visitor_name": null,
+        "host_name_spoken": null, "purpose": "打ち合わせ", "has_appointment": null
+      }
+    }
+  ]
+}

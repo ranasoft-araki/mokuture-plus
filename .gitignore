@@ -62,6 +62,17 @@ kiosk_agent/vendor/whisper.cpp/
 # プラットフォーム固有の実行ファイルなのでリポジトリには入れない。
 kiosk_agent/vendor/whisper.cpp-win-x64/
 
+# 一文受付の精度評価で使う llama.cpp の配布バイナリ(同上)。
+kiosk_agent/vendor/llama.cpp-win-x64/
+
+# 精度評価で比較する LLM / whisper のモデル。大きいので取得スクリプト任せにする
+# (voice_models/ の ggml-base/small と vosk zip は LFS で管理している分)。
+kiosk_agent/voice_models/*.gguf
+kiosk_agent/voice_models/ggml-tiny-*.bin
+
+# 精度評価用に合成したテスト音源(その場で作り直せる)。
+kiosk_agent/voice_eval_audio/
+
 # Vosk モデルの展開先(zip を fetch_voice_models.py --extract で開いたもの)。
 # リポジトリに入っているのは zip のほう。
 kiosk_agent/voice_models/vosk-model-small-ja-0.22/
