@@ -165,7 +165,13 @@ def transcribe(seg: AudioSegment) -> Transcript:
     wav = tmp / f"{stem}.wav"
     out_base = tmp / stem
     out_json = tmp / f"{stem}.json"
+    # 認識にかかる時間は音の長さにほぼ比例する。設定値は「短い一語」を想定した
+    # 目安なので、一文をまとめて話す(最長15秒)と固定値では足りない。音の長さに
+    # 応じて延ばす。倍率は実測に合わせて設定で変えられる。
     timeout = float(settings.get("whisper.timeout_sec"))
+    per_sec = float(settings.get("whisper.timeout_per_audio_sec") or 0.0)
+    if per_sec > 0:
+        timeout = max(timeout, per_sec * (seg.total_ms / 1000.0))
 
     started = time.monotonic()
     try:

@@ -152,6 +152,17 @@ if (-not (Test-Path $yaml)) {
     Write-Host "既にあります: $yaml"
 }
 
+# 担当者の読み仮名。社員マスターに読みの欄が無いので端末側で補う。
+# ここに載っていない担当者は音声では指名できない(読みの推測は禁止)。
+$readings = Join-Path $AgentDir "staff_readings.yaml"
+if (-not (Test-Path $readings)) {
+    Copy-Item (Join-Path $AgentDir "staff_readings.yaml.example") $readings
+    Write-Host "作成しました: $readings" -ForegroundColor Yellow
+    Write-Host "  ※ 中身は例のままです。管理画面の担当者名と読み仮名へ書き換えてください。" -ForegroundColor Yellow
+} else {
+    Write-Host "既にあります: $readings"
+}
+
 # ── 仕上げ ────────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== 完了 ===" -ForegroundColor Cyan
@@ -159,6 +170,8 @@ Write-Host ""
 Invoke-Native { & $Python (Join-Path $AgentDir "scripts\voice_selftest.py") --status }
 Write-Host ""
 Write-Host "試し方:"
+Write-Host "  一文で受け付ける : 受付フォームの「音声で入力」→「話す」で、区切らずに一息で"
+Write-Host "                     「○○商事の田中と申します。服部様と打ち合わせのお約束で参りました」"
 Write-Host "  読み上げ音で1往復 : $Python scripts\voice_selftest.py --say `"株式会社ラナソフトです`" --show-text"
 Write-Host "  マイクで1往復     : $Python scripts\voice_selftest.py --mic --show-text"
 Write-Host "  入力デバイス一覧  : $Python scripts\voice_selftest.py --devices"

@@ -202,6 +202,7 @@ BUNDLE_FILES = [
     "voice/api.py",
     "voice/capture.py",
     "voice/defaults.py",
+    "voice/extract.py",
     "voice/metrics.py",
     "voice/quality.py",
     "voice/server.py",

@@ -19,7 +19,7 @@ import threading
 import time
 from dataclasses import dataclass, field as dc_field
 
-from voice import capture, metrics, quality, settings, textnorm, vad, whisper_cpp
+from voice import capture, extract, metrics, quality, settings, textnorm, vad, whisper_cpp
 from voice.types import Phase, Recognition
 
 log = logging.getLogger(__name__)
@@ -49,6 +49,10 @@ class Session:
     # 「音声をやめてタッチへ」が押されたか。集計にだけ使う。
     fell_back: bool = False
 
+    # 一文の名乗り(field="reception")で使う。誰がいるかは画面から渡してもらう。
+    _staff_names: list[str] = dc_field(default_factory=list)
+    _purposes: list[str] = dc_field(default_factory=list)
+
     _worker: threading.Thread | None = None
     _cancel: threading.Event = dc_field(default_factory=threading.Event)
     _stop: threading.Event = dc_field(default_factory=threading.Event)
@@ -75,8 +79,14 @@ class Session:
         }
 
     # ── 操作 ──────────────────────────────────────────────────────────────
-    def listen(self, field_name: str) -> None:
-        """1 項目ぶんの録音と認識を始める。すぐ返り、進行は state() で見る。"""
+    def listen(self, field_name: str, *, staff: list[str] | None = None,
+               purposes: list[str] | None = None) -> None:
+        """1 項目ぶんの録音と認識を始める。すぐ返り、進行は state() で見る。
+
+        staff / purposes は field="reception"(一文の名乗り)でだけ使う。**誰がいるか**
+        の出どころは管理画面の社員マスターで、画面がそれを持っているので渡してもらう。
+        音声サービス側は読み仮名だけを端末ローカルから補う。
+        """
         with self._lock:
             if self.busy():
                 raise Busy("録音中です")
@@ -89,6 +99,8 @@ class Session:
             self.error_code = None
             self.result = None
             self.touch()
+            self._staff_names = list(staff or [])
+            self._purposes = list(purposes or [])
             self._worker = threading.Thread(
                 target=self._run, args=(field_name,), name=f"voice-{field_name}", daemon=True,
             )
@@ -121,6 +133,7 @@ class Session:
     def _run(self, field_name: str) -> None:
         fcfg = settings.field_cfg(field_name)
         max_sec = float(fcfg.get("max_record_sec") or settings.get("vad.max_record_sec"))
+        quiet_sec = fcfg.get("silence_sec")
         engine_name = whisper_cpp.ENGINE_NAME
         model = whisper_cpp.model_name()
         seg = None
@@ -140,6 +153,7 @@ class Session:
                 seg = vad.record_utterance(
                     stream,
                     max_record_sec=max_sec,
+                    silence_sec=float(quiet_sec) if quiet_sec else None,
                     on_level=self._on_level,
                     should_cancel=self._cancel.is_set,
                     should_stop=self._stop.is_set,
@@ -192,11 +206,23 @@ class Session:
                     return
 
             normalized = textnorm.normalize(field_name, tr.text)
+            extracted = None
+            if field_name == "reception":
+                # ここに LLM は使わない(voice/extract.py の冒頭に理由)。規則と
+                # 名簿の読み合わせだけなので、実測で 1 ミリ秒未満で終わる。
+                try:
+                    extracted = extract.extract(
+                        tr.text, extract.build_staff(self._staff_names), self._purposes,
+                    ).as_dict()
+                except Exception as e:
+                    # 抽出に失敗しても文字起こしは出す。画面で打ち直せる。
+                    log.warning("[voice] 項目の取り出しに失敗: %s", type(e).__name__)
             verdict = quality.judge(seg, tr, normalized)
             verdict.signals["stop_reason"] = seg.stop_reason
             total_ms = int((time.monotonic() - speech_end) * 1000)
 
             self.result = Recognition(
+                extracted=extracted,
                 field=field_name,
                 text=normalized,
                 raw_text=textnorm.normalize_common(tr.text),
@@ -289,6 +315,7 @@ def _result_payload(r: Recognition) -> dict:
         "stop_reason": r.stop_reason,
         "signals": r.signals,
         "candidates": r.candidates,
+        "extracted": r.extracted,
     }
 
 

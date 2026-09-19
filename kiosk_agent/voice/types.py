@@ -10,7 +10,7 @@ from typing import Literal
 
 # 入力項目。第1段階で使うのは company / person_name の 2 つ。
 FieldName = Literal["company", "person_name", "staff", "command"]
-FIELDS: tuple[str, ...] = ("company", "person_name", "staff", "command")
+FIELDS: tuple[str, ...] = ("reception", "company", "person_name", "staff", "command")
 
 # セッションの進行状態。画面はこれを見て文言を切り替える。
 #   idle        …… 何もしていない
@@ -126,3 +126,5 @@ class Recognition:
     signals: dict
     # 担当者照合(第3段階)。候補が無いときは空。
     candidates: list[dict] = field(default_factory=list)
+    # field="reception" のときだけ入る。一文から取り出した受付項目(下書き)。
+    extracted: dict | None = None

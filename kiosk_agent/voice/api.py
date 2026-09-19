@@ -29,7 +29,7 @@ import re
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from voice import capture, metrics, session as session_mod, settings, whisper_cpp
+from voice import capture, extract, metrics, session as session_mod, settings, whisper_cpp
 from voice.types import FIELDS, message
 
 log = logging.getLogger(__name__)
@@ -67,6 +67,12 @@ def _require_session(sid: str) -> session_mod.Session:
 
 class ListenBody(BaseModel):
     field: str = Field(default="company")
+    # field="reception"(一文の名乗り)でだけ使う。**誰がいるか**の出どころは管理画面の
+    # 社員マスターなので、それを持っている画面から渡してもらう。音声サービスは読み仮名
+    # だけを端末ローカルの staff_readings.yaml から補う。
+    # 上限があるのは、長い一覧を投げ込まれて照合が重くならないようにするため。
+    staff: list[str] = Field(default_factory=list, max_length=500)
+    purposes: list[str] = Field(default_factory=list, max_length=50)
 
 
 class EventBody(BaseModel):
@@ -105,13 +111,19 @@ async def voice_status(request: Request):
         "enabled": enabled,
         "microphone": {"available": mic_ok, "detail": mic_detail},
         "engines": {"whisper": engine},
-        # 第3・4段階(Vosk・担当者照合)はまだ。画面が導線を出さないよう false を返す。
+        # 第4段階(音声操作)はまだ。画面が導線を出さないよう false を返す。
         "features": {
+            # 一文の名乗りをまとめて受ける。こちらが受付の既定の入口。
+            "reception": True,
             "company": True,
             "person_name": True,
+            # 担当者だけを単独で言わせる入口は作らない(一文の中で拾う)。
             "staff": False,
             "command": False,
         },
+        # 読み仮名が登録されている担当者の数。0 なら一文から担当者を拾えない
+        # (読みを推測してはいけないため)。画面はこれを見て案内を変えられる。
+        "staff_readings": {"registered": len(extract.load_readings())},
         "fields": fields,
         "timing": {
             "start_timeout_sec": float(settings.get("vad.start_timeout_sec")),
@@ -158,7 +170,7 @@ async def voice_listen(sid: str, body: ListenBody, request: Request):
     if not settings.field_cfg(body.field):
         raise HTTPException(status_code=400, detail="field not configured")
     try:
-        session.listen(body.field)
+        session.listen(body.field, staff=body.staff, purposes=body.purposes)
     except session_mod.Busy:
         raise HTTPException(status_code=409, detail="already listening")
     return session.state()

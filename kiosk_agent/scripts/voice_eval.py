@@ -602,20 +602,20 @@ def main() -> int:
                 continue
 
             if args.strategy == "rules":
+                # **本体(voice/extract.py)をそのまま呼ぶ。** ベンチに写しを持つと、
+                # 測ったものと動くものがずれる。
+                from voice import extract as vex
+                book = [vex.Staff(name=s["name"], reading=s.get("name_kana", "")) for s in staff]
                 t0 = time.monotonic()
-                company, name, span = scan_visitor(text, purposes)
-                # 名乗りの部分を除いてから担当者を探す。ここを残すと「山田運送の
-                # 田中です」の田中が担当者として当たってしまう（田中・佐藤のような
-                # 姓では実運用で必ず起きる）。
-                rest = (text[:span[0]] + " " + text[span[1]:]) if span else text
-                cand = scan_staff(rest, staff)
-                got = {"visitor_company": company, "visitor_name": name,
-                       "host_name_spoken": cand[0]["name"] if cand else None,
-                       "host_employee_id": cand[0]["employee_id"] if len(cand) == 1 else None,
-                       "purpose": rule_purpose(text, purposes),
-                       "has_appointment": rule_appointment(text),
-                       "_candidates": [s["name"] for s in cand]}
+                r = vex.extract(text, book, purposes)
                 lms, err = int((time.monotonic() - t0) * 1000), ""
+                by_name = {s["name"]: s for s in staff}
+                only = by_name.get(r.host_candidates[0]) if len(r.host_candidates) == 1 else None
+                got = {"visitor_company": r.visitor_company, "visitor_name": r.visitor_name,
+                       "host_name_spoken": r.host_name_spoken,
+                       "host_employee_id": only["employee_id"] if only else None,
+                       "purpose": r.purpose, "has_appointment": r.has_appointment,
+                       "_candidates": list(r.host_candidates)}
             else:
                 got, lms, err = extract(text, staff, purposes, args.llm_url, args.strategy)
             llm_ms.append(lms)

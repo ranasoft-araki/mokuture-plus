@@ -2669,20 +2669,28 @@ function stopKioskAudio() {
 
 // 音声入力のオーバーレイを開く。確定されたら onApply(values, opts) を呼ぶ。
 // 呼び出し側の画面(受付フォーム)はそのまま生きているので、入力途中の値は失われない。
-function openVoiceInput({ initial, onApply }) {
+function openVoiceInput({ initial, onApply, context }) {
   const bc = ST.brand_color;
   const st = VOICE.status || {};
   const FEATURES = st.features || {};
   const FIELD_CFG = st.fields || {};
   const TIMING = st.timing || {};
   const POLL_MS = TIMING.poll_interval_ms || 120;
-  // 第1段階は会社名とお名前だけ。担当者(第3段階)はサービスが使えると言ったら増える。
-  const STEPS = ["company", "person_name", "staff"].filter(f => FEATURES[f]);
+  // 受付の電話と同じで、実際には「磯野木工所の荒木と申します、服部様と打ち合わせの
+  // お約束で参りました」と**一続き**で話す。項目ごとに区切らせると体験が落ちるので、
+  // サービスが対応していれば一文をまとめて受ける方を既定にする。
+  const ONE_SHOT = !!FEATURES.reception;
+  const STEPS = ONE_SHOT ? ["reception"] : ["company", "person_name", "staff"].filter(f => FEATURES[f]);
   const LABEL = {
+    reception:   ["ご用件", "Your visit"],
     company:     ["会社名", "Company"],
     person_name: ["お名前", "Name"],
     staff:       ["訪問先", "Host"],
   };
+  // 画面が持っている担当者と用件の一覧。**誰がいるか**の出どころは管理画面の
+  // 社員マスターなので、音声サービスへはこちらから渡す。
+  const CTX_STAFF = (context && context.staff) || [];
+  const CTX_PURPOSES = (context && context.purposes) || [];
 
   // 使える項目が 1 つも無いのに開かれたら、何もせず閉じる(ボタンは出ないはずだが保険)。
   if (!STEPS.length) return { close() {} };
@@ -2696,7 +2704,10 @@ function openVoiceInput({ initial, onApply }) {
     company: (initial && initial.company) || "",
     person_name: (initial && initial.visitor_name) || "",
     staff: (initial && initial.staff) || "",
+    purpose: (initial && initial.purpose) || "",
   };
+  // 一文から取り出した担当者の候補。1 人に絞れないのは正常(同姓が複数)。
+  let hostCandidates = [];
   const edited = { company: false, person_name: false, staff: false };
   // レベルメーターの履歴(簡易的な波形)。右から流れる。
   const BARS = 32;
@@ -2743,7 +2754,13 @@ function openVoiceInput({ initial, onApply }) {
     if (closed) return;
     try {
       await ensureSession();
-      await voiceApi("POST", `/voice/session/${sessionId}/listen`, { field: fieldName() });
+      const body = { field: fieldName() };
+      if (fieldName() === "reception") {
+        // 担当者の照合と用件の判定に使う。端末側は読み仮名だけを補う。
+        body.staff = CTX_STAFF;
+        body.purposes = CTX_PURPOSES;
+      }
+      await voiceApi("POST", `/voice/session/${sessionId}/listen`, body);
     } catch (e) {
       phase = "error"; errCode = "internal";
       errMsg = "音声入力を始められませんでした"; errMsgEn = "Could not start";
@@ -2779,6 +2796,16 @@ function openVoiceInput({ initial, onApply }) {
         draft = s.result.text || "";
         errCode = s.result.accepted ? null : s.result.error_code;
         errMsg = s.message || ""; errMsgEn = s.message_en || "";
+        const ex = s.result.extracted;
+        if (ex) {
+          // 取れた項目だけ入れる。取れなかった欄は触らない(すでに入っていた値を消さない)。
+          if (ex.visitor_company) values.company = ex.visitor_company;
+          if (ex.visitor_name) values.person_name = ex.visitor_name;
+          hostCandidates = Array.isArray(ex.host_candidates) ? ex.host_candidates : [];
+          // 候補が 1 人でも、ここで確定はしない。画面で選んでもらう(§4)。
+          values.staff = hostCandidates.length === 1 ? hostCandidates[0] : "";
+          if (ex.purpose && CTX_PURPOSES.includes(ex.purpose)) values.purpose = ex.purpose;
+        }
         phase = "review";
       } else if (s.phase === "cancelled") {
         phase = "intro";
@@ -2831,7 +2858,25 @@ function openVoiceInput({ initial, onApply }) {
   }
 
   // ── 確定して次の項目へ ────────────────────────────────────────────────
+  // 一文モードの確定。画面に並べた4項目をそのまま受付フォームへ渡す。
+  function collectReception() {
+    const val = (id) => { const el = g(id); return el ? String(el.value || "").trim() : ""; };
+    values.company = val("v-company");
+    values.person_name = val("v-name");
+    values.staff = val("v-staff");
+    if (g("v-purpose")) values.purpose = val("v-purpose");
+  }
+
   async function acceptStep() {
+    if (ONE_SHOT) {
+      collectReception();
+      const changed = !!(result && result.extracted &&
+        (values.company !== (result.extracted.visitor_company || "") ||
+         values.person_name !== (result.extracted.visitor_name || "")));
+      await sendEvent("confirm", changed);
+      close({ apply: true });
+      return;
+    }
     const el = g("v-edit");
     const finalText = el ? el.value.trim() : draft;
     values[fieldName()] = finalText;
@@ -2855,6 +2900,12 @@ function openVoiceInput({ initial, onApply }) {
 
   async function toKeyboard() {
     // 認識結果を受付フォームへ入れ、既存の五十音キーボードで直してもらう。
+    if (ONE_SHOT) {
+      collectReception();
+      await sendEvent("fallback_touch", true);
+      close({ apply: true, focus: "company" });
+      return;
+    }
     const el = g("v-edit");
     if (el) values[fieldName()] = el.value.trim();
     const field = fieldName();
@@ -2878,6 +2929,8 @@ function openVoiceInput({ initial, onApply }) {
   };
 
   function stepDots() {
+    // 一文モードは 1 段階しかないので、進み具合を出す意味が無い。
+    if (ONE_SHOT) return "";
     return STEPS.map((f, i) => {
       const on = i === stepIdx, done = i < stepIdx;
       const color = on ? bc : (done ? T.sub : T.border);
@@ -2924,6 +2977,17 @@ function openVoiceInput({ initial, onApply }) {
 
   // 使い終わった項目の一覧(右側)。すでに確定したものを見せて安心してもらう。
   function summaryHtml() {
+    // 一文モードは 1 回の発話で 4 項目が埋まるので、全部を並べて見せる。
+    const shown = ONE_SHOT
+      ? [["company", "会社名"], ["person_name", "お名前"], ["staff", "訪問先"], ["purpose", "ご用件"]]
+      : null;
+    if (shown) {
+      return `<div style="display:flex;flex-direction:column;gap:6px">${shown.map(([k, label]) => `
+        <div style="display:flex;flex-direction:column;gap:4px;padding:16px 18px;border-radius:14px;background:${values[k] ? T.panel : "transparent"};border:1px solid ${values[k] ? T.border : "transparent"}">
+          <div style="font-size:18px;color:${T.muted}">${escHtml(label)}</div>
+          <div style="font-size:26px;color:${values[k] ? T.ink : T.muted};font-weight:${values[k] ? 600 : 400}">${escHtml(values[k] || "未入力")}</div>
+        </div>`).join("")}</div>`;
+    }
     const rows = STEPS.map((f, i) => {
       const v = values[f];
       const active = i === stepIdx;
@@ -3000,6 +3064,71 @@ function openVoiceInput({ initial, onApply }) {
       </div>`;
   }
 
+  // 一文で受けたときの確認画面。**取れた項目をすべて並べて、その場で直せる。**
+  // 会社名と氏名は文字起こしの精度がそのまま出る(実測で 3〜4 割)ので、直せることが
+  // 前提。担当者だけは通知先が変わるので、候補から選ぶ形にして打ち間違いを防ぐ。
+  function bodyReceptionReview() {
+    const weak = !!errCode;
+    const heard = escHtml(draft || "（聞き取れませんでした）");
+    const inputStyle = `width:100%;height:78px;background:${T.canvas};border:2px solid ${T.border};border-radius:14px;padding:0 20px;font-size:32px;font-weight:600;color:${T.ink};outline:none;font-family:inherit`;
+    const selStyle = inputStyle + ";cursor:pointer";
+
+    // 候補が出ていればそれだけを、出ていなければ全員を選べるようにする。
+    const hostOptions = (hostCandidates.length ? hostCandidates : CTX_STAFF);
+    const hostNote = hostCandidates.length > 1
+      ? `<div style="font-size:19px;color:${T.sub};margin-top:6px">同じ姓の方が ${hostCandidates.length} 名います。お選びください。</div>`
+      : (hostCandidates.length === 0 && CTX_STAFF.length
+          ? `<div style="font-size:19px;color:${T.muted};margin-top:6px">お声から訪問先を特定できませんでした。一覧からお選びください。</div>`
+          : "");
+
+    const purposeRow = CTX_PURPOSES.length ? `
+      <div>
+        <div style="font-size:21px;color:${T.muted};margin-bottom:8px">ご用件</div>
+        <select id="v-purpose" style="${selStyle}">
+          <option value="">選択してください</option>
+          ${CTX_PURPOSES.map(p => `<option value="${escHtml(p)}"${p === values.purpose ? " selected" : ""}>${escHtml(p)}</option>`).join("")}
+        </select>
+      </div>` : "";
+
+    return `
+      <div style="flex:1;display:flex;flex-direction:column;gap:18px;min-height:0;overflow:auto">
+        <div style="background:${weak ? T.urgentBg : T.panel};border:1px solid ${weak ? "rgba(168,66,56,.35)" : T.border};border-radius:12px;padding:14px 18px">
+          <div style="font-size:18px;color:${T.muted};margin-bottom:4px">聞き取った内容</div>
+          <div style="font-size:23px;color:${weak ? T.urgent : T.sub};line-height:1.6">${heard}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+          <div>
+            <div style="font-size:21px;color:${T.muted};margin-bottom:8px">会社名</div>
+            <input id="v-company" type="text" value="${escHtml(values.company)}" autocomplete="off" style="${inputStyle}">
+          </div>
+          <div>
+            <div style="font-size:21px;color:${T.muted};margin-bottom:8px">お名前</div>
+            <input id="v-name" type="text" value="${escHtml(values.person_name)}" autocomplete="off" style="${inputStyle}">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+          <div>
+            <div style="font-size:21px;color:${T.muted};margin-bottom:8px">訪問先</div>
+            ${CTX_STAFF.length
+              ? `<select id="v-staff" style="${selStyle}">
+                   <option value="">選択してください</option>
+                   ${hostOptions.map(n => `<option value="${escHtml(n)}"${n === values.staff ? " selected" : ""}>${escHtml(n)}</option>`).join("")}
+                 </select>${hostNote}`
+              : `<input id="v-staff" type="text" value="${escHtml(values.staff)}" autocomplete="off" style="${inputStyle}">`}
+          </div>
+          ${purposeRow}
+        </div>
+        <div style="font-size:20px;color:${T.muted};line-height:1.7">
+          違うところはこの画面で直せます。細かい修正は「キーボードで修正」から受付画面へ戻れます。
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:4px">
+          ${btn("v-accept", "この内容で受付へ", "accent")}
+          ${btn("v-again", "もう一度話す")}
+          ${btn("v-kb", "キーボードで修正")}
+        </div>
+      </div>`;
+  }
+
   function bodyError() {
     const retryable = errCode !== "mic_unavailable" && errCode !== "engine_unavailable";
     return `
@@ -3021,7 +3150,7 @@ function openVoiceInput({ initial, onApply }) {
     const body = phase === "intro" ? bodyIntro()
                : (phase === "listening" || phase === "speaking" || phase === "arming") ? bodyListening()
                : phase === "recognizing" ? bodyRecognizing()
-               : phase === "review" ? bodyReview()
+               : phase === "review" ? (ONE_SHOT ? bodyReceptionReview() : bodyReview())
                : bodyError();
     root.innerHTML = `
 <div style="width:1760px;height:960px;background:${T.bg};border-radius:28px;box-shadow:0 30px 90px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden">
@@ -3339,6 +3468,8 @@ function showReception(initPurpose) {
       applied.push("お名前");
     }
     if (v.staff && STAFF_LIST.includes(v.staff)) { form.staff = v.staff; applied.push("担当者"); }
+    // 用件は一文で話したときだけ入る。設定にある選択肢に限る。
+    if (v.purpose && PURPOSE_OPTIONS.includes(v.purpose)) { form.purpose = v.purpose; applied.push("ご用件"); }
     cardNote = applied.length
       ? `音声から ${applied.join("・")} を入力しました。違うところは右のキーボードで直してください。`
       : "音声からは入力できませんでした。お手数ですが右のキーボードで入力してください。";
@@ -3431,7 +3562,12 @@ function showReception(initPurpose) {
     if (voiceBtn) voiceBtn.addEventListener("click", () => {
       resetIdle();
       AN.inputStarted("voice_input", "voice");
-      openVoiceInput({ initial: form, onApply: applyVoiceValues });
+      openVoiceInput({
+        initial: form,
+        onApply: applyVoiceValues,
+        // 担当者の照合と用件の判定に使う。音声サービスは読み仮名だけを端末から補う。
+        context: { staff: STAFF_LIST, purposes: PURPOSE_OPTIONS },
+      });
     });
     Object.keys(KEY).forEach(id => {
       const el = g(id); if (!el) return;

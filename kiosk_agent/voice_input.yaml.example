@@ -74,6 +74,10 @@ whisper:
   # Pi 5 は 4 コア。他の処理と食い合うようなら 3 に落とす。
   threads: 4
   timeout_sec: 10.0
+  # 音 1 秒あたりに許す認識時間。一文をまとめて話すと最長 15 秒になるので、
+  # 固定の timeout_sec では足りない。長い音ではこちらとの大きい方を使う。
+  # Windows の実測は音 1 秒あたり 0.4〜0.9 秒(base)。Pi はもっと遅いので上げること。
+  timeout_per_audio_sec: 2.0
   beam_size: 1
   # 音声と中間 JSON の置き場。tmpfs(RAM)にすること。ディスクに残さない。
   tmp_dir: /dev/shm

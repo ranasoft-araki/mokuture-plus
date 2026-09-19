@@ -43,7 +43,11 @@ DEFAULTS: dict[str, Any] = {
         "sample_rate": 16000,
         "channels": 1,
         # auto = arecord → sounddevice → 無し の順に試す。
+        # file = 下の file_path の WAV をマイクの代わりに流す(動作試験用)。
         "backend": "auto",
+        # backend: file のときに読む WAV。**ここに載っていない設定キーは
+        # 設定ファイルでも環境変数でも無視される**ので、使うキーは必ず既定に置く。
+        "file_path": "",
         # 録音開始の頭を捨てる長さ。受付開始音やスピーカーの余韻がマイクに
         # 回り込むのを防ぐ(§9)。
         "start_guard_ms": 250,
@@ -99,6 +103,11 @@ DEFAULTS: dict[str, Any] = {
         # Pi 5 は 4 コア。他の処理と食い合わないよう既定は 4。
         "threads": 4,
         "timeout_sec": 10.0,
+        # 音 1 秒あたりに許す認識時間。一文(最長15秒)は固定値では足りないので、
+        # 長い音では timeout_sec とこちらの大きい方を使う。Pi は Windows より
+        # 遅いので、実機に合わせて上げること。
+        "timeout_per_audio_sec": 2.0,
+
         # 1 = greedy。キオスクの短い発話ではビーム幅を広げても効果が薄く、遅くなる。
         "beam_size": 1,
         # 音声・中間 JSON の置き場。tmpfs(RAM)に置き、finally で必ず消す。
@@ -148,6 +157,17 @@ DEFAULTS: dict[str, Any] = {
             "prompt_en": "Please say who you are visiting",
             "example_ja": "「営業部の田中さん」",
             "max_record_sec": 8.0,
+        },
+        # 一文の名乗りをまとめて受ける。項目ごとに区切って言わせると受付として
+        # 不自然なので、こちらを既定の入口にする。文の途中で間が空くので、
+        # 無音とみなすまでの長さを他より長く取る。
+        "reception": {
+            "engine": "whisper",
+            "prompt_ja": "ご用件をお話しください",
+            "prompt_en": "Please tell us who you are and who you are visiting",
+            "example_ja": "「磯野木工所の荒木と申します。服部様と打ち合わせのお約束で参りました」",
+            "max_record_sec": 15.0,
+            "silence_sec": 1.2,
         },
         "command": {
             "engine": "auto",
