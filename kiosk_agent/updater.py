@@ -82,6 +82,7 @@ MANAGED_FILES = [
     "voice/api.py",
     "voice/capture.py",
     "voice/defaults.py",
+    "voice/engines.py",
     "voice/extract.py",
     "voice/metrics.py",
     "voice/quality.py",
@@ -91,6 +92,7 @@ MANAGED_FILES = [
     "voice/textnorm.py",
     "voice/types.py",
     "voice/vad.py",
+    "voice/vosk_engine.py",
     "voice/whisper_cpp.py",
     # 端末ごとに現場で調整する設定(voice_input.yaml / staff_readings.yaml)は
     # 上書きしたくないので配信対象に入れない。

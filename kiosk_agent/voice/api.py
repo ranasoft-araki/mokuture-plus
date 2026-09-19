@@ -29,7 +29,8 @@ import re
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from voice import capture, extract, metrics, session as session_mod, settings, whisper_cpp
+from voice import (capture, engines, extract, metrics, session as session_mod,
+                   settings, whisper_cpp)
 from voice.types import FIELDS, message
 
 log = logging.getLogger(__name__)
@@ -93,7 +94,10 @@ async def voice_status(request: Request):
     _require_local(request)
     enabled = bool(settings.get("enabled"))
     mic_ok, mic_detail = capture.available()
-    engine = whisper_cpp.describe()
+    described = engines.describe_all()
+    # 「使える」は、どれか1つでも動くエンジンがあること。項目ごとにどれを使うかは
+    # fields[].engine に出す。
+    engine_ok = any(d["available"] for d in described.values())
 
     fields = {}
     for name in FIELDS:
@@ -103,14 +107,17 @@ async def voice_status(request: Request):
             "prompt_en": f.get("prompt_en", ""),
             "example_ja": f.get("example_ja", ""),
             "max_record_sec": float(f.get("max_record_sec") or settings.get("vad.max_record_sec")),
-            "engine": f.get("engine", "whisper"),
+            # 設定に書かれた指定と、実際に使われるエンジン。auto のときに
+            # どちらが選ばれているかが画面と実験ログから分かるようにする。
+            "engine": engines.wanted(name),
+            "engine_used": engines.pick(name).ENGINE_NAME,
         }
 
     return {
-        "available": enabled and mic_ok and engine["available"],
+        "available": enabled and mic_ok and engine_ok,
         "enabled": enabled,
         "microphone": {"available": mic_ok, "detail": mic_detail},
-        "engines": {"whisper": engine},
+        "engines": described,
         # 第4段階(音声操作)はまだ。画面が導線を出さないよう false を返す。
         "features": {
             # 一文の名乗りをまとめて受ける。こちらが受付の既定の入口。
@@ -239,7 +246,7 @@ async def voice_event(sid: str, body: EventBody, request: Request):
         "screenId": metrics.SCREEN_IDS.get(field_name, field_name or "unknown"),
         "result": body.result,
         "edited": bool(body.edited),
-        "model": whisper_cpp.model_name(),
+        "model": engines.pick(field_name).model_name(),
         "retryCount": session.retry_count.get(field_name, 0),
         "errorCode": None,
     })

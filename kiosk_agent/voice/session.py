@@ -19,7 +19,8 @@ import threading
 import time
 from dataclasses import dataclass, field as dc_field
 
-from voice import capture, extract, metrics, quality, settings, textnorm, vad, whisper_cpp
+from voice import (capture, engines, extract, metrics, quality, settings, textnorm,
+                   vad, vosk_engine, whisper_cpp)
 from voice.types import Phase, Recognition
 
 log = logging.getLogger(__name__)
@@ -134,8 +135,11 @@ class Session:
         fcfg = settings.field_cfg(field_name)
         max_sec = float(fcfg.get("max_record_sec") or settings.get("vad.max_record_sec"))
         quiet_sec = fcfg.get("silence_sec")
-        engine_name = whisper_cpp.ENGINE_NAME
-        model = whisper_cpp.model_name()
+        # 項目ごとにエンジンが違う。一文の名乗りは Vosk の方が読みを当てる
+        # (voice/engines.py に比較表)。
+        engine = engines.pick(field_name)
+        engine_name = engine.ENGINE_NAME
+        model = engine.model_name()
         seg = None
 
         try:
@@ -190,12 +194,12 @@ class Session:
                     self.phase = "cancelled"
                     return
                 try:
-                    tr = whisper_cpp.transcribe(seg)
+                    tr = engine.transcribe(seg)
                 except whisper_cpp.EngineTimeout:
                     self._fail("timeout", engine_name, model, seg.total_ms, 0,
                                int((time.monotonic() - speech_end) * 1000), stop_reason=seg.stop_reason)
                     return
-                except whisper_cpp.EngineUnavailable as e:
+                except (whisper_cpp.EngineUnavailable, vosk_engine.EngineUnavailable) as e:
                     self._fail("engine_unavailable", engine_name, model, seg.total_ms, 0,
                                int((time.monotonic() - speech_end) * 1000), str(e), seg.stop_reason)
                     return

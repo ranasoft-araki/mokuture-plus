@@ -27,21 +27,22 @@ card = [
     "PyYAML>=6.0",
 ]
 # 音声入力（QR無し来訪者の受付フォームを声で埋める / 実験導入）。
-# 入っていなくても音声サービスは動く（PyYAML が無ければ voice_input.yaml を読まず
-# 既定値のまま、webrtcvad が無ければエネルギーVAD、vosk が無ければ第3・4段階が無効）。
-# 録音は arecord（alsa-utils）を使うので Python 依存は増やしていない。
+# 録音は arecord（alsa-utils）を使うので、録音まわりの Python 依存は無い。
 voice = [
     "PyYAML>=6.0",
+    # 一文の名乗り（受付の既定の入口）で使う。固有名詞の読みは whisper より
+    # Vosk の方が当たる（読みCER 0.118 / whisper base 0.217）。
+    # 入っていなければ whisper へ自動で落ちるが、精度は下がる。
+    "vosk>=0.3.45",
     # 任意: 入っていれば VAD を webrtcvad に切り替えられる
     # "webrtcvad-wheels>=2.0.14",
-    # 任意: 第3・4段階（画面操作・担当者名）で使う
-    # "vosk>=0.3.45",
 ]
 # Windows 開発機で動作試験するとき用（arecord が無いのでマイクは PortAudio 経由）。
 # 本番の Raspberry Pi には入れない。scripts/install_voice_windows.ps1 が入れる。
 voice-windows = [
     "PyYAML>=6.0",
     "sounddevice>=0.4.6",
+    "vosk>=0.3.45",
 ]
 dev = [
     "pytest>=8.0",

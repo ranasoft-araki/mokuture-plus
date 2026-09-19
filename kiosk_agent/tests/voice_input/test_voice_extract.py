@@ -254,6 +254,9 @@ def test_一文モードがAPIから使える(monkeypatch, tmp_path, feed):
         "staff:\n  - name: 服部太郎\n    kana: はっとりたろう\n", encoding="utf-8")
     settings.cfg()["staff"]["readings_path"] = str(readings)
 
+    # ここで見たいのは抽出なので、エンジンは差し替えやすい whisper に固定する
+    # (既定の auto では Vosk が選ばれ、下の monkeypatch が効かない)。
+    settings.cfg()["fields"]["reception"]["engine"] = "whisper"
     heard = "磯野木工所の荒木と申します。本日、はっとり様と打ち合わせのお約束で参りました"
     monkeypatch.setattr(whisper_cpp, "available", lambda: (True, "test"))
     monkeypatch.setattr(whisper_cpp, "transcribe", lambda seg: Transcript(
@@ -304,6 +307,7 @@ def test_項目ごとの入力では抽出しない(monkeypatch, feed):
     from voice.types import Transcript
     from voice_audio import silence, tone
 
+    settings.cfg()["fields"]["company"]["engine"] = "whisper"
     monkeypatch.setattr(whisper_cpp, "available", lambda: (True, "test"))
     monkeypatch.setattr(whisper_cpp, "transcribe", lambda seg: Transcript(
         text="株式会社ラナソフトです", engine="whisper", model_name="whisper-base-q5",

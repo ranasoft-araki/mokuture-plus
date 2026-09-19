@@ -202,6 +202,7 @@ BUNDLE_FILES = [
     "voice/api.py",
     "voice/capture.py",
     "voice/defaults.py",
+    "voice/engines.py",
     "voice/extract.py",
     "voice/metrics.py",
     "voice/quality.py",
@@ -211,6 +212,7 @@ BUNDLE_FILES = [
     "voice/textnorm.py",
     "voice/types.py",
     "voice/vad.py",
+    "voice/vosk_engine.py",
     "voice/whisper_cpp.py",
 ]
 _FORCE_WINDOW_SEC = 7200  # force flag stays active for 2 hours after trigger

@@ -141,6 +141,36 @@ if ($NoMic) {
     }
 }
 
+# ── 3-2. Vosk ─────────────────────────────────────────────────────────────────
+# 一文の名乗り(受付の既定の入口)で使う。固有名詞の読みは whisper より Vosk の方が
+# 当たる(読みCER 0.118 / whisper base 0.217)。無ければ whisper へ自動で落ちる。
+Write-Host ""
+Write-Host "--- Vosk ---"
+Invoke-Native { & $Python -c "import vosk" 2>$null }
+if (($LASTEXITCODE -eq 0) -and (-not $Force)) {
+    Write-Host "vosk は導入済み"
+} else {
+    $uv = Get-Command uv -ErrorAction SilentlyContinue
+    if ($uv) {
+        Invoke-Native { & uv pip install --python $Python vosk }
+    } else {
+        Invoke-Native { & $Python -m pip install vosk }
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "vosk を入れられませんでした。一文の名乗りは whisper で動きます(精度は下がります)。" -ForegroundColor Yellow
+    }
+}
+
+$VoskModel = Join-Path $AgentDir "voice_models\vosk-model-small-ja-0.22"
+if (Test-Path $VoskModel) {
+    Write-Host "モデルは展開済み"
+} else {
+    Invoke-Native { & $Python (Join-Path $AgentDir "scripts\fetch_voice_models.py") --extract }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "モデルを展開できませんでした。" -ForegroundColor Yellow
+    }
+}
+
 # ── 4. 設定ファイル ───────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "--- 設定 ---"

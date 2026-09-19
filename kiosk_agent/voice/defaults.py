@@ -162,7 +162,9 @@ DEFAULTS: dict[str, Any] = {
         # 不自然なので、こちらを既定の入口にする。文の途中で間が空くので、
         # 無音とみなすまでの長さを他より長く取る。
         "reception": {
-            "engine": "whisper",
+            # 一文の名乗りは Vosk の方が固有名詞の読みを当てる(voice/engines.py に
+            # 比較表)。auto = Vosk が使えれば Vosk、駄目なら whisper。
+            "engine": "auto",
             "prompt_ja": "ご用件をお話しください",
             "prompt_en": "Please tell us who you are and who you are visiting",
             "example_ja": "「磯野木工所の荒木と申します。服部様と打ち合わせのお約束で参りました」",

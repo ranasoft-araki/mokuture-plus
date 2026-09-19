@@ -28,7 +28,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from voice import session as session_mod, settings, whisper_cpp
+from voice import engines, session as session_mod, settings, vosk_engine, whisper_cpp
 from voice.api import router as voice_router
 
 log = logging.getLogger(__name__)
@@ -86,8 +86,9 @@ async def _watch_sources() -> None:
 async def lifespan(app: FastAPI):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    ok, detail = whisper_cpp.available()
-    log.info("[voice] whisper: %s (%s)", "ready" if ok else "unavailable", detail)
+    for name, mod in engines.ENGINES.items():
+        ok, detail = mod.available()
+        log.info("[voice] %s: %s (%s)", name, "ready" if ok else "unavailable", detail)
     mic_ok, mic_detail = _mic_status()
     log.info("[voice] microphone: %s (%s)", "ready" if mic_ok else "unavailable", mic_detail)
 
@@ -95,7 +96,9 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_purge_loop()),
         asyncio.create_task(_watch_sources()),
         # モデルをページキャッシュに載せる。初回の待ち時間を削る。
-        asyncio.create_task(asyncio.to_thread(whisper_cpp.warmup)),
+        # モデルの読み込みは数秒かかる。使うものだけ先に温めておく。
+        *[asyncio.create_task(asyncio.to_thread(mod.warmup))
+          for mod in engines.ENGINES.values() if mod.available()[0]],
     ]
     try:
         yield
@@ -128,8 +131,9 @@ app.include_router(voice_router)
 
 @app.get("/health")
 async def health():
-    ok, detail = whisper_cpp.available()
-    return {"ok": True, "engine_ready": ok, "detail": detail, "sources": _sources_digest()}
+    ready = {name: mod.available()[0] for name, mod in engines.ENGINES.items()}
+    return {"ok": True, "engine_ready": any(ready.values()), "engines": ready,
+            "sources": _sources_digest()}
 
 
 def main() -> None:

@@ -11,7 +11,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from voice import capture, session as session_mod, settings, whisper_cpp
+from voice import capture, session as session_mod, settings, vosk_engine, whisper_cpp
 from voice.api import router
 from voice.types import Transcript
 from voice_audio import silence, tone
@@ -95,10 +95,30 @@ def test_status_without_microphone_is_unavailable(client, engine, monkeypatch):
 
 
 def test_status_without_engine_is_unavailable(client, feed, monkeypatch):
+    """エンジンが**どれも**使えないときだけ利用不可。1つ残っていれば使える。"""
     feed(silence(100))
     monkeypatch.setattr(whisper_cpp, "available", lambda: (False, "モデルがありません"))
-    s = client.get("/voice/status").json()
-    assert s["available"] is False
+    assert client.get("/voice/status").json()["available"] is True, "vosk が残っているのに使えないと言っている"
+
+    monkeypatch.setattr(vosk_engine, "available", lambda: (False, "モデルがありません"))
+    assert client.get("/voice/status").json()["available"] is False
+
+
+def test_一文の名乗りはvoskを使う(client, feed):
+    """一文は固有名詞の読みを当てたいので Vosk を選ぶ(voice/engines.py に比較表)。"""
+    feed(silence(100))
+    fields = client.get("/voice/status").json()["fields"]
+    assert fields["reception"]["engine"] == "auto"
+    assert fields["reception"]["engine_used"] == "vosk"
+    # 会社名を単独で言わせる従来の入口は whisper のまま(辞書に無い社名が化けない)。
+    assert fields["company"]["engine_used"] == "whisper"
+
+
+def test_voskが無ければwhisperに落ちる(client, feed, monkeypatch):
+    feed(silence(100))
+    monkeypatch.setattr(vosk_engine, "available", lambda: (False, "モデルがありません"))
+    fields = client.get("/voice/status").json()["fields"]
+    assert fields["reception"]["engine_used"] == "whisper"
 
 
 def test_disabled_blocks_session(client, engine, feed):

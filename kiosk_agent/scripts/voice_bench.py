@@ -1,7 +1,10 @@
-"""Raspberry Pi 5 での音声認識の性能計測(§3-1・§12)。
+"""実機(Raspberry Pi)での音声認識の性能計測(§3-1・§12)。
 
-    # マイクから 1 回録って、base と small で比べる
-    .venv/bin/python scripts/voice_bench.py --models base,small
+    # マイクから 1 回録って、一文の名乗りで使うエンジンを測る
+    .venv/bin/python scripts/voice_bench.py --models vosk --field reception
+
+    # whisper と比べる
+    .venv/bin/python scripts/voice_bench.py --models vosk,base,small --field reception
 
     # 同じ音声で何度も測る(ばらつきを見る)
     .venv/bin/python scripts/voice_bench.py --wav /dev/shm/sample.wav --repeat 5
@@ -28,13 +31,49 @@ AGENT_DIR = Path(__file__).resolve().parent.parent
 if str(AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(AGENT_DIR))
 
-from voice import capture, quality, settings, textnorm, vad, whisper_cpp  # noqa: E402
+from voice import capture, quality, settings, textnorm, vad, vosk_engine, whisper_cpp  # noqa: E402
 from voice.types import AudioSegment  # noqa: E402
 
+#: 測れるもの。whisper はモデルの大きさ違い、vosk は別エンジン。
 MODELS = {
     "base":  ("voice_models/ggml-base-q5_1.bin", "whisper-base-q5"),
     "small": ("voice_models/ggml-small-q5_1.bin", "whisper-small-q5"),
+    "vosk":  (None, "vosk-small-ja-0.22"),
 }
+#: 受付で人が黙って待てる上限。これを超えるなら画面の案内だけでは間が持たない。
+TARGET_SEC = 3.0
+
+
+def machine() -> str:
+    """実機を取り違えて比べないように、機械の素性を出しておく。"""
+    bits = []
+    model = Path("/proc/device-tree/model")
+    if model.exists():
+        bits.append(model.read_text(errors="ignore").strip("\x00").strip())
+    else:
+        import platform
+        bits.append(f"{platform.system()} {platform.machine()}")
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                bits.append(f"メモリ {int(line.split()[1]) / 1024 / 1024:.1f}GB")
+                break
+    except OSError:
+        pass
+    import os
+    bits.append(f"{os.cpu_count()} コア")
+    return " / ".join(bits)
+
+
+def rss_mb() -> float | None:
+    """いまのプロセスが使っているメモリ(MB)。Pi 4 は 4GB しかないので見ておく。"""
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) / 1024
+    except OSError:
+        pass
+    return None
 
 
 def record(seconds: float | None) -> AudioSegment:
@@ -74,20 +113,35 @@ def load_wav(path: Path) -> AudioSegment:
 def run_model(key: str, seg: AudioSegment, repeat: int, field: str, show_text: bool) -> None:
     rel, name = MODELS[key]
     cfg = settings.cfg()
-    cfg["whisper"]["model_path"] = rel
-    cfg["whisper"]["model_name"] = name
+    if key == "vosk":
+        engine = vosk_engine
+        head = f"\n[{key}] {name}"
+    else:
+        engine = whisper_cpp
+        cfg["whisper"]["model_path"] = rel
+        cfg["whisper"]["model_name"] = name
+        head = f"\n[{key}] {name}  threads={cfg['whisper']['threads']}"
 
-    ok, detail = whisper_cpp.available()
+    ok, detail = engine.available()
     if not ok:
         print(f"\n[{key}] 使えません: {detail}")
         return
 
-    print(f"\n[{key}] {name}  threads={cfg['whisper']['threads']}")
+    # モデルの読み込みは 1 回だけ。**この時間は待ち時間に入らない**(常駐中に済む)。
+    before = rss_mb()
+    started = time.monotonic()
+    engine.warmup()
+    load_ms = int((time.monotonic() - started) * 1000)
+    after = rss_mb()
+    print(head)
+    mem = f" / モデルで +{after - before:.0f}MB" if (after and before) else ""
+    print(f"  モデル読み込み {load_ms}ms（常駐中に済むので待ち時間には入らない）{mem}")
+
     times: list[int] = []
     for i in range(repeat):
         started = time.monotonic()
         try:
-            tr = whisper_cpp.transcribe(seg)
+            tr = engine.transcribe(seg)
         except whisper_cpp.EngineTimeout:
             print(f"  {i + 1}/{repeat}: タイムアウト")
             continue
@@ -107,9 +161,23 @@ def run_model(key: str, seg: AudioSegment, repeat: int, field: str, show_text: b
 
     if times:
         rtf = statistics.median(times) / max(1, seg.total_ms)
+        worst = max(times) / 1000
         print(f"  中央値 {int(statistics.median(times))}ms"
               f" / 最小 {min(times)}ms / 最大 {max(times)}ms"
               f" / RTF {rtf:.2f}(音声長に対する処理時間の比)")
+        # 1 回目だけ大きく遅いことがある(Vosk は実測で 4.7秒 → 0.7秒)。
+        # 平均に混ぜると実態を見誤るので、分けて出す。
+        if len(times) >= 2 and times[0] > statistics.median(times[1:]) * 2:
+            rest = statistics.median(times[1:])
+            print(f"  ※ 1 回目だけ {times[0]}ms、2 回目以降は中央値 {int(rest)}ms。"
+                  "サービス起動後の最初の 1 人だけが余分に待ちます")
+            worst = max(times[1:]) / 1000
+        if worst <= TARGET_SEC:
+            print(f"  → 実用的です（最悪でも {worst:.1f} 秒）")
+        elif worst <= TARGET_SEC * 2:
+            print(f"  → 待たされます（最悪 {worst:.1f} 秒）。画面の案内でごまかせる範囲の上限")
+        else:
+            print(f"  → 受付には遅すぎます（最悪 {worst:.1f} 秒）")
 
 
 def main() -> int:
@@ -141,7 +209,9 @@ def main() -> int:
         print(f"不明なモデル: {', '.join(unknown)}  (使えるのは {', '.join(MODELS)})")
         return 2
 
-    print(f"\n音声 {seg.total_ms}ms / 発話 {seg.speech_ms}ms")
+    print(f"\n機械: {machine()}")
+    print(f"音声 {seg.total_ms}ms / 発話 {seg.speech_ms}ms"
+          f" / 目標は話し終わってから {TARGET_SEC:.0f} 秒以内")
     try:
         for key in keys:
             run_model(key, seg, args.repeat, args.field, args.show_text)

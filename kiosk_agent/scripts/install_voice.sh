@@ -107,12 +107,33 @@ else
     echo "  -> 任意依存を入れられませんでした。既定値のまま動きます"
 fi
 
+# ── 4-2. Vosk のモデル ────────────────────────────────────────────────────────
+# 一文の名乗り(受付の既定の入口)で使う。zip はリポジトリにあるので展開するだけ。
+# 展開後は 48MB 程度。無くても whisper へ落ちるが、固有名詞の読みの精度が下がる。
+echo ""
+echo "--- Vosk のモデル ---"
+if [ -d "$AGENT_DIR/voice_models/vosk-model-small-ja-0.22" ]; then
+    echo "展開済み"
+elif "$VENV/bin/python" "$AGENT_DIR/scripts/fetch_voice_models.py" --extract; then
+    echo "展開しました"
+else
+    echo "  -> 展開できませんでした。一文の名乗りは whisper で動きます(精度は下がります)"
+fi
+
 # ── 5. 設定ファイルとマイク ───────────────────────────────────────────────────
 echo ""
 echo "--- 設定 ---"
 if [ ! -f "$AGENT_DIR/voice_input.yaml" ]; then
     cp "$AGENT_DIR/voice_input.yaml.example" "$AGENT_DIR/voice_input.yaml"
     echo "作成しました: $AGENT_DIR/voice_input.yaml"
+fi
+
+# 担当者の読み仮名。社員マスターに読みの欄が無いので端末側で補う。
+# ここに載っていない担当者は音声では指名できない(読みの推測は禁止)。
+if [ ! -f "$AGENT_DIR/staff_readings.yaml" ]; then
+    cp "$AGENT_DIR/staff_readings.yaml.example" "$AGENT_DIR/staff_readings.yaml"
+    echo "作成しました: $AGENT_DIR/staff_readings.yaml"
+    echo "  ※ 中身は例のままです。管理画面の担当者名と読み仮名へ書き換えてください。"
 fi
 mkdir -p "$HOME/.mokuture-voice"
 
@@ -144,7 +165,7 @@ echo "状態     : sudo systemctl status $SERVICE_NAME"
 echo "ログ     : journalctl -u $SERVICE_NAME -f"
 echo "利用可否 : curl -s http://127.0.0.1:8181/voice/status"
 echo "マイク   : curl -s http://127.0.0.1:8181/voice/devices"
-echo "性能計測 : $VENV/bin/python $AGENT_DIR/scripts/voice_bench.py --seconds 3"
+echo "速さの計測: $VENV/bin/python $AGENT_DIR/scripts/voice_bench.py --mic"
 echo ""
 curl -s -m 5 http://127.0.0.1:8181/voice/status 2>/dev/null | head -c 400 || \
     echo "まだ応答がありません。数秒おいて status を確認してください。"
