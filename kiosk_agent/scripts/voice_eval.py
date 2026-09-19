@@ -145,13 +145,6 @@ def rule_appointment(text: str) -> bool | None:
     return True if any(w in text for w in APPOINTMENT_WORDS) else None
 
 
-def _bare_name(spoken: str) -> str:
-    for suffix in ("様", "さま", "サマ", "さん", "サン", "氏", "殿", "先生"):
-        if spoken.endswith(suffix):
-            return spoken[: -len(suffix)]
-    return spoken
-
-
 def fix_swap(got: dict, staff: list[dict]) -> dict:
     """来訪者と訪問先の取り違えを直す。
 
@@ -170,18 +163,57 @@ def fix_swap(got: dict, staff: list[dict]) -> dict:
     return got
 
 
-def match_staff(spoken: str | None, staff: list[dict]) -> list[dict]:
-    """名簿との突合。LLM にはやらせない。
+def _reading_key(text: str) -> str:
+    """読み比べ用のキー。敬称を外し、ひらがなへ寄せ、長音・促音の揺れを畳む。"""
+    from voice import textnorm
+    key = textnorm.normalize_reading(textnorm.strip_honorific(str(text).strip()))
+    # 文字起こしが漢字を当ててしまった分（「張っとり」の「張」）は読みが分からないので落とす。
+    return "".join(ch for ch in key if "ぁ" <= ch <= "ゟ")
 
-    複数当たるのは**正常**（服部が2人）。1人に絞れなくても構わない。絞れないことを
-    画面に出して選ばせるのが正しい動きで、ここで勝手に1人へ寄せる方が危ない。
+
+def _distance(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb))
+        prev = cur
+    return prev[len(b)]
+
+
+def match_staff(spoken: str | None, staff: list[dict], tolerance: int = 1) -> list[dict]:
+    """名簿との突合。**文字列ではなく読みで照合する。**
+
+    文字起こしは同じ人を「はっとりさま」「ハットリ様」「ハッドリ」「アットリ様」と
+    毎回違う字で返す。文字列一致では当たらないが、読みに直すと はとり / はどり /
+    あとり となり、1文字の違いに収まる。**姓だけ言う**のが普通なので、名簿の読みの
+    先頭と比べる。
+
+    複数当たるのは**正常**（服部が2人いる）。1人に絞れなくても構わない。絞れない
+    ことを画面に出して選ばせるのが正しい動きで、ここで勝手に寄せる方が危ない。
     """
     if not spoken:
         return []
-    key = _bare_name(str(spoken).strip())
-    if not key:
-        return []
-    hit = [s for s in staff if key and (key in s["name"] or key in s.get("name_kana", ""))]
+    from voice import textnorm
+    bare = textnorm.strip_honorific(str(spoken).strip())
+    key = _reading_key(spoken)
+    hit = []
+    for s in staff:
+        # 文字起こしが漢字を正しく当てた場合（「田中です」）は、そのまま名簿と突き合う。
+        if len(bare) >= 2 and bare in s["name"]:
+            hit.append(s)
+            continue
+        full = _reading_key(s.get("name_kana") or s["name"])
+        if not full or len(key) < 2:
+            continue
+        # 敬称が語尾に癒着することがある（「ハトリサマット」）。姓だけでも当たるよう、
+        # 先頭から 2 文字以上の範囲で当たりを探す。
+        # 2文字だけの一致で 1 文字の違いを許すと、誰にでも当たってしまう
+        # （「はとり」の先頭2文字「はと」が「さとう」に 1 違いで当たる）。
+        # 2文字は完全一致、3文字以上で 1 文字の違いまで許す。
+        if any(_distance(key[:n], full[:n]) <= (0 if n < 3 else tolerance)
+               for n in range(2, min(len(key), len(full)) + 1)):
+            hit.append(s)
     return hit
 
 
@@ -457,6 +489,9 @@ def main() -> int:
         cers, asr_ms, llm_ms = [], [], []
         hits = {f: 0 for f in FIELDS}
         invented_total, ungrounded_total, parse_fail, placeholder_total = 0, 0, 0, 0
+        # 受付として最後に効くのはここ。会社名や氏名は画面で直せるが、担当者を
+        # 取り違えると別の人へ通知が飛ぶ。当たったか・空だったか・誤ったかを分けて数える。
+        match_ok = match_miss = match_wrong = 0
 
         for c in cases:
             if args.perfect_asr:
@@ -490,6 +525,20 @@ def main() -> int:
             invented_total += len(s["invented"])
             ungrounded_total += len(s["ungrounded"])
             placeholder_total += len(s["placeholders"])
+            if args.strategy == "split":
+                cand = got.get("_candidates") or []
+                want_host = c["expect"].get("host_name_spoken")
+                if want_host is None:
+                    if cand:
+                        match_wrong += 1
+                    else:
+                        match_ok += 1
+                elif not cand:
+                    match_miss += 1
+                elif all(want_host in x for x in cand):
+                    match_ok += 1
+                else:
+                    match_wrong += 1
             mark = "".join("o" if s["hit"][f] else "x" for f in FIELDS)
             line += f" | 抽出 {mark} ({lms}ms)"
             if s["invented"]:
@@ -513,6 +562,9 @@ def main() -> int:
             print(f"  ⚠ 根拠なし項目数  : {ungrounded_total}   （0 でなければ不合格）")
             print(f"  「不明」等の穴埋め: {placeholder_total}   （実装側で null に潰す必要がある数）")
             print(f"  JSON 解析失敗     : {parse_fail}")
+            if args.strategy == "split":
+                print(f"  担当者の照合      : 正しく{match_ok}/{n}  候補なし{match_miss}  "
+                      f"誤った候補{match_wrong}   （誤りは 0 でなければ不合格）")
     print("\n注意: ここの処理時間は Windows の値です。Raspberry Pi の目安にはなりません。")
     return 0
 
