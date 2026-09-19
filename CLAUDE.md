@@ -69,6 +69,7 @@ journalctl -u mokuture-kiosk -f
 ```
 mokuture/
 ├── CLAUDE.md                  ← このファイル
+├── ANALYTICS.md               ← 分析ログ(実証実験・製品改善)の設計書。イベント一覧・語彙・稼働率の定義
 ├── backend/                   ← FastAPI バックエンド
 │   └── app/
 │       ├── main.py            ← FastAPI アプリ初期化・CORS・ルーター登録
@@ -82,6 +83,7 @@ mokuture/
 │       │   ├── kiosk.py       ← /kiosk/* (公開API: スケジュール・受付送信・自己登録/承認状態)
 │       │   ├── reception.py   ← /reception (受付ログ一覧)
 │       │   ├── events.py      ← /events/stream (SSE: 管理画面の受付/ロッカー ニアリアルタイム連動)
+│       │   ├── analytics.py   ← /analytics/* (分析ログ: 端末からの投入 + 運営の参照/CSV出力)
 │       │   ├── notifications.py ← /notifications (Slack/Chatwork 設定)
 │       │   ├── staff_routes.py ← /notifications/staff-routes (担当者ごとの通知先・代理通知の設定)
 │       │   ├── lockers.py     ← /lockers (ロッカー制御モック)
@@ -95,6 +97,7 @@ mokuture/
 │       │   ├── device.py      ← Device (token, status=承認状態, hardware_id), Locker
 │       │   ├── reception.py   ← ReceptionLog (visitor_name, company, staff, purpose, state)
 │       │   ├── inquiry.py     ← Inquiry (共通問い合わせフォーム受信)
+│       │   ├── analytics.py   ← ReceptionSession/ReceptionEvent/DeviceEvent/DeviceMetric (匿名・個人情報の列は無い)
 │       │   ├── notification.py ← NotificationSetting, PushSubscription
 │       │   └── staff_route.py  ← StaffNotificationRoute (担当者ごとの通知先・代理通知先)
 │       ├── middleware/
@@ -105,6 +108,9 @@ mokuture/
 │           ├── storage.py     ← R2/MinIO Presigned URL 生成
 │           ├── slack.py       ← SlackNotifier(OAuth認可URL/code交換→Bot Token/chat.postMessage送信/チャンネル列挙・参加/受付文面生成)。旧Webhook送信も後方互換で残置
 │           ├── events.py      ← テナント単位の in-memory pub/sub (SSE 管理画面ニアリアルタイム連動)。単一ワーカー前提
+│           ├── analytics.py   ← 分析ログの受信・集計・未終了セッションのスイープ
+│           ├── analytics_vocab.py ← 分析ログの固定語彙(イベント名/画面ID/エラーコード)。analytics.js と一致させる
+│           ├── analytics_link.py  ← 受付ログID→匿名セッションID の**プロセス内 TTL マップ**(永続化しない)
 │           ├── webpush.py     ← Web Push 送信
 │           └── email.py       ← SMTP メール送信(aiosmtplib, best-effort)。来社予定QRのメール送信(segno で QR PNG 生成→CIDインライン画像+添付)。SMTP未設定なら送信APIが 503
 │
@@ -117,7 +123,8 @@ mokuture/
 │   │   ├── partner-portal/page.tsx ← 代理店ログイン（隠しURL）
 │   │   ├── operator/          ← 運営画面 (operator JWT 必須)
 │   │   │   ├── page.tsx       ← 運営ダッシュボード
-│   │   │   └── reception/page.tsx ← 受付ログ（クロステナント）
+│   │   │   ├── reception/page.tsx ← 受付ログ（クロステナント）
+│   │   │   └── analytics/page.tsx ← 実証実験ログ（匿名セッション一覧・時系列・主要指標・端末稼働率・CSV/JSON出力）
 │   │   └── [tenant]/          ← テナント別ルート (slug でテナント識別)
 │   │       ├── layout.tsx     ← テナントレイアウト
 │   │       ├── admin/         ← 管理画面 (JWT 必須)
@@ -162,6 +169,10 @@ mokuture/
 │
 └── kiosk_agent/               ← Raspberry Pi エージェント (Phase 1)
     ├── main.py                ← メインループ (API ポーリング・GPIO 制御)
+    ├── analytics.py           ← 分析ログ: スプール(JSONL)・アップローダ・端末稼働イベント/メトリクス
+    ├── sysinfo.py             ← CPU/温度/メモリ/ストレージ/タッチ の取得(標準ライブラリのみ・Linux 実測)
+    ├── watchdog.py            ← systemd watchdog + ブラウザ生存確認(分析ログの app_crashed 判定にも使う)
+    ├── static/analytics.js    ← キオスク画面の行動ロガー(匿名・IndexedDB 一時保存 + 指数バックオフ再送)
     ├── gpio.py                ← GPIO モック / 実機切り替え
     ├── sync.py                ← バックエンドとのデータ同期
     ├── state.py               ← デバイス状態管理
@@ -197,6 +208,7 @@ mokuture/
 - `/operator/devices` — 全デバイス管理
 - `/operator/broadcast` — 緊急配信
 - `/operator/reception` — 受付ログ（クロステナント）
+- `/operator/analytics` — 実証実験ログ（匿名セッション・端末稼働率。→ [`ANALYTICS.md`](ANALYTICS.md)）
 - `/{tenant}/reseller` — 代理店ダッシュボード（ResellerShell）
 - `/{tenant}/reseller/customers` — 顧客管理
 - `/{tenant}/reseller/users` — ユーザー管理
@@ -323,6 +335,9 @@ mokuture/
 | current_playlist_id | VARCHAR(36) | 現在配信中のプレイリストID。`GET /kiosk/schedule` が配信解決時に記録(変化時のみ)。管理画面「キオスク端末」詳細の「現在のプレイリスト」に名前解決して表示。停止/承認待ち/スケジュール無しでは NULL にクリア |
 | agent_version | VARCHAR(32) | 端末エージェント版数。`POST /kiosk/heartbeat` の body で受信し保存(管理画面詳細の「バージョン」) |
 | ip_address | VARCHAR(64) | 端末が報告する LAN IP。heartbeat body で受信(管理画面詳細の「IPアドレス」) |
+| os_version | VARCHAR(64) | 端末の OS 版数。分析ログの端末イベント/メトリクスから最新値をミラー |
+| ui_version | VARCHAR(32) | キオスク画面(kiosk.html)の版数ラベル。同上 |
+| last_boot_at | TIMESTAMP | 直近の端末起動時刻。`device_boot`/`device_restart` 受信時に更新 |
 | online_since | TIMESTAMP(UTC naive) | 連続オンライン開始時刻。`get_kiosk_device` が last_seen 更新時に維持(前回接続から3分超の空白でリセット)。管理画面の「連続稼働」= now − online_since(online な端末のみ表示) |
 
 > 上記のうち `current_playlist_id`(当初からモデルに存在)・`agent_version`・`ip_address`・`online_since` は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS.devices`)で追加。**heartbeat は任意 body**(`{version, ip}`)で、旧エージェント(body 無し)とも後方互換(422 にならない)。日時列は本番 Neon で timestamptz として aware に読み戻るため、シリアライズは `iso_z()` で単一 Z 化、`online_since` の差分計算は naive-UTC へ揃えてから行う(→[[naive-timestamp-tz-gotcha]] 相当)。
@@ -339,8 +354,30 @@ mokuture/
 - **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired, meeting_room_id FK nullable)
 - **meeting_rooms** — 会議室 (name, location, capacity, color, description, is_active, **map_image_url**=館内マップ画像URL nullable)
 - **notification_settings** — 通知先設定 (Fernet 暗号化, `type` で種別)。受付: `slack`/`chatwork`/`webhook`/`vapid`。配達専用: `slack_delivery`/`chatwork_delivery`/`webhook_delivery`(未設定時は受付用にフォールバック)、`push_delivery`(`{enabled}` プッシュ通知ON/OFF, 既定ON)。**`slack`(受付)は OAuth 連携で `{team_id, team_name, bot_access_token, bot_user_id, channel_id, channel_name, auth_method:"bot", created_at, updated_at}` を暗号化保存**(専用テーブルは作らず既存 row を拡張＝マイグレーション不要)。`bot_access_token` は API レスポンス・ログに一切出さない。旧・手入力 `{webhook_url}` の row も送信は後方互換で動く(`SlackNotifier.send_to_config` が bot/webhook を自動判別)
-- **staff_notification_routes** — **訪問先担当者ごとの通知先と代理通知設定**。`(tenant_id, staff_name)` で一意(`main.py` の起動時に `CREATE UNIQUE INDEX IF NOT EXISTS ix_staff_routes_tenant_staff`)。`staff_name` は `tenants.staff_list`(キオスクの訪問先ドロップダウン) の1件＝`reception_logs.staff` と突き合わせる。宛先は `config_json`(Fernet 暗号化)に `{slack_channel_id, slack_channel_name, email, webhook_url}`。**`webhook_url` は API レスポンスに出さない**(`webhook_configured` の真偽だけ)＝CLAUDE.md「秘密情報」方針。`include_default`(既定 true)=テナント共通の通知先(Slack/Webhook/**プッシュ**)へも送るか、`fallback_staff_name`=応答が無いときに転送する代理担当者(**1段のみ・連鎖しない**)、`escalate_after_sec`(既定 60、0=代理通知しない、30〜3600)。**行が無い担当者は従来どおり共通の通知先だけ**(後方互換)。テーブルは起動時 `create_all` で自動作成
+- **staff_notification_routes** — **訪問先担当者ごとの通知先と代理通知設定**。`(tenant_id, staff_name)` で一意(`main.py` の起動時に `CREATE UNIQUE INDEX IF NOT EXISTS ix_staff_routes_tenant_staff`)。`staff_name` は `tenants.staff_list`(キオスクの訪問先ドロップダウン) の1件＝`reception_logs.staff` と突き合わせる。宛先は `config_json`(Fernet 暗号化)に `{slack_channel_id, slack_channel_name, chatwork_room_id, email, webhook_url}` と、列 `push_user_id`(→`users.id`。Web Push を届ける管理ユーザー。購読はブラウザ＝ユーザーに紐づくため、担当者(ただの名前)とここで結びつける。NULL=従来どおり共通の購読へ)。**`webhook_url` は API レスポンスに出さない**(`webhook_configured` の真偽だけ)＝CLAUDE.md「秘密情報」方針。`include_default`(既定 true)=テナント共通の通知先(Slack/Webhook/**プッシュ**)へも送るか、`fallback_staff_name`=応答が無いときに転送する代理担当者(**1段のみ・連鎖しない**)、`escalate_after_sec`(既定 60、0=代理通知しない、30〜3600)。**行が無い担当者は従来どおり共通の通知先だけ**(後方互換)。テーブルは起動時 `create_all` で自動作成
 - **push_subscriptions** — Web Push 購読情報
+
+### 分析ログ（実証実験・製品改善）— 詳細は [`ANALYTICS.md`](ANALYTICS.md)
+
+**個人情報の列を持たない**（氏名・会社名・担当者・入力値・IPアドレス等の置き場が存在しない）。
+自由入力の `metadata` 欄も意図的に作っていない＝保存できる項目はカラム定義がホワイトリスト。
+テーブルは起動時 `create_all` で自動作成。
+
+- **reception_sessions** — 受付1回ぶんの匿名セッション。`id`=端末が発行する UUIDv4。
+  `outcome`(`completed|cancelled|abandoned|timeout|app_error|device_restarted`、NULL=進行中)、
+  `entry_method`(`touch|qr|card|voice|smartphone`)、`duration_ms`、`event_count`/`error_count`/
+  `screen_count`/`back_count`、`staff_response`(accepted/phone/declined)+`staff_response_ms`、
+  アンケート回答 `answer_clarity`/`answer_confidence`/`answer_assistance`(未回答は NULL=unknown)。
+  **`reception_logs` とは結び付けない**（`reception_log_id` に相当する列は無い）
+- **reception_events** — 行動イベント。**`event_id` が主キー＝再送されても二重登録されない**。
+  `sequence_no`(セッション内1始まりの連番)・`client_occurred_at`(端末時刻)・`server_received_at`
+  (サーバ受信時刻)を両方持ち、並べ替えは **受信順ではなく** `client_occurred_at, sequence_no`。
+  バックエンド発(通知の成否)は `event_source="backend"` / `sequence_no=0`
+- **device_events** — 端末稼働イベント(`device_boot`/`device_shutdown`/`device_restart`/
+  `agent_started`/`agent_stopped`/`browser_started`/`app_started`/`page_reloaded`/`app_crashed`/
+  `online`/`offline`/`network_recovered`/`log_dropped`)。`id` が主キー＝冪等
+- **device_metrics** — 端末の定期メトリクス。ハートビート(既定60秒)ごとに1行、5分ごとに
+  CPU/温度/メモリ/ストレージも載せる。`app_healthy`/`online`/`interval_sec` が **稼働率の計算元**
 
 ---
 
@@ -408,6 +445,17 @@ mokuture/
 | POST | /kiosk/lockers/mirror | デバイストークン | agent からの占有状態ミラー `{lockers:[{id,occupied,has_pin,name?,door_number?,kind?}]}`→`{ok,updated}`（管理画面の表示専用、**PINは受けない**）。**DBの lockers 台帳には書かず、送信端末の `devices.locker_state_json` に端末ごとの全件スナップショットとして保存**(冪等に丸ごと置換)。旧agent(メタ無し)は id から door_number/name を補完。管理画面は `GET /lockers/status` で端末ごとに表示 |
 | POST | /kiosk/call-staff | デバイストークン | 配達の呼び出し: **受付ログ(ReceptionLog: visitor="配達"/company=device.name/method="delivery"/state="received")を作成**し、担当者へ「どの端末(device.name)から呼び出し」を通知 `{message?}`→`{ok, id}`。id はキオスクの待機画面が `GET /kiosk/reception/{id}` をポーリングして 受付(accepted)/電話(phone) 応答を結果画面へ反映するのに使う(受付フローと同じ仕組み。配達は お断り 無し)。**通知には受付/電話の対応ボタンを付ける**(`_fire_delivery_notifications(decision_log=log)`)＝来客受付と同じ Slack Block Kit(署名シークレット＋Bot Token時)＋Web Push アクション(`decision_actions`/`build_decision_push_extras`, 配達は accept/phone の2択)。スタッフが**通知から直接「受付」を押す**→`_apply_decision`で accepted→キオスクがポーリングで拾い「参ります」へ遷移。WebPush は `push_delivery` 設定 (`{enabled}`, 既定ON) で ON/OFF 可、通知本体タップ先は `?respond={id}` 付きで対応モーダル(受付/電話)を直接開く。Slack/WebPush/Webhook/Chatwork (best-effort)。**通知は非ブロック(BackgroundTasks)** |
 | POST | /lockers/{id}/open | JWT | ロッカー開錠 |
+| POST | /analytics/events | デバイストークン | **行動イベントの投入**(バッチ・最大200件)。1件の不正で全体を落とさず `{accepted, duplicate, rejected}` を返す。tenant/site/device はトークンから確定し本文の申告値は使わない |
+| POST | /analytics/device-events | デバイストークン | 端末稼働イベントの投入(同上) |
+| POST | /analytics/device-metrics | デバイストークン | 端末メトリクス(ハートビート)の投入(同上) |
+| GET | /analytics/sessions | **運営JWT** | 匿名セッション一覧(テナント/端末/日付(JST)/結果/入力方法で絞り込み) |
+| GET | /analytics/sessions/{id} | **運営JWT** | 1セッションの時系列イベント(`client_occurred_at, sequence_no` 順) |
+| GET | /analytics/summary | **運営JWT** | 主要指標(完了率・離脱率・エラー率・回復率・所要時間の中央値/90%タイル・自己申告非介助率(回答率併記)) |
+| GET | /analytics/uptime | **運営JWT** | 端末稼働率・通信障害時間・再起動回数・CPU/温度/空き容量 |
+| GET | /analytics/export | **運営JWT** | CSV/JSON 出力(`kind=sessions\|events`, `fmt=csv\|json`) |
+
+> `/analytics/*` の参照系は **運営(operator)のみ**。テナント管理画面には出さない（実証実験・製品改善は自社側の分析のため）。
+> 受付送信(`POST /kiosk/reception`)と配達呼び出し(`POST /kiosk/call-staff`)は任意の `analytics_session_id` を受け取るが、**受付ログには保存しない**（通知の成否を匿名セッションへ書き戻すためだけにプロセス内 TTL マップへ渡す）。
 
 ---
 
@@ -451,9 +499,44 @@ mokuture/
 - **管理画面 (`admin/kiosk/page.tsx`)**: 端末一覧を 15s ごとに自動更新。`status==="pending"` の端末を「承認待ちの端末」セクションに表示し「承認する」(`api.approveDevice`→`POST /devices/{id}/approve`)で active に。不要な端末は「削除」で消す（拒否ボタンは無し）。端末名/場所は承認後に鉛筆ボタンで編集。
 - **仮名**: 自己登録時の端末名はホスト名（Web版は「新しい端末」）。承認後に鉛筆ボタンで正式名称に変更する。
 
+### 分析ログ（実証実験・製品改善）
+
+**設計書は [`ANALYTICS.md`](ANALYTICS.md)。イベントや項目を足すときは必ずそちらも更新すること。**
+
+- **個人情報は保存しない。** 氏名・会社名・担当者・入力値・QRトークン・名刺/カメラ画像・
+  音声・IPアドレス・Cookie は **列そのものが存在しない**。自由入力の `metadata` 欄も作らない。
+  受信 API は `extra="forbid"` のスキーマ＋固定語彙(`services/analytics_vocab.py`)で
+  **ホワイトリスト外を1件単位で reject** する（残りは通る＝1件の不正で全体を落とさない）。
+- **キオスク側の追加防御**: ソフトキーボードのキー(`[data-pk]`)と漢字変換候補(`.kb-cand`)は
+  クリック記録の対象外（打鍵列から入力値が復元できるため）。`<input>` の value は読まない。
+  スタッフ専用の `kiosk-settings` 画面は **画面遷移すら記録しない**（Wi-Fiパスワードを含むため）。
+  `element_id` は ASCII 識別子のみ許可＝日本語の表示ラベルはサーバ側で弾かれる。
+- **匿名セッションと受付ログ(個人情報)は結び付けない。** 対応表は
+  `services/analytics_link.py` の **プロセス内 TTL マップ(既定2時間・永続化しない)** だけ。
+  通知の成否(`notification_succeeded`/`failed`/`retried`)を匿名セッションへ書き戻すためだけに使う。
+  単一ワーカー前提は SSE pub/sub と同じ（複数ワーカー化するならここも要検討。**永続化はしない**）。
+- **経路**: ブラウザ(`static/analytics.js`) → **IndexedDB に先に保存** → エージェント
+  `POST /device/analytics/events` → **ディスクスプール(JSONL)へ書いてから ack** →
+  ブラウザは ack されたものだけ削除 → エージェントが `X-Kiosk-Token` を付けて backend へ
+  指数バックオフでアップロード → 200 を受けてスプールから削除。
+  **デバイストークンはブラウザのコードに持たせない**（エージェントが中継する）。
+- **通信断でも失われない**: IndexedDB は再読込・端末再起動をまたいで残り、スプールは
+  順番(FIFO)を維持したまま復旧後に再送する。`event_id` が主キーなので二重登録されない。
+- **稼働率の分母は「ラズパイの電源が入っていた時間」**（メトリクス行が存在する時間）。
+  電源OFF中は行が無いので夜間・休日・計画停止は自動的に分母から外れる。通信断中は
+  ローカルに溜まって後から届くので **分母に入り分子(app_healthy)から外れる**＝通信障害時間になる。
+- **失敗しても受付を止めない**: ブラウザ側は全公開APIを try/catch で包み、`/analytics.js` が
+  404（OTA 未着）でも `AN` が no-op に落ちて通常どおり動く。エージェント/バックエンドが
+  落ちていてもキオスク操作には影響しない。
+- **`?mock=1` のプレビューでは送信しない**（本番データを汚さない）。
+- **語彙は2か所にある**: `backend/app/services/analytics_vocab.py` と
+  `kiosk_agent/static/analytics.js` の `VOCAB`。**片方だけ増やすとそのイベントが reject される**ので
+  必ず両方に足すこと（`backend/tests/test_analytics_vocab_sync.py` がズレを検出する）。
+
 ### キオスク OTA 配信（`kiosk.html`・agent の自己更新）
 
-キオスク端末(agent)は `updater.py` で backend の `GET /kiosk/bundle/manifest`(version＋各ファイル `sha256(bytes)[:16]`)を定期ポーリングし、version が変われば変更ファイルだけを `GET /kiosk/bundle/file/{path}` からDL→idle時に適用する。対象は `BUNDLE_FILES`(kiosk.html/tap.mp3/main.py/updater.py/gpio.py/sync.py/state.py/config.py/locker_store.py＋`card/**.py` 17ファイル)。デバイス側 `_local_hash` と backend の hash は同一算法(`sha256(bytes)[:16]`)＝一致すれば再DLしない。
+キオスク端末(agent)は `updater.py` で backend の `GET /kiosk/bundle/manifest`(version＋各ファイル `sha256(bytes)[:16]`)を定期ポーリングし、version が変われば変更ファイルだけを `GET /kiosk/bundle/file/{path}` からDL→idle時に適用する。対象は `BUNDLE_FILES`(kiosk.html/**analytics.js**/tap.mp3/main.py/updater.py/gpio.py/sync.py/state.py/config.py/locker_store.py/**analytics.py**/**sysinfo.py**/**watchdog.py**＋`card/**.py` 17ファイル)。
+**`main.py` が import する Python は必ず同じリストに入れること**（main.py だけ新しくなると import 失敗でエージェントが起動しなくなる）。デバイス側 `_local_hash` と backend の hash は同一算法(`sha256(bytes)[:16]`)＝一致すれば再DLしない。
 
 - **配信元は「ローカルの kiosk_agent が有ればそれ、無ければ GitHub public raw(master)」**(`backend/app/api/kiosk.py` の `_read_bundle_bytes`/`_collect_bundle`)。**本番 Render のイメージはビルドコンテキストが `backend/` のみで `kiosk_agent/` を含まないため**、以前は配信元パスが存在せず manifest が空(`files:[]`)＝**全キオスクにOTAが一切届いていなかった**。対策として、ローカルに無い場合は公開リポジトリ `raw.githubusercontent.com/ranasoft-araki/mokuture-plus/master/kiosk_agent/<rel>` から取得(120s バイトキャッシュ)。これで **Dockerfile/コンテキストを触らず**、push→backend再デプロイ→GitHub master の最新 kiosk.html を配信、で更新が実機に届く。env `KIOSK_BUNDLE_DIR`/`KIOSK_BUNDLE_GITHUB_RAW` で上書き可。
 - **注意**: 配信は GitHub **master** ソース＝**push していない変更は実機に届かない**。kiosk.html を直したら commit＋push すること。Windows開発機のローカル配信は CRLF、GitHub/Linux は LF で hash が変わるが、実機(Linux Pi)は常に LF なので manifest と一致し再DLループにならない。
@@ -557,7 +640,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
   top: ご訪問 → reception(フォーム),  荷物の配達 → delivery,  ロッカー → lockerMode(保管/受取) → locker
   reception(フォーム・用件5択) → calling(お待ちください)
   calling ──(スタッフ応答)──▶ resultOk(受付) / resultPhone(電話) / resultDecline(お断り) / complete(予約マップ)
-  各結果 ──▶ idle
+  各結果 ──▶ feedback(任意アンケート3問。お断りのときは出さない) ──▶ idle
 ```
 ※旧・独立QR画面(`showQr`)は `showWelcome` に統合して**廃止**。QR専用画面 `go("qr")` は無い。
 
@@ -596,6 +679,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - **QR読取**: `welcome`(統合)に統合。`parseQR()` は **`appt:<token>` / `name` パラメータ付きURLのみ受付**、未対応/エラーは `pauseScan()` でメッセージ＋クールダウン。`scanLoop` は ≈8fps 間引き、`getUserMedia` は `disposed` フラグで teardown ガード。
 - **resultPhone（電話案内・`showResultPhone`）**: スタッフ「電話(対応不可)」応答時。`ST.kiosk_phone_number` を大きく表示（未設定時は「受付までお声がけください」）。一定時間で idle 復帰。
 - **resultDecline（営業お断り・`showResultDecline`）**: スタッフ「お断り」応答時。「営業・セールス等の…ご協力をお願いいたします」＋「お問い合わせフォームよりお願いいたします。受付でのお取次ぎは行っておりません」＋`ST.inquiry_qr`(SVG data URI, backend生成) の問い合わせフォールQRを表示。未生成時はURL文字列で代替。一定時間で idle 復帰。
+- **feedback（受付完了後アンケート・`showFeedback`）**: **お断り(resultDecline)以外のすべての終了パターン**の直後に表示する（受付/電話/歓迎画面/ロッカー完了/配達完了）。`goAfterResult()` が1か所で判定する。3問を1問ずつ・大きなボタンで、**すべて任意回答**。常に「回答せず終了」を出し、1問 20 秒（`FEEDBACK_QUESTION_SEC`）で自動終了する。保存されるのは **質問IDと回答コードだけ**（`clarity`/`confidence`/`assistance`。自由記述は無い）。未回答は `unknown` 扱いで、**行動ログからスタッフ支援の有無を推測しない**。端末単位で止めるには localStorage `kiosk_feedback="off"`。`?mock=1` では出さない。
 - **complete（歓迎画面「お待ちしておりました」）**: 氏名と「様」を同サイズでインライン表示。予約情報を拡大表示。QR受付で行き先（会議室）が確定し、かつその会議室に `map_image_url` が登録されている場合のみ館内マップを表示（`go("calling"/"complete", { name, staff, room, scheduledAt, method })` でデータを伝搬）。
 - **キオスク設定（スタッフ専用・`showKioskSettings`）**: 画面**左上＋右上の同時タッチ**（または `Ctrl+Shift+M`）で開く。上部の**タブで「設定」/「デバイスチェック」を切替**（統合済み）。
   - **設定タブ**: 音量スライダー＋サウンドON/OFF（タップ音, `/device/volume`）、Wi-Fi（`/device/wifi/networks|connect|toggle`）、**ロッカーの口数(3口/7口)選択**（`/device/locker-config`。増設時に設置者がタッチで切替＝JSON編集不要）、ロッカーの鍵 全解除（`/proxy/lockers/open-all`）、フッター端末名の**5連タップで再登録**。
@@ -693,17 +777,32 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 
 受付通知の宛先は元々「テナントに1つ」だったが、**来訪者がキオスクで選んだ訪問先担当者ごと**に Slack チャンネル / メール / Webhook を割り当てられる。さらに**応答が無いまま時間切れ**になったら、指定した**代理担当者**の通知先へ自動転送する（GitHub issue #1）。
 
-- **宛先の決定は `services/staff_routing.py` に集約**。`resolve_primary(db, tenant_id, staff_name)` が通常の宛先、`resolve_fallback(...)` が代理の宛先を `Destinations{slack_channels, emails, webhooks, use_default, routed_to}` で返す。`slack_send_configs(default_config, dest)` が実際に `SlackNotifier.send_to_config` へ渡す設定列を組む。
-- **送信は `services/reception_notify.py` に集約**。`notify_reception(db, tenant_id, log, stage="primary"|"fallback")` が Slack / Web Push / Webhook / メールへ一括ファンアウトする。**キオスク受付(`kiosk.kiosk_reception`)と管理画面からの手動受付(`reception.create_reception`)の両方がここを通る**（以前は両ファイルに `_notify_slack`/`_notify_push` がほぼ同じ形で重複しており、宛先を担当者別に拡張するとズレる一方だったので統合した）。どちらも `BackgroundTasks` で非ブロック送信（メール20s/Webhook5sのタイムアウトを受付経路に持ち込まない）。
+- **宛先の決定は `services/staff_routing.py` に集約**。`resolve_primary(db, tenant_id, staff_name)` が通常の宛先、`resolve_fallback(...)` が代理の宛先を `Destinations{slack_channels, chatwork_rooms, emails, webhooks, push_user_ids, use_default, routed_to}` で返す。`slack_send_configs(default_config, dest)` が実際に `SlackNotifier.send_to_config` へ渡す設定列を組む。
+- **送信は `services/reception_notify.py` に集約**。`notify_reception(db, tenant_id, log, stage="primary"|"fallback")` が Slack / **Chatwork** / Web Push / Webhook / メールへ一括ファンアウトする。**キオスク受付(`kiosk.kiosk_reception`)と管理画面からの手動受付(`reception.create_reception`)の両方がここを通る**（以前は両ファイルに `_notify_slack`/`_notify_push` がほぼ同じ形で重複しており、宛先を担当者別に拡張するとズレる一方だったので統合した）。どちらも `BackgroundTasks` で非ブロック送信（メール20s/Webhook5sのタイムアウトを受付経路に持ち込まない）。
 - **統合による意図的な挙動変更**: 管理画面から手動作成した受付(`POST /reception`)も、キオスク受付と同じく Slack の対応ボタン(Block Kit)・Webhook・メールが付く（従来は Slack テキスト＋Web Push のみ）。通知も `BackgroundTasks` 化した。
 - **Slack は既存の OAuth 連携(Bot Token)を使い回し、チャンネルだけ差し替える**＝**追加スコープ不要**。担当者チャンネルへ送る config は `{bot_access_token, channel_id}` のみにして `webhook_url` を落とす（旧Webhook設定へフォールバックして共通チャンネルへ二重投稿するのを防ぐ）。Bot Token が無い（旧Webhook連携だけの）テナントでは担当者ごとのチャンネル指定は成立しないので黙って捨てる。共通の通知先と同じチャンネルになる場合は重複送信しない。
-- **`include_default`（既定 ON・担当者ごとにOFF可）**でテナント共通の通知先へも送るかを決める。**OFF のときは共通の Slack・Webhook に加えて Web Push も送らない**（プッシュは購読が担当者と結び付いていないため担当者別に割れない＝「共通の通知先」として扱う）。**代理通知のときだけは `include_default` に関わらず必ず Web Push を送る**（誰も応答していない状態なので手元の端末へ届けるのが安全側）。代理通知のプッシュは `tag` を `reception-{id}-esc` にして元の通知を上書きしない。
+- **Chatwork も担当者ごとにルームを割り当てられる**（issue #1 追記分）。Slack と同じで**API トークンはテナント共通のものを使い回し、差し替えるのはルーム ID だけ**（担当者ごとにトークンを発行させない）。送信の実体は `services/chatwork.py` に集約。**トークン未設定なら何も送らない**。ルーム ID だけ指定して保存しようとすると API が 400 で拒む（「設定したのに届かない」を作らない）。
+- **受付通知の Chatwork は「担当者ごとのルームだけ」・共通ルームへは送らない**（`staff_routing.chatwork_send_rooms()` は `use_default` を見ない）。**共通ルームを既定の宛先にしてはいけない**: 従来 Chatwork は `api/kiosk.py` 直書きで**配達の呼び出し専用**であり、受付→Chatwork の経路は存在しなかった。共通ルームを足すと、Chatwork を登録済みの全テナントで**何も設定していないのに受付ごとに鳴り始める**（しかも通知設定カードに止める手段が無い）。受付を Chatwork へ流したい担当者にルームを設定する、という明示的な opt-in にしてある。
+- **トークンとルームは別々に読む**（`chatwork.load_api_token()` / `load_config()`）。「両方揃った行だけ返す」実装にすると、トークンだけ登録して共通ルームが空のテナントで**担当者ルームへ1通も届かない**（保存時も「未連携です」と嘘の 400 を返す）。一方 `load_config()` は配達用に**最初に見つかった行をそのまま返す**（不完全な行を飛ばして次の候補へ流すと、配達専用ルームを空にしているテナントの配達通知が受付用ルームへ漏れる）。
+- **Chatwork の接続設定(テナント共通)は部分更新**。`PUT /notifications/settings/chatwork`(と `_delivery`)は**空欄の項目を現在値のまま残す**。API トークンはレスポンスで `***` にマスクしていて画面の入力欄には戻らないため、素直に上書きすると「**ルーム ID だけ直したい**」という普通の操作でトークンが空になり、Chatwork 通知が丸ごと止まる（担当者ごとのルームも道連れ）。新規登録のときだけ両方必須（空の設定行を作らない）。
+- **来訪者の入力は Chatwork 記法として無害化する**（`chatwork.escape_tags()`）。氏名・会社名はキオスクで打たれた文字列なので、`[/info]` でカードを閉じたり `[To:id]` でメンションを飛ばしたりできないよう角括弧を全角へ寄せる（Chatwork にエスケープ記法は無い）。
+- **Web Push は担当者ごとに割れる**（issue #1 追記分）。購読(`push_subscriptions`)は端末ではなく**ログインした管理ユーザー**に紐づくので、`staff_notification_routes.push_user_id` で「この担当者あては誰の端末へ」を結びつける。宛先は `reception_notify.push_targets()`。
+- **プッシュ先を指定したら `include_default` が ON でもその人だけに送る**。Slack/Chatwork は「担当者のチャンネル＋共通チャンネル」と足し算に意味があるが、**プッシュの「共通」はテナント内の全購読＝絞り込みの上位集合**なので、足すと担当者ごとの指定が必ず無意味になる（既定が ON なので、そのままでは機能が死ぬ）。指定した人が**まだプッシュを許可していない**（購読0件）ときだけ `include_default` に従って全購読へ落とす。
+- **`include_default`（既定 ON・担当者ごとにOFF可）**でテナント共通の通知先へも送るかを決める。OFF かつ `push_user_id` 未設定なら Web Push は送らない（従来どおり）。**代理通知で宛先が絞れないときは `include_default` に関わらず全購読へ送る**（誰も応答していない状態で誰にも届かないのが一番危ないので安全側へ倒す）。代理通知のプッシュは `tag` を `reception-{id}-esc` にして元の通知を上書きしない。
+- **ユーザーを削除したら `push_user_id` を NULL に戻す**（`api/users.delete_user`）。本番の `push_user_id` は `ALTER TABLE ADD COLUMN` で足した列で**外部キー制約が無く `ON DELETE SET NULL` が効かない**。残すと画面は「指定しない」と表示するのに実際は宛先が解決できない、という乖離になる。
 - **代理通知は「別の担当者を指定」方式・1段のみ**（`fallback_staff_name`）。代理の代理は辿らないのでループしない。代理担当者にルートが無い/宛先が空のときは**テナント共通の通知先へ落とす**（無言の空振りを避ける）。自分自身を代理には指定できない（API が 422）。
 - **発火は「受付ごとのタイマー」ではなく定期スイープ**（`services/escalation.py`、15秒間隔、`main.lifespan` が起動・停止）。受付ごとに `asyncio.sleep` する方式だと Render の再デプロイ/再起動で待機中のタスクが消え、**安全網が一番必要なときに黙って効かなくなる**。スイープなら再起動後も未処理ぶんを拾い直せる。対象は **`staff_notification_routes` との JOIN で「代理通知が設定された担当者宛」に限定**したうえで、`state ∈ (received, notified)` かつ `escalated_at IS NULL` かつ `method ∉ (delivery, dropoff)` かつ直近24時間、1周期あたり最大50件。**JOIN で絞るのが重要**: 代理設定の無い担当者宛や担当者未選択の未応答ログは `escalated_at` が永久に NULL のままなので（来客に直接応対して誰も 受付/電話/お断り を押さない受付はそのまま残る）、絞らないと毎周期そちらが LIMIT の枠を先に埋め、本来送るべき受付が永久に選ばれなくなる。cutoff は **naive-UTC** で渡す（SQLAlchemy はモデルの `DateTime(timezone=False)` から `$1::TIMESTAMP WITHOUT TIME ZONE` にキャストするため、aware を渡すと asyncpg 側で壊れる）。**代理通知を設定しているテナントが1つも無ければ JOIN の結果が0件で終わる**（`staff_notification_routes` が空なら走査するものが無い）。担当者名の突き合わせは `func.trim(reception_logs.staff)` で行う——ルート側(`staff_name`)は保存時に必ず strip されるため、受付側に前後空白が残ると**代理通知だけ静かに落ちる**（1通目は `get_route` が strip して引くので届いてしまい原因に気づけない）。新規受付は `ReceptionCreate.staff` / `AppointmentCreate.staff` の strip バリデータで入口から揃え、過去データは JOIN 側の trim で拾う。
 - **冪等性は `reception_logs.escalated_at`**。**「まだ未応答・未エスカレーション」を条件にした `UPDATE` で先に確定・commit** してから送る。条件付きなのは、対象を読んでから送るまでの await の間にスタッフが応答を commit しうるため（単一ワーカーでもリクエストは並行する）。更新件数が0なら送らない。**この順序は意図的に at-most-once**＝commit と送信の間でプロセスが落ちるとその1件は送られない。逆にすると送信成功後の commit 失敗で15秒ごとに鳴り続けうるので、鳴りすぎるより取りこぼす側に倒している（通知は全経路 best-effort）。代理通知後は SSE(`{"type":"reception"}`)を publish し、管理画面「受付ログ」に**「代理通知済」バッジ**が即出る。
 - **前提: uvicorn `--workers 1`**（Dockerfile。in-memory pub/sub と同じ前提）。複数ワーカー化する場合は、このスイープが各ワーカーで走らないよう担当プロセスを決めるかロックを入れること。
 - **文面**: `SlackNotifier.build_reception_message(..., escalated_from=...)` に元の担当者名を渡すと見出しが `:warning: 受付に応答がありません（代理通知）` になり、末尾が「「{担当者}」宛の受付に応答がありません。代わりに対応をお願いします。」になる。メールは `reception_notify.build_reception_email`（来社予定QRメールと同じ和モダンHTML・`?respond={id}` 付きの受付ログリンク）。JST 表記は `services/timeutil.format_jst`（Slack・メール共通。以前 slack.py にあった `_format_jst` を公開名として timeutil へ移した）。
-- **管理画面**: 「通知設定」の**担当者ごとの通知先**カード（`StaffRoutesPanel` @ `admin/notify/page.tsx`）。受付設定の担当者リストを行に並べ、行の「編集」でインライン編集（Slackチャンネルは `GET /notifications/slack/channels` を**編集を開いた時だけ**取得）。**宛先ごとの成否が出るテスト送信**（通常／代理）付き。Slack未連携・SMTP未設定はカード上部で明示する。「設定を解除」は取り消せないので**2段階確認**にしている（JSダイアログ禁止ルールに従いインライン。Slack連携解除と同じ方式）。
+- **管理画面**: 「通知設定」の**担当者ごとの通知先**カード（`StaffRoutesPanel` @ `admin/notify/page.tsx`）。上部の `StaffMasterEditor` で担当者の追加・改名・削除・並べ替えを行い、その下に担当者ごとの行を並べる。行の「編集」でインライン編集（Slackチャンネル／Chatworkルーム／プッシュ先ユーザー／メール／Webhook／代理通知。Slackチャンネルは `GET /notifications/slack/channels` を**編集を開いた時だけ**取得）。プッシュ先の選択肢には**まだブラウザでプッシュを許可していないユーザーに「（未許可）」を付ける**（選べてしまうが届かないため）。**宛先ごとの成否が出るテスト送信**（通常／代理）付き。Slack未連携・SMTP未設定はカード上部で明示する。「設定を解除」は取り消せないので**2段階確認**にしている（JSダイアログ禁止ルールに従いインライン。Slack連携解除と同じ方式）。
+- **担当者マスターの編集は「通知設定」に集約**（issue #1 追記分）。実体は `tenants.staff_list`（カンマ区切り）のままで、**キオスク設定（受付設定）側は読み取り専用**にして誘導リンクだけ置く。宛先を決める場所と担当者を足す場所が別画面なのは分かりにくいため。API は `PUT /notifications/staff-routes/staff`（リストを丸ごと置換＝追加・削除・並べ替え）と `POST /notifications/staff-routes/staff/rename`。**名前にカンマは使えない**（保存形式が壊れるので 422）。
+  - **削除するとその担当者の通知先設定も一緒に消し、他の担当者の代理通知先参照も外す**。残すと「キオスクでは選べないのに代理先として参照され続ける」状態になる。
+  - **改名は通知先設定・代理通知先・まだ応答していない受付・登録済みの来社予定まで追随させる**。進行中の受付を旧名のまま残すと、その受付の代理通知が旧名で設定を探して見つけられず、**安全網が黙って外れる**。来社予定の `staff` はキオスク受付時にそのまま `reception_logs.staff` になるので、こちらも追随させないと同じことが起きる。**過去の完了ログは当時の記録なので書き換えない**。追随させる状態の集合(`PENDING_STATES`)と突き合わせ方(`func.trim`)は**スイープと必ず揃える**。
+  - **改名先は担当者リストだけでなく「設定行」も見て重複を弾く**。リストから消えても設定だけ残る担当者(orphan)と同名へ改名すると `(tenant_id, staff_name)` が重複し、以後 `get_route()` の `scalar_one_or_none()` が `MultipleResultsFound` を投げて、**その担当者宛の通知が全経路サイレントに止まる**（例外は `fire_reception_notifications` の except に飲まれる）。
+  - **`PATCH /settings` は `staff_list` を受け取っても無視する**。画面を読み取り専用にするだけでは、デプロイ前に開かれていた古いタブが受付設定を保存した瞬間に、その時点の古いリストで巻き戻る（しかもこの経路はルートの後片付けをしない）。
+  - **担当者リストの更新は楽観ロックで守る**。`GET` が返す `staff_list_version`（リスト内容の sha256 先頭16桁。並び順も含む）を画面が持ち回り、`PUT /staff` と `POST /staff/rename` に送り返す。食い違えば 409。**リストは全置換**なので、2人の管理者が同じ画面を開いていると、古い版のまま保存した側が**相手の追加した担当者とその通知先設定を巻き込んで消す**。`tenants` に `updated_at` が無いのでカラムは足さず内容から版を作る。版の送信は任意（API 直叩きを塞がない）だが管理画面は必ず送る。409 のときは画面側も読み直して最新を見せる。
+  - キオスク設定ページは `staff_list` を**PATCH の対象から外した**。読み取り専用にしたまま送ると、そのページを開いた時点の古いリストで上書きしてしまう。
 - **後方互換**: 担当者ごとの設定を1件も作らなければ挙動は従来どおり（共通の通知先だけ・代理通知なし）。担当者リストから名前が消えても設定行は残り、一覧に `orphan`（「受付設定に無い担当者」）として出す。
 - **配達の呼び出し・置き配は対象外**（`log.staff` が無いので宛先ルーティングは働かず、スイープも `method` で明示的に除外する。従来どおり `_fire_delivery_notifications`）。
 - **Webhook ペイロードの変更**: 受付 Webhook に `reception_id` が増え、`created_at` は `iso_z()` の単一 `Z` 形式に揃えた（従来は naive/aware で `...` と `...+00:00` が混在していた）。代理通知では `event` が `reception_escalated` になり `escalated_from`(元の担当者名) が付く。管理画面「カスタムWebhook」のサンプル表示も同じ形に更新済み。
@@ -753,6 +852,24 @@ SMTP_FROM_NAME=       # 差出人表示名(空ならテナント名)
 SMTP_STARTTLS=true
 SMTP_SSL=false
 ```
+
+> 分析ログ(ANALYTICS.md)にバックエンド専用の追加設定は無い（既存の DB とデバイストークンを使う）。
+
+### Kiosk Agent (.env) — 分析ログ関連（すべて任意・未設定なら既定値）
+
+```bash
+ANALYTICS_HEARTBEAT_SEC=60        # ハートビート(device_metrics 1行)の間隔
+ANALYTICS_METRICS_SEC=300         # CPU/温度/メモリ等を載せる間隔
+ANALYTICS_FLUSH_SEC=15            # スプールのアップロード間隔(失敗時は指数バックオフで最大5分)
+ANALYTICS_BROWSER_STALE_SEC=45    # ブラウザのハートビートが途切れたと見なす秒数(app_crashed 判定)
+ANALYTICS_BOOT_WINDOW_SEC=180     # 起動時、OS の uptime がこれ未満なら「端末が起動した」と判定
+ANALYTICS_MAX_SPOOL_LINES=20000   # スプールの上限行数(種類ごと・超過分は古い順に破棄→log_dropped)
+ANALYTICS_UPLOAD_BATCH=200        # 1回のアップロード件数(サーバ上限と揃える)
+ANALYTICS_SPOOL_DIR=              # スプールの置き場所(既定 kiosk_agent/analytics_spool/)
+```
+
+端末ごとの切り替え（キオスク画面の localStorage）:
+`kiosk_feedback="off"` で受付完了後アンケートをその端末だけ止める。
 
 ### Frontend (.env.local)
 ```

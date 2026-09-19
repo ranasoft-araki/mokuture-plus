@@ -35,8 +35,16 @@ class SlackConfig(BaseModel):
 
 
 class ChatworkConfig(BaseModel):
-    api_token: str
-    room_id: str
+    """Chatwork の接続設定。
+
+    **空欄は「変更しない」**。API トークンはレスポンスで `***` にマスクしていて画面に
+    戻らないため、入力欄は常に空で表示される。素直に受け取って上書きすると、ルーム ID
+    だけ直したいときに**トークンが空で潰れ、Chatwork 通知が丸ごと止まる**（担当者ごとの
+    ルームも道連れになる）。秘密情報を伏せている以上、部分更新を既定にするしかない。
+    """
+
+    api_token: str = ""
+    room_id: str = ""
 
 
 class WebhookConfig(BaseModel):
@@ -84,7 +92,7 @@ async def update_chatwork(
     user: User = Depends(require_roles("admin", "superadmin")),
     db: AsyncSession = Depends(get_db),
 ):
-    await _upsert_setting(user.tenant_id, "chatwork", {"api_token": body.api_token, "room_id": body.room_id}, db)
+    await _upsert_chatwork(user.tenant_id, "chatwork", body, db)
     return {"ok": True}
 
 
@@ -118,7 +126,7 @@ async def update_chatwork_delivery(
     user: User = Depends(require_roles("admin", "superadmin")),
     db: AsyncSession = Depends(get_db),
 ):
-    await _upsert_setting(user.tenant_id, "chatwork_delivery", {"api_token": body.api_token, "room_id": body.room_id}, db)
+    await _upsert_chatwork(user.tenant_id, "chatwork_delivery", body, db)
     return {"ok": True}
 
 
@@ -311,6 +319,39 @@ async def _upsert_setting(tenant_id: str, type_: str, config: dict, db: AsyncSes
     else:
         db.add(NotificationSetting(tenant_id=tenant_id, type=type_, config_json=encrypted))
     await db.commit()
+
+
+async def _upsert_chatwork(
+    tenant_id: str, type_: str, body: "ChatworkConfig", db: AsyncSession
+) -> None:
+    """Chatwork 設定を**部分更新**する。空欄の項目は現在値を残す。
+
+    理由は `ChatworkConfig` の docstring を参照（トークンはマスクして返しているので、
+    画面から素直に上書きすると片方だけ直したときに消える）。新規登録のときだけは
+    両方を必須にする（空の設定行を作っても意味が無い）。
+    """
+    result = await db.execute(
+        select(NotificationSetting).where(
+            NotificationSetting.tenant_id == tenant_id,
+            NotificationSetting.type == type_,
+        )
+    )
+    setting = result.scalar_one_or_none()
+    current: dict = {}
+    if setting is not None and setting.config_json and setting.config_json != "{}":
+        try:
+            current = decrypt_dict(setting.config_json)
+        except Exception:
+            current = {}
+
+    api_token = (body.api_token or "").strip() or (current.get("api_token") or "").strip()
+    room_id = (body.room_id or "").strip() or (current.get("room_id") or "").strip()
+    if not api_token or not room_id:
+        raise HTTPException(
+            status_code=422,
+            detail="API トークンと通知先ルーム ID を入力してください",
+        )
+    await _upsert_setting(tenant_id, type_, {"api_token": api_token, "room_id": room_id}, db)
 
 
 # ── Slack OAuth (Bot Token + chat.postMessage) ─────────────────────────────────

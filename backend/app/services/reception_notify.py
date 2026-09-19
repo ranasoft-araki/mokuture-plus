@@ -1,4 +1,4 @@
-"""受付通知のファンアウト（Slack / Web Push / Webhook / メール）。
+"""受付通知のファンアウト（Slack / Chatwork / Web Push / Webhook / メール）。
 
 キオスク受付(`api/kiosk.kiosk_reception`)と管理画面からの手動受付(`api/reception.create_reception`)
 の**両方がここを通る**。以前は両ファイルに `_notify_slack` / `_notify_push` がほぼ同じ形で重複して
@@ -26,6 +26,9 @@ from app.database import AsyncSessionLocal
 from app.models.notification import NotificationSetting, PushSubscription
 from app.models.reception import ReceptionLog
 from app.models.tenant import Tenant
+from app.services import analytics as analytics_service
+from app.services import analytics_link
+from app.services import chatwork
 from app.services import email as email_service
 from app.services import staff_routing
 from app.services.crypto import decrypt_dict
@@ -61,10 +64,47 @@ async def notify_reception(
 
     escalated_from = (log.staff or "").strip() if stage == FALLBACK else ""
 
-    await _notify_slack(db, tenant_id, log, dest, escalated_from)
-    await _notify_push(db, tenant_id, log, dest, escalated_from)
-    await _notify_webhook(db, tenant_id, log, dest, escalated_from)
-    await _notify_email(db, tenant_id, log, dest, escalated_from)
+    # 各チャネルは True=1件以上成功 / False=全滅 / None=未設定(送らなかった) を返す。
+    results = {
+        "slack": await _notify_slack(db, tenant_id, log, dest, escalated_from),
+        "chatwork": await _notify_chatwork(db, tenant_id, log, dest, escalated_from),
+        "push": await _notify_push(db, tenant_id, log, dest, escalated_from),
+        "webhook": await _notify_webhook(db, tenant_id, log, dest, escalated_from),
+        "email": await _notify_email(db, tenant_id, log, dest, escalated_from),
+    }
+    await _record_analytics(tenant_id, log, results, stage)
+
+
+async def _record_analytics(
+    tenant_id: str, log: ReceptionLog, results: dict[str, bool | None], stage: str
+) -> None:
+    """通知の成否を匿名セッションへ記録する（分析ログ・best-effort）。
+
+    受付ログIDから匿名セッションを引けるのは `analytics_link` の**プロセス内 TTL マップ**だけで、
+    永続化はしない（ANALYTICS.md §2）。引けなければ静かに何もしない＝通知も受付も止めない。
+    担当者名・チャンネル名・宛先は一切渡さず、経路の固定語（slack/push/webhook/email）だけを載せる。
+    """
+    try:
+        ref = analytics_link.lookup(log.id)
+        if ref is None:
+            return
+        if stage == FALLBACK:
+            await analytics_service.record_backend_event(
+                ref, "notification_retried", result="succeeded" if any(results.values()) else "failed"
+            )
+            return
+        attempted = {k: v for k, v in results.items() if v is not None}
+        if not attempted:
+            return
+        for channel, ok in attempted.items():
+            await analytics_service.record_backend_event(
+                ref,
+                "notification_succeeded" if ok else "notification_failed",
+                result="succeeded" if ok else "failed",
+                element_id=channel,
+            )
+    except Exception:
+        logger.warning("analytics: reception notification result not recorded (tenant=%s)", tenant_id)
 
 
 async def fire_reception_notifications(
@@ -89,11 +129,12 @@ async def fire_reception_notifications(
 
 async def _notify_slack(
     db: AsyncSession, tenant_id: str, log: ReceptionLog, dest: Destinations, escalated_from: str
-) -> None:
+) -> bool | None:
+    """True=1件以上成功 / False=全滅 / None=宛先が無く送らなかった（分析ログの判定に使う）。"""
     default_config = await staff_routing.load_default_slack_config(db, tenant_id)
     targets = staff_routing.slack_send_configs(default_config, dest)
     if not targets:
-        return
+        return None
     try:
         msg = SlackNotifier.build_reception_message(
             visitor_name=log.visitor_name,
@@ -105,8 +146,9 @@ async def _notify_slack(
         )
     except Exception:
         logger.warning("Slack reception message build failed (tenant=%s, reception=%s)", tenant_id, log.id)
-        return
+        return False
 
+    any_ok = False
     for config, label in targets:
         # 署名シークレット設定時のみ、受付/電話/お断りの対応ボタン(Block Kit)を付ける。
         # Bot Token 経路のときだけ(webhook はインタラクション不可)。押下は署名トークンで検証。
@@ -121,17 +163,19 @@ async def _notify_slack(
             ok = await SlackNotifier.send_to_config(config, msg, blocks=blocks)
         except Exception:
             ok = False
+        any_ok = any_ok or bool(ok)
         if not ok:
             # 受付は失敗させない(best-effort)。Bot Token/Webhook URL は絶対に出さない。
             logger.warning(
                 "Slack reception notification failed (tenant=%s, reception=%s, target=%s)",
                 tenant_id, log.id, label,
             )
+    return any_ok
 
 
 # ── Web Push ───────────────────────────────────────────────────────────────────
 
-async def _vapid_private_key(db: AsyncSession, tenant_id: str) -> str:
+async def vapid_private_key(db: AsyncSession, tenant_id: str) -> str:
     result = await db.execute(
         select(NotificationSetting).where(
             NotificationSetting.tenant_id == tenant_id,
@@ -149,27 +193,103 @@ async def _vapid_private_key(db: AsyncSession, tenant_id: str) -> str:
     return settings.vapid_private_key
 
 
+async def push_targets(
+    db: AsyncSession, tenant_id: str, dest: Destinations, escalated_from: str
+) -> list[PushSubscription]:
+    """この通知で実際にプッシュする購読を選ぶ。
+
+    **担当者にプッシュ先ユーザーが設定されていれば、その人の端末だけに送る。**
+    `include_default`(共通の通知先へも送る) が ON でも全員には広げない。Slack や
+    Chatwork は「担当者のチャンネル＋共通チャンネル」と足し算に意味があるが、
+    プッシュの「共通」はテナント内の全購読＝絞り込みの上位集合なので、足すと
+    担当者ごとの指定が必ず無意味になる（既定が ON なので、そのままでは機能が死ぬ）。
+
+    絞った結果が 0 件（指定した人がまだプッシュを許可していない／退職して購読ごと
+    消えた）のときは、黙って誰にも届かないほうが危険なので `include_default` に
+    従って全購読へ落とす。代理通知は誰も応答していない状態なので、絞れなければ
+    `include_default` に関わらず全購読へ送る。
+    """
+    stmt = select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
+    all_subs = list((await db.execute(stmt)).scalars().all())
+    if not all_subs:
+        return []
+
+    if dest.push_user_ids:
+        wanted = set(dest.push_user_ids)
+        targeted = [s for s in all_subs if s.user_id and s.user_id in wanted]
+        if targeted:
+            return targeted
+
+    # ここから先は「担当者ごとの指定が無い／効かなかった」場合。
+    if dest.use_default or escalated_from:
+        return all_subs
+    return []
+
+
+# ── Chatwork ───────────────────────────────────────────────────────────────────
+
+async def _notify_chatwork(
+    db: AsyncSession, tenant_id: str, log: ReceptionLog, dest: Destinations, escalated_from: str
+) -> bool | None:
+    """担当者ごとに設定された Chatwork ルームへ投稿する。
+
+    API トークンはテナント共通のものを使い回し、担当者ごとに差し替えるのはルームだけ
+    （Slack と同じ考え方）。**共通ルームへは送らない** — 理由は
+    `staff_routing.chatwork_send_rooms()` を参照。
+
+    戻り値は他チャネルと同じ契約: True=1件以上成功 / False=全滅 / None=未設定。
+    """
+    rooms = staff_routing.chatwork_send_rooms(dest)
+    if not rooms:
+        return None
+    token = await chatwork.load_api_token(db, tenant_id)
+    if not token:
+        return None
+
+    text = chatwork.build_reception_message(
+        visitor_name=log.visitor_name,
+        company=log.company,
+        # 訪問先は「来訪者が選んだ担当者」を出す。代理通知でも本文の末尾で
+        # 「『{元の担当者}』宛の受付に応答がありません」と続くので、ここを代理の人に
+        # すると 1 通の中で辻褄が合わなくなる（Slack 側も log.staff を使っている）。
+        host_name=log.staff,
+        when=log.created_at,
+        department=log.department,
+        escalated_from=escalated_from or None,
+    )
+    any_ok = False
+    for room_id, _label in rooms:
+        any_ok = await chatwork.send_message(token, room_id, text) or any_ok
+    return any_ok
+
+
+# ── Web Push ───────────────────────────────────────────────────────────────────
+
 async def _notify_push(
     db: AsyncSession, tenant_id: str, log: ReceptionLog, dest: Destinations, escalated_from: str
-) -> None:
-    """テナントに登録された全端末へ Web Push。
+) -> bool | None:
+    """Web Push を送る。
 
-    プッシュは端末(購読)単位で担当者と結び付いていないため宛先の担当者別分割はできない。
-    通常の受付では「テナント共通の通知先へも送る」設定に従い、代理通知では**必ず**送る
-    （誰も応答していない状態なので、手元の端末へ届けるのが安全側）。
+    購読(`push_subscriptions`)はブラウザ＝**ログインした管理ユーザー**に紐づく。担当者は
+    `tenants.staff_list` のただの名前でアカウントを持たないため、担当者ごとのプッシュは
+    「この担当者あては誰の端末へ」という結びつけ(`push_user_id`)で実現する。
+
+      - 担当者にプッシュ先ユーザーが設定されている → そのユーザーの購読へ
+      - 加えて「共通の通知先へも送る」が ON なら、テナント内の全購読へ
+      - 代理通知は誰も応答していない状態なので、宛先が絞れないときは全購読へ送る
+        （手元の端末に届くほうが安全側）
+
+    同じ端末(endpoint)が二重に該当しても 1 回だけ送る。
     """
-    if not escalated_from and not dest.use_default:
-        return
-    private_key = await _vapid_private_key(db, tenant_id)
+    # 「送る/送らない」の判定は push_targets() に集約してある（担当者ごとの絞り込みと
+    # 共通購読へのフォールバックが絡むため、ここで先に弾くと両立しない）。
+    private_key = await vapid_private_key(db, tenant_id)
     if not private_key:
-        return
+        return None
 
-    subs_result = await db.execute(
-        select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
-    )
-    subs = subs_result.scalars().all()
+    subs = await push_targets(db, tenant_id, dest, escalated_from)
     if not subs:
-        return
+        return None
 
     if escalated_from:
         title = "受付に応答がありません"
@@ -185,6 +305,7 @@ async def _notify_push(
     from app.api.reception import build_decision_push_extras  # 遅延 import で循環参照を避ける
 
     data, actions = build_decision_push_extras(tenant_id, log)
+    any_ok = False
     for sub in subs:
         try:
             await send_push(
@@ -201,8 +322,10 @@ async def _notify_push(
                 data=data,
                 actions=actions,
             )
+            any_ok = True
         except Exception:
             pass  # fire-and-forget: 死んだ購読で全体を止めない
+    return any_ok
 
 
 # ── Webhook ────────────────────────────────────────────────────────────────────
@@ -226,17 +349,19 @@ def build_webhook_payload(tenant_id: str, log: ReceptionLog, escalated_from: str
     return payload
 
 
-async def _post_webhook(url: str, payload: dict) -> None:
+async def _post_webhook(url: str, payload: dict) -> bool:
+    """送信できたら True。best-effort なので例外は握りつぶす（URL はログに出さない）。"""
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-            await client.post(url, json=payload)
+            resp = await client.post(url, json=payload)
+        return resp.status_code < 400
     except Exception:
-        pass  # best-effort。URL はログに出さない
+        return False
 
 
 async def _notify_webhook(
     db: AsyncSession, tenant_id: str, log: ReceptionLog, dest: Destinations, escalated_from: str
-) -> None:
+) -> bool | None:
     urls: list[str] = [u for u in dest.webhooks if u]
     if dest.use_default:
         result = await db.execute(
@@ -254,10 +379,12 @@ async def _notify_webhook(
             if default_url and default_url not in urls:
                 urls.append(default_url)
     if not urls:
-        return
+        return None
     payload = build_webhook_payload(tenant_id, log, escalated_from)
+    any_ok = False
     for url in urls:
-        await _post_webhook(url, payload)
+        any_ok = await _post_webhook(url, payload) or any_ok
+    return any_ok
 
 
 # ── メール ─────────────────────────────────────────────────────────────────────
@@ -339,9 +466,9 @@ def build_reception_email(
 
 async def _notify_email(
     db: AsyncSession, tenant_id: str, log: ReceptionLog, dest: Destinations, escalated_from: str
-) -> None:
+) -> bool | None:
     if not dest.emails or not settings.smtp_enabled:
-        return
+        return None
     tenant = (await db.execute(select(Tenant).where(Tenant.id == tenant_id))).scalar_one_or_none()
     tenant_name = tenant.name if tenant else settings.app_name
     brand_color = tenant.brand_color if tenant else "#4a7c4e"
@@ -351,6 +478,7 @@ async def _notify_email(
     subject, text, html = build_reception_email(
         tenant_name, brand_color, log, admin_url, escalated_from
     )
+    any_ok = False
     for addr in dest.emails:
         ok, err = await email_service.send_email(
             to=addr,
@@ -366,7 +494,9 @@ async def _notify_email(
             starttls=settings.smtp_starttls,
             use_ssl=settings.smtp_ssl,
         )
+        any_ok = any_ok or bool(ok)
         if not ok:
             logger.warning(
                 "reception email failed (tenant=%s, reception=%s): %s", tenant_id, log.id, err[:200]
             )
+    return any_ok

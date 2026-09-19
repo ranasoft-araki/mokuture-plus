@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
+import analytics as analytics_mod
 import kana_kanji
 import locker_store
 from config import settings
@@ -478,6 +479,9 @@ systemd_watchdog = SystemdWatchdog(
     browser_startup_grace_sec=settings.systemd_watchdog_browser_startup_grace_sec,
     browser_stale_sec=settings.systemd_watchdog_browser_stale_sec,
 )
+# 分析ログ（ANALYTICS.md）: 端末稼働イベント/メトリクスの記録と、ブラウザイベントの中継。
+# ブラウザのハートビート状態は watchdog と共有する（二重に持たない）。
+device_analytics = analytics_mod.DeviceAnalytics(browser_heartbeat_state)
 
 
 def _spawn(coro):
@@ -518,6 +522,7 @@ except Exception as _e:          # ImportError 以外（モデル破損など）
 
 _KIOSK_HTML = Path(__file__).parent / "static" / "kiosk.html"
 _JSQR_JS   = Path(__file__).parent / "static" / "jsqr.min.js"
+_ANALYTICS_JS = Path(__file__).parent / "static" / "analytics.js"
 _TAP_MP3   = Path(__file__).parent / "static" / "tap.mp3"
 _CONTROL_PANEL_HTML = Path(__file__).parent / "static" / "device-control.html"
 
@@ -532,6 +537,12 @@ async def lifespan(app: FastAPI):
     update_task = asyncio.create_task(updater.run())
     heartbeat_task = asyncio.create_task(heartbeat_loop())
     watchdog_task = asyncio.create_task(systemd_watchdog.run())
+    # 分析ログ: 起動/再起動の判定を先に済ませてから、アップローダとメトリクス採取を回す。
+    await device_analytics.on_startup()
+    analytics_tasks = [
+        asyncio.create_task(device_analytics.uploader_loop()),
+        asyncio.create_task(device_analytics.metrics_loop()),
+    ]
     # かな漢字辞書: 無ければ取得→事前ロード(別スレッド)。OTA 更新の Pi でも自動で辞書を揃え、
     # 初回変換の遅延も回避する。取得失敗(オフライン)時は同梱 kana_dict.tsv にフォールバック。
     async def _prepare_convert_dict():
@@ -548,6 +559,10 @@ async def lifespan(app: FastAPI):
         print(f"[card] disabled: {_CARD_IMPORT_ERROR}")
     await systemd_watchdog.ready("mokuture kiosk agent started")
     yield
+    # 分析ログ: 正常停止として記録し、最後に1回だけ送信を試みる（届かなければ次回起動後に再送）。
+    await device_analytics.on_shutdown()
+    for t in analytics_tasks:
+        t.cancel()
     task.cancel()
     update_task.cancel()
     heartbeat_task.cancel()
@@ -605,6 +620,12 @@ class KioskHeartbeatBody(BaseModel):
     focused: bool | None = None
     href: str = ""
     ts: int | None = None
+    # ページ読み込みごとに変わるランダムID。ブラウザ起動/リロードの検出に使う（分析ログ）。
+    page_id: str | None = None
+    # キオスク画面(kiosk.html)の版数ラベル。端末イベント/メトリクスに載せる。
+    ui_version: str | None = None
+    # 受付アプリの起動完了(boot 完了)。起動ごとに1回だけ true が来る（分析ログの app_started）。
+    booted: bool = False
 
 
 @app.get("/", include_in_schema=False)
@@ -617,6 +638,17 @@ async def serve_jsqr():
     if not _JSQR_JS.exists():
         raise HTTPException(status_code=404, detail="jsqr.min.js not found")
     return FileResponse(_JSQR_JS, media_type="application/javascript")
+
+
+@app.get("/analytics.js", include_in_schema=False)
+async def serve_analytics_js():
+    """キオスク画面が読み込む行動ログのロガー（ANALYTICS.md §7）。
+
+    無い端末（OTA 未着など）でも 404 になるだけで、kiosk.html は従来どおり動く
+    （ロガーが無ければログを取らないだけ）。"""
+    if not _ANALYTICS_JS.exists():
+        raise HTTPException(status_code=404, detail="analytics.js not found")
+    return FileResponse(_ANALYTICS_JS, media_type="application/javascript")
 
 
 @app.get("/tap.mp3", include_in_schema=False)
@@ -650,6 +682,12 @@ async def get_config():
         "remote_api_url": settings.remote_api_url,
         "device_name": get_device_name(),
         "registered": is_registered(),
+        # 分析ログ用: バンドル版数(app_version)と、ブラウザ側ロガーの送信間隔。
+        "app_version": read_version(),
+        "analytics": {
+            "flush_sec": analytics_mod.FLUSH_SEC,
+            "max_batch": analytics_mod.MAX_BROWSER_BATCH,
+        },
     }
 
 
@@ -745,13 +783,42 @@ async def health():
         "media_dir": str(settings.media_dir),
         "mock_gpio": settings.mock_gpio,
         "watchdog": systemd_watchdog.status(),
+        "analytics": device_analytics.status(),
     }
 
 
 @app.post("/device/kiosk-heartbeat")
 async def kiosk_heartbeat(body: KioskHeartbeatBody):
-    browser_heartbeat_state.record(body.model_dump())
+    payload = body.model_dump()
+    browser_heartbeat_state.record(payload)
+    # 分析ログ: ブラウザ起動/リロードの検出（失敗してもハートビートは成立させる）。
+    try:
+        await device_analytics.on_browser_heartbeat(payload)
+    except Exception:
+        pass
     return {"ok": True, "watchdog": systemd_watchdog.status()}
+
+
+class AnalyticsBatchBody(BaseModel):
+    events: list[dict] = []
+
+
+@app.post("/device/analytics/events")
+async def device_analytics_events(body: AnalyticsBatchBody):
+    """キオスク画面(ブラウザ)からの行動イベントを受け取る中継。
+
+    **ここでディスク(スプール)へ書いてから ack する**ので、ブラウザは accepted に載った
+    event_id だけを IndexedDB から消せばよい（ANALYTICS.md §7）。デバイストークンは
+    エージェントだけが持ち、ブラウザのコードには渡さない。
+    バックエンドへの送信はアップローダが指数バックオフで行う（通信断でも失われない）。
+    """
+    return await device_analytics.submit_browser_events(body.events)
+
+
+@app.get("/device/analytics/status")
+async def device_analytics_status():
+    """未送信件数・オンライン状態などの軽量な状態（秘密情報は含まない）。"""
+    return device_analytics.status()
 
 
 @app.get("/proxy/settings")

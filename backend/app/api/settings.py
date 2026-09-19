@@ -352,8 +352,11 @@ async def patch_settings(
         if body.kiosk_style not in ALLOWED_KIOSK_STYLES:
             raise HTTPException(status_code=422, detail=f"kiosk_style not allowed: {body.kiosk_style}")
         tenant.kiosk_style = body.kiosk_style
-    if "staff_list" in body.model_fields_set:
-        tenant.staff_list = body.staff_list
+    # staff_list はここでは書かない。担当者リストの編集は「通知設定」
+    # (`PUT /notifications/staff-routes/staff` ほか)に集約した。あちらは削除時に
+    # 通知先設定や代理通知先の参照まで片付けるが、この素通し経路はそれをしない。
+    # デプロイ前に開かれていた古いタブが受付設定を保存すると、その時点の古い
+    # リストで巻き戻してしまうため、受け取っても無視する。
     if "purpose_list" in body.model_fields_set:
         tenant.purpose_list = body.purpose_list
     if "department_list" in body.model_fields_set:

@@ -147,6 +147,9 @@ Raspberry Pi 上で動き、コンテンツ同期・メディア配信・GPIO �
 kiosk_agent/
 ├── main.py               FastAPI 本体 (メディア配信・GPIO API・静的ファイル配信)
 ├── sync.py               コンテンツ同期デーモン (差分ダウンロード・定期実行)
+├── analytics.py          分析ログ (行動ログの中継・端末稼働イベント/メトリクス・再送)
+├── sysinfo.py            CPU/温度/メモリ/ストレージ/タッチ の取得 (標準ライブラリのみ)
+├── watchdog.py           systemd watchdog + ブラウザ生存確認
 ├── gpio.py               GPIO 制御 (ロッカーリレー・PIR センサー)
 ├── state.py              デバイス登録状態の永続管理
 ├── config.py             設定読み込み (.env)
@@ -301,6 +304,9 @@ curl -X POST http://<RPiのIPアドレス>:8080/register
 | `POST` | `/card/frame` | 検出用フレームの送信（案内文言・四隅を返す） |
 | `POST` | `/card/capture` | 撮影フレームの送信（OCR・項目抽出） |
 | `POST` | `/card/session/{id}/confirm` | 確認済みの値を確定しセッションを破棄 |
+| `POST` | `/device/analytics/events` | キオスク画面からの行動ログ（匿名）を受け取りディスクへ保存 |
+| `GET` | `/device/analytics/status` | 未送信件数・オンライン状態（分析ログの動作確認用） |
+| `GET` | `/analytics.js` | キオスク画面が読み込む行動ロガー |
 
 音声入力は**別プロセス**（`http://127.0.0.1:8181` のみ。外部からは接続不可）:
 
@@ -329,6 +335,12 @@ curl -X POST http://<RPiのIPアドレス>:8080/register
 | `MOCK_GPIO` | `false` | `true` にすると GPIO をモック動作 |
 | `PIR_PIN` | `4` | PIR センサーの GPIO ピン番号 (BCM) |
 | `LOCKER_PINS_JSON` | `{}` | ロッカーID → GPIO ピンの対応 例: `{"1": 17, "2": 18}` |
+| `ANALYTICS_HEARTBEAT_SEC` | `60` | 端末ハートビート（稼働率の元データ）の間隔 |
+| `ANALYTICS_METRICS_SEC` | `300` | CPU・温度・メモリ等を取得する間隔 |
+| `ANALYTICS_FLUSH_SEC` | `15` | 分析ログのアップロード間隔（失敗時は指数バックオフ） |
+
+> 分析ログの詳細（取得する項目・個人情報を保存しないための設計・稼働率の定義）は
+> [`ANALYTICS.md`](ANALYTICS.md) を参照。
 
 ### Chromium 自動起動設定（RPi）
 
@@ -374,8 +386,23 @@ curl -X POST http://<RPiのIPアドレス>:8080/register
 | `GET` | `/kiosk/schedule` | 現在のプレイリスト取得（承認待ちは `pending:true`） |
 | `GET` | `/kiosk/content-manifest` | 全スケジュールメディア一覧（ローカルキャッシュ用） |
 | `POST` | `/kiosk/reception` | 受付登録 |
+| `POST` | `/analytics/events` | 行動ログ（匿名）の投入 |
+| `POST` | `/analytics/device-events` | 端末稼働イベントの投入 |
+| `POST` | `/analytics/device-metrics` | 端末メトリクス（ハートビート）の投入 |
 
 キオスク API は `X-Kiosk-Token: {device_token}` ヘッダーを使用します。
+
+### 分析 API（運営のみ・JWT）
+
+| メソッド | パス | 説明 |
+|---|---|---|
+| `GET` | `/analytics/sessions` | 匿名セッション一覧（日付・拠点・端末・完了状態で絞り込み） |
+| `GET` | `/analytics/sessions/{id}` | 1セッションの時系列イベント |
+| `GET` | `/analytics/summary` | 主要指標（完了率・離脱率・エラー率・回復率・所要時間） |
+| `GET` | `/analytics/uptime` | 端末稼働率・通信障害時間・再起動回数 |
+| `GET` | `/analytics/export` | CSV / JSON 出力 |
+
+運営画面 `/operator/analytics` から参照できます。**個人情報は保存していません**（→ [`ANALYTICS.md`](ANALYTICS.md)）。
 
 ---
 

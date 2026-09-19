@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
-import { api, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffRouteTestResult } from "@/lib/api";
+import { api, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffPushUser, type StaffRouteTestResult } from "@/lib/api";
 import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, type PushStatus } from "@/lib/push";
 import { getAccessToken } from "@/lib/auth";
 
@@ -395,6 +395,10 @@ function formatEscalate(sec: number): string {
 
 type RouteDraft = {
   slack_channel_id: string;
+  /** Chatwork のルーム ID。APIトークンはテナント共通のものを使い回す。 */
+  chatwork_room_id: string;
+  /** プッシュを届ける管理ユーザー（""=共通の購読へ）。 */
+  push_user_id: string;
   email: string;
   /** null=変更しない（既存を維持）、""=解除、URL=差し替え。URL自体はサーバから返らない。 */
   webhook_url: string | null;
@@ -406,6 +410,8 @@ type RouteDraft = {
 function draftFrom(route: StaffNotificationRoute | undefined, defaultSec: number): RouteDraft {
   return {
     slack_channel_id: route?.slack_channel_id ?? "",
+    chatwork_room_id: route?.chatwork_room_id ?? "",
+    push_user_id: route?.push_user_id ?? "",
     email: route?.email ?? "",
     webhook_url: null,
     include_default: route?.include_default ?? true,
@@ -414,17 +420,165 @@ function draftFrom(route: StaffNotificationRoute | undefined, defaultSec: number
   };
 }
 
-function routeSummary(route: StaffNotificationRoute | undefined): string {
+function routeSummary(
+  route: StaffNotificationRoute | undefined,
+  users: StaffPushUser[] = [],
+): string {
   if (!route) return "未設定（全体の通知先のみ）";
   const parts: string[] = [];
   if (route.slack_channel_name || route.slack_channel_id) {
     parts.push(`Slack ${route.slack_channel_name || route.slack_channel_id}`);
   }
+  if (route.chatwork_room_id) parts.push(`Chatwork ルーム${route.chatwork_room_id}`);
   if (route.email) parts.push(`メール ${route.email}`);
   if (route.webhook_configured) parts.push("Webhook");
+  if (route.push_user_id) {
+    const u = users.find((x) => x.id === route.push_user_id);
+    parts.push(`プッシュ ${u ? u.name : "指定ユーザー"}`);
+  }
   if (parts.length === 0) parts.push("個別の宛先なし");
   if (route.include_default) parts.push("全体にも送る");
   return parts.join(" ・ ");
+}
+
+/** 担当者マスターの編集（追加・名前変更・削除・並べ替え）。
+ *
+ * 実体は `tenants.staff_list`（キオスクの訪問先リストと同じもの）。以前は「受付設定」でしか
+ * 編集できず、この画面は読むだけだった。通知の宛先を決める場所と担当者を足す場所が
+ * 別なのは分かりにくいので、編集をここへ集約した（受付設定側は読み取り専用）。
+ */
+function StaffMasterEditor({
+  authToken, names, version, onChanged, onError,
+}: {
+  authToken: string;
+  names: string[];
+  /** 最後に読んだ担当者リストの版。更新時に送り返して、他の人の変更を巻き込まない。 */
+  version: string;
+  onChanged: () => Promise<void> | void;
+  onError: (message: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [adding, setAdding] = useState("");
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameTo, setRenameTo] = useState("");
+  // 削除は取り消せないので2段階にする（JSダイアログは使わない方針）。
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    onError("");
+    try {
+      await fn();
+      await onChanged();
+      return true;
+    } catch (e: unknown) {
+      onError(e instanceof Error ? e.message : "担当者の更新に失敗しました");
+      // 失敗時も読み直す。ほかの人が変更していて 409 になった場合、画面が古い
+      // ままだと同じ操作を繰り返して同じところで止まるため、最新の内容を見せる。
+      await onChanged();
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const add = async () => {
+    const name = adding.trim();
+    if (!name) return;
+    if (names.includes(name)) {
+      onError("同じ名前の担当者がすでに居ます");
+      return;
+    }
+    if (await run(() => api.replaceStaffList(authToken, [...names, name], version))) setAdding("");
+  };
+
+  const remove = async (name: string) => {
+    setConfirmRemove(null);
+    await run(() => api.replaceStaffList(authToken, names.filter((n) => n !== name), version));
+  };
+
+  const move = async (name: string, delta: number) => {
+    const i = names.indexOf(name);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= names.length) return;
+    const next = [...names];
+    [next[i], next[j]] = [next[j], next[i]];
+    await run(() => api.replaceStaffList(authToken, next, version));
+  };
+
+  const rename = async () => {
+    const from = renaming;
+    const to = renameTo.trim();
+    if (!from || !to || from === to) { setRenaming(null); return; }
+    if (await run(() => api.renameStaff(authToken, from, to, version))) setRenaming(null);
+  };
+
+  return (
+    <div style={{ border: "1px solid #efece5", borderRadius: 9, background: "#fffefb", marginBottom: 16, overflow: "hidden" }}>
+      <div className="adm-toolbar" style={{ padding: "12px 14px", alignItems: "center", gap: 10 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15" }}>担当者（訪問先リスト）</div>
+          <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3 }}>
+            {names.length ? `${names.length}名・キオスクにはこの順で表示されます` : "未登録"}
+          </div>
+        </div>
+        <MkBtn size="sm" onClick={() => { setOpen(!open); setRenaming(null); setConfirmRemove(null); }}>
+          {open ? "閉じる" : "担当者を管理"}
+        </MkBtn>
+      </div>
+
+      {open && (
+        <div style={{ borderTop: "1px solid #efece5", padding: "14px", background: "#fdfcf9" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <TextInput placeholder="担当者名（例: 田中 太郎）" value={adding} onChange={setAdding} />
+            </div>
+            <MkBtn variant="primary" size="sm" onClick={add}>{busy ? "…" : "追加"}</MkBtn>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {names.map((name, i) => (
+              <div key={name} style={{ border: "1px solid #efece5", borderRadius: 8, background: "#fff", padding: "8px 10px" }}>
+                {renaming === name ? (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <TextInput value={renameTo} onChange={setRenameTo} />
+                    </div>
+                    <MkBtn variant="primary" size="sm" onClick={rename}>保存</MkBtn>
+                    <MkBtn size="sm" onClick={() => setRenaming(null)}>やめる</MkBtn>
+                  </div>
+                ) : confirmRemove === name ? (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ flex: 1, minWidth: 180, fontSize: 12, color: "#a84238" }}>
+                      「{name}」を削除すると、この担当者の通知先設定も消えます。
+                    </div>
+                    <MkBtn variant="danger" size="sm" onClick={() => remove(name)}>削除する</MkBtn>
+                    <MkBtn size="sm" onClick={() => setConfirmRemove(null)}>やめる</MkBtn>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ flex: 1, minWidth: 140, fontSize: 13, color: "#1d1a15" }}>{name}</div>
+                    <MkBtn size="sm" onClick={() => move(name, -1)} disabled={i === 0}>↑</MkBtn>
+                    <MkBtn size="sm" onClick={() => move(name, 1)} disabled={i === names.length - 1}>↓</MkBtn>
+                    <MkBtn size="sm" onClick={() => { setRenaming(name); setRenameTo(name); setConfirmRemove(null); }}>
+                      名前を変更
+                    </MkBtn>
+                    <MkBtn size="sm" onClick={() => { setConfirmRemove(name); setRenaming(null); }}>削除</MkBtn>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 12, lineHeight: 1.8 }}>
+            名前を変更すると、通知先の設定・代理通知先・まだ応答していない受付も一緒に追随します。
+            過去の受付ログは当時の記録のまま残ります。
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function StaffRoutesPanel({ authToken }: { authToken: string }) {
@@ -440,15 +594,17 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
   // 解除は取り消せないので2段階にする（Slack連携解除と同じ方式。JSダイアログは使わない）。
   const [confirmClear, setConfirmClear] = useState<string | null>(null);
 
-  const reload = useCallback(async () => {
+  // quiet=true は「読み込み中…」に落とさずデータだけ差し替える。担当者の追加・
+  // 並べ替えのたびにパネル全体がアンマウントされ、開いていた編集欄が閉じるのを防ぐ。
+  const reload = useCallback(async (quiet = false) => {
     if (!authToken) return;
-    setLoading(true);
+    if (!quiet) setLoading(true);
     try {
       setData(await api.getStaffRoutes(authToken));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "設定の読み込みに失敗しました");
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, [authToken]);
 
@@ -524,24 +680,30 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
     return <div style={{ padding: "20px 0", color: "#a84238", fontSize: 13 }}>{error || "設定を読み込めませんでした"}</div>;
   }
 
-  // 受付設定の担当者リスト＋（リストから消えたが設定だけ残っている担当者）を並べる。
+  // 担当者リスト＋（リストから消えたが設定だけ残っている担当者）を並べる。
   const orphans = data.routes.filter((r) => r.orphan).map((r) => r.staff_name);
   const names = [...data.staff_list, ...orphans];
-
-  if (names.length === 0) {
-    return (
-      <div style={{ padding: "16px 18px", background: "#f4f1ea", border: "1px solid #efece5", borderRadius: 8, fontSize: 12.5, color: "#6b6559", lineHeight: 1.8 }}>
-        担当者が登録されていません。「受付設定」の担当者リストに追加すると、ここで担当者ごとの通知先を設定できます。
-      </div>
-    );
-  }
 
   return (
     <div>
       <div style={{ padding: "12px 14px", background: "#f4f1ea", border: "1px solid #efece5", borderRadius: 8, fontSize: 11.5, color: "#6b6559", lineHeight: 1.8, marginBottom: 16 }}>
-        キオスクで来訪者が選んだ訪問先担当者ごとに、通知の届け先を変えられます。設定していない担当者は全体の通知先だけに届きます。
-        応答が無いときは、指定した代理担当者の通知先へ自動で転送します。
+        担当者の登録と、担当者ごとの通知の届け先をここで管理します。ここで登録した担当者が、そのままキオスクの訪問先リストになります。
+        設定していない担当者は全体の通知先だけに届きます。応答が無いときは、指定した代理担当者の通知先へ自動で転送します。
       </div>
+
+      <StaffMasterEditor
+        authToken={authToken}
+        names={data.staff_list}
+        version={data.staff_list_version}
+        onChanged={() => reload(true)}
+        onError={setError}
+      />
+
+      {names.length === 0 && (
+        <div style={{ padding: "16px 18px", background: "#f4f1ea", border: "1px solid #efece5", borderRadius: 8, fontSize: 12.5, color: "#6b6559", lineHeight: 1.8 }}>
+          担当者がまだ居ません。上の欄から追加すると、担当者ごとの通知先を設定できます。
+        </div>
+      )}
 
       {!data.slack.bot_connected && (
         <div style={{ padding: "10px 14px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.25)", borderRadius: 8, color: "#7a5c00", fontSize: 12, marginBottom: 14 }}>
@@ -567,7 +729,7 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
                     {staff}
                     {route?.orphan && <MkPill tone="warn" dot={false}>受付設定に無い担当者</MkPill>}
                   </div>
-                  <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3, wordBreak: "break-all" }}>{routeSummary(route)}</div>
+                  <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 3, wordBreak: "break-all" }}>{routeSummary(route, data.users)}</div>
                   {route?.fallback_staff_name && route.escalate_after_sec > 0 && (
                     <div style={{ fontSize: 11.5, color: "#6b6559", marginTop: 3 }}>
                       応答が無ければ {formatEscalate(route.escalate_after_sec)}後に「{route.fallback_staff_name}」へ代理通知
@@ -596,6 +758,38 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
                         )}
                         {(channels ?? []).map((c) => (
                           <option key={c.id} value={c.id}>{c.is_private ? "🔒 " : "# "}{c.name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field
+                      label="Chatworkルーム"
+                      hint={
+                        data.chatwork.connected
+                          ? "この担当者宛の受付をこのルームへ送ります（ルームIDは数字）。受付通知がChatworkへ届くのは、ここにルームを設定した担当者だけです"
+                          : "上の「Chatwork」でAPIトークンを登録すると使えます"
+                      }
+                    >
+                      <TextInput
+                        placeholder={data.chatwork.connected ? "123456789" : "Chatwork未連携"}
+                        mono
+                        value={draft.chatwork_room_id}
+                        onChange={(v) => setDraft({ ...draft, chatwork_room_id: v.replace(/[^0-9]/g, "") })}
+                      />
+                    </Field>
+                    <Field
+                      label="プッシュ通知の宛先"
+                      hint="プッシュはブラウザ（ログインした人）に届きます。指定すると、この担当者あてはその人の端末だけに送ります（下の「全体の通知先にも送る」に関わらず）"
+                    >
+                      <select
+                        value={draft.push_user_id}
+                        onChange={(e) => setDraft({ ...draft, push_user_id: e.target.value })}
+                        style={selectStyle}
+                      >
+                        <option value="">指定しない（全体の通知先に従う）</option>
+                        {data.users.map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {u.name}{u.has_push ? "" : "（未許可）"}
+                          </option>
                         ))}
                       </select>
                     </Field>
@@ -1348,17 +1542,25 @@ export default function AdminNotifyPage() {
             <MkPill tone={cwConfigured ? "live" : "off"}>{cwConfigured ? "設定済" : "未設定"}</MkPill>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <Field label="API トークン" required>
+            <Field
+              label="API トークン"
+              required={!cwConfigured}
+              hint={cwConfigured ? "設定済み。安全のため表示しません（変更するときだけ入力）" : undefined}
+            >
               <TextInput
-                placeholder="Chatwork API トークン"
+                placeholder={cwConfigured ? "設定済み（変更するときだけ入力）" : "Chatwork API トークン"}
                 mono
                 value={cwApiToken}
                 onChange={setCwApiToken}
               />
             </Field>
-            <Field label="通知先ルーム ID" required>
+            <Field
+              label="通知先ルーム ID"
+              required={!cwConfigured}
+              hint={cwConfigured ? "変更するときだけ入力（空欄なら現在の設定のまま）" : undefined}
+            >
               <TextInput
-                placeholder="例: 312648719"
+                placeholder={cwConfigured ? "設定済み（変更するときだけ入力）" : "例: 312648719"}
                 mono
                 value={cwRoomId}
                 onChange={setCwRoomId}

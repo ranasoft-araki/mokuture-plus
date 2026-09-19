@@ -31,6 +31,7 @@ _VERSION_FILE = _APP_DIR / ".bundle_version"
 # Files managed by OTA (relative to kiosk_agent root).
 MANAGED_FILES = [
     "static/kiosk.html",
+    "static/analytics.js",   # 行動ログ(匿名)のロガー。kiosk.html が <script> で読む(再起動不要)
     "static/tap.mp3",   # タップ操作音の音源(バイナリ)。再起動不要でコピーのみ
     "main.py",
     "updater.py",
@@ -39,6 +40,11 @@ MANAGED_FILES = [
     "state.py",
     "config.py",
     "locker_store.py",  # ロッカーのローカル状態・ミラーペイロード生成。実機へ確実に届ける
+    # 端末稼働ログ(ANALYTICS.md §9)。main.py がこれらを import するので**必ず一緒に配る**
+    # （main.py だけ新しくなると import 失敗でエージェントが起動しなくなる）。
+    "analytics.py",
+    "sysinfo.py",
+    "watchdog.py",
     # 名刺読み取り(QR無し来訪者の受付フォーム自動入力)。Python の変更は再起動が要る。
     # 依存パッケージ(opencv/onnxruntime)と OCR モデルは OTA では配れない(サイズと
     # ビルドの都合)。それらは install.sh / scripts/fetch_ocr_models.py の担当で、
@@ -90,7 +96,8 @@ MANAGED_FILES = [
 ]
 
 # Changing these files requires a service restart to take effect.
-RESTART_FILES = {"main.py", "updater.py", "gpio.py", "sync.py", "state.py", "config.py", "locker_store.py"}
+RESTART_FILES = {"main.py", "updater.py", "gpio.py", "sync.py", "state.py", "config.py", "locker_store.py",
+                 "analytics.py", "sysinfo.py", "watchdog.py"}
 # card/ 配下はすべて Python なので、変更があれば再起動する（下の apply() が判定）。
 # voice/ は別プロセスなので**ここには入れない**。エージェントを再起動しても音声
 # サービスは入れ替わらず、音声サービス側が自分で気づいて再起動する。

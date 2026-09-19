@@ -7,6 +7,12 @@ from app.models.notification import NotificationSetting, PushSubscription
 from app.models.staff_route import StaffNotificationRoute
 from app.models.room import MeetingRoom
 from app.models.inquiry import Inquiry
+from app.models.analytics import (
+    ReceptionSession,
+    ReceptionEvent,
+    DeviceEvent,
+    DeviceMetric,
+)
 
 __all__ = [
     "Tenant",
@@ -23,4 +29,8 @@ __all__ = [
     "StaffNotificationRoute",
     "MeetingRoom",
     "Inquiry",
+    "ReceptionSession",
+    "ReceptionEvent",
+    "DeviceEvent",
+    "DeviceMetric",
 ]

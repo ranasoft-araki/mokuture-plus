@@ -32,6 +32,10 @@ frontend/.netlify/
 kiosk_agent/device_state.json
 kiosk_agent/locker_state.json
 
+# 分析ログの送信待ちスプール(端末ごと・JSONL)。ANALYTICS.md §7。
+# 個人情報は含まないが端末固有の実データなのでコミットしない。
+kiosk_agent/analytics_spool/
+
 # Kiosk agent かな漢字辞書のダウンロード中間物(SKK-JISYO.L 本体は資産として commit 済み)
 kiosk_agent/SKK-JISYO.L.gz
 
