@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import platform
 import subprocess
 import sys
@@ -140,9 +141,95 @@ def rule_purpose(text: str, purposes: list[str]) -> str | None:
     return None
 
 
+# 「アポは無いんですけど」を約束ありにしてはいけない。語の直後を見て打ち消す。
+NEGATIONS = ["無い", "ない", "ありません", "無く", "なく", "取ってない", "取っていない", "してない"]
+
+
 def rule_appointment(text: str) -> bool | None:
-    """約束の有無。言っていなければ **false ではなく null**（画面で確認させる）。"""
-    return True if any(w in text for w in APPOINTMENT_WORDS) else None
+    """約束の有無。言っていなければ **false ではなく null**（画面で確認させる）。
+
+    打ち消しを見落とすと逆の意味になる。「アポは無いんですけど服部さんいますか」は
+    飛び込みの来訪で、約束ありとして通してはいけない。
+    """
+    for w in APPOINTMENT_WORDS:
+        i = text.find(w)
+        if i < 0:
+            continue
+        # 語の直後(十数文字)に打ち消しがあれば、約束は無いと言っている。
+        if any(neg in text[i + len(w): i + len(w) + 12] for neg in NEGATIONS):
+            return False
+        return True
+    return None
+
+
+def scan_staff(text: str, staff: list[dict]) -> list[dict]:
+    """発話全体を名簿と突き合わせる。**LLM に「どの語が担当者か」を聞かない。**
+
+    担当者は名簿にいる人しかありえないので、発話のどこかに名簿の誰かの読みが出て
+    いれば、それが訪問先である可能性が高い。語の切り出しを LLM に任せる必要がない。
+    """
+    from voice import textnorm
+    hits: dict[str, dict] = {}
+
+    # 漢字で正しく出た場合（「田中です」）。
+    for s in staff:
+        for n in range(2, len(s["name"]) + 1):
+            if s["name"][:n] in text:
+                hits[s["employee_id"]] = s
+
+    # 仮名で出た場合。読みに直してから窓を滑らせる。
+    reading = _reading_key(textnorm.normalize_common(text))
+    for i in range(len(reading)):
+        for n in (4, 3, 2):
+            if i + n > len(reading):
+                continue
+            for s in match_staff(reading[i:i + n], staff):
+                hits[s["employee_id"]] = s
+    return [s for s in staff if s["employee_id"] in hits]
+
+
+VISITOR_PATTERNS = [
+    # 「○○の××と申します」「○○の××です」— 前が会社、後ろが氏名
+    re.compile(r"(?P<company>[^、。\s]{2,20}?)の(?P<name>[^、。\s]{2,10}?)(?:と申します|でございます|です)"),
+    # 「○○と申します」— 氏名だけ
+    re.compile(r"(?P<name>[^、。\s]{2,10}?)(?:と申します|でございます)"),
+    # 「○○から来ました」— 会社だけ
+    re.compile(r"(?P<company>[^、。\s]{2,20}?)から(?:来ました|参りました|まいりました)"),
+]
+
+
+# 氏名の欄に入ってはいけない語。「採用担当の方にお会いしたいのですが」が
+# 「(会社)の(氏名)です」に当たり、氏名が「方にお会いしたいの」になっていた。
+_NOT_NAME = re.compile(r"(方|人|者|担当|部署|くださ|したい|します|ください|いたし|おり|ござい|"
+                       r"合わせ|約束|荷物|面接|点検|工事|商談|納品)")
+
+
+def _plausible_name(candidate: str) -> bool:
+    """氏名らしいか。姓だけ・姓名で 2〜6 文字に収まるのが普通。"""
+    c = candidate.strip()
+    return 2 <= len(c) <= 6 and not _NOT_NAME.search(c)
+
+
+def scan_visitor(text: str, purposes: list[str]) -> tuple[str | None, str | None, tuple[int, int] | None]:
+    """名乗りの言い回しから会社名と氏名を切り出し、その範囲も返す。
+
+    「○○の××と申します」は受付の定型なので規則で取れる。**名乗りの位置は強い証拠**で、
+    そこに出た名前は名簿に同姓がいても来訪者。範囲を返すのは、担当者を探すときに
+    名乗りの部分を除くため（「山田運送の田中です」の田中を担当者にしないため）。
+    """
+    for pat in VISITOR_PATTERNS:
+        for m in pat.finditer(text):
+            g = m.groupdict()
+            company, name = g.get("company"), g.get("name")
+            # 「服部様との打ち合わせです」が「(会社)の(氏名)です」に当たってしまう。
+            # 用件を表す語は氏名ではない。
+            if name and not _plausible_name(name):
+                continue
+            if company and rule_purpose(company, purposes):
+                company = None
+            if company or name:
+                return company, name, m.span()
+    return None, None, None
 
 
 def fix_swap(got: dict, staff: list[dict]) -> dict:
@@ -460,8 +547,9 @@ def main() -> int:
     ap.add_argument("--perfect-asr", action="store_true",
                     help="文字起こしを飛ばし、正しい発話文を LLM に渡す（抽出の上限性能）")
     ap.add_argument("--llm-url", default="http://127.0.0.1:8182/v1/chat/completions")
-    ap.add_argument("--strategy", default="all-in-one", choices=["all-in-one", "split"],
-                    help="all-in-one=LLMに6項目すべて任せる(ChatGPT案) / split=用件と社員照合を規則で行う")
+    ap.add_argument("--strategy", default="all-in-one", choices=["all-in-one", "split", "rules"],
+                    help="all-in-one=LLMに6項目すべて任せる(ChatGPT案) / split=用件と社員照合を規則で行う / "
+                         "rules=LLMを使わない")
     ap.add_argument("--show-text", action="store_true", help="文字起こし結果と抽出結果を出す")
     args = ap.parse_args()
 
@@ -513,7 +601,23 @@ def main() -> int:
                 print(line)
                 continue
 
-            got, lms, err = extract(text, staff, purposes, args.llm_url, args.strategy)
+            if args.strategy == "rules":
+                t0 = time.monotonic()
+                company, name, span = scan_visitor(text, purposes)
+                # 名乗りの部分を除いてから担当者を探す。ここを残すと「山田運送の
+                # 田中です」の田中が担当者として当たってしまう（田中・佐藤のような
+                # 姓では実運用で必ず起きる）。
+                rest = (text[:span[0]] + " " + text[span[1]:]) if span else text
+                cand = scan_staff(rest, staff)
+                got = {"visitor_company": company, "visitor_name": name,
+                       "host_name_spoken": cand[0]["name"] if cand else None,
+                       "host_employee_id": cand[0]["employee_id"] if len(cand) == 1 else None,
+                       "purpose": rule_purpose(text, purposes),
+                       "has_appointment": rule_appointment(text),
+                       "_candidates": [s["name"] for s in cand]}
+                lms, err = int((time.monotonic() - t0) * 1000), ""
+            else:
+                got, lms, err = extract(text, staff, purposes, args.llm_url, args.strategy)
             llm_ms.append(lms)
             if got is None:
                 parse_fail += 1
@@ -525,7 +629,7 @@ def main() -> int:
             invented_total += len(s["invented"])
             ungrounded_total += len(s["ungrounded"])
             placeholder_total += len(s["placeholders"])
-            if args.strategy == "split":
+            if args.strategy in ("split", "rules"):
                 cand = got.get("_candidates") or []
                 want_host = c["expect"].get("host_name_spoken")
                 if want_host is None:
@@ -562,7 +666,7 @@ def main() -> int:
             print(f"  ⚠ 根拠なし項目数  : {ungrounded_total}   （0 でなければ不合格）")
             print(f"  「不明」等の穴埋め: {placeholder_total}   （実装側で null に潰す必要がある数）")
             print(f"  JSON 解析失敗     : {parse_fail}")
-            if args.strategy == "split":
+            if args.strategy in ("split", "rules"):
                 print(f"  担当者の照合      : 正しく{match_ok}/{n}  候補なし{match_miss}  "
                       f"誤った候補{match_wrong}   （誤りは 0 でなければ不合格）")
     print("\n注意: ここの処理時間は Windows の値です。Raspberry Pi の目安にはなりません。")
