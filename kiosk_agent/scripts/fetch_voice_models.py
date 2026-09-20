@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -96,6 +97,38 @@ def sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
+def has_git_lfs() -> bool:
+    """git-lfs が入っているか。
+
+    **git 本体とは別のプログラム**で、入っていないと `git lfs pull` は
+    「'lfs' is not a git command」と言われる。Raspberry Pi OS には既定で入っていない。
+    """
+    try:
+        r = subprocess.run(["git", "lfs", "version"], capture_output=True, timeout=10)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def lfs_advice() -> list[str]:
+    """ポインタのままだったときの案内。環境に合わせて出し分ける。
+
+    **git-lfs が無くても解決できる**(このスクリプトが取得元から直接落とせる)ことを
+    伝える。ここを知らないと「git lfs が無いから進めない」で止まってしまう。
+    """
+    if has_git_lfs():
+        return ["  リポジトリから取り出す: git lfs install && git lfs pull"]
+    return [
+        "  git-lfs が入っていません(git 本体とは別のプログラムです)。",
+        "  どちらでも解決できます:",
+        "    A) git-lfs を入れて取り出す",
+        "         sudo apt install git-lfs        # Raspberry Pi OS / Debian",
+        "         git lfs install && git lfs pull",
+        "    B) git-lfs を使わず取得元から直接落とす(SHA-256 で検証します)",
+        "         python3 scripts/fetch_voice_models.py",
+    ]
+
+
 def is_lfs_pointer(path: Path) -> bool:
     try:
         with path.open("rb") as f:
@@ -109,7 +142,7 @@ def state_of(asset: Asset) -> tuple[str, str]:
     if not asset.path.exists():
         return "missing", "ファイルがありません"
     if is_lfs_pointer(asset.path):
-        return "pointer", "Git LFS のポインタのままです (git lfs pull が必要)"
+        return "pointer", "Git LFS のポインタのままで、実体が入っていません"
     actual = sha256_of(asset.path)
     if actual != asset.sha256:
         return "corrupt", f"SHA-256 が一致しません ({actual[:16]}…)"
@@ -191,7 +224,13 @@ def main() -> int:
     if args.check:
         # --only で絞ったときは、指定したものが揃っていなければ失敗とする
         # (「任意」の印が付いていても、名指しで要ると言われているため)。
-        return 1 if (bad if args.only else [a for a in bad if a.required]) else 0
+        stop = bad if args.only else [a for a in bad if a.required]
+        # ポインタのままなら、取り出し方を出さないと利用者がここで詰まる。
+        if any(state_of(a)[0] == "pointer" for a in stop):
+            print("")
+            for line in lfs_advice():
+                print(line)
+        return 1 if stop else 0
 
     failed = False
     for asset in bad:
@@ -203,7 +242,8 @@ def main() -> int:
 
     if failed:
         print("\n必須のモデルが揃いませんでした。音声入力は無効のまま起動します。")
-        print("  リポジトリから取り直す: git lfs pull")
+        for line in lfs_advice():
+            print(line)
         return 1
     print("\nモデルは揃っています。")
     return 0

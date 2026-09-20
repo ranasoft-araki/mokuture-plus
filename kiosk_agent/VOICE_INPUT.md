@@ -56,12 +56,28 @@ pydantic / uvicorn の作法をそのまま流用できる。whisper.cpp は C++
 
 ### 2-2. モデルを取り出す
 
-モデルの実体はリポジトリに **Git LFS** で入っている。clone しただけでポインタのままなら:
+モデルの実体はリポジトリに **Git LFS** で入っている。clone しただけではポインタ
+（中身が数行のテキスト）のままなので、実体を取り出す必要がある。
+
+**`git lfs` は git 本体とは別のプログラム**で、Raspberry Pi OS には既定で入っていない。
+入っていないと `git: 'lfs' is not a git command` と言われる（`lfs` は小文字のエル、
+Large File Storage の略）。
 
 ```bash
-cd ~/mokuture          # リポジトリのルート
-git lfs install
+git lfs version                # 入っているか確認
+sudo apt install git-lfs       # 入っていなければ（Raspberry Pi OS / Debian）
+
+cd ~/mokuture                  # リポジトリのルート
+git lfs install                # 利用者ごとに1回
 git lfs pull
+```
+
+**git-lfs を入れたくない・入れられない場合は、取得元から直接落とせる。**
+SHA-256 を記録してあるので、壊れたものは弾かれる。
+
+```bash
+cd ~/mokuture/kiosk_agent
+.venv/bin/python scripts/fetch_voice_models.py        # 足りないものだけ落とす
 ```
 
 揃っているかの確認:

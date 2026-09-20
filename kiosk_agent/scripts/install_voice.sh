@@ -47,10 +47,23 @@ if [ "$VOSK_ONLY" = "1" ]; then
 fi
 if ! "$VENV/bin/python" "$AGENT_DIR/scripts/fetch_voice_models.py" --check $CHECK_ARGS; then
     echo ""
-    echo "モデルが揃っていません。まず次を試してください:"
-    echo "    cd $(dirname "$AGENT_DIR") && git lfs pull"
-    echo "それでも駄目なら取得し直します:"
-    echo "    $VENV/bin/python $AGENT_DIR/scripts/fetch_voice_models.py"
+    echo "モデルが揃っていません。"
+    # git-lfs は git 本体とは別のプログラムで、Raspberry Pi OS には既定で入っていない。
+    # 入っていないまま「git lfs pull を実行」とだけ案内すると、利用者がここで詰まる。
+    if git lfs version >/dev/null 2>&1; then
+        echo "  リポジトリから取り出す:"
+        echo "    cd $(dirname "$AGENT_DIR") && git lfs install && git lfs pull"
+        echo "  それでも駄目なら取得元から落とし直す:"
+        echo "    $VENV/bin/python $AGENT_DIR/scripts/fetch_voice_models.py"
+    else
+        echo "  git-lfs が入っていません(git 本体とは別のプログラムです)。"
+        echo "  どちらでも解決できます:"
+        echo "    A) git-lfs を入れて取り出す"
+        echo "         sudo apt install git-lfs"
+        echo "         cd $(dirname "$AGENT_DIR") && git lfs install && git lfs pull"
+        echo "    B) git-lfs を使わず取得元から直接落とす(SHA-256 で検証します)"
+        echo "         $VENV/bin/python $AGENT_DIR/scripts/fetch_voice_models.py"
+    fi
     exit 1
 fi
 
