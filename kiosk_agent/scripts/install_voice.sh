@@ -1,9 +1,13 @@
 #!/bin/bash
 # mokuture+ 音声入力(実験導入) — Raspberry Pi セットアップ
 #
-#   bash scripts/install_voice.sh            # 一式(依存 → ビルド → systemd → 起動)
-#   bash scripts/install_voice.sh --build    # whisper.cpp のビルドだけやり直す
-#   bash scripts/install_voice.sh --no-apt   # apt を触らない(オフライン端末)
+#   bash scripts/install_voice.sh              # 一式(依存 → ビルド → systemd → 起動)
+#   bash scripts/install_voice.sh --vosk-only  # whisper を飛ばす(一文の受付はこれで動く)
+#   bash scripts/install_voice.sh --build      # whisper.cpp のビルドだけやり直す
+#   bash scripts/install_voice.sh --no-apt     # apt を触らない(オフライン端末)
+#
+# 一文の名乗り(受付の既定の入口)は Vosk だけで動く。whisper.cpp のビルドは Pi で
+# 10 分以上かかるので、まず動かして測りたいだけなら --vosk-only が速い。
 #
 # ネットワークを使うのは apt とモデルの取り直しだけ。モデルの実体はリポジトリに
 # Git LFS で入っているので、`git lfs pull` 済みなら取得は走らない。
@@ -18,11 +22,13 @@ WHISPER_SRC="$AGENT_DIR/vendor/whisper.cpp-${WHISPER_VERSION}.tar.gz"
 WHISPER_DIR="$AGENT_DIR/vendor/whisper.cpp"
 BUILD_ONLY=0
 USE_APT=1
+VOSK_ONLY=0
 
 for arg in "$@"; do
     case "$arg" in
-        --build)  BUILD_ONLY=1 ;;
-        --no-apt) USE_APT=0 ;;
+        --build)     BUILD_ONLY=1 ;;
+        --no-apt)    USE_APT=0 ;;
+        --vosk-only) VOSK_ONLY=1 ;;
         *) echo "不明な引数: $arg"; exit 2 ;;
     esac
 done
@@ -34,7 +40,12 @@ echo "ディレクトリ: $AGENT_DIR"
 # LFS のポインタのままだと whisper がモデルを読めないので、先に気づけるようにする。
 echo ""
 echo "--- モデルの確認 ---"
-if ! "$VENV/bin/python" "$AGENT_DIR/scripts/fetch_voice_models.py" --check; then
+CHECK_ARGS=""
+if [ "$VOSK_ONLY" = "1" ]; then
+    CHECK_ARGS="--only vosk-model-small-ja-0.22.zip"
+    echo "(--vosk-only: whisper のモデルとビルドは飛ばします)"
+fi
+if ! "$VENV/bin/python" "$AGENT_DIR/scripts/fetch_voice_models.py" --check $CHECK_ARGS; then
     echo ""
     echo "モデルが揃っていません。まず次を試してください:"
     echo "    cd $(dirname "$AGENT_DIR") && git lfs pull"
@@ -49,8 +60,11 @@ if [ "$USE_APT" = "1" ] && [ "$BUILD_ONLY" = "0" ]; then
     echo "--- 依存パッケージ ---"
     MISSING=""
     command -v arecord >/dev/null 2>&1 || MISSING="$MISSING alsa-utils"
-    command -v cmake   >/dev/null 2>&1 || MISSING="$MISSING cmake"
-    command -v g++     >/dev/null 2>&1 || MISSING="$MISSING build-essential"
+    if [ "$VOSK_ONLY" = "0" ]; then
+        # whisper.cpp をこの端末でビルドするのに要る。Vosk だけなら不要。
+        command -v cmake >/dev/null 2>&1 || MISSING="$MISSING cmake"
+        command -v g++   >/dev/null 2>&1 || MISSING="$MISSING build-essential"
+    fi
     if [ -n "$MISSING" ]; then
         echo "導入します:$MISSING"
         sudo apt-get update -qq
@@ -65,7 +79,10 @@ fi
 # (Git LFS 管理)から、この端末でビルドする。
 echo ""
 echo "--- whisper.cpp v$WHISPER_VERSION ---"
-if [ -x "$WHISPER_DIR/build/bin/whisper-cli" ] && [ "$BUILD_ONLY" = "0" ]; then
+if [ "$VOSK_ONLY" = "1" ]; then
+    echo "飛ばしました (--vosk-only)。一文の名乗りは Vosk で動きます。"
+    echo "  会社名・お名前を項目ごとに言う従来の入口は使えません。"
+elif [ -x "$WHISPER_DIR/build/bin/whisper-cli" ] && [ "$BUILD_ONLY" = "0" ]; then
     echo "ビルド済み: $WHISPER_DIR/build/bin/whisper-cli"
 else
     if [ ! -d "$WHISPER_DIR" ] || [ "$BUILD_ONLY" = "1" ]; then
@@ -74,7 +91,7 @@ else
         tar xzf "$WHISPER_SRC" -C "$AGENT_DIR/vendor"
         mv "$AGENT_DIR/vendor/whisper.cpp-$WHISPER_VERSION" "$WHISPER_DIR"
     fi
-    echo "ビルド中(Pi 5 で 3〜6 分かかります)..."
+    echo "ビルド中(Pi 5 で 3〜6 分、Pi 4 では 10 分以上かかります)..."
     # 静的リンクにして、サービスからどこで実行しても動くようにする。
     cmake -S "$WHISPER_DIR" -B "$WHISPER_DIR/build" \
         -DCMAKE_BUILD_TYPE=Release \
@@ -85,11 +102,13 @@ else
     cmake --build "$WHISPER_DIR/build" -j "$(nproc)" --target whisper-cli
 fi
 
-if [ ! -x "$WHISPER_DIR/build/bin/whisper-cli" ]; then
-    echo "whisper-cli ができていません。ビルドログを確認してください。"
-    exit 1
+if [ "$VOSK_ONLY" = "0" ]; then
+    if [ ! -x "$WHISPER_DIR/build/bin/whisper-cli" ]; then
+        echo "whisper-cli ができていません。ビルドログを確認してください。"
+        exit 1
+    fi
+    echo "OK: $("$WHISPER_DIR/build/bin/whisper-cli" --version 2>&1 | head -1 || echo whisper-cli)"
 fi
-echo "OK: $("$WHISPER_DIR/build/bin/whisper-cli" --version 2>&1 | head -1 || echo whisper-cli)"
 
 if [ "$BUILD_ONLY" = "1" ]; then
     echo ""

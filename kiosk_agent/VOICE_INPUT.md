@@ -49,9 +49,9 @@ pydantic / uvicorn の作法をそのまま流用できる。whisper.cpp は C++
 
 ### 2-1. 前提
 
-- Raspberry Pi 5 / Raspberry Pi OS 64bit
-- USB マイクを接続済み
-- キオスクエージェント（`install.sh`）が導入済み
+- Raspberry Pi 4 (4GB) 以上 / Raspberry Pi OS 64bit
+- **USB マイクを接続済み**（本体にマイク入力は無い）
+- キオスクエージェント（`install.sh`）が導入済み＝ `kiosk_agent/.venv` がある
 - **導入時だけ**ネットワークに繋がること（apt と、LFS を引いていない場合のモデル取得）
 
 ### 2-2. モデルを取り出す
@@ -69,13 +69,16 @@ git lfs pull
 ```bash
 cd ~/mokuture/kiosk_agent
 .venv/bin/python scripts/fetch_voice_models.py --check
+
+# 一文の受付だけ試すなら Vosk のモデルだけあればよい
+.venv/bin/python scripts/fetch_voice_models.py --check --only vosk-model-small-ja-0.22.zip
 ```
 
 | ファイル | サイズ | 用途 |
 |---|---|---|
-| `voice_models/ggml-base-q5_1.bin` | 57MB | 既定モデル |
-| `voice_models/ggml-small-q5_1.bin` | 181MB | 比較用（精度は上・3〜4倍遅い） |
-| `voice_models/vosk-model-small-ja-0.22.zip` | 47MB | 第3・4段階用（今は未使用） |
+| `voice_models/vosk-model-small-ja-0.22.zip` | 50MB | **一文の名乗り（受付の既定の入口）** |
+| `voice_models/ggml-base-q5_1.bin` | 60MB | 項目ごとに言う従来の入口 |
+| `voice_models/ggml-small-q5_1.bin` | 190MB | 比較用（Pi では遅すぎて実用にならない） |
 | `vendor/whisper.cpp-1.9.3.tar.gz` | 9MB | whisper.cpp のソース（固定版） |
 
 壊れていた場合だけ、記録してある SHA-256 付きの取得元から落とし直す:
@@ -86,28 +89,86 @@ cd ~/mokuture/kiosk_agent
 
 ### 2-3. セットアップ
 
+**まず動かして測りたいだけなら `--vosk-only` が速い。** 一文の名乗り（受付の既定の
+入口）は Vosk だけで動き、whisper.cpp のビルド（Pi 4 で 10 分以上）を飛ばせる。
+
 ```bash
 cd ~/mokuture/kiosk_agent
-bash scripts/install_voice.sh
+bash scripts/install_voice.sh --vosk-only     # 一文の受付だけ。数分で終わる
+bash scripts/install_voice.sh                 # 一式（whisper もビルドする）
 ```
 
 やること:
 
 1. モデルの検証（ポインタのまま・壊れている場合はここで止まる）
-2. `alsa-utils` / `cmake` / `build-essential` を apt で導入
-3. `vendor/whisper.cpp-1.9.3.tar.gz` を展開して **whisper-cli をビルド**（Pi 5 で 3〜6 分）
-4. `voice_input.yaml` を雛形から作成、`~/.mokuture-voice/` を作成
-5. 実行ユーザーを `audio` グループへ追加
-6. `mokuture-voice.service` を登録して起動
+2. `alsa-utils` を apt で導入（`--vosk-only` でなければ `cmake` / `build-essential` も）
+3. whisper-cli をビルド（Pi 5 で 3〜6 分、Pi 4 で 10 分以上。`--vosk-only` なら飛ばす）
+4. `vosk` を venv へ導入し、Vosk のモデル zip を展開
+5. `voice_input.yaml` と `staff_readings.yaml` を雛形から作成、`~/.mokuture-voice/` を作成
+6. 実行ユーザーを `audio` グループへ追加
+7. `mokuture-voice.service` を登録して起動
 
-終わったら:
+### 2-4. 担当者の読み仮名を書く（必須）
+
+社員マスターに読み仮名の欄が無いので、端末側で補う。**ここに載っていない担当者は
+音声で指名できない**（読みの推測は禁止）。
+
+```bash
+nano ~/mokuture/kiosk_agent/staff_readings.yaml
+```
+
+`name` は管理画面「受付設定」の担当者一覧と**完全に同じ文字列**にすること。
+
+```yaml
+staff:
+  - name: 服部 太郎        # 管理画面の表記そのまま
+    kana: はっとりたろう    # 必須
+    department: 営業部      # 任意
+    aliases:                # 任意（社内での呼ばれ方・旧姓）
+      - はっとりさん
+```
+
+書き換えたら再起動:
+
+```bash
+sudo systemctl restart mokuture-voice
+curl -s http://127.0.0.1:8181/voice/status | grep -o '"staff_readings":[^}]*}'
+```
+
+### 2-5. 動いているか確かめる
 
 ```bash
 curl -s http://127.0.0.1:8181/voice/status
 ```
 
-`"available": true` になっていれば、受付フォームに「音声で入力」が出る。
+見るところ:
+
+| 項目 | 期待する値 |
+|---|---|
+| `available` | `true` |
+| `microphone.available` | `true`（false なら USB マイクを認識していない） |
+| `engines.vosk.available` | `true` |
+| `fields.reception.engine_used` | `vosk` |
+| `staff_readings.registered` | 1 以上 |
+
+`available: true` になっていれば、受付フォームに「音声で入力」が出る。
 `false` のときは `detail` に理由が入っている。
+
+### 2-6. 速さを測る
+
+```bash
+.venv/bin/python scripts/voice_bench.py --models vosk --field reception --repeat 4
+```
+
+マイクに向かって一息で名乗ると、機械の素性・モデルのメモリ・認識時間・実時間比が出る。
+**`--repeat` は 2 以上にすること。** 1 回目だけ大きく遅く（Kaldi が最初に実デコードを
+する費用。Windows で 3.8 秒 → 2 回目以降 0.58 秒）、平均に混ぜると実態を見誤る。
+
+whisper と比べるなら（`--vosk-only` で入れた場合は whisper は測れない）:
+
+```bash
+.venv/bin/python scripts/voice_bench.py --models vosk,base --field reception --repeat 4
+```
 
 > **ビルドだけやり直す**（whisper.cpp のバージョンを上げた等）:
 > `bash scripts/install_voice.sh --build`
@@ -115,7 +176,7 @@ curl -s http://127.0.0.1:8181/voice/status
 
 ---
 
-## 2-4. Windows 開発機での動作試験
+## 2-7. Windows 開発機での動作試験
 
 本番は Raspberry Pi ですが、**Windows でも同じコードで一通り試せます**。Pi を用意しなくても、
 録音 → VAD → whisper.cpp → 整形 → 採否判定 の経路と、キオスク画面の導線を確認できます。
@@ -293,22 +354,40 @@ audio:
 
 ---
 
-## 5. 性能計測（Raspberry Pi 5）
+## 5. 性能計測（実機）
 
 ```bash
 cd ~/mokuture/kiosk_agent
 
-# その場で 1 回話して、base と small を比べる
-.venv/bin/python scripts/voice_bench.py --models base,small
+# その場で 1 回話して測る（既定は一文の名乗り＝ Vosk）
+.venv/bin/python scripts/voice_bench.py --models vosk --field reception --repeat 4
+
+# whisper と比べる
+.venv/bin/python scripts/voice_bench.py --models vosk,base --field reception --repeat 4
 
 # 同じ音声で繰り返してばらつきを見る
 .venv/bin/python scripts/voice_bench.py --record-only --out /dev/shm/sample.wav
-.venv/bin/python scripts/voice_bench.py --wav /dev/shm/sample.wav --models base,small --repeat 5
+.venv/bin/python scripts/voice_bench.py --wav /dev/shm/sample.wav --models vosk,base --repeat 5
 rm -f /dev/shm/sample.wav        # 計測が終わったら必ず消す
 ```
 
-出るもの（§3-1 の計測項目）: 音声の長さ / 認識処理時間 / 発話終了から結果表示までの時間 /
-使用モデル / 自動確定の可否（成功・再入力）。
+出るもの（§3-1 の計測項目）: 機械の素性 / 音声の長さ / 認識処理時間 / 発話終了から
+結果表示までの時間 / 実時間比（RTF）/ モデルのメモリ / 自動確定の可否。
+
+**`--repeat` は 2 以上にすること。** Vosk は 1 回目だけ大きく遅い（Windows の実測で
+3.8 秒 → 2 回目以降 0.58 秒）。モデル読み込みでも認識器の生成でもなく、Kaldi が最初に
+実際のデコードをするときに払う費用で、モデルを先読みしても消えなかった。
+運用上はサービス起動後の最初の 1 人だけが余分に待つ（OTA の再起動ごとに 1 回）。
+ベンチはこれを分けて表示する。
+
+判定の目安は **話し終わってから 3 秒**。Windows（8 コア）での実測値は次のとおりで、
+Pi はこれより数倍遅くなる。
+
+| | 読みCER | 定常の認識 | 実時間比 |
+|---|---|---|---|
+| Vosk small-ja | 0.118 | 0.58 秒 | 0.10 |
+| whisper base | 0.217 | 2.86 秒 | 0.48 |
+| whisper small | 0.179 | 10.1 秒 | — |
 
 認識したテキストは既定では表示しない。精度を目で確かめたいときだけ `--show-text`
 （画面に出るだけで、どこにも保存しない）。
