@@ -191,6 +191,29 @@ BUNDLE_FILES = [
     "card/ocr/base.py",
     "card/ocr/paddle_onnx.py",
     "card/ocr/tesseract.py",
+    # 音声入力(QR無し来訪の受付フォームを声で埋める / 実験導入)。こちらも agent の
+    # updater.MANAGED_FILES と同じ並びにしておくこと。
+    # 名刺と違って端末では**別プロセス**(mokuture-voice.service / 127.0.0.1:8181)で動く。
+    # エージェント本体を再起動しても入れ替わらないので、音声サービスが自分のソースの
+    # ハッシュ変化を検知して自ら終了し、systemd に起こし直してもらう。
+    # whisper.cpp のバイナリ・ggml モデル・Vosk モデルは OTA では配らない
+    # (scripts/install_voice.sh の担当)。
+    "voice/__init__.py",
+    "voice/api.py",
+    "voice/capture.py",
+    "voice/defaults.py",
+    "voice/engines.py",
+    "voice/extract.py",
+    "voice/metrics.py",
+    "voice/quality.py",
+    "voice/server.py",
+    "voice/session.py",
+    "voice/settings.py",
+    "voice/textnorm.py",
+    "voice/types.py",
+    "voice/vad.py",
+    "voice/vosk_engine.py",
+    "voice/whisper_cpp.py",
 ]
 _FORCE_WINDOW_SEC = 7200  # force flag stays active for 2 hours after trigger
 

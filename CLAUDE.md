@@ -590,6 +590,47 @@ mokuture/
   架空の社名・氏名と予約済みドメインで名刺画像を生成する（横型/縦型/日英混在/白/色付き/木目/斜め/
   反射/ぼけ/暗所/名刺でない紙/スマホ画面 等19パターン）。モデル未取得なら `-m ocr` のテストが自動 skip。
 
+### 音声入力（QR無し来訪者の受付フォームを声で埋める / 実験導入）
+
+受付フォーム(`showReception`)の「音声で入力」から、**会社名・お名前**を声で入力する。
+**端末内で完結**し、クラウド音声認識API・Web Speech API・外部生成AIは一切使わない。
+ネット切断中でも動く。詳細は [`kiosk_agent/VOICE_INPUT.md`](kiosk_agent/VOICE_INPUT.md)。
+
+- **実装場所は `kiosk_agent/voice/` だが、名刺と違って別プロセス・別ポート・別systemd**
+  (`mokuture-voice.service` / `127.0.0.1:8181`)。理由は3つ: ①本体は端末管理のため 0.0.0.0 で
+  待つので、相乗りすると音声APIがLANから見える(**ソケットの時点で閉じたい**) ②実験機能の
+  クラッシュで受付本体(GPIO/ロッカー/扉)を巻き込まない ③whisper.cpp のCPU占有を切り分けやすい。
+- **マイクを握るのはブラウザではなくサービス側**(`arecord`)。名刺(カメラ=ブラウザ)と逆なので注意。
+  ブラウザが送るのは「どの項目を録るか」だけで、音声はブラウザを通らない。
+- **音声だけで受付を確定させない**。認識結果は受付フォームの入力欄に入るだけで、送信は
+  従来どおり「受付する」を押したとき。失敗してもいつでもタッチ入力に戻れる。
+- **確信度は単一の数値で取れない**。whisper.cpp の JSON(`-ojf`)はトークン確率 `p` は返すが
+  no-speech 確率は返さない。そこで無音率/認識文字数/平均トークン確率/繰り返し/発話時間に
+  対する長さ を組み合わせて自動確定の可否を決める(`voice/quality.py`)。**弾いた結果も画面には
+  出す**(黙って捨てるより、利用者が直すか話し直すかを選べる)。
+- **音声は残さない**。PCM はメモリ上のみ。whisper-cli は WAV のパスを受け取る API なので
+  tmpfs(`/dev/shm`)に一度書くが、成功・失敗・タイムアウトのいずれでも `finally` で必ず消す。
+- **分析ログは「書ける項目を列挙する」方式**(`voice/metrics.py` の `_ALLOWED`)。認識テキスト・
+  氏名・会社名は構造的に書けない。修正の有無は真偽値だけ。セッションIDは使い捨てで
+  `reception_logs` とひも付けない。
+- **モデルは Git LFS でリポジトリに入れた**(`voice_models/` 約290MB + `vendor/whisper.cpp-*.tar.gz`)。
+  `ggml-small-q5_1.bin` が181MBでGitHubの1ファイル100MB上限を超えるため。**clone 後に
+  `git lfs pull` が要る**。名刺のOCRモデル(スクリプト取得)とは方針が違う。
+  whisper-cli のバイナリは aarch64 専用なので入れない(`install_voice.sh` が Pi 上でビルド)。
+- **OTA は `voice/*.py` を配るが `_RESTART_DIRS` には入れない**。別プロセスなので本体を
+  再起動しても入れ替わらない。音声サービスが自分のソースのハッシュ変化を60秒ごとに見て
+  自ら終了し、systemd(`Restart=always`)に起こし直してもらう(`voice/server.py` の `_watch_sources`)。
+- **社員マスターに読み仮名が無い**。`tenants.staff_list` は表示氏名のカンマ区切りだけで、
+  読み仮名・部署・別称の欄が無い。読みを推測して確定するのは禁止なので、端末ローカルの
+  `staff_readings.yaml`(gitignore。実在の社員情報が入る)に読みがある担当者だけを音声照合の
+  対象にし、無ければ「設定不足」として担当者の音声入力そのものを無効にする。
+- しきい値は `voice/defaults.py` が唯一の定義で、`voice_input.yaml`(端末ごと・gitignore)と
+  環境変数 `VOICE_<SECTION>__<KEY>` で上書きする(名刺と同じ作法)。
+- **Windows 開発機でも動作試験できる**。録音は `sounddevice`(arecord が無いので `auto` が自動で選ぶ)、whisper-cli は上流の配布バイナリ(タグ `b4938` = v1.9.3 と同じソース。`whisper.binary_windows` で持ち替え)。`scripts/install_voice_windows.ps1` が SHA-256 照合つきで展開する。`scripts/voice_selftest.py` が録音→認識→整形→判定を1往復させ、`--say` は Windows の音声合成(SAPI)で音源を作るのでマイクが無くても試せる。`audio.backend: file` なら WAV をマイクの代わりに流せる(同じ音で何度でも比較できる)。**処理時間は Pi 5 の目安にならない**(CPU も命令セットも違う)ので、性能の数字は必ず実機の `voice_bench.py` で取る。
+- テストは `kiosk_agent/tests/voice_input/`(158件)。**実マイクも whisper バイナリも使わない**。
+  合成した波形を実時間で流すフェイクマイク(`capture.BufferStream(realtime=True)`)で録音ループを
+  本番と同じ条件で回す。VAD 単体は時計を差し替えて待たずに検証する。
+
 ### キオスク画面（device 版 `kiosk_agent/static/kiosk.html`）
 画面遷移フロー（`go(screen, data)` で管理）:
 

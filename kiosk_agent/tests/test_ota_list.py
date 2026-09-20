@@ -60,10 +60,50 @@ def test_agentとbackendの配信リストが一致する():
 
 
 def test_Pythonの変更は再起動扱いになる():
+    """配って反映されないコードを作らない。
+
+    音声入力(voice/)だけは例外。キオスク本体とは**別プロセス**で動くので、本体を
+    再起動しても入れ替わらない。代わりに音声サービスが自分のソースの変化を見て
+    自ら終了し、systemd に起こし直してもらう。例外にする以上、その仕組みが実際に
+    在ることを下の test で確かめる。
+    """
     import updater
     for rel in _managed():
         if rel.endswith(".py"):
             name = Path(rel).name
             top = Path(rel).parts[0]
+            if top == "voice":
+                continue
             assert name in updater.RESTART_FILES or top in updater._RESTART_DIRS, \
                 f"{rel} を更新しても再起動されない"
+
+
+def test_音声サービスは自分でソース更新に気づいて再起動する():
+    """voice/ を RESTART から外している根拠。仕組みが消えたら気付けるようにする。"""
+    server = (AGENT_DIR / "voice" / "server.py").read_text(encoding="utf-8")
+    assert "_sources_digest" in server, "ソースの指紋を取る仕組みが無い"
+    assert "_watch_sources" in server, "ソース変化を見張る仕組みが無い"
+    assert "os._exit" in server, "変化を見つけても終了していない"
+
+    unit = (AGENT_DIR / "mokuture-voice.service").read_text(encoding="utf-8")
+    assert "Restart=always" in unit, "終了しても起こし直されない"
+
+
+def test_音声モジュールが配信対象に入っている():
+    managed = set(_managed())
+    voice_files = {
+        str(p.relative_to(AGENT_DIR)).replace("\\", "/")
+        for p in (AGENT_DIR / "voice").rglob("*.py")
+        if "__pycache__" not in p.parts
+    }
+    missing = voice_files - managed
+    assert not missing, f"OTA に入っていない音声モジュール: {sorted(missing)}"
+
+
+def test_音声のモデルと端末ごとの設定は配信対象に入れない():
+    """モデルは大きすぎる。設定は現場で調整したものを上書きしたくない。"""
+    for rel in _managed():
+        assert not rel.startswith("voice_models/"), rel
+        assert not rel.startswith("vendor/"), rel
+        assert rel != "voice_input.yaml", rel
+        assert rel != "staff_readings.yaml", rel

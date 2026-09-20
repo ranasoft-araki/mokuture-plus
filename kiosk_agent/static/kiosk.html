@@ -605,6 +605,8 @@ const ICO = {
   truck:     `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>`,
   more:      `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`,
   card:      `<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="11" r="2"/><path d="M5 16c.6-1.3 1.7-2 3-2s2.4.7 3 2"/><path d="M14 9.5h5M14 13h5M14 16h3"/></svg>`,
+  mic:       `<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 18v4M8 22h8"/></svg>`,
+  mic_lg:    `<svg width="76" height="76" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 18v4M8 22h8"/></svg>`,
   arrow:     `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`,
   bell_sm:   `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0v5l2 3H4l2-3z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>`,
   bell_lg:   `<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0v5l2 3H4l2-3z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>`,
@@ -2587,6 +2589,615 @@ function openCardCapture({ onConfirm }) {
   return { close };
 }
 
+// ─── 音声入力 (QR無し来訪の受付フォームを声で埋める / 実験導入) ─────────────────
+// マイクを握るのはブラウザではなく端末内の音声サービス(127.0.0.1:8181)。ここは
+//   1) どの項目を録るか指示する  2) 状態をポーリングして画面に出す  3) 結果を確認させる
+// だけを行う。音声データはブラウザを通らない。
+//
+// 音声だけで受付を確定させない(要件)。このオーバーレイが返すのは受付フォームに入れる
+// 「候補」で、送信は利用者が受付フォームの「受付する」を押したとき。
+//
+// 使えない端末(マイク未接続・モデル未導入・サービス停止)では status が取れず、
+// 「音声で入力」ボタンそのものを描画しない = 従来どおりのタッチ操作だけが残る。
+const VOICE = { status: null, checked: false };
+// 音声サービスは別プロセス・別ポート。voice_input.yaml の server.port を変えたら
+// ここも合わせる(既定 8181)。
+const VOICE_BASE = "http://127.0.0.1:8181";
+
+async function voiceApi(method, path, body) {
+  const r = await fetch(VOICE_BASE + path, {
+    method,
+    headers: body != null ? { "Content-Type": "application/json" } : {},
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({ detail: r.statusText }));
+    throw new Error(e.detail ?? "voice request failed");
+  }
+  return r.status === 204 ? null : r.json();
+}
+
+// 起動時に一度だけ利用可否を調べる。失敗しても例外は投げない(音声導線を隠すだけ)。
+async function ensureVoiceStatus() {
+  if (VOICE.checked) return VOICE.status;
+  VOICE.checked = true;
+  if (MOCK) return null;
+  try {
+    const s = await voiceApi("GET", "/voice/status");
+    VOICE.status = s && s.available ? s : null;
+  } catch { VOICE.status = null; }
+  return VOICE.status;
+}
+function voiceAvailable() { return !!(VOICE.status && VOICE.status.available); }
+
+// 受付開始音。鳴り終わるまで待ってから解決する(§9: 端末の音をマイクが拾わないように)。
+function playStartChime() {
+  return new Promise(resolve => {
+    let ctx = null;
+    const level = tapVolume();
+    try { ctx = _ensureTapAudio(); } catch { ctx = null; }
+    if (!ctx || level <= 0) { setTimeout(resolve, 80); return; }
+    try {
+      if (ctx.state === "suspended") ctx.resume();
+      const t = ctx.currentTime;
+      const master = ctx.createGain();
+      master.gain.value = 0.28 * level;
+      master.connect(ctx.destination);
+      // 低→高の2音。「どうぞ」の合図とわかる短い上昇。
+      [[784, 0], [1175, 0.11]].forEach(([hz, at]) => {
+        const osc = ctx.createOscillator(), g = ctx.createGain();
+        osc.type = "sine"; osc.frequency.value = hz;
+        osc.connect(g); g.connect(master);
+        g.gain.setValueAtTime(0, t + at);
+        g.gain.linearRampToValueAtTime(0.75, t + at + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.20);
+        osc.start(t + at); osc.stop(t + at + 0.22);
+      });
+      // 鳴り終わり + 余韻ぶん待ってから解決する。サービス側でも頭の 250ms を
+      // 捨てているので二重の対策になる。
+      setTimeout(resolve, 520);
+    } catch { setTimeout(resolve, 80); }
+  });
+}
+
+// 端末が鳴らしている音を止める(§9: 案内の再生中は認識しない)。
+function stopKioskAudio() {
+  try {
+    document.querySelectorAll("video, audio").forEach(el => { try { el.pause(); } catch {} });
+  } catch {}
+}
+
+// 音声入力のオーバーレイを開く。確定されたら onApply(values, opts) を呼ぶ。
+// 呼び出し側の画面(受付フォーム)はそのまま生きているので、入力途中の値は失われない。
+function openVoiceInput({ initial, onApply, context }) {
+  const bc = ST.brand_color;
+  const st = VOICE.status || {};
+  const FEATURES = st.features || {};
+  const FIELD_CFG = st.fields || {};
+  const TIMING = st.timing || {};
+  const POLL_MS = TIMING.poll_interval_ms || 120;
+  // 受付の電話と同じで、実際には「磯野木工所の荒木と申します、服部様と打ち合わせの
+  // お約束で参りました」と**一続き**で話す。項目ごとに区切らせると体験が落ちるので、
+  // サービスが対応していれば一文をまとめて受ける方を既定にする。
+  const ONE_SHOT = !!FEATURES.reception;
+  const STEPS = ONE_SHOT ? ["reception"] : ["company", "person_name", "staff"].filter(f => FEATURES[f]);
+  const LABEL = {
+    reception:   ["ご用件", "Your visit"],
+    company:     ["会社名", "Company"],
+    person_name: ["お名前", "Name"],
+    staff:       ["訪問先", "Host"],
+  };
+  // 画面が持っている担当者と用件の一覧。**誰がいるか**の出どころは管理画面の
+  // 社員マスターなので、音声サービスへはこちらから渡す。
+  const CTX_STAFF = (context && context.staff) || [];
+  const CTX_PURPOSES = (context && context.purposes) || [];
+
+  // 使える項目が 1 つも無いのに開かれたら、何もせず閉じる(ボタンは出ないはずだが保険)。
+  if (!STEPS.length) return { close() {} };
+
+  let sessionId = null, closed = false, stepIdx = 0;
+  // intro → arming → listening/speaking → recognizing → review / error
+  let phase = "intro";
+  let pollId = null, result = null, errCode = null, errMsg = "", errMsgEn = "";
+  let draft = "";                 // 確認欄に出している文字列(利用者が直せる)
+  const values = {
+    company: (initial && initial.company) || "",
+    person_name: (initial && initial.visitor_name) || "",
+    staff: (initial && initial.staff) || "",
+    purpose: (initial && initial.purpose) || "",
+  };
+  // 一文から取り出した担当者の候補。1 人に絞れないのは正常(同姓が複数)。
+  let hostCandidates = [];
+  const edited = { company: false, person_name: false, staff: false };
+  // レベルメーターの履歴(簡易的な波形)。右から流れる。
+  const BARS = 32;
+  let bars = new Array(BARS).fill(0);
+
+  const root = document.createElement("div");
+  root.id = "voice-ov";
+  root.style.cssText = "position:absolute;inset:0;z-index:9600;background:rgba(20,18,14,.55);display:flex;align-items:center;justify-content:center;font-family:'Noto Sans JP',Inter,system-ui,sans-serif";
+  sc.appendChild(root);
+  const g = (id) => root.querySelector("#" + id);
+
+  function stopPolling() { if (pollId) { clearInterval(pollId); pollId = null; } }
+
+  function close(opts) {
+    if (closed) return;
+    closed = true;
+    stopPolling();
+    if (sessionId) {
+      // 破棄 = 端末メモリ上の音声と認識結果の破棄。失敗しても TTL で消える。
+      fetch(`${VOICE_BASE}/voice/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
+      sessionId = null;
+    }
+    root.remove();
+    if (opts && opts.apply) onApply(values, opts);
+  }
+  CLEANUPS.push(() => close());
+
+  function fieldName() { return STEPS[stepIdx]; }
+  function fieldCfg() { return FIELD_CFG[fieldName()] || {}; }
+
+  async function ensureSession() {
+    if (sessionId) return sessionId;
+    const s = await voiceApi("POST", "/voice/session");
+    sessionId = s.session_id;
+    return sessionId;
+  }
+
+  // ── 録音開始(§9 の順序: 案内を止める → 開始音 → 鳴り終わりを待つ → マイク) ──
+  async function startListening() {
+    if (closed) return;
+    phase = "arming"; errCode = null; result = null; render();
+    stopKioskAudio();
+    await playStartChime();
+    if (closed) return;
+    try {
+      await ensureSession();
+      const body = { field: fieldName() };
+      if (fieldName() === "reception") {
+        // 担当者の照合と用件の判定に使う。端末側は読み仮名だけを補う。
+        body.staff = CTX_STAFF;
+        body.purposes = CTX_PURPOSES;
+      }
+      await voiceApi("POST", `/voice/session/${sessionId}/listen`, body);
+    } catch (e) {
+      phase = "error"; errCode = "internal";
+      errMsg = "音声入力を始められませんでした"; errMsgEn = "Could not start";
+      render();
+      return;
+    }
+    bars = new Array(BARS).fill(0);
+    startPolling();
+  }
+
+  function startPolling() {
+    stopPolling();
+    pollId = setInterval(async () => {
+      if (closed) return;
+      let s;
+      try {
+        s = await voiceApi("GET", `/voice/session/${sessionId}/state`);
+      } catch { return; }   // 一時的な失敗は次の周期で取り直す
+      if (closed) return;
+      bars.push(s.level || 0); bars.shift();
+      if (s.phase === "listening" || s.phase === "speaking") {
+        phase = s.phase;
+        paintMeter();
+        paintPhase();
+        return;
+      }
+      if (s.phase === "recognizing" || s.phase === "arming") {
+        phase = s.phase; paintMeter(); paintPhase(); return;
+      }
+      stopPolling();
+      if (s.phase === "done" && s.result) {
+        result = s.result;
+        draft = s.result.text || "";
+        errCode = s.result.accepted ? null : s.result.error_code;
+        errMsg = s.message || ""; errMsgEn = s.message_en || "";
+        const ex = s.result.extracted;
+        if (ex) {
+          // 取れた項目だけ入れる。取れなかった欄は触らない(すでに入っていた値を消さない)。
+          if (ex.visitor_company) values.company = ex.visitor_company;
+          if (ex.visitor_name) values.person_name = ex.visitor_name;
+          hostCandidates = Array.isArray(ex.host_candidates) ? ex.host_candidates : [];
+          // 候補が 1 人でも、ここで確定はしない。画面で選んでもらう(§4)。
+          values.staff = hostCandidates.length === 1 ? hostCandidates[0] : "";
+          if (ex.purpose && CTX_PURPOSES.includes(ex.purpose)) values.purpose = ex.purpose;
+        }
+        phase = "review";
+      } else if (s.phase === "cancelled") {
+        phase = "intro";
+      } else {
+        phase = "error";
+        errCode = s.error_code || "internal";
+        errMsg = s.message || "うまく聞き取れませんでした";
+        errMsgEn = s.message_en || "";
+      }
+      render();
+    }, POLL_MS);
+  }
+
+  async function stopRecording() {
+    try { await voiceApi("POST", `/voice/session/${sessionId}/stop`); } catch {}
+  }
+  async function cancelRecording() {
+    stopPolling();
+    try { await voiceApi("POST", `/voice/session/${sessionId}/cancel`); } catch {}
+    phase = "intro"; render();
+  }
+  async function retry() {
+    try { await voiceApi("POST", `/voice/session/${sessionId}/retry`); } catch {}
+    startListening();
+  }
+
+  // 録音中の「もう一度話す」(言い直し)。走っている録音を畳んでから録り直す。
+  // サービスは録音中の listen を 409 で撥ねる(二重送信よけ)ので、畳み終わるのを待つ。
+  async function restartListening() {
+    stopPolling();
+    try { await voiceApi("POST", `/voice/session/${sessionId}/cancel`); } catch {}
+    const RUNNING = ["arming", "listening", "speaking", "recognizing"];
+    for (let i = 0; i < 20 && !closed; i++) {
+      try {
+        const s = await voiceApi("GET", `/voice/session/${sessionId}/state`);
+        if (!RUNNING.includes(s.phase)) break;
+      } catch { break; }
+      await new Promise(r => setTimeout(r, 50));
+    }
+    if (closed) return;
+    retry();
+  }
+  // 実験ログ(§12)。セッションを破棄する前に送り終える必要があるので Promise を返す。
+  // 破棄が先に届くと 404 になって「タッチへ切り替えた」件数が落ちる。
+  function sendEvent(kind, wasEdited) {
+    if (!sessionId) return Promise.resolve();
+    return voiceApi("POST", `/voice/session/${sessionId}/event`, {
+      result: kind, edited: !!wasEdited, field: fieldName(),
+    }).catch(() => {});
+  }
+
+  // ── 確定して次の項目へ ────────────────────────────────────────────────
+  // 一文モードの確定。画面に並べた4項目をそのまま受付フォームへ渡す。
+  function collectReception() {
+    const val = (id) => { const el = g(id); return el ? String(el.value || "").trim() : ""; };
+    values.company = val("v-company");
+    values.person_name = val("v-name");
+    values.staff = val("v-staff");
+    if (g("v-purpose")) values.purpose = val("v-purpose");
+  }
+
+  async function acceptStep() {
+    if (ONE_SHOT) {
+      collectReception();
+      const changed = !!(result && result.extracted &&
+        (values.company !== (result.extracted.visitor_company || "") ||
+         values.person_name !== (result.extracted.visitor_name || "")));
+      await sendEvent("confirm", changed);
+      close({ apply: true });
+      return;
+    }
+    const el = g("v-edit");
+    const finalText = el ? el.value.trim() : draft;
+    values[fieldName()] = finalText;
+    edited[fieldName()] = !!(result && finalText !== (result.text || ""));
+    const sent = sendEvent("confirm", edited[fieldName()]);
+    result = null; errCode = null;
+    if (stepIdx + 1 < STEPS.length) {
+      stepIdx += 1;
+      phase = "intro";
+      render();
+    } else {
+      await sent;               // 記録してから破棄する
+      close({ apply: true });
+    }
+  }
+
+  function backStep() {
+    if (stepIdx === 0) { close({ apply: true }); return; }
+    stepIdx -= 1; phase = "intro"; result = null; errCode = null; render();
+  }
+
+  async function toKeyboard() {
+    // 認識結果を受付フォームへ入れ、既存の五十音キーボードで直してもらう。
+    if (ONE_SHOT) {
+      collectReception();
+      await sendEvent("fallback_touch", true);
+      close({ apply: true, focus: "company" });
+      return;
+    }
+    const el = g("v-edit");
+    if (el) values[fieldName()] = el.value.trim();
+    const field = fieldName();
+    await sendEvent("fallback_touch", true);
+    close({ apply: true, focus: field });
+  }
+
+  async function quitToTouch() {
+    await sendEvent("fallback_touch", false);
+    close({ apply: true });
+  }
+
+  // ── 描画 ──────────────────────────────────────────────────────────────
+  const btn = (id, label, kind) => {
+    const styles = {
+      primary: `background:${T.dark};border:none;color:#fff`,
+      accent:  `background:${bc};border:none;color:#fff`,
+      plain:   `background:${T.canvas};border:2px solid ${T.borderStrong};color:${T.sub}`,
+    };
+    return `<button type="button" id="${id}" style="min-height:84px;padding:0 34px;border-radius:16px;font-size:26px;font-weight:600;cursor:pointer;font-family:inherit;${styles[kind || "plain"]}">${escHtml(label)}</button>`;
+  };
+
+  function stepDots() {
+    // 一文モードは 1 段階しかないので、進み具合を出す意味が無い。
+    if (ONE_SHOT) return "";
+    return STEPS.map((f, i) => {
+      const on = i === stepIdx, done = i < stepIdx;
+      const color = on ? bc : (done ? T.sub : T.border);
+      return `<div style="display:flex;align-items:center;gap:10px">
+        <div style="width:14px;height:14px;border-radius:50%;background:${color}"></div>
+        <span style="font-size:20px;color:${on ? T.ink : T.muted};font-weight:${on ? 600 : 400}">${escHtml(LABEL[f][0])}</span>
+      </div>`;
+    }).join(`<div style="width:26px;height:2px;background:${T.border}"></div>`);
+  }
+
+  function meterHtml() {
+    return `<div id="v-meter" style="display:flex;align-items:flex-end;gap:5px;height:120px">${
+      bars.map(() => `<div style="flex:1;background:${T.border};border-radius:3px;height:4px"></div>`).join("")
+    }</div>`;
+  }
+
+  function paintMeter() {
+    const m = g("v-meter");
+    if (!m) return;
+    const kids = m.children;
+    for (let i = 0; i < kids.length && i < bars.length; i++) {
+      const h = Math.max(4, Math.round(bars[i] * 116));
+      kids[i].style.height = h + "px";
+      kids[i].style.background = bars[i] > 0.08 ? bc : T.border;
+    }
+  }
+
+  function paintPhase() {
+    const el = g("v-phase"), sub = g("v-phase-sub");
+    if (!el) return;
+    const speaking = phase === "speaking";
+    const txt = phase === "recognizing" ? "認識しています"
+              : speaking ? "聞き取り中"
+              : phase === "arming" ? "マイクを準備しています"
+              : "お話しください";
+    const en = phase === "recognizing" ? "Recognising"
+             : speaking ? "Listening"
+             : phase === "arming" ? "Preparing" : "Please speak";
+    el.textContent = txt;
+    if (sub) sub.textContent = en;
+    const dot = g("v-live");
+    if (dot) dot.style.opacity = (phase === "listening" || phase === "speaking") ? "1" : "0.25";
+  }
+
+  // 使い終わった項目の一覧(右側)。すでに確定したものを見せて安心してもらう。
+  function summaryHtml() {
+    // 一文モードは 1 回の発話で 4 項目が埋まるので、全部を並べて見せる。
+    const shown = ONE_SHOT
+      ? [["company", "会社名"], ["person_name", "お名前"], ["staff", "訪問先"], ["purpose", "ご用件"]]
+      : null;
+    if (shown) {
+      return `<div style="display:flex;flex-direction:column;gap:6px">${shown.map(([k, label]) => `
+        <div style="display:flex;flex-direction:column;gap:4px;padding:16px 18px;border-radius:14px;background:${values[k] ? T.panel : "transparent"};border:1px solid ${values[k] ? T.border : "transparent"}">
+          <div style="font-size:18px;color:${T.muted}">${escHtml(label)}</div>
+          <div style="font-size:26px;color:${values[k] ? T.ink : T.muted};font-weight:${values[k] ? 600 : 400}">${escHtml(values[k] || "未入力")}</div>
+        </div>`).join("")}</div>`;
+    }
+    const rows = STEPS.map((f, i) => {
+      const v = values[f];
+      const active = i === stepIdx;
+      return `<div style="display:flex;flex-direction:column;gap:4px;padding:16px 18px;border-radius:14px;background:${active ? T.panel : "transparent"};border:1px solid ${active ? T.border : "transparent"}">
+        <div style="font-size:18px;color:${T.muted}">${escHtml(LABEL[f][0])}</div>
+        <div style="font-size:26px;color:${v ? T.ink : T.muted};font-weight:${v ? 600 : 400}">${escHtml(v || "未入力")}</div>
+      </div>`;
+    }).join("");
+    return `<div style="display:flex;flex-direction:column;gap:6px">${rows}</div>`;
+  }
+
+  function bodyIntro() {
+    const cfg = fieldCfg();
+    return `
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;text-align:center">
+        <div style="color:${bc}">${ICO.mic_lg}</div>
+        <div style="font-size:52px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">${escHtml(cfg.prompt_ja || "お話しください")}</div>
+        <div style="font-size:24px;color:${T.muted}">${escHtml(cfg.example_ja || "")}</div>
+        ${btn("v-start", "話す", "accent")}
+        <div style="font-size:20px;color:${T.muted}">ボタンを押すとマイクが動きます</div>
+      </div>`;
+  }
+
+  function bodyListening() {
+    return `
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;text-align:center">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div id="v-live" style="width:18px;height:18px;border-radius:50%;background:${T.urgent};animation:dot-pulse 1.2s ease-in-out infinite"></div>
+          <span style="font-size:22px;color:${T.sub};font-weight:600">マイク動作中</span>
+        </div>
+        <div id="v-phase" style="font-size:52px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">お話しください</div>
+        <div id="v-phase-sub" style="font-size:22px;color:${T.muted};font-family:Inter,system-ui,sans-serif">Please speak</div>
+        <div style="width:80%;max-width:760px">${meterHtml()}</div>
+        <div style="display:flex;gap:18px;margin-top:8px">
+          ${btn("v-stop", "入力を終了", "primary")}
+          ${btn("v-restart", "もう一度話す")}
+          ${btn("v-cancel", "キャンセル")}
+        </div>
+      </div>`;
+  }
+
+  function bodyRecognizing() {
+    return `
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;text-align:center">
+        <div style="width:70px;height:70px;border-radius:50%;border:5px solid ${T.border};border-top-color:${bc};animation:spin .8s linear infinite"></div>
+        <div id="v-phase" style="font-size:48px;font-weight:600;color:${T.ink};letter-spacing:-1.4px">認識しています</div>
+        <div id="v-phase-sub" style="font-size:22px;color:${T.muted};font-family:Inter,system-ui,sans-serif">Recognising</div>
+        <div style="display:flex;gap:18px;margin-top:8px">${btn("v-cancel", "キャンセル")}</div>
+      </div>`;
+  }
+
+  function bodyReview() {
+    const cfg = fieldCfg();
+    const weak = !!errCode;
+    const noteBg = weak ? T.urgentBg : T.panel;
+    const noteBd = weak ? "rgba(168,66,56,.35)" : T.border;
+    const noteColor = weak ? T.urgent : T.sub;
+    const note = weak
+      ? `${escHtml(errMsg || "うまく聞き取れませんでした")}。このままでよければ「この内容で進む」、違うときは言い直すかキーボードで直してください。`
+      : "違っていたら、言い直すかキーボードで直せます。";
+    return `
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:22px">
+        <div style="font-size:26px;color:${T.muted}">${escHtml(cfg.prompt_ja || "")}</div>
+        <div style="font-size:22px;font-weight:600;color:${T.ink}">${escHtml(LABEL[fieldName()][0])}</div>
+        <input id="v-edit" type="text" value="${escHtml(draft)}" autocomplete="off"
+          style="width:100%;height:96px;background:${T.canvas};border:3px solid ${weak ? "rgba(168,66,56,.5)" : bc};border-radius:18px;padding:0 24px;font-size:44px;font-weight:600;color:${T.ink};outline:none;font-family:inherit">
+        <div style="background:${noteBg};border:1px solid ${noteBd};border-radius:12px;padding:14px 18px;color:${noteColor};font-size:20px">${note}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:6px">
+          ${btn("v-accept", stepIdx + 1 < STEPS.length ? "この内容で進む" : "この内容で受付へ", "accent")}
+          ${btn("v-again", "音声でもう一度入力")}
+          ${btn("v-kb", "キーボードで修正")}
+          ${btn("v-back", "前の項目に戻る")}
+        </div>
+      </div>`;
+  }
+
+  // 一文で受けたときの確認画面。**取れた項目をすべて並べて、その場で直せる。**
+  // 会社名と氏名は文字起こしの精度がそのまま出る(実測で 3〜4 割)ので、直せることが
+  // 前提。担当者だけは通知先が変わるので、候補から選ぶ形にして打ち間違いを防ぐ。
+  function bodyReceptionReview() {
+    const weak = !!errCode;
+    const heard = escHtml(draft || "（聞き取れませんでした）");
+    const inputStyle = `width:100%;height:78px;background:${T.canvas};border:2px solid ${T.border};border-radius:14px;padding:0 20px;font-size:32px;font-weight:600;color:${T.ink};outline:none;font-family:inherit`;
+    const selStyle = inputStyle + ";cursor:pointer";
+
+    // 候補が出ていればそれだけを、出ていなければ全員を選べるようにする。
+    const hostOptions = (hostCandidates.length ? hostCandidates : CTX_STAFF);
+    const hostNote = hostCandidates.length > 1
+      ? `<div style="font-size:19px;color:${T.sub};margin-top:6px">同じ姓の方が ${hostCandidates.length} 名います。お選びください。</div>`
+      : (hostCandidates.length === 0 && CTX_STAFF.length
+          ? `<div style="font-size:19px;color:${T.muted};margin-top:6px">お声から訪問先を特定できませんでした。一覧からお選びください。</div>`
+          : "");
+
+    const purposeRow = CTX_PURPOSES.length ? `
+      <div>
+        <div style="font-size:21px;color:${T.muted};margin-bottom:8px">ご用件</div>
+        <select id="v-purpose" style="${selStyle}">
+          <option value="">選択してください</option>
+          ${CTX_PURPOSES.map(p => `<option value="${escHtml(p)}"${p === values.purpose ? " selected" : ""}>${escHtml(p)}</option>`).join("")}
+        </select>
+      </div>` : "";
+
+    return `
+      <div style="flex:1;display:flex;flex-direction:column;gap:18px;min-height:0;overflow:auto">
+        <div style="background:${weak ? T.urgentBg : T.panel};border:1px solid ${weak ? "rgba(168,66,56,.35)" : T.border};border-radius:12px;padding:14px 18px">
+          <div style="font-size:18px;color:${T.muted};margin-bottom:4px">聞き取った内容</div>
+          <div style="font-size:23px;color:${weak ? T.urgent : T.sub};line-height:1.6">${heard}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+          <div>
+            <div style="font-size:21px;color:${T.muted};margin-bottom:8px">会社名</div>
+            <input id="v-company" type="text" value="${escHtml(values.company)}" autocomplete="off" style="${inputStyle}">
+          </div>
+          <div>
+            <div style="font-size:21px;color:${T.muted};margin-bottom:8px">お名前</div>
+            <input id="v-name" type="text" value="${escHtml(values.person_name)}" autocomplete="off" style="${inputStyle}">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+          <div>
+            <div style="font-size:21px;color:${T.muted};margin-bottom:8px">訪問先</div>
+            ${CTX_STAFF.length
+              ? `<select id="v-staff" style="${selStyle}">
+                   <option value="">選択してください</option>
+                   ${hostOptions.map(n => `<option value="${escHtml(n)}"${n === values.staff ? " selected" : ""}>${escHtml(n)}</option>`).join("")}
+                 </select>${hostNote}`
+              : `<input id="v-staff" type="text" value="${escHtml(values.staff)}" autocomplete="off" style="${inputStyle}">`}
+          </div>
+          ${purposeRow}
+        </div>
+        <div style="font-size:20px;color:${T.muted};line-height:1.7">
+          違うところはこの画面で直せます。細かい修正は「キーボードで修正」から受付画面へ戻れます。
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:4px">
+          ${btn("v-accept", "この内容で受付へ", "accent")}
+          ${btn("v-again", "もう一度話す")}
+          ${btn("v-kb", "キーボードで修正")}
+        </div>
+      </div>`;
+  }
+
+  function bodyError() {
+    const retryable = errCode !== "mic_unavailable" && errCode !== "engine_unavailable";
+    return `
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;text-align:center">
+        <div style="font-size:44px;font-weight:600;color:${T.ink};letter-spacing:-1.2px">${escHtml(errMsg || "うまく聞き取れませんでした")}</div>
+        <div style="font-size:22px;color:${T.muted};font-family:Inter,system-ui,sans-serif">${escHtml(errMsgEn || "")}</div>
+        <div style="font-size:22px;color:${T.sub};max-width:900px;line-height:1.8">
+          ${retryable ? "もう一度お話しいただくか、キーボードでの入力に切り替えられます。" : "この端末では音声入力を使えません。キーボードで入力してください。"}
+        </div>
+        <div style="display:flex;gap:16px;margin-top:8px">
+          ${retryable ? btn("v-again", "もう一度話す", "accent") : ""}
+          ${btn("v-kb", "キーボードで入力", retryable ? "plain" : "accent")}
+        </div>
+      </div>`;
+  }
+
+  function render() {
+    if (closed) return;
+    const body = phase === "intro" ? bodyIntro()
+               : (phase === "listening" || phase === "speaking" || phase === "arming") ? bodyListening()
+               : phase === "recognizing" ? bodyRecognizing()
+               : phase === "review" ? (ONE_SHOT ? bodyReceptionReview() : bodyReview())
+               : bodyError();
+    root.innerHTML = `
+<div style="width:1760px;height:960px;background:${T.bg};border-radius:28px;box-shadow:0 30px 90px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden">
+  <div style="padding:26px 40px;border-bottom:1px solid ${T.border};display:flex;align-items:center;gap:26px;flex-shrink:0">
+    <div>
+      <div style="font-size:38px;font-weight:600;color:${T.ink};letter-spacing:-1px">音声で入力します</div>
+      <div style="font-size:19px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:2px">Voice input</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px;margin-left:20px">${stepDots()}</div>
+    <div style="flex:1"></div>
+    ${btn("v-quit", "音声入力をやめる")}
+  </div>
+  <div style="flex:1;display:flex;gap:32px;padding:34px 44px;min-height:0">
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0">${body}</div>
+    <div style="width:520px;display:flex;flex-direction:column;gap:18px;flex-shrink:0">
+      <div style="background:${T.canvas};border:2px solid ${T.border};border-radius:18px;padding:22px 24px">
+        <div style="font-size:22px;font-weight:600;color:${T.ink};margin-bottom:12px">入力中の内容</div>
+        ${summaryHtml()}
+      </div>
+      <div style="flex:1"></div>
+      <div style="background:${T.panel};border:2px solid ${T.border};border-radius:18px;padding:22px 24px;font-size:19px;color:${T.sub};line-height:1.8">
+        音声はこの端末の中だけで処理します。外部に送られることはなく、受付が終わると消去されます。声だけで受付が確定することはありません。
+      </div>
+    </div>
+  </div>
+</div>`;
+    bind();
+    if (phase === "listening" || phase === "speaking" || phase === "arming") { paintMeter(); paintPhase(); }
+  }
+
+  function bind() {
+    const on = (id, fn) => { const el = g(id); if (el) el.addEventListener("click", fn); };
+    on("v-quit", quitToTouch);
+    on("v-start", startListening);
+    on("v-stop", stopRecording);
+    on("v-restart", restartListening);
+    on("v-cancel", cancelRecording);
+    on("v-accept", acceptStep);
+    on("v-again", retry);
+    on("v-kb", toKeyboard);
+    on("v-back", backStep);
+  }
+
+  render();
+  return { close };
+}
+
 // ─── RECEPTION FORM (画面内蔵の五十音ソフトキーボード) ────────────────────────────
 // 左=入力フォーム / 右=五十音表キーボード。列＝行(あ/か/さ…)の五十音表に、撥音ん・
 // 濁点゛・半濁点゜・小文字・長音ー・スペースのコントロール行を備える。ひらがな/カタカナ/ABC
@@ -2602,7 +3213,7 @@ function showReception(initPurpose) {
     : ["ご予約のあるお客様", "お打ち合わせ", "納品", "採用面接", "その他"];
   const chipStyle = (sel) => `padding:16px 24px;border-radius:14px;border:2px solid ${sel ? bc : T.borderStrong};background:${sel ? bc : T.canvas};color:${sel ? "#fff" : T.ink};font-size:26px;font-weight:600;cursor:pointer;font-family:inherit;min-height:60px;display:flex;align-items:center;justify-content:center`;
   let submitting = false, errMsg = "";
-  let cardNote = "";          // 名刺から入力したときの案内(1行)
+  let cardNote = "";          // 名刺/音声から入力したときの案内(1行)
   let form = { visitor_name: "", company: "", department: "", staff: "", purpose: initPurpose ?? "" };
   let idleId, kbMode = "kana", focusedField = null;
   let cands = [];   // 現在表示中の漢字変換候補
@@ -2845,6 +3456,34 @@ function showReception(initPurpose) {
     render();
   }
 
+  // 音声入力の結果をフォームへ反映する。
+  // 反映するだけで受付は確定しない(送信は「受付する」を押したとき)。
+  // opts.focus が来たら、その欄にフォーカスを当てて五十音キーボードで直せるようにする。
+  function applyVoiceValues(v, opts) {
+    if (!v) return;
+    const applied = [];
+    if (v.company) { form.company = v.company; applied.push("会社名"); }
+    if (v.visitor_name || v.person_name) {
+      form.visitor_name = v.visitor_name || v.person_name;
+      applied.push("お名前");
+    }
+    if (v.staff && STAFF_LIST.includes(v.staff)) { form.staff = v.staff; applied.push("担当者"); }
+    // 用件は一文で話したときだけ入る。設定にある選択肢に限る。
+    if (v.purpose && PURPOSE_OPTIONS.includes(v.purpose)) { form.purpose = v.purpose; applied.push("ご用件"); }
+    cardNote = applied.length
+      ? `音声から ${applied.join("・")} を入力しました。違うところは右のキーボードで直してください。`
+      : "音声からは入力できませんでした。お手数ですが右のキーボードで入力してください。";
+    errMsg = "";
+    render();
+    // 「キーボードで修正」から戻ってきたときは、その欄をすぐ直せる状態にする。
+    const target = opts && opts.focus === "company" ? "f-company"
+                 : opts && opts.focus === "person_name" ? "f-name" : null;
+    if (target) {
+      focusedField = target;
+      setTimeout(() => { const el = g(target); if (el) { el.focus(); el.selectionStart = el.value.length; } }, 60);
+    }
+  }
+
   function render() {
     const staffInner = STAFF_LIST.length
       ? `<select id="f-staff" style="${selStyle}"><option value="">選択してください</option>${STAFF_LIST.map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join("")}</select>`
@@ -2876,6 +3515,7 @@ function showReception(initPurpose) {
           <div style="font-size:24px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:2px">Visit Details</div>
         </div>
         <div style="flex:1"></div>
+        ${voiceAvailable() ? `<button id="rec-voice" type="button" style="display:inline-flex;align-items:center;gap:12px;min-height:72px;padding:0 28px;background:${T.canvas};border:2px solid ${bc};border-radius:16px;font-size:25px;font-weight:600;color:${bc};cursor:pointer;font-family:inherit">${ICO.mic}音声で入力</button>` : ""}
         ${cardAvailable() ? `<button id="rec-card" type="button" style="display:inline-flex;align-items:center;gap:12px;min-height:72px;padding:0 28px;background:${T.canvas};border:2px solid ${bc};border-radius:16px;font-size:25px;font-weight:600;color:${bc};cursor:pointer;font-family:inherit">${ICO.card}名刺で入力</button>` : ""}
       </div>
       ${cardNote ? `<div style="margin-bottom:10px;background:${T.panel};border:1px solid ${T.border};border-radius:12px;padding:12px 16px;color:${T.sub};font-size:19px">${escHtml(cardNote)}</div>` : ""}
@@ -2918,6 +3558,17 @@ function showReception(initPurpose) {
     bindHomeBtn("rec-home");
     const cardBtn = g("rec-card");
     if (cardBtn) cardBtn.addEventListener("click", () => { resetIdle(); AN.inputStarted("card_capture", "card"); openCardCapture({ onConfirm: applyCardValues }); });
+    const voiceBtn = g("rec-voice");
+    if (voiceBtn) voiceBtn.addEventListener("click", () => {
+      resetIdle();
+      AN.inputStarted("voice_input", "voice");
+      openVoiceInput({
+        initial: form,
+        onApply: applyVoiceValues,
+        // 担当者の照合と用件の判定に使う。音声サービスは読み仮名だけを端末から補う。
+        context: { staff: STAFF_LIST, purposes: PURPOSE_OPTIONS },
+      });
+    });
     Object.keys(KEY).forEach(id => {
       const el = g(id); if (!el) return;
       const ev = el.tagName === "SELECT" ? "change" : "input";
@@ -3012,10 +3663,15 @@ function showReception(initPurpose) {
 
   render();
 
-  // boot 時の可否確認(ensureCardStatus)がまだ終わっていない場合に備える。
-  // 解決してからこの画面が生きていれば描き直して「名刺で入力」を出す。
+  // boot 時の可否確認(ensureCardStatus / ensureVoiceStatus)がまだ終わっていない場合に備える。
+  // 解決してからこの画面が生きていれば描き直して「名刺で入力」「音声で入力」を出す。
   if (!CARD.checked) {
     ensureCardStatus()
+      .then(() => { if (CURRENT_SCREEN === "reception") render(); })
+      .catch(() => {});
+  }
+  if (!VOICE.checked) {
+    ensureVoiceStatus()
       .then(() => { if (CURRENT_SCREEN === "reception") render(); })
       .catch(() => {});
   }
@@ -4583,6 +5239,10 @@ async function boot() {
   // 名刺読み取りの利用可否(OCR モデル・依存パッケージの導入状況)を一度だけ確認する。
   // 使えない端末では受付フォームに「名刺で入力」を出さない。失敗しても起動は止めない。
   ensureCardStatus().catch(() => {});
+
+  // 音声入力(実験導入)の利用可否も同じく一度だけ。音声サービスは別プロセスなので、
+  // 止まっていても・未導入でも、ここで届かないだけで受付は従来どおり動く。
+  ensureVoiceStatus().catch(() => {});
 
   // Load settings + schedule in parallel
   try {

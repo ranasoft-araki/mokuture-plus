@@ -50,6 +50,40 @@ kiosk_agent/tests/fixtures/
 # 配布するのは card_reader.yaml.example のほう。
 kiosk_agent/card_reader.yaml
 
+# 端末ごとの音声入力設定(マイクのデバイス名・しきい値・使うモデル)。
+# 配布するのは voice_input.yaml.example のほう。
+kiosk_agent/voice_input.yaml
+
+# 担当者の読み仮名。実在の社員の氏名・読み・部署が入るのでコミット禁止。
+# 配布するのは staff_readings.yaml.example（記入例は架空の人物）のほう。
+kiosk_agent/staff_readings.yaml
+
+# whisper.cpp の展開先とビルド成果物。配信するのは vendor/*.tar.gz(固定版ソース)
+# だけで、バイナリは端末ごとに install_voice.sh がビルドする(aarch64 専用のため)。
+kiosk_agent/vendor/whisper.cpp/
+
+# Windows 動作試験用の whisper.cpp 配布バイナリ(install_voice_windows.ps1 が展開する)。
+# プラットフォーム固有の実行ファイルなのでリポジトリには入れない。
+kiosk_agent/vendor/whisper.cpp-win-x64/
+
+# 一文受付の精度評価で使う llama.cpp の配布バイナリ(同上)。
+kiosk_agent/vendor/llama.cpp-win-x64/
+
+# 精度評価で比較する LLM / whisper のモデル。大きいので取得スクリプト任せにする
+# (voice_models/ の ggml-base/small と vosk zip は LFS で管理している分)。
+kiosk_agent/voice_models/*.gguf
+kiosk_agent/voice_models/ggml-tiny-*.bin
+
+# 精度評価用に合成したテスト音源(その場で作り直せる)。
+kiosk_agent/voice_eval_audio/
+
+# Vosk モデルの展開先(zip を fetch_voice_models.py --extract で開いたもの)。
+# リポジトリに入っているのは zip のほう。
+kiosk_agent/voice_models/vosk-model-small-ja-0.22/
+
+# 音声入力の匿名メトリクス(端末内にだけ置く。既定は ~/.mokuture-voice/)
+kiosk_agent/**/metrics.jsonl*
+
 # Misc
 .DS_Store
 *.log
