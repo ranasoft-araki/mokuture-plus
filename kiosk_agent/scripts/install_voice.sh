@@ -4,13 +4,15 @@
 #   bash scripts/install_voice.sh              # 一式(依存 → ビルド → systemd → 起動)
 #   bash scripts/install_voice.sh --vosk-only  # whisper を飛ばす(一文の受付はこれで動く)
 #   bash scripts/install_voice.sh --build      # whisper.cpp のビルドだけやり直す
-#   bash scripts/install_voice.sh --no-apt     # apt を触らない(オフライン端末)
+#   bash scripts/install_voice.sh --no-apt     # apt を触らない
+#   bash scripts/install_voice.sh --no-net     # 通信しない(モデルも取りに行かない)
 #
 # 一文の名乗り(受付の既定の入口)は Vosk だけで動く。whisper.cpp のビルドは Pi で
 # 10 分以上かかるので、まず動かして測りたいだけなら --vosk-only が速い。
 #
-# ネットワークを使うのは apt とモデルの取り直しだけ。モデルの実体はリポジトリに
-# Git LFS で入っているので、`git lfs pull` 済みなら取得は走らない。
+# **モデルが揃っていなければ自分で取りに行く。** 取得元と SHA-256 はスクリプトに
+# 固定してあるので git-lfs は要らない(リポジトリに Git LFS でも入っているが、
+# `git lfs pull` 済みならそちらが使われ、取得は走らない)。
 # 導入が終われば音声認識は完全にオフラインで動く。
 set -e
 
@@ -23,12 +25,14 @@ WHISPER_DIR="$AGENT_DIR/vendor/whisper.cpp"
 BUILD_ONLY=0
 USE_APT=1
 VOSK_ONLY=0
+NO_NET=0
 
 for arg in "$@"; do
     case "$arg" in
         --build)     BUILD_ONLY=1 ;;
         --no-apt)    USE_APT=0 ;;
         --vosk-only) VOSK_ONLY=1 ;;
+        --no-net)    NO_NET=1; USE_APT=0 ;;
         *) echo "不明な引数: $arg"; exit 2 ;;
     esac
 done
@@ -46,25 +50,26 @@ if [ "$VOSK_ONLY" = "1" ]; then
     echo "(--vosk-only: whisper のモデルとビルドは飛ばします)"
 fi
 if ! "$VENV/bin/python" "$AGENT_DIR/scripts/fetch_voice_models.py" --check $CHECK_ARGS; then
-    echo ""
-    echo "モデルが揃っていません。"
-    # git-lfs は git 本体とは別のプログラムで、Raspberry Pi OS には既定で入っていない。
-    # 入っていないまま「git lfs pull を実行」とだけ案内すると、利用者がここで詰まる。
-    if git lfs version >/dev/null 2>&1; then
-        echo "  リポジトリから取り出す:"
-        echo "    cd $(dirname "$AGENT_DIR") && git lfs install && git lfs pull"
-        echo "  それでも駄目なら取得元から落とし直す:"
-        echo "    $VENV/bin/python $AGENT_DIR/scripts/fetch_voice_models.py"
-    else
-        echo "  git-lfs が入っていません(git 本体とは別のプログラムです)。"
-        echo "  どちらでも解決できます:"
-        echo "    A) git-lfs を入れて取り出す"
-        echo "         sudo apt install git-lfs"
-        echo "         cd $(dirname "$AGENT_DIR") && git lfs install && git lfs pull"
-        echo "    B) git-lfs を使わず取得元から直接落とす(SHA-256 で検証します)"
-        echo "         $VENV/bin/python $AGENT_DIR/scripts/fetch_voice_models.py"
+    # **揃っていなければ自分で取りに行く。**
+    # モデルは取得元と SHA-256 が固定してあるので git-lfs は要らない。
+    # 以前はここで「git lfs pull を実行してください」と案内して止まっていたが、
+    # ブランチを取り違えていると取りに行く対象が無く、何も起きないまま詰まる。
+    if [ "$NO_NET" = "1" ]; then
+        echo ""
+        echo "モデルが揃っていませんが、--no-net なので取得しません。"
+        echo "  取得する: $VENV/bin/python $AGENT_DIR/scripts/fetch_voice_models.py"
+        exit 1
     fi
-    exit 1
+    echo ""
+    echo "揃っていないものを取得します(取得元と SHA-256 は固定。git-lfs は不要)..."
+    if ! "$VENV/bin/python" "$AGENT_DIR/scripts/fetch_voice_models.py" $CHECK_ARGS; then
+        echo ""
+        echo "モデルを取得できませんでした。ネットワークを確認してください。"
+        echo "  リポジトリから取り出す手もあります(要 git-lfs):"
+        echo "    sudo apt install git-lfs"
+        echo "    cd $(dirname "$AGENT_DIR") && git lfs install && git lfs pull"
+        exit 1
+    fi
 fi
 
 # ── 2. 依存パッケージ ─────────────────────────────────────────────────────────

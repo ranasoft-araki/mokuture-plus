@@ -218,7 +218,9 @@ def main() -> int:
         need = "必須" if asset.required else "任意"
         print(f"  {mark}[{need}] {asset.path.name:<32} {detail}")
         print(f"          {asset.note}")
-        if state != "ok" and (asset.required or args.all):
+        # --only で名指しされたものは、「任意」の印が付いていても対象にする
+        # (名指しで要ると言われているため)。
+        if state != "ok" and (asset.required or args.all or args.only):
             bad.append(asset)
 
     if args.check:

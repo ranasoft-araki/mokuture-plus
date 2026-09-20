@@ -54,41 +54,10 @@ pydantic / uvicorn の作法をそのまま流用できる。whisper.cpp は C++
 - キオスクエージェント（`install.sh`）が導入済み＝ `kiosk_agent/.venv` がある
 - **導入時だけ**ネットワークに繋がること（apt と、LFS を引いていない場合のモデル取得）
 
-### 2-2. モデルを取り出す
+### 2-2. モデル
 
-モデルの実体はリポジトリに **Git LFS** で入っている。clone しただけではポインタ
-（中身が数行のテキスト）のままなので、実体を取り出す必要がある。
-
-**`git lfs` は git 本体とは別のプログラム**で、Raspberry Pi OS には既定で入っていない。
-入っていないと `git: 'lfs' is not a git command` と言われる（`lfs` は小文字のエル、
-Large File Storage の略）。
-
-```bash
-git lfs version                # 入っているか確認
-sudo apt install git-lfs       # 入っていなければ（Raspberry Pi OS / Debian）
-
-cd ~/mokuture                  # リポジトリのルート
-git lfs install                # 利用者ごとに1回
-git lfs pull
-```
-
-**git-lfs を入れたくない・入れられない場合は、取得元から直接落とせる。**
-SHA-256 を記録してあるので、壊れたものは弾かれる。
-
-```bash
-cd ~/mokuture/kiosk_agent
-.venv/bin/python scripts/fetch_voice_models.py        # 足りないものだけ落とす
-```
-
-揃っているかの確認:
-
-```bash
-cd ~/mokuture/kiosk_agent
-.venv/bin/python scripts/fetch_voice_models.py --check
-
-# 一文の受付だけ試すなら Vosk のモデルだけあればよい
-.venv/bin/python scripts/fetch_voice_models.py --check --only vosk-model-small-ja-0.22.zip
-```
+**セットアップスクリプトが自分で取りに行くので、普通は何もしなくてよい。**
+取得元と SHA-256 はスクリプトに固定してあり、**git-lfs は要らない**。
 
 | ファイル | サイズ | 用途 |
 |---|---|---|
@@ -97,11 +66,29 @@ cd ~/mokuture/kiosk_agent
 | `voice_models/ggml-small-q5_1.bin` | 190MB | 比較用（Pi では遅すぎて実用にならない） |
 | `vendor/whisper.cpp-1.9.3.tar.gz` | 9MB | whisper.cpp のソース（固定版） |
 
-壊れていた場合だけ、記録してある SHA-256 付きの取得元から落とし直す:
+手で確認・取得するなら:
 
 ```bash
-.venv/bin/python scripts/fetch_voice_models.py
+cd ~/mokuture/kiosk_agent
+.venv/bin/python scripts/fetch_voice_models.py --check          # 確認だけ
+.venv/bin/python scripts/fetch_voice_models.py                  # 足りないものを取得
+.venv/bin/python scripts/fetch_voice_models.py --only vosk-model-small-ja-0.22.zip
 ```
+
+リポジトリにも **Git LFS** で同じものが入っている。`git lfs pull` 済みならそちらが
+使われ、取得は走らない。ただし **`git lfs` は git 本体とは別のプログラム**で、
+Raspberry Pi OS には既定で入っていない（`lfs` は小文字のエル、Large File Storage）。
+
+```bash
+git lfs version                # 入っているか
+sudo apt install git-lfs       # 入れる場合
+cd ~/mokuture && git lfs install && git lfs pull
+```
+
+> **モデルが落ちてこないとき**は、まず**いま居るブランチにモデルが入っているか**を
+> 疑うこと。`git lfs pull` は現在のチェックアウトが参照している LFS オブジェクトしか
+> 取りに行かないので、モデルを含まないブランチに居ると**何も起きない**。
+> 判断に迷ったら `git lfs pull` を諦めて `fetch_voice_models.py` で落とすのが速い。
 
 ### 2-3. セットアップ
 
