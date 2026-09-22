@@ -1,3 +1,8 @@
+[build-system]
+# `[tool.setuptools]` を pyproject.toml から読むには setuptools>=61 が要る。
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "mokuture-kiosk-agent"
 version = "0.1.0"
@@ -48,6 +53,14 @@ dev = [
     "pytest>=8.0",
     "Pillow>=10.0",      # tests/make_fixtures.py が架空名刺の画像を作るのに使う
 ]
+
+[tool.setuptools]
+# 配布物ではなく「依存を .venv に入れるための editable install」なので、パッケージは
+# 明示列挙する。列挙しないと setuptools の自動検出が kiosk_agent 直下のディレクトリを
+# 全部パッケージ候補と見なし（static/assets/vendor/models/voice_models/analytics_spool…）、
+# "Multiple top-level packages discovered in a flat-layout" で install.sh ごと止まる。
+# 直下の .py（main.py 等）はサービスが WorkingDirectory から読むので、ここには含めない。
+packages = ["card", "card.ocr", "voice"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

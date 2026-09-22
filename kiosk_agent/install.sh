@@ -15,17 +15,34 @@ python3 -m venv "$VENV"
 
 # 依存の導入。名刺読み取り(card)は任意。入らなくてもキオスク本体は動くので、
 # 段階的に諦めながら進める: rpi+card → card → rpi → 最小。
+# 各試行の出力はログに残す。捨てると「4回とも黙って失敗し、最後の1回だけ素の
+# エラーを吐いて set -e で止まる」状態になり、本当の原因が読めなくなる。
 CARD_DEPS_OK=0
-if "$VENV/bin/pip" install --quiet -e ".[rpi,card]" 2>/dev/null; then
+PIP_LOG="$AGENT_DIR/.install-pip.log"
+: > "$PIP_LOG"
+
+try_pip() {   # try_pip <extras表記> ; 成否を終了コードで返す
+    echo "--- pip install -e \"$1\" ---" >> "$PIP_LOG"
+    "$VENV/bin/pip" install -e "$1" >> "$PIP_LOG" 2>&1
+}
+
+if try_pip ".[rpi,card]"; then
     CARD_DEPS_OK=1
-elif "$VENV/bin/pip" install --quiet -e ".[card]" 2>/dev/null; then
+elif try_pip ".[card]"; then
     CARD_DEPS_OK=1
     echo "  -> GPIO ライブラリが入らなかった(Pi 以外の環境か)。ハードはモックで動く"
-elif "$VENV/bin/pip" install --quiet -e ".[rpi]" 2>/dev/null; then
+elif try_pip ".[rpi]"; then
     echo "  -> 名刺読み取りの依存(opencv/onnxruntime)が入らなかった"
-else
-    "$VENV/bin/pip" install --quiet -e .
+elif try_pip "."; then
     echo "  -> 名刺読み取りの依存が入らなかった"
+else
+    echo ""
+    echo "依存パッケージを導入できなかった。最後の試行の出力(末尾40行):"
+    echo "---------------------------------------------------------------"
+    tail -40 "$PIP_LOG"
+    echo "---------------------------------------------------------------"
+    echo "全文: $PIP_LOG"
+    exit 1
 fi
 
 # 名刺 OCR のモデル取得。導入時のみネットワークを使う(以後は完全オフライン)。

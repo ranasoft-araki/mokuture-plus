@@ -36,6 +36,9 @@ kiosk_agent/locker_state.json
 # 個人情報は含まないが端末固有の実データなのでコミットしない。
 kiosk_agent/analytics_spool/
 
+# install.sh が残す pip の試行ログ(失敗時の原因追跡用。端末ごとの実行記録)
+kiosk_agent/.install-pip.log
+
 # Kiosk agent かな漢字辞書のダウンロード中間物(SKK-JISYO.L 本体は資産として commit 済み)
 kiosk_agent/SKK-JISYO.L.gz
 
