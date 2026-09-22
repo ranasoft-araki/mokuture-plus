@@ -329,3 +329,44 @@ def test_項目ごとの入力では抽出しない(monkeypatch, feed):
         _time.sleep(0.02)
     assert state["phase"] == "done", state
     assert state["result"]["extracted"] is None
+
+
+# ── 語彙を絞った 2 パス目の候補 ───────────────────────────────────────────────
+#
+# フリー認識で読みごと失われた担当者を救うための足し算。実測(クリーン音源10本)では
+# 「服部様」が「酉様」「都立様」に化けて読み照合が効かず、担当者の特定は 8/10 だった。
+# 担当者の語彙だけで decode し直した結果を足すと 10/10 になる。
+
+def test_読みごと失われた担当者を2パス目が救う():
+    """「酉様」では漢字も読みも手がかりが無い。1 パス目だけでは取れない。"""
+    free = "酉様との約束できました"
+    assert names(extract.extract(free, BOOK, PURPOSES)) == []
+
+    got = extract.extract(free, BOOK, PURPOSES,
+                          grammar_text="服部様とお約束で来ました", host_tokens=["服部"])
+    assert names(got) == ["服部太郎", "服部健一"]      # 同姓は絞らない(従来どおり)
+
+
+def test_信頼できなかった語は候補にしない():
+    """2 パス目の文字起こしに出ていても、信頼度で落ちた語は足さない。"""
+    got = extract.extract("酉様との約束できました", BOOK, PURPOSES,
+                          grammar_text="服部様とお約束で来ました", host_tokens=[])
+    assert names(got) == []
+
+
+def test_2パス目でも名乗りの範囲は担当者にしない():
+    """「山田運送の田中です」の田中は来訪者。信頼度 1.0 が付いていても担当者ではない。"""
+    got = extract.extract("山田運送の田中です荷物お届けに来ました", BOOK, PURPOSES,
+                          grammar_text="山田運送の田中です荷物お届けに来ました",
+                          host_tokens=["田中"])
+    assert names(got) == []
+
+
+def test_2パス目は会社名と氏名には使わない():
+    """絞った語彙は来訪者の会社名を知らない。そちらは 1 パス目の方が当たる。"""
+    got = extract.extract("磯野木工所の荒木と申します服部様との打ち合わせです",
+                          BOOK, PURPOSES,
+                          grammar_text="[unk]のから来と申します服部様との打ち合わせです",
+                          host_tokens=["服部"])
+    assert got.visitor_company == "磯野木工所"
+    assert got.visitor_name == "荒木"

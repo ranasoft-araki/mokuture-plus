@@ -24,8 +24,15 @@ def _forget_model():
 class FakeRecognizer:
     """語ごとの信頼度を返す Vosk の認識器のふり。"""
 
-    def __init__(self, model, rate):
+    #: 語彙を絞ったときに返す結果。テストごとに差し替える。
+    grammar_payload = {
+        "text": "磯野 木工所 の 荒木 です 服部 様 と の 打ち合わせ",
+        "result": [{"word": "服部", "conf": 1.0}, {"word": "林", "conf": 0.7}],
+    }
+
+    def __init__(self, model, rate, grammar=None):
         self.rate = rate
+        self.grammar = grammar
         self.words = True
         self.resets = 0
         self.fed = b""
@@ -42,6 +49,8 @@ class FakeRecognizer:
         return True
 
     def FinalResult(self):
+        if self.grammar is not None:
+            return json.dumps(self.grammar_payload, ensure_ascii=False)
         return json.dumps({
             "text": "磯野 木工所 の 荒木 です",
             "result": [{"word": "磯野", "conf": 0.9}, {"word": "荒木", "conf": 0.7}],
@@ -61,10 +70,19 @@ def fake_vosk(monkeypatch, tmp_path):
         def __init__(self, path):
             self.path = path
 
-    def kaldi(model, rate):
-        r = FakeRecognizer(model, rate)
+    def kaldi(model, rate, grammar=None):
+        r = FakeRecognizer(model, rate, grammar)
         made.append(r)
         return r
+
+    # 発音辞書。グラマーに入れられる語はここにある語だけ。
+    graph = model_dir / "graph"
+    graph.mkdir()
+    (graph / "words.txt").write_text(
+        "\n".join(f"{w} {i}" for i, w in enumerate(
+            ["<eps>", "[unk]", "服部", "田中", "佐藤", "磯野", "荒木", "様", "さん",
+             "です", "の", "と", "申し", "ます", "打ち合わせ", "お", "約束", "で"])),
+        encoding="utf-8")
 
     import types
     mod = types.SimpleNamespace(Model=FakeModel, KaldiRecognizer=kaldi, SetLogLevel=lambda n: None)
@@ -168,3 +186,54 @@ def test_名前で指定したら黙って別のエンジンに変えない(monk
 def test_会社名単独はwhisperのまま():
     """辞書に無い社名は Vosk だと別の実在語に化けて読みごと失われる。"""
     assert engines.pick("company") is whisper_cpp
+
+
+# ── 語彙を絞った 2 パス目 ─────────────────────────────────────────────────────
+
+def test_姓だけを語彙に入れる(fake_vosk):
+    """姓だけ言われるのが普通。辞書にある一番長い並びを採る。"""
+    tokens, missing = vosk_engine.grammar_tokens(["服部 健一", "田中太郎"])
+    assert set(tokens) == {"服部", "田中"}      # 管理画面の「服部 健一」の空白も畳む
+    assert missing == []
+
+
+def test_辞書に無い名前は入れられないと分かる(fake_vosk):
+    """読み仮名を登録しても Vosk の発音辞書には入らない。呼ぶ側が気づけること。"""
+    tokens, missing = vosk_engine.grammar_tokens(["服部健一", "陽菜乃丞"])
+    assert tokens == ["服部"]
+    assert missing == ["陽菜乃丞"]
+
+
+def test_信頼度が足りない候補は捨てる(fake_vosk):
+    """誤って別人を埋めた語は信頼度が落ちる(実測 0.657〜0.871 / 正解は 1.000)。"""
+    settings.cfg()["vosk"]["grammar_min_conf"] = 0.9
+    text, sure = vosk_engine.transcribe_vocabulary(segment(), ["服部健一", "田中太郎"])
+    assert "服部" in text
+    assert sure == ["服部"]          # conf 0.7 の「林」は落ちる(そもそも語彙外)
+
+
+def test_語彙が同じなら認識器を作り直さない(fake_vosk):
+    """作り直しは重い。担当者一覧が変わるのは一日に数回で、発話ごとではない。"""
+    for _ in range(3):
+        vosk_engine.transcribe_vocabulary(segment(), ["服部健一"])
+    assert len(fake_vosk) == 1
+
+
+def test_語彙が変われば作り直す(fake_vosk):
+    vosk_engine.transcribe_vocabulary(segment(), ["服部健一"])
+    vosk_engine.transcribe_vocabulary(segment(), ["服部健一", "田中太郎"])
+    assert len(fake_vosk) == 2
+
+
+def test_グラマーに入れられる名前が無ければ何もしない(fake_vosk):
+    text, sure = vosk_engine.transcribe_vocabulary(segment(), ["陽菜乃丞"])
+    assert (text, sure) == ("", [])
+    assert fake_vosk == [], "認識器を作ってしまっている"
+
+
+def test_2パス目はフリー認識の認識器と別に持つ(fake_vosk):
+    """片方ずつ暖まっていてほしい。使い回しの効果を潰さない。"""
+    vosk_engine.transcribe(segment())
+    vosk_engine.transcribe_vocabulary(segment(), ["服部健一"])
+    assert len(fake_vosk) == 2
+    assert [r.grammar is None for r in fake_vosk] == [True, False]

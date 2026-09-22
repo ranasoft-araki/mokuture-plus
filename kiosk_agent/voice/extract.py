@@ -364,17 +364,38 @@ def readings_count(names: list[str]) -> int:
 
 # ── まとめ ────────────────────────────────────────────────────────────────────
 
-def extract(text: str, staff: list[Staff], purposes: list[str]) -> Extraction:
+def _outside_visitor(text: str) -> str:
+    """名乗りの範囲を除いた部分。担当者はここから探す。"""
+    company, name, span = scan_visitor(text)
+    return (text[:span[0]] + " " + text[span[1]:]) if span else text
+
+
+def extract(text: str, staff: list[Staff], purposes: list[str],
+            grammar_text: str = "", host_tokens: list[str] | None = None) -> Extraction:
     """一文から受付項目を取り出す。
 
     順番に意味がある。**先に名乗りを取り、その範囲を除いてから担当者を探す。**
     逆にすると「山田運送の田中です」の田中が担当者として当たってしまう。
     田中・佐藤のような姓では実運用で必ず起きる。
+
+    grammar_text は担当者の語彙だけで decode し直した 2 パス目の文字起こし、
+    host_tokens はそのうち信頼できた語(vosk_engine.transcribe_vocabulary)。
+    **担当者の候補を足すためだけに使い、会社名・氏名には使わない。** 絞った語彙は
+    来訪者の会社名を知らないので、そちらは 1 パス目の方が当たる。
+    2 パス目にも同じ「名乗りを除く」処理をかける。除かないと「山田運送の田中です」の
+    田中が、今度は信頼度 1.0 付きで担当者に化ける。
     """
     body = textnorm.normalize_common(text or "")
     company, name, span = scan_visitor(body)
     rest = (body[:span[0]] + " " + body[span[1]:]) if span else body
     candidates = scan_staff(rest, staff)
+
+    if grammar_text and host_tokens:
+        found = {s.name for s in candidates}
+        for s in scan_staff(_outside_visitor(textnorm.normalize_common(grammar_text)), staff):
+            if s.name not in found and any(t and t in s.name for t in host_tokens):
+                candidates.append(s)
+                found.add(s.name)
     return Extraction(
         visitor_company=company or None,
         visitor_name=name or None,

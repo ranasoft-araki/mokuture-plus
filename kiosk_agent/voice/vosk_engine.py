@@ -55,6 +55,11 @@ _rec = None
 _rec_rate = 0
 _rec_lock = threading.Lock()
 
+# 語彙を絞った 2 パス目の認識器。フリー認識とは別に持つ(片方ずつ暖まっていてほしい)。
+_gram_rec = None
+_gram_key: tuple[int, str] | None = None
+_gram_warned: tuple[str, ...] = ()      # 語彙に入れられなかった名前(同じ顔ぶれでは黙る)
+
 
 def model_path() -> Path:
     return settings.resolve_path(str(settings.get("vosk.model_path")))
@@ -116,9 +121,10 @@ def load(force: bool = False) -> object:
 
 def unload() -> None:
     """モデルと認識器を手放す。設定を変えて読み直すときだけ使う。"""
-    global _model, _rec, _rec_rate
+    global _model, _rec, _rec_rate, _gram_rec, _gram_key
     with _rec_lock:
         _rec, _rec_rate = None, 0
+        _gram_rec, _gram_key = None, None
     with _model_lock:
         _model = None
 
@@ -136,6 +142,131 @@ def _recognizer(rate: int):
         # 前の発話の状態を持ち越さない。§11 の「認識結果を残さない」も兼ねる。
         _rec.Reset()
     return _rec
+
+
+# ── 語彙を絞った 2 パス目 ─────────────────────────────────────────────────────
+# 一般語の言語モデルは固有名詞に弱い。実測(クリーン音源10本)では「服部」が
+# 「酉」「都立」「服部祖」に化けた。**辞書に無いのではなく**、文脈で別語に負けて
+# いる(辞書 206,715 語に「服部」「磯野」「荒木」はある)。
+#
+# 担当者は「誰がいるか」が分かっているので、その語彙だけに絞って decode し直すと
+# 当たる。実測: 担当者の特定が 8/10 → 10/10、誤爆 0。
+#
+# **絞った側の結果は候補にしか使わない。** 呼ばれた担当者が名簿に無いとき、別人の
+# 名前を埋めることがある(実測 10件中 2件: 「服部様」→「林様」「山本」)。ただし誤って
+# 埋めた語は信頼度が落ちる(実測 0.657〜0.871 / 正解は 6/6 すべて 1.000)ので、
+# grammar_min_conf で捨てられる。捨てた場合は候補なし = 画面で選ぶ従来の動きに戻る。
+
+# 姓は 2〜4 文字で見る。1 文字の姓を入れないのは、短い語ほどどこにでも当たるうえ、
+# 照合側(extract.scan_staff)が 2 文字以上でしか名簿と突き合わせないため。
+_NAME_PREFIX_MAX = 4
+
+
+def lexicon_words(candidates: set[str]) -> set[str]:
+    """モデルの発音辞書にある語だけを返す。
+
+    **読み仮名を staff_readings.yaml に登録しても Vosk の発音辞書には入らない。**
+    辞書に無い表記をグラマーに渡すと Vosk が失敗するので、ここで落とす。
+    辞書は 20 万語あるので、常駐させずに必要な語だけ拾って捨てる。
+    """
+    path = model_path() / "graph" / "words.txt"
+    if not candidates or not path.is_file():
+        return set()
+    found: set[str] = set()
+    with path.open(encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            word = line.split(" ", 1)[0]
+            if word in candidates:
+                found.add(word)
+    return found
+
+
+def grammar_tokens(names: list[str]) -> tuple[list[str], list[str]]:
+    """(グラマーに入れる語, 入れられなかった名前)。
+
+    姓だけ言われるのが普通なので、名前の先頭から辞書にある一番長い並びを採る。
+    入れられなかった名前は、音声では指名できない(従来どおりフリー認識の読み照合
+    だけが頼りになる)ので、呼ぶ側が気づけるように返す。
+    """
+    compact = [str(n or "").replace(" ", "").replace("　", "").strip() for n in names]
+    sizes = range(2, _NAME_PREFIX_MAX + 1)
+    known = lexicon_words({n[:i] for n in compact for i in sizes if len(n) >= i})
+    tokens: list[str] = []
+    missing: list[str] = []
+    for name in compact:
+        best = max((name[:i] for i in sizes if len(name) >= i and name[:i] in known),
+                   key=len, default="")
+        if best:
+            tokens.append(best)
+        elif name:
+            missing.append(name)
+    return sorted(set(tokens)), missing
+
+
+def _grammar_json(tokens: list[str]) -> str:
+    """Vosk に渡すグラマー。定型句を混ぜないと、周りが全部 [unk] に寄る。"""
+    phrases = [str(p) for p in (settings.get("vosk.grammar_phrases") or [])]
+    usable = lexicon_words({w for p in phrases for w in p.split(" ")})
+    keep = [p for p in phrases if all(w in usable for w in p.split(" "))]
+    # [unk] は語彙外の音の逃げ場。無いと未知の会社名が候補の名前に化ける。
+    return json.dumps(tokens + keep + ["[unk]"], ensure_ascii=False)
+
+
+def _grammar_recognizer(rate: int, grammar: str):
+    """語彙を絞った認識器。呼ぶ側は _rec_lock を持っていること。
+
+    作り直しは重い(フリー側の実測で 1.28秒 → 4.45秒)ので、語彙が変わったときだけ
+    作り直す。担当者一覧が変わるのは一日に数回で、発話ごとではない。
+    """
+    global _gram_rec, _gram_key
+    import vosk
+
+    key = (rate, grammar)
+    if _gram_rec is None or _gram_key != key:
+        _gram_rec = vosk.KaldiRecognizer(load(), float(rate), grammar)
+        _gram_rec.SetWords(True)
+        _gram_key = key
+    else:
+        _gram_rec.Reset()
+    return _gram_rec
+
+
+def transcribe_vocabulary(seg: AudioSegment, names: list[str]) -> tuple[str, list[str]]:
+    """担当者の語彙だけで decode し直す。(文字起こし, 信頼できた語) を返す。
+
+    2 パス目なので、失敗しても 1 パス目の結果は使える。呼ぶ側で握りつぶしてよい。
+    """
+    global _gram_warned
+    tokens, missing = grammar_tokens(names)
+    if tuple(missing) != _gram_warned:
+        _gram_warned = tuple(missing)
+        if missing:
+            # 読み仮名の登録とは別の話なので、運用者が気づけるようにしておく。
+            log.warning("[voice] 発音辞書に無いため音声で指名できない担当者: %s",
+                        "、".join(missing))
+    if not tokens:
+        return "", []
+    grammar = _grammar_json(tokens)
+    floor = float(settings.get("vosk.grammar_min_conf"))
+    with _rec_lock:
+        try:
+            rec = _grammar_recognizer(seg.sample_rate, grammar)
+            rec.AcceptWaveform(seg.pcm)
+            payload = json.loads(rec.FinalResult() or "{}")
+        except Exception as e:
+            globals()["_gram_rec"], globals()["_gram_key"] = None, None
+            raise EngineFailed(f"{type(e).__name__}") from e
+        finally:
+            try:
+                if _gram_rec is not None:
+                    _gram_rec.Reset()
+            except Exception:
+                pass
+
+    text = str(payload.get("text") or "").replace(" ", "").strip()
+    sure = [str(w.get("word", "")) for w in payload.get("result") or []
+            if str(w.get("word", "")) in tokens and float(w.get("conf", 0.0)) >= floor]
+    return text, sure
 
 
 def transcribe(seg: AudioSegment) -> Transcript:

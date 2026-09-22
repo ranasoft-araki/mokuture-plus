@@ -131,6 +131,26 @@ class Session:
         self.error_code = None
 
     # ── 本体 ──────────────────────────────────────────────────────────────
+    def _host_pass(self, seg, engine_name: str) -> tuple[str, list[str]]:
+        """担当者の語彙だけで decode し直す(2 パス目)。(文字起こし, 信頼できた語)。
+
+        Vosk のときだけ。whisper には語彙を絞る仕組みが無い。担当者一覧が空の端末
+        (社員マスター未設定)では何もしない。
+        """
+        if engine_name != vosk_engine.ENGINE_NAME or not self._staff_names:
+            return "", []
+        if not settings.get("vosk.grammar"):
+            return "", []
+        started = time.monotonic()
+        try:
+            text, sure = vosk_engine.transcribe_vocabulary(seg, self._staff_names)
+        except Exception as e:
+            log.info("[voice] 担当者パスを飛ばしました: %s", type(e).__name__)
+            return "", []
+        log.info("[voice] 担当者パス %dms (候補 %d)",
+                 int((time.monotonic() - started) * 1000), len(sure))
+        return text, sure
+
     def _run(self, field_name: str) -> None:
         fcfg = settings.field_cfg(field_name)
         max_sec = float(fcfg.get("max_record_sec") or settings.get("vad.max_record_sec"))
@@ -212,11 +232,16 @@ class Session:
             normalized = textnorm.normalize(field_name, tr.text)
             extracted = None
             if field_name == "reception":
+                # 2 パス目。担当者の語彙だけで decode し直す(一般語の言語モデルは
+                # 固有名詞に弱く、「服部」が「酉」「都立」に化ける)。**失敗しても
+                # 1 パス目の結果は使える**ので、ここで握りつぶす。
+                grammar_text, host_tokens = self._host_pass(seg, engine_name)
                 # ここに LLM は使わない(voice/extract.py の冒頭に理由)。規則と
                 # 名簿の読み合わせだけなので、実測で 1 ミリ秒未満で終わる。
                 try:
                     extracted = extract.extract(
                         tr.text, extract.build_staff(self._staff_names), self._purposes,
+                        grammar_text=grammar_text, host_tokens=host_tokens,
                     ).as_dict()
                 except Exception as e:
                     # 抽出に失敗しても文字起こしは出す。画面で打ち直せる。
