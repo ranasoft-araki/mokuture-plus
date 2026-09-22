@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import shutil
 import struct
@@ -423,10 +424,20 @@ def _file_path() -> Path | None:
     return settings.resolve_path(raw)
 
 
+# `arecord` の出力は端末の表示言語に翻訳される。日本語の Pi では見出しが
+# 「カード 0: ...」になり、英語の "card" を探す判定が必ず外れる = マイクが
+# 挿さっていても「録音デバイスが見つかりません」になる。機械で読む呼び出しは
+# ロケールを C に固定し、翻訳されない出力を読む。
+# (キオスク本体の /devices は main.py が「card|カード」両方を拾っている。
+#  そちらで OK に見えるのにここだけ false、という食い違いはこれが原因だった)
+_LOCALE_C_ENV = {**os.environ, "LC_ALL": "C", "LANGUAGE": "C"}
+
+
 def _probe_arecord() -> tuple[bool, str]:
     """入力デバイスが 1 つでも見えるか確認する。"""
     try:
-        r = subprocess.run(["arecord", "-l"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["arecord", "-l"], capture_output=True, text=True,
+                           timeout=5, env=_LOCALE_C_ENV)
     except Exception as e:
         return False, f"arecord を実行できません: {type(e).__name__}"
     if r.returncode != 0 or "card" not in r.stdout:
@@ -455,7 +466,8 @@ def list_devices() -> list[str]:
     if backend != "arecord":
         return []
     try:
-        r = subprocess.run(["arecord", "-L"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["arecord", "-L"], capture_output=True, text=True,
+                           timeout=5, env=_LOCALE_C_ENV)
     except Exception:
         return []
     names: list[str] = []
