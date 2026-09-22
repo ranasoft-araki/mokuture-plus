@@ -24,8 +24,11 @@ def _reset_voice(tmp_path):
     cfg["whisper"]["tmp_dir"] = str(tmp_path)
     session_mod.store.clear()
     capture.set_override(None)
+    # 録音デバイスの解決結果はモジュールに覚えるので、テスト間で持ち越さない。
+    capture.forget_device()
     yield
     capture.set_override(None)
+    capture.forget_device()
     session_mod.store.clear()
     settings.reload()
 

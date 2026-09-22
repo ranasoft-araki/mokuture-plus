@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import re
 import shutil
 import struct
 import subprocess
@@ -87,6 +88,7 @@ class ArecordStream:
         self._reader.start()
         self._errr = threading.Thread(target=self._pump_err, name="voice-arecord-err", daemon=True)
         self._errr.start()
+        _mark_recording(+1)
 
     def _pump(self) -> None:
         out = self._proc.stdout
@@ -138,6 +140,9 @@ class ArecordStream:
             if chunk is None:                 # arecord が終了した
                 if not self._buf:
                     detail = b" / ".join(self._err_tail).decode("utf-8", "replace")
+                    # 挿し替え・抜き差しでデバイスが変わったのかもしれない。
+                    # 次の録音で選び直す。
+                    forget_device()
                     raise CaptureFailed(("録音が止まりました " + detail).strip())
                 break
             self._buf.extend(chunk)
@@ -149,6 +154,7 @@ class ArecordStream:
         if self._closed:
             return
         self._closed = True
+        _mark_recording(-1)
         try:
             self._proc.terminate()
             try:
@@ -433,16 +439,125 @@ def _file_path() -> Path | None:
 _LOCALE_C_ENV = {**os.environ, "LC_ALL": "C", "LANGUAGE": "C"}
 
 
-def _probe_arecord() -> tuple[bool, str]:
-    """入力デバイスが 1 つでも見えるか確認する。"""
+# ── 録音デバイスの解決 ────────────────────────────────────────────────────────
+# USB マイクのカード番号は固定できない。挿す位置・挿す順・起動時の認識順で変わるし、
+# USB カメラのマイクのような別の録音デバイスが増えることもある。設定に番号を焼き
+# 込むと、挿し直しただけで受付から音声入力が消える。
+#
+# そこで毎回「設定の指定 → 実際に短く録ってみる → 駄目なら見つかったデバイスを
+# 順に試す」で決める。一覧に出るかどうかは当てにならない: この現場の `default` は
+# asym プラグインで再生側しか定義されておらず(capture slave is not defined)、
+# `arecord -l` には出るのに開くと EINVAL で落ちた。**開けるかは開いてみないと
+# 分からない。**
+#
+# 決まった結果は覚えておき(テスト録音を毎回はやらない)、録音が止まったら忘れて
+# 決め直す = 挿し替えに次の録音から追従する。
+_DEVICE_TEST_SEC = 1
+_FAIL_RETRY_SEC = 30.0                     # 開けなかったときに覚えておく時間
+_resolved: tuple[str, str | None] | None = None   # (設定値, 実際に使うデバイス)
+_resolved_at = 0.0
+_resolve_lock = threading.RLock()
+_recording = 0                             # 録音中はテスト録音をしない(奪い合う)
+
+
+def _mark_recording(delta: int) -> None:
+    global _recording
+    with _resolve_lock:
+        _recording = max(0, _recording + delta)
+
+
+def forget_device() -> None:
+    """次の録音でデバイスを決め直す(挿し替え・抜き差しへの追従)。"""
+    global _resolved
+    with _resolve_lock:
+        _resolved = None
+
+
+def _is_usb_card(card: int) -> bool:
+    """USB の音声デバイスか。USB マイクを先に試すための優先度にだけ使う。"""
+    return Path(f"/proc/asound/card{card}/usbid").exists()
+
+
+def capture_devices() -> list[str]:
+    """`arecord -l` に見えている録音デバイス。USB を先に返す。
+
+    内蔵(HDMI 等)は録音できないか、録れても使い物にならないので後ろに回す。
+    """
     try:
         r = subprocess.run(["arecord", "-l"], capture_output=True, text=True,
                            timeout=5, env=_LOCALE_C_ENV)
-    except Exception as e:
-        return False, f"arecord を実行できません: {type(e).__name__}"
-    if r.returncode != 0 or "card" not in r.stdout:
+    except Exception:
+        return []
+    found: list[tuple[int, str]] = []
+    for line in r.stdout.splitlines():
+        m = re.match(r"card (\d+):.*?device (\d+):", line)
+        if not m:
+            continue
+        card, dev = int(m.group(1)), int(m.group(2))
+        # hw: ではなく plughw: を使う。USB マイクは 48kHz ステレオ固定のものが
+        # 多く、16kHz モノラルへの変換を plug 層にやらせないと開けない。
+        found.append((0 if _is_usb_card(card) else 1, f"plughw:{card},{dev}"))
+    found.sort(key=lambda x: x[0])            # 安定ソート: 同じ優先度なら一覧の順
+    return [d for _, d in found]
+
+
+def _can_open(device: str, rate: int, channels: int) -> bool:
+    """本当に録れるか、短く録って確かめる。"""
+    cmd = ["arecord", "-q", "-D", device, "-f", "S16_LE", "-r", str(rate),
+           "-c", str(channels), "-t", "raw", "-d", str(_DEVICE_TEST_SEC)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=_DEVICE_TEST_SEC + 3,
+                           env=_LOCALE_C_ENV)
+    except Exception:
+        return False
+    return r.returncode == 0 and bool(r.stdout)
+
+
+def resolve_device(*, probe: bool = True) -> str | None:
+    """`arecord -D` に渡すデバイス。開けるものが無ければ None。
+
+    設定(audio.device)の指定は必ず最初に試す。開ければそれを使う = 現場で名指し
+    した設定は尊重される。開けないときだけ、見つかったデバイスへ自動で移る。
+    """
+    global _resolved, _resolved_at
+    want = str(settings.get("audio.device") or "default").strip() or "default"
+    with _resolve_lock:
+        if _resolved is not None and _resolved[0] == want:
+            # 開けなかったという結果も少しの間は覚えておく。画面は status を
+            # 繰り返し引くので、毎回テスト録音を走らせるわけにいかない。
+            if _resolved[1] is not None or time.monotonic() - _resolved_at < _FAIL_RETRY_SEC:
+                return _resolved[1]
+        if not probe or _recording:
+            # 録音中は奪い合うので試さない。まだ決まっていなければ設定のまま。
+            return want
+        rate = int(settings.get("audio.sample_rate"))
+        channels = int(settings.get("audio.channels"))
+        order = [want] + [d for d in capture_devices() if d != want]
+        for device in order:
+            if not _can_open(device, rate, channels):
+                continue
+            if device != want:
+                log.warning("[voice] 録音デバイスを %s にしました (設定: %s は開けません)",
+                            device, want)
+            _resolved, _resolved_at = (want, device), time.monotonic()
+            return device
+        _resolved, _resolved_at = (want, None), time.monotonic()
+        return None
+
+
+def _probe_arecord() -> tuple[bool, str]:
+    """設定されたデバイスを実際に開けるかまで見る。
+
+    一覧に出るかどうかだけを見ていると、画面には「使える」と出るのに「話す」を
+    押した瞬間に落ちる、という一番たちの悪い形になる。
+    """
+    devices = capture_devices()
+    if not devices:
         return False, "録音デバイスが見つかりません (USB マイクの接続を確認)"
-    return True, "arecord (device=" + str(settings.get("audio.device")) + ")"
+    device = resolve_device()
+    if device is None:
+        return False, "録音デバイスを開けませんでした (" + ", ".join(devices[:3]) + ")"
+    return True, f"arecord (device={device})"
 
 
 def list_devices() -> list[str]:
@@ -485,6 +600,9 @@ def open_stream() -> Stream:
     rate = int(settings.get("audio.sample_rate"))
     channels = int(settings.get("audio.channels"))
     backend = _backend()
+    if backend == "arecord":
+        # 設定の指定が開けるならそのまま、駄目なら挿さっているマイクへ移る。
+        device = resolve_device() or device
     retries = max(0, int(settings.get("audio.open_retries")))
 
     last: Exception | None = None

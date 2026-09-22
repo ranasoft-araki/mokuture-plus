@@ -302,7 +302,30 @@ sudo systemctl enable  mokuture-voice     # 自動起動に戻す
 
 ## 4. マイク選択・音量調整
 
-### 4-1. どのデバイスか調べる
+### 4-1. ふつうは設定しなくてよい（自動で決まる）
+
+USB マイクのカード番号は**挿す位置・挿す順・起動時の認識順で変わる**ので、設定に
+番号を焼き込むと挿し直しただけで音声入力が消える。そこでサービスは
+
+1. 設定（`audio.device`、既定は `default`）をまず試す
+2. 開けなければ `arecord -l` に見えるデバイスを順に試す（**USB が先**）
+3. 開けたものを覚える。録音が途中で止まったら忘れて次の録音で決め直す
+
+という順で毎回決める。**開けるかどうかは開いてみて確かめる**（一覧に出るかは当て
+にならない。`default` は asym プラグインで再生側しか定義されていない端末があり、
+`arecord -l` には出るのに開くと EINVAL で落ちる）。
+
+実際にどれを使っているかは status に出る:
+
+```bash
+curl -s http://127.0.0.1:8181/voice/status | head -c 200
+# ... "microphone":{"available":true,"detail":"arecord (device=plughw:2,0)"} ...
+```
+
+1 つも開けなければ `available:false` になり、detail に試したデバイスが並ぶ。
+画面に「音声で入力」は出ないので、受付は従来どおり進む。
+
+### 4-2. どのデバイスか調べる
 
 ```bash
 arecord -l                                     # カード番号の一覧
@@ -312,19 +335,24 @@ curl -s http://127.0.0.1:8181/voice/devices    # サービスから見えてい�
 
 USB マイクはたいてい `plughw:1,0` か `sysdefault:CARD=<名前>`。
 
-### 4-2. 設定に書く
+### 4-3. 名指しする（必要なときだけ）
+
+マイクが複数挿さっていて選ばせたいときだけ書く。書いた指定は必ず最初に試され、
+開ければそれが使われる（開けないときだけ自動選択に落ちる）。番号（`plughw:1,0`）
+より**名前**（`plughw:CARD=Device,DEV=0` / `sysdefault:CARD=Device`）のほうが挿し
+位置に左右されない。
 
 ```yaml
 # voice_input.yaml
 audio:
-  device: plughw:1,0
+  device: plughw:CARD=Device,DEV=0
 ```
 
 ```bash
 sudo systemctl restart mokuture-voice
 ```
 
-### 4-3. 録れているか確かめる
+### 4-4. 録れているか確かめる
 
 ```bash
 # 3 秒録って再生する（本番と同じ 16kHz/モノラル）
@@ -332,7 +360,7 @@ arecord -D plughw:1,0 -f S16_LE -r 16000 -c 1 -d 3 /dev/shm/t.wav && aplay /dev/
 rm -f /dev/shm/t.wav
 ```
 
-### 4-4. 入力音量
+### 4-5. 入力音量
 
 ```bash
 alsamixer -c 1        # F4 で Capture 画面。Mic のゲインを上げる
@@ -346,7 +374,7 @@ audio:
   input_gain: 2.0     # 上げすぎると歪んで認識が落ちる。3.0 くらいまで
 ```
 
-### 4-5. 拾いすぎ・拾わなさすぎ
+### 4-6. 拾いすぎ・拾わなさすぎ
 
 | 症状 | 調整 |
 |---|---|
@@ -639,7 +667,9 @@ git push origin master        # OTA で全端末の kiosk.html が戻る
 | `whisper-cli がありません` | `bash scripts/install_voice.sh --build` |
 | `モデルがありません` | `git lfs pull` → `.venv/bin/python scripts/fetch_voice_models.py --check` |
 | `録音デバイスが見つかりません` | USB マイクの接続。`arecord -l` に出るか。`audio` グループに入っているか（`id -nG`）。入れた直後は再ログインか Pi の再起動が要る |
-| 認識がいつも「うまく聞き取れませんでした」 | `voice_bench.py --show-text` で実際の認識結果を見る。マイクのゲイン不足が多い（§4-4） |
+| `録音デバイスを開けませんでした` | 一覧には出るが開けない。`arecord -D plughw:1,0 -f S16_LE -r 16000 -c 1 -d 3 /tmp/t.wav` を手で試す。`hw:` 指定なら `plughw:` にする（48kHz ステレオ固定のマイクは変換が要る） |
+| 「話す」を押して 0.5 秒で `マイクの調子が悪いようです` | `journalctl -u mokuture-voice` の `mic_error` の行 に arecord の生のエラーが出る。`capture slave is not defined` なら `default` が再生専用（§4-1 の自動選択が拾うので、出るなら設定の `audio.device` を見直す） |
+| 認識がいつも「うまく聞き取れませんでした」 | `voice_bench.py --show-text` で実際の認識結果を見る。マイクのゲイン不足が多い（§4-5） |
 | 認識が遅い（3 秒以上） | モデルが small になっていないか（`status` の `engines.whisper.model`）。`whisper.threads` が 4 か |
 | 開始音を認識してしまう | `audio.start_guard_ms` を上げる（250 → 400） |
 | ブラウザのコンソールに CORS エラー | `voice_input.yaml` の `server.allowed_origins` にキオスクのオリジンが入っているか |

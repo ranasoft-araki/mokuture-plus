@@ -38,6 +38,8 @@ DEFAULTS: dict[str, Any] = {
     "audio": {
         # arecord の -D に渡す値。`arecord -l` / `arecord -L` で確認する。
         # 例: "default" / "plughw:1,0" / "sysdefault:CARD=USB"
+        # ここで開けなければ、挿さっている録音デバイスへ自動で移る
+        # (capture.resolve_device)。USB マイクのカード番号は固定できないため。
         "device": "default",
         # whisper.cpp も Vosk も 16kHz モノラル 16bit PCM を前提にしている。
         "sample_rate": 16000,

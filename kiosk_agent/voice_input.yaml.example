@@ -24,10 +24,13 @@ server:
     - http://127.0.0.1:8080
 
 audio:
-  # Raspberry Pi: `arecord -L` で出てくる名前。USB マイクは plughw:1,0 など。
+  # Raspberry Pi: **ふつうは default のままでよい**。開けなければ、挿さっている
+  # 録音デバイス(USB が先)へ自動で移る。USB マイクのカード番号は挿す位置や起動順
+  # で変わるので、番号を焼き込むほうがかえって壊れやすい。
+  # 名指ししたいときは `arecord -L` の名前を書く。番号(plughw:1,0)より
+  # 名前(plughw:CARD=Device,DEV=0)のほうが挿し位置に左右されない。
   # Windows(動作試験): 装置番号か名前の一部。番号は次で確認する
   #   .venv\Scripts\python scripts\voice_selftest.py --devices
-  # default のままで拾えていれば変えなくてよい。
   device: default
   sample_rate: 16000
   channels: 1
