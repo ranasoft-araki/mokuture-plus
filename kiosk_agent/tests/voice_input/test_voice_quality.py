@@ -127,3 +127,20 @@ def test_thresholds_come_from_settings():
 def test_repeat_ratio(text, expected_high):
     limit = float(settings.get("quality.repeat_ratio_max"))
     assert (quality.repeat_ratio(text) > limit) is expected_high
+
+
+# ── 失敗の内訳（精度が出ないときの切り分け） ──────────────────────────────────
+
+def test_失敗の内訳がエラーコード別に出る(tmp_path):
+    """「聞き取れていない」のか「自信が足りない」のかで打つ手が変わる。"""
+    from voice import metrics, settings
+
+    settings.cfg()["metrics"]["path"] = str(tmp_path / "m.jsonl")
+    for code in ("empty_result", "low_confidence", "low_confidence"):
+        metrics.record({"sessionId": "s1", "screenId": "reception",
+                        "result": "error", "errorCode": code})
+    metrics.record({"sessionId": "s1", "screenId": "reception", "result": "success"})
+
+    s = metrics.summary()
+    assert s["by_error"] == {"empty_result": 1, "low_confidence": 2}
+    assert s["attempts"] == 4

@@ -13,8 +13,13 @@
     .venv/bin/python scripts/voice_bench.py --record-only --out /dev/shm/sample.wav
 
 測るもの:
-    音声の長さ / 認識処理時間 / 発話終了から結果が出るまでの時間 / 使用モデル /
+    入力レベル(発話・暗騒音・S/N・割れ) / 音声の長さ / 認識処理時間 /
+    発話終了から結果が出るまでの時間 / 使用モデル /
     認識成功・再入力・キャンセルの別(ここでは自動判定の可否として出す)
+
+**精度が出ないときは、まず入力レベルを見る。** 認識器を替える前に、音が小さい
+(alsamixer でマイクの入力が上がっていない)・割れている・暗騒音に埋もれている、の
+どれかであることが多い。
 
 **認識したテキストは既定では表示しない。** 精度を目で確かめたいときだけ
 `--show-text` を付ける(画面に出るだけで、どこにも保存しない)。
@@ -22,9 +27,11 @@
 from __future__ import annotations
 
 import argparse
+import math
 import statistics
 import sys
 import time
+from array import array
 from pathlib import Path
 
 AGENT_DIR = Path(__file__).resolve().parent.parent
@@ -76,6 +83,55 @@ def rss_mb() -> float | None:
     return None
 
 
+def sample_peak(pcm: bytes) -> tuple[float, float]:
+    """(最大振幅 dBFS, 割れた標本の割合)。フレーム RMS では割れを見落とすので別に見る。"""
+    samples = array("h")
+    samples.frombytes(pcm[: len(pcm) - (len(pcm) % 2)])
+    if not samples:
+        return -100.0, 0.0
+    peak = max(abs(s) for s in samples)
+    clipped = sum(1 for s in samples if abs(s) >= 32000) / len(samples)
+    db = 20.0 * math.log10(peak / 32768.0) if peak else -100.0
+    return db, clipped
+
+
+def measure(pcm: bytes, rate: int) -> tuple[float, float]:
+    """(発話のピーク, 暗騒音) を 20ms フレームの RMS から推定する。WAV 用。"""
+    step = max(2, int(rate * 0.02) * 2)
+    frames = [vad.dbfs(pcm[i:i + step]) for i in range(0, max(0, len(pcm) - step), step)]
+    if not frames:
+        return -100.0, -100.0
+    ordered = sorted(frames)
+    return ordered[-1], ordered[len(ordered) // 10]      # 下位 10% を暗騒音の目安に
+
+
+def level_report(seg: AudioSegment) -> None:
+    """入力レベルの講評。精度が出ない原因はたいていここで分かる。
+
+    目安(16bit PCM):
+      発話のピーク  -18〜-6 dBFS   小さすぎると子音が量子化で潰れる
+      暗騒音        -50 dBFS 以下  これより大きいとロビーの環境音に埋もれる
+      S/N           20dB 以上ほしい
+    """
+    peak_db, clipped = sample_peak(seg.pcm)
+    snr = seg.peak_db - seg.noise_floor_db
+    print(f"  レベル: 発話 {seg.peak_db:.1f}dBFS / 暗騒音 {seg.noise_floor_db:.1f}dBFS"
+          f" / S/N {snr:.1f}dB / 最大振幅 {peak_db:.1f}dBFS / 割れ {clipped * 100:.2f}%")
+    notes = []
+    if clipped > 0.001 or peak_db > -1.0:
+        notes.append("割れています。alsamixer でマイクの入力を下げてください")
+    if seg.peak_db < -30.0:
+        notes.append("小さすぎます。alsamixer(F4 で Capture)でマイクの入力を上げてください。"
+                     "それでも足りなければ voice_input.yaml の audio.input_gain")
+    if snr < 15.0:
+        notes.append("S/N が足りません。マイクを話者へ近づける・向きを変える・"
+                     "暗騒音(空調やスピーカー)を下げる")
+    for n in notes:
+        print(f"  ※ {n}")
+    if not notes:
+        print("  → レベルは妥当です。精度の原因はここではありません")
+
+
 def record(seconds: float | None) -> AudioSegment:
     """マイクから 1 項目ぶん録る。VAD の終了条件は本番と同じ。"""
     ok, detail = capture.available()
@@ -106,8 +162,9 @@ def load_wav(path: Path) -> AudioSegment:
         rate = w.getframerate()
         pcm = w.readframes(w.getnframes())
     ms = int(len(pcm) / 2 / rate * 1000)
+    peak_db, floor_db = measure(pcm, rate)
     return AudioSegment(pcm=pcm, sample_rate=rate, total_ms=ms, speech_ms=ms,
-                        stop_reason="manual", peak_db=0.0, noise_floor_db=-60.0)
+                        stop_reason="manual", peak_db=peak_db, noise_floor_db=floor_db)
 
 
 def run_model(key: str, seg: AudioSegment, repeat: int, field: str, show_text: bool) -> None:
@@ -182,12 +239,14 @@ def run_model(key: str, seg: AudioSegment, repeat: int, field: str, show_text: b
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--models", default="base", help="比較するモデル(base,small)")
+    ap.add_argument("--models", default="vosk",
+                    help="比較するモデル(vosk,base,small)。既定は一文の名乗りで使う vosk")
     ap.add_argument("--wav", type=Path, help="録音の代わりに使う WAV(16bit モノラル)")
     ap.add_argument("--seconds", type=float, default=None, help="最大録音時間(秒)")
     ap.add_argument("--repeat", type=int, default=3, help="同じ音声で繰り返す回数")
-    ap.add_argument("--field", default="company", choices=("company", "person_name", "staff"),
-                    help="どの項目として整形・判定するか")
+    ap.add_argument("--field", default="reception",
+                    choices=("reception", "company", "person_name", "staff"),
+                    help="どの項目として整形・判定するか。既定は受付の入口の一文")
     ap.add_argument("--record-only", action="store_true", help="録音して WAV に保存するだけ")
     ap.add_argument("--out", type=Path, help="--record-only の保存先")
     ap.add_argument("--show-text", action="store_true",
@@ -196,6 +255,7 @@ def main() -> int:
 
     if args.record_only:
         seg = record(args.seconds)
+        level_report(seg)
         out = args.out or Path("/dev/shm/voice-bench.wav")
         out.write_bytes(capture.to_wav(seg.pcm, seg.sample_rate))
         print(f"保存しました: {out}  (計測が終わったら消してください)")
@@ -203,6 +263,7 @@ def main() -> int:
         return 0
 
     seg = load_wav(args.wav) if args.wav else record(args.seconds)
+    level_report(seg)
     keys = [k.strip() for k in args.models.split(",") if k.strip()]
     unknown = [k for k in keys if k not in MODELS]
     if unknown:

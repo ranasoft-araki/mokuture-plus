@@ -222,6 +222,15 @@ def summary() -> dict[str, Any]:
         m["end_to_display_ms_p50"] = _percentile(tot, 0.5)
         m["end_to_display_ms_p95"] = _percentile(tot, 0.95)
 
+    # 失敗の内訳。「精度が出ない」が、聞き取れていない(empty_result)のか、
+    # 聞き取れているが自信が足りない(low_confidence)のか、幻聴(repetition)なのかで
+    # 打つ手が変わる。件数だけなので個人情報は入らない。
+    by_error: dict[str, int] = {}
+    for r in attempts:
+        code = r.get("errorCode")
+        if code:
+            by_error[str(code)] = by_error.get(str(code), 0) + 1
+
     all_total = [r["totalMs"] for r in attempts if isinstance(r.get("totalMs"), int)]
     return {
         "voice_sessions": len(sessions),
@@ -238,4 +247,5 @@ def summary() -> dict[str, Any]:
         "end_to_display_ms_p95": _percentile(all_total, 0.95),
         "by_screen": by_screen,
         "by_model": by_model,
+        "by_error": by_error,
     }
