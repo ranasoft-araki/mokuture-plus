@@ -37,6 +37,10 @@ BROWSER_PAT="${MOKUTURE_BROWSER_PAT:-chromium|chrome|firefox|epiphany}"
 # ブラウザを持っていそうな systemd ユニットの見つけ方(名前が端末ごとに違うため)。
 BROWSER_UNIT_PAT="${MOKUTURE_BROWSER_UNIT_PAT:-brows|chrom|kiosk-ui}"
 GUARD_TAG="MOKUTURE_BROWSER_GUARD"
+# 音声サービスの可否を見る先(別プロセス・別ポート)。voice_input.yaml の server.port を
+# 変えている端末は MOKUTURE_VOICE_STATUS_URL で上書きする。
+VOICE_STATUS_URL="${MOKUTURE_VOICE_STATUS_URL:-http://127.0.0.1:8181/voice/status}"
+VOICE_WAIT_SEC="${MOKUTURE_VOICE_WAIT_SEC:-40}"
 PAUSE_AT_END=0
 
 # デスクトップのユーザー(= ブラウザのユーザーサービスを持っている人)。sudo 経由で
@@ -87,6 +91,25 @@ do_kill_browser() {
     pkill -u "$DESK_USER" -f "$BROWSER_PAT" >/dev/null 2>&1 || true
     sleep 2
     pkill -9 -u "$DESK_USER" -f "$BROWSER_PAT" >/dev/null 2>&1 || true
+}
+
+# 音声サービスが「使える」と答えるまで待つ。モデルの読み込みで数秒〜十数秒かかるので、
+# ここを待たずにブラウザを開くと受付画面から「音声で入力」が消える(latch のため復帰は
+# ページ再読込まで戻らない)。マイク未接続などで永遠に available にならない端末もあるので
+# 上限付き。待てなかったときは false を返すだけで、起動そのものは止めない。
+wait_voice_ready() {
+    command -v curl >/dev/null 2>&1 || { sleep 10; return 1; }
+    i=0
+    while [ "$i" -lt "$VOICE_WAIT_SEC" ]; do
+        if curl -fsS --max-time 2 "$VOICE_STATUS_URL" 2>/dev/null \
+            | grep -q '"available"[[:space:]]*:[[:space:]]*true'; then
+            return 0
+        fi
+        printf '.'
+        sleep 1
+        i=$((i + 1))
+    done
+    return 1
 }
 
 guard_running() { pgrep -f "$GUARD_TAG" >/dev/null 2>&1; }
@@ -159,14 +182,27 @@ do_start() {
     echo "=== キオスクを再開します ==="
     guard_stop
 
-    echo "--- 受付サービス($KIOSK_UNIT) ---"
-    # 本体の ExecStartPost がブラウザのユニットを起こし直す。
-    if as_root systemctl start "$KIOSK_UNIT"; then echo "  起動しました"; else echo "  起動できませんでした"; fi
-
+    # **起動は停止の逆順**。受付画面は起動時に一度だけ /voice/status を見て、届かなければ
+    # そのページが閉じるまで「音声で入力」を出さない(kiosk.html の ensureVoiceStatus は
+    # VOICE.checked で latch する)。本体を先に上げるとブラウザが数秒で開き、まだ起動中の
+    # 音声サービスに間に合わず、**ボタンが消えたまま**になる。だから音声を先に上げ、
+    # 応答を確かめてから本体(= ブラウザ)を起こす。
     if unit_exists_system "$VOICE_UNIT"; then
         echo "--- 音声入力($VOICE_UNIT) ---"
         if as_root systemctl start "$VOICE_UNIT"; then echo "  起動しました"; else echo "  起動できませんでした"; fi
+        printf '  利用できるようになるまで待っています'
+        if wait_voice_ready; then
+            echo " → 準備できました"
+        else
+            echo " → 待ちきれませんでした"
+            echo "  ※ このまま進めます。受付画面に「音声で入力」が出ない場合は次を確認:"
+            echo "     systemctl status $VOICE_UNIT / curl -s $VOICE_STATUS_URL"
+        fi
     fi
+
+    echo "--- 受付サービス($KIOSK_UNIT) ---"
+    # 本体の ExecStartPost がブラウザのユニットを起こし直す。
+    if as_root systemctl start "$KIOSK_UNIT"; then echo "  起動しました"; else echo "  起動できませんでした"; fi
 
     echo "--- ブラウザ ---"
     sleep 2
@@ -186,6 +222,16 @@ do_status() {
     printf '%-26s %s\n' "$KIOSK_UNIT" "$(systemctl is-active "$KIOSK_UNIT" 2>/dev/null || echo unknown)"
     if unit_exists_system "$VOICE_UNIT"; then
         printf '%-26s %s\n' "$VOICE_UNIT" "$(systemctl is-active "$VOICE_UNIT" 2>/dev/null || echo unknown)"
+        # サービスが active でも、モデル読み込み中やマイク未接続だと available にならない。
+        # 受付画面の「音声で入力」が出るかどうかはこちらで決まる。
+        if command -v curl >/dev/null 2>&1; then
+            if curl -fsS --max-time 2 "$VOICE_STATUS_URL" 2>/dev/null \
+                | grep -q '"available"[[:space:]]*:[[:space:]]*true'; then
+                printf '%-26s %s\n' "「音声で入力」" "出る(available)"
+            else
+                printf '%-26s %s\n' "「音声で入力」" "出ない($VOICE_STATUS_URL が available を返さない)"
+            fi
+        fi
     fi
     for u in $(browser_units_user); do
         printf '%-26s %s\n' "$u" "$(sc_user is-active "$u" 2>/dev/null || echo unknown) (ユーザーサービス)"
