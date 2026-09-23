@@ -1487,7 +1487,10 @@ async def kiosk_voice_transcribe(
     tenant, device = ctx
     if (device.status or "active") == "pending":
         raise HTTPException(status_code=403, detail="device not approved")
-    if not settings.cloud_asr_enabled or not bool(getattr(tenant, "voice_cloud_enabled", False)):
+    # 既定(VOICE_CLOUD_DEFAULT)を入れておけば全店で有効になる。店舗ごとの操作は
+    # 「既定が false のときに先行して開ける」か「断られた店舗を止める」ときだけ。
+    allowed = (settings.voice_cloud_default or bool(getattr(tenant, "voice_cloud_enabled", False)))         and not bool(getattr(tenant, "voice_cloud_opt_out", False))
+    if not settings.cloud_asr_enabled or not allowed:
         # 端末はこれを見て、しばらく問い合わせを止める。
         raise HTTPException(status_code=503, detail="cloud asr disabled")
 

@@ -90,6 +90,10 @@ class Settings(BaseSettings):
     # サーバが AmiVoice を呼ぶ。未設定ならこの機能ごと無効(端末はローカル認識だけで
     # 従来どおり動く)。テナント単位の可否は tenants.voice_cloud_enabled。
     amivoice_appkey: str = ""
+    # **全テナントの既定値。** true にすると、鍵がある限り全店で中継が有効になる
+    # (店舗ごとの操作は不要)。断られた顧客だけ tenants.voice_cloud_opt_out で止める。
+    # false のときは、明示的に許可したテナント(tenants.voice_cloud_enabled)だけ。
+    voice_cloud_default: bool = False
     amivoice_engine: str = "-a-general"   # 日本語の汎用エンジン
     amivoice_timeout_sec: float = 8.0
     # 受付の一文は最長でも15秒。これを超える音は受け取らない(取り違い・悪用の防止)。

@@ -130,3 +130,36 @@ async def test_運営が切り替えられる(client, operator_headers, tenant, 
     r = await client.patch(f"/api/operator/tenants/{tenant.id}/voice-cloud",
                            headers=operator_headers, json={"enabled": False})
     assert r.json()["voice_cloud_enabled"] is False
+
+
+# ── 全店まとめて有効にする（店舗ごとの操作を要らなくする） ────────────────────
+
+async def test_サーバ既定が有効なら店舗ごとの操作は要らない(
+        client, kiosk_headers, cloud_key, monkeypatch):
+    """VOICE_CLOUD_DEFAULT を入れるだけで全店で中継される。"""
+    monkeypatch.setattr(settings, "voice_cloud_default", True)
+
+    async def fake_transcribe(wav, words):
+        return "磯野木工所の荒木です", 800
+
+    monkeypatch.setattr(speech_service, "transcribe", fake_transcribe)
+    r = await post(client, kiosk_headers)          # テナントは何も設定していない
+    assert r.status_code == 200
+
+
+async def test_断られた店舗だけ止められる(client, kiosk_headers, tenant, cloud_key, monkeypatch):
+    """既定が有効でも、opt_out を立てた店舗では中継しない。こちらが強い。"""
+    monkeypatch.setattr(settings, "voice_cloud_default", True)
+    async with AsyncSessionLocal() as db:
+        t = (await db.execute(select(Tenant).where(Tenant.id == tenant.id))).scalar_one()
+        t.voice_cloud_opt_out = True
+        await db.commit()
+    r = await post(client, kiosk_headers)
+    assert r.status_code == 503
+
+
+async def test_鍵が無ければ既定が有効でも中継しない(client, kiosk_headers, monkeypatch):
+    monkeypatch.setattr(settings, "voice_cloud_default", True)
+    monkeypatch.setattr(settings, "amivoice_appkey", "")
+    r = await post(client, kiosk_headers)
+    assert r.status_code == 503

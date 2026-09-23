@@ -66,3 +66,8 @@ services:
       # 発行元: AmiVoice Cloud Platform マイページ →「接続情報」→ APIキー。
       - key: AMIVOICE_APPKEY
         sync: false
+      # 全テナントの既定。true にすると、鍵がある限り**全店で**中継が有効になる
+      # (店舗ごとの操作は不要)。断られた顧客だけ運営APIで opt_out を立てて止める。
+      # 未設定(false)なら、明示的に許可したテナントだけ。
+      - key: VOICE_CLOUD_DEFAULT
+        sync: false

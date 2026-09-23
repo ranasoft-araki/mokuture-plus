@@ -52,7 +52,10 @@ class Tenant(Base):
     # 受付の音声をクラウド音声認識へ中継してよいか。**既定は False。**
     # 来訪者の氏名・所属・訪問先を外部へ出すかどうかはテナントの判断なので、
     # サーバに鍵があるだけでは有効にならない(両方そろって初めて中継する)。
+    # 全体の既定(VOICE_CLOUD_DEFAULT)が false のときに、このテナントだけ先に有効化する。
     voice_cloud_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 既定が true でも、このテナントだけは使わない(顧客に断られた場合)。こちらが強い。
+    voice_cloud_opt_out: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # OTA: timestamp set by admin to trigger force-push to all devices of this tenant
     kiosk_force_update_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
