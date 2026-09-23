@@ -237,6 +237,42 @@ _NOT_NAME = re.compile(r"(方|人|者|担当|部署|くださ|したい|しま�
                        r"合わせ|約束|荷物|面接|点検|工事|商談|納品)")
 
 
+# ── 名簿が無い端末の訪問先 ────────────────────────────────────────────────────
+# 担当者を名簿から選ばせず**自由入力**にしている端末がある。その場合「名簿にいる人
+# しか訪問先になり得ない」という前提が成り立たず、「服部様とお約束で…」と正しく
+# 聞き取れていても訪問先が永久に空になる。そこで敬称の直前を呼び名として拾う。
+#
+# **名簿があるときは使わない。** 名簿にいない名前を候補に混ぜると、実在しない担当者を
+# 選べてしまい、通知の宛先も決まらない。
+
+_TITLES = ("様", "さま", "さん", "先生", "部長", "課長", "社長", "専務", "常務",
+           "部長さん", "主任", "係長", "所長")
+_HONORIFIC = re.compile(r"(?P<name>[^\s、。]{1,10}?)(?:" + "|".join(_TITLES) + r")")
+# 敬称は付くが人名ではないもの。
+_NOT_HOST = re.compile(r"(お客|皆|みな|貴社|御社|弊社|担当|どちら|どなた|受付|係の)")
+# 「営業部の田中さん」のような言い方から、助詞の手前を落とすため。
+_PARTICLES = set("のとにがはをでもへやかね、。")
+
+
+def scan_host_spoken(text: str) -> str | None:
+    """敬称の直前を訪問先の呼び名として拾う。**名簿が無い端末専用。**
+
+    「服部様とお約束で参りました」→「服部」。「お客様」「担当の方」のように敬称が
+    付いても人名でないものは拾わない。
+    """
+    for m in _HONORIFIC.finditer(text or ""):
+        name = m.group("name").split("の")[-1].strip()
+        name = _LEAD.sub("", name)
+        while name and name[0] in _PARTICLES:
+            name = name[1:]
+        if not name or _NOT_HOST.search(name):
+            continue
+        if all(ch in _PARTICLES for ch in name):
+            continue
+        return name
+    return None
+
+
 def _plausible_name(candidate: str) -> bool:
     """氏名らしいか。姓だけ・姓名で 2〜6 文字に収まるのが普通。"""
     c = candidate.strip()
@@ -389,6 +425,19 @@ def extract(text: str, staff: list[Staff], purposes: list[str],
     company, name, span = scan_visitor(body)
     rest = (body[:span[0]] + " " + body[span[1]:]) if span else body
     candidates = scan_staff(rest, staff)
+
+    # 名簿が空 = 担当者が自由入力の端末。聞こえた呼び名をそのまま候補にする
+    # (画面は自由入力欄の初期値として使う)。名簿があるときは絶対にやらない。
+    if not staff:
+        heard = scan_host_spoken(rest)
+        return Extraction(
+            visitor_company=company or None,
+            visitor_name=name or None,
+            host_name_spoken=heard,
+            host_candidates=[heard] if heard else [],
+            purpose=purpose_of(body, purposes),
+            has_appointment=appointment_of(body),
+        )
 
     if grammar_text and host_tokens:
         found = {s.name for s in candidates}

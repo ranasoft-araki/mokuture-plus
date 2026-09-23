@@ -370,3 +370,51 @@ def test_2パス目は会社名と氏名には使わない():
                           host_tokens=["服部"])
     assert got.visitor_company == "磯野木工所"
     assert got.visitor_name == "荒木"
+
+
+# ── 担当者が自由入力の端末 ────────────────────────────────────────────────────
+#
+# 担当者を名簿から選ばせず自由入力にしている端末がある。そこでは「名簿にいる人しか
+# 訪問先になり得ない」という前提が成り立たず、正しく聞き取れていても訪問先が永久に
+# 空になっていた（実機で発覚）。名簿が空のときだけ、敬称の直前を呼び名として拾う。
+
+def test_名簿が無ければ敬称から訪問先を拾う():
+    got = extract.extract("磯野木工所の荒木と申します服部様とお約束でまいりました",
+                          [], PURPOSES)
+    assert got.host_candidates == ["服部"]
+    assert got.host_name_spoken == "服部"
+    assert got.visitor_company == "磯野木工所"      # 名乗りの取り出しは変わらない
+    assert got.visitor_name == "荒木"
+
+
+@pytest.mark.parametrize("said,want", [
+    ("服部さんに会いに来ました", "服部"),
+    ("営業部の田中さんをお願いします", "田中"),
+    ("林さんと約束しています", "林"),
+])
+def test_言い方が違っても拾う(said, want):
+    assert extract.extract(said, [], PURPOSES).host_candidates == [want]
+
+
+@pytest.mark.parametrize("said", [
+    "お客様がお待ちです",          # 敬称は付くが人名ではない
+    "担当の方をお願いします",
+    "打ち合わせで来ました",        # そもそも敬称が無い
+])
+def test_人名でないものは拾わない(said):
+    assert extract.extract(said, [], PURPOSES).host_candidates == []
+
+
+def test_名簿があるときは名簿の人しか出さない():
+    """名簿にいない名前を混ぜると、実在しない担当者を選べてしまう。"""
+    got = extract.extract("磯野木工所の荒木と申します服部様とお約束でまいりました",
+                          [extract.Staff("田中 一郎", "たなかいちろう")], PURPOSES)
+    assert got.host_candidates == []
+    assert got.host_name_spoken is None
+
+
+def test_名簿が無くても名乗りの範囲からは拾わない():
+    """「山田運送の田中です」の田中は来訪者。敬称が無いので拾わないこと。"""
+    got = extract.extract("山田運送の田中です荷物のお届けに来ました", [], PURPOSES)
+    assert got.host_candidates == []
+    assert got.visitor_name == "田中"
