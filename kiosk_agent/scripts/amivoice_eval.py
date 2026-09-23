@@ -17,6 +17,10 @@
     # 実機のマイクで3回録って、そのつどローカルと並べる（本番と同じ録音経路）
     .venv/bin/python scripts/amivoice_eval.py --record 3
 
+    # **鍵を端末に置きたくないとき**: 端末では録るだけ。認識は手元でまとめて。
+    .venv/bin/python scripts/amivoice_eval.py --record 3 --save ~/rec   # 実機(鍵不要)
+    python scripts/amivoice_eval.py --wav rec/*.wav                     # 手元
+
     # すでに録ってある WAV で比べる
     .venv/bin/python scripts/amivoice_eval.py --wav /dev/shm/s.wav
 
@@ -131,6 +135,8 @@ def compare_one(args, label: str, seg, wav: bytes, book, purposes,
     if blob is not None:
         rows.append(("ローカル Vosk 2パス", blob["text"], blob["ms"]))
     for name, w in (("AmiVoice 素", ""), ("AmiVoice 単語登録", words)):
+        if not args.appkey:
+            break
         if w and args.no_words:
             continue
         try:
@@ -194,6 +200,9 @@ def main() -> int:
                     help="この WAV を比べる（採点はしない。複数可）")
     ap.add_argument("--record", type=int, metavar="N",
                     help="実機のマイクから N 回録って比べる（本番と同じ録音経路）")
+    ap.add_argument("--save", type=Path, metavar="DIR",
+                    help="録った音を WAV で残す。鍵を端末に置かず、手元でまとめて"
+                         "認識にかけるときに使う（音声が残るので、済んだら消すこと）")
     ap.add_argument("--log", action="store_true",
                     help="ログを残すエンドポイントを使う（マイページで確認したいとき）")
     ap.add_argument("--with-local", action="store_true", help="ローカル Vosk とも並べる")
@@ -205,7 +214,15 @@ def main() -> int:
 
     if args.local_only:
         args.with_local, args.appkey = True, args.appkey or "-"
-    if not args.appkey:
+    # 録るだけなら鍵は要らない。発売済みの端末すべてに鍵を置いて回るのは現実的で
+    # ないので、「端末は録音だけ・認識は手元で」を最初から通る道にしておく。
+    if args.record and not args.appkey:
+        print("APPKEY が無いので、録音とローカル認識だけ行います"
+              "（AmiVoice には送りません）。")
+        if not args.save:
+            args.save = Path.home() / "mokuture-voice-rec"
+        args.appkey = ""
+    elif not args.appkey:
         print("APPKEY がありません。AmiVoice のマイページで発行し、環境変数"
               " AMIVOICE_APPKEY に入れてください。")
         return 2
@@ -216,8 +233,8 @@ def main() -> int:
     staff_names = [s["name"] for s in staff_master]
     book = extract.build_staff(staff_names)
 
-    if args.local_only:
-        print("--local-only: 通信しません。ローカルの基準値だけ出します。")
+    if args.local_only or not args.appkey:
+        print("通信しません。ローカルの認識だけ行います。")
     else:
         print(f"エンドポイント: {'ログあり' if args.log else 'ログなし'} / エンジン {ENGINE}")
         print(f"単語登録: {len(words.split('|')) if words else 0} 件")
@@ -229,12 +246,24 @@ def main() -> int:
 
         print("\n実機のマイクで録ります。一文で名乗ってください。")
         print("例:「磯野木工所の荒木と申します。服部様と打ち合わせのお約束で参りました」")
+        saved = []
         for i in range(args.record):
             seg = record(None)
             level_report(seg)
             wav = capture.to_wav(seg.pcm, seg.sample_rate)
+            if args.save:
+                args.save.mkdir(parents=True, exist_ok=True)
+                out = args.save / f"{time.strftime('%Y%m%d-%H%M%S')}-{i + 1}.wav"
+                out.write_bytes(wav)
+                saved.append(out)
             compare_one(args, f"{i + 1}回目", seg, wav, book, purposes, staff_names, words)
             seg.clear()
+        if saved:
+            print(f"\n保存しました: {args.save}")
+            print("手元へ持っていって、まとめて比べられます:")
+            print("  scp 'mokuture@<この端末>:" + str(args.save) + "/*.wav' .")
+            print("  python scripts/amivoice_eval.py --wav *.wav")
+            print("**音声が残っています。済んだら消してください。**")
         return 0
 
     if args.wav:
