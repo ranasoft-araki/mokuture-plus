@@ -349,6 +349,34 @@ curl -X POST http://<RPiのIPアドレス>:8080/register
 @chromium-browser --kiosk --noerrdialogs --disable-infobars http://localhost:8080
 ```
 
+ユーザーの systemd ユニット（`mokuture-browser.service`）から起動している端末もある。
+`mokuture-kiosk.service` の `ExecStartPost` が起動のたびにこのユニットを起こすので、
+**本体を起動すればブラウザも全画面で戻る**。
+
+### 現地でのサービス停止／再開（画面を空ける）
+
+保守で画面を空けたいときは `scripts/kiosk-service.sh` を使う。**止める順番と止め方が
+決まっている**ので、`systemctl stop mokuture-kiosk` だけ・ブラウザを閉じるだけでは
+数秒でブラウザが全画面に戻ってくる（理由はスクリプト冒頭のコメント）。
+
+```bash
+bash scripts/kiosk-service.sh stop             # 受付サービス＋ブラウザを止める（画面が空く）
+bash scripts/kiosk-service.sh start            # 受付画面へ戻す
+bash scripts/kiosk-service.sh status           # いま何が動いているか
+bash scripts/kiosk-service.sh diagnose         # 止めても戻ってくるとき、誰が起こしているか調べる
+bash scripts/kiosk-service.sh install-desktop  # デスクトップに「停止」「再開」アイコンを置く
+```
+
+- ブラウザの起動元（ユーザーユニット／システムユニット／セッションの autostart）は
+  スクリプトが名前で探して systemd に止めさせる
+  （`Restart=always` の相手は `kill` では止まらず、`systemctl stop` なら止まる）。
+- **それだけでは足りないので、停止中は見張りを残す。** `~/.mokuture-browser-paused`
+  がある間だけ動き、復活してきたブラウザを落とし続ける（`while true` のラッパーや
+  `@` 付き autostart など、起こし直す仕組みが端末ごとに違うため）。`start` で解除。
+- それでも戻ってくるときは `diagnose`。プロセスの親・cgroup・ユニット・autostart を
+  一度に出すので、どの経路が起こしているか分かる。
+- 停止は再起動をまたがない。電源を入れ直せば通常どおり受付画面で立ち上がる。
+
 ---
 
 ## API エンドポイント

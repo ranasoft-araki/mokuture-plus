@@ -486,20 +486,33 @@ APPKEY を配って回るのは現実的でない**（端末が持ち出され�
         端末トークンで認証              鍵はここ(環境変数)にだけ置く
 ```
 
-**有効になる条件は2つとも揃ったときだけ。**
+**入れるのは Render の環境変数2つだけ。店舗ごとの操作は要らない。**
 
-1. サーバに `AMIVOICE_APPKEY` がある（Render の環境変数）
-2. そのテナントが許可されている（`tenants.voice_cloud_enabled`）
+```
+AMIVOICE_APPKEY=<マイページの APIキー>
+VOICE_CLOUD_DEFAULT=true
+```
 
-どちらか欠ければ API は 503 を返し、端末は10分ほど問い合わせを止めて、ローカル認識
-だけで従来どおり動く。**端末側の作業はゼロ**（OTA で `voice/cloud.py` が届くだけ）。
+これで鍵のある限り全店で有効になる。`VOICE_CLOUD_DEFAULT` が無ければ API は 503 を
+返し、端末は10分ほど問い合わせを止めて、ローカル認識だけで従来どおり動く。
+**端末側の作業はゼロ**（OTA で `voice/cloud.py` が届くだけ）。
 
-テナントの許可は運営だけが切り替えられる（音声の行き先が変わる設定なので、テナント
-管理者には出さない）:
+店舗ごとに触るのは例外のときだけ。運営だけが切り替えられる（音声の行き先が変わる
+設定なので、テナント管理者には出さない）。
+
+| したいこと | 操作 |
+|---|---|
+| 全店で使う | `VOICE_CLOUD_DEFAULT=true`（これだけ） |
+| 1店だけ先に試す | 既定は false のまま、その店舗に `{"enabled": true}` |
+| 断られた店舗を外す | 既定は true のまま、その店舗に `{"opt_out": true}` |
 
 ```bash
-curl -X PATCH "$API/operator/tenants/<tenant_id>/voice-cloud"      -H "Authorization: Bearer <運営のトークン>"      -H "Content-Type: application/json" -d '{"enabled": true}'
+curl -X PATCH "$API/operator/tenants/<tenant_id>/voice-cloud" \
+     -H "Authorization: Bearer <運営のトークン>" \
+     -H "Content-Type: application/json" -d '{"opt_out": true}'
 ```
+
+返り値の `effective` が、鍵・既定・店舗の設定を全部踏まえて「実際に中継されるか」。
 
 **ローカルと並走させる。** 発話が終わった時点でクラウドへ投げ始め、その裏でローカルの
 認識を回す。ローカルが終わったあとに `cloud.wait_after_local_sec`（既定 1.8 秒）だけ
