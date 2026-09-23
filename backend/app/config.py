@@ -84,6 +84,21 @@ class Settings(BaseSettings):
     smtp_starttls: bool = True  # 587: STARTTLS で暗号化
     smtp_ssl: bool = False      # 465: implicit TLS を使う場合 True(starttls は無視)
 
+    # クラウド音声認識(AmiVoice)への中継。**鍵はここにだけ置く。**
+    # 発売済みの端末すべてに鍵を配って回るのは現実的でなく、持ち出されたときに
+    # 止められない。キオスクは自社 API(/kiosk/voice/transcribe)へ音声を送り、
+    # サーバが AmiVoice を呼ぶ。未設定ならこの機能ごと無効(端末はローカル認識だけで
+    # 従来どおり動く)。テナント単位の可否は tenants.voice_cloud_enabled。
+    amivoice_appkey: str = ""
+    amivoice_engine: str = "-a-general"   # 日本語の汎用エンジン
+    amivoice_timeout_sec: float = 8.0
+    # 受付の一文は最長でも15秒。これを超える音は受け取らない(取り違い・悪用の防止)。
+    voice_max_audio_bytes: int = 2 * 1024 * 1024
+
+    @property
+    def cloud_asr_enabled(self) -> bool:
+        return bool(self.amivoice_appkey)
+
     @property
     def slack_oauth_enabled(self) -> bool:
         return bool(self.slack_client_id and self.slack_client_secret and self.slack_redirect_uri)

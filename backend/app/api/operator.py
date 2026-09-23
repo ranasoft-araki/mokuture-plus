@@ -9,6 +9,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
+from app.config import settings as app_settings
 from app.database import get_db
 from app.middleware.tenant import require_operator
 from app.models.tenant import Tenant
@@ -183,6 +184,7 @@ async def list_tenants(
                 "brand_color": t.brand_color,
                 "is_suspended": t.is_suspended,
                 "is_demo": bool(getattr(t, "is_demo", False)),
+                "voice_cloud_enabled": bool(getattr(t, "voice_cloud_enabled", False)),
                 "created_at": t.created_at.isoformat() if t.created_at else None,
                 "operator_notes": t.operator_notes,
                 "device_count": device_counts.get(t.id, 0),
@@ -303,6 +305,37 @@ async def set_tenant_demo(
     tenant.is_demo = body.demo
     await db.commit()
     return {"ok": True, "tenant_id": tenant_id, "is_demo": tenant.is_demo}
+
+
+class VoiceCloudRequest(BaseModel):
+    enabled: bool
+
+
+@router.patch("/tenants/{tenant_id}/voice-cloud")
+async def set_tenant_voice_cloud(
+    tenant_id: str,
+    body: VoiceCloudRequest,
+    _: User = Depends(require_operator()),
+    db: AsyncSession = Depends(get_db),
+):
+    """受付の音声をクラウド音声認識へ中継してよいか。**既定は無効。**
+
+    有効にすると、そのテナントのキオスクが受付の一文(来訪者の氏名・所属・訪問先を
+    含む)を自社 API 経由で外部の音声認識へ送るようになる。契約・同意に基づいて運営が
+    開けるものなので、テナント管理者ではなく運営だけが切り替えられる。
+
+    サーバに AMIVOICE_APPKEY が無ければ、ここを有効にしても中継は起きない
+    (端末はローカル認識だけで従来どおり動く)。
+    """
+    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    tenant.voice_cloud_enabled = body.enabled
+    await db.commit()
+    return {"ok": True, "tenant_id": tenant_id,
+            "voice_cloud_enabled": tenant.voice_cloud_enabled,
+            "server_key_configured": app_settings.cloud_asr_enabled}
 
 
 class UpdateNotesRequest(BaseModel):

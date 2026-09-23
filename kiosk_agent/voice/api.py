@@ -29,7 +29,7 @@ import re
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from voice import (capture, engines, extract, metrics, session as session_mod,
+from voice import (capture, cloud, engines, extract, metrics, session as session_mod,
                    settings, whisper_cpp)
 from voice.types import FIELDS, message
 
@@ -95,6 +95,7 @@ async def voice_status(request: Request):
     enabled = bool(settings.get("enabled"))
     mic_ok, mic_detail = capture.available()
     described = engines.describe_all()
+    cloud_ok, cloud_detail = cloud.available()
     # 「使える」は、どれか1つでも動くエンジンがあること。項目ごとにどれを使うかは
     # fields[].engine に出す。
     engine_ok = any(d["available"] for d in described.values())
@@ -118,6 +119,9 @@ async def voice_status(request: Request):
         "enabled": enabled,
         "microphone": {"available": mic_ok, "detail": mic_detail},
         "engines": described,
+        # クラウド中継の状態。実際に使えるかはサーバが決めるので、ここに出るのは
+        # 「端末として問い合わせられる状態か」まで。
+        "cloud": {"available": cloud_ok, "detail": cloud_detail},
         # 第4段階(音声操作)はまだ。画面が導線を出さないよう false を返す。
         "features": {
             # 一文の名乗りをまとめて受ける。こちらが受付の既定の入口。

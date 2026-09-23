@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from voice import capture, session as session_mod, settings
+from voice import capture, cloud, session as session_mod, settings
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +26,9 @@ def _reset_voice(tmp_path):
     capture.set_override(None)
     # 録音デバイスの解決結果はモジュールに覚えるので、テスト間で持ち越さない。
     capture.forget_device()
+    # **テストが外へ音声を送らないようにする。** 中継を使うテストは自分で入れ直す。
+    cfg["cloud"]["enabled"] = False
+    cloud.reset()
     yield
     capture.set_override(None)
     capture.forget_device()

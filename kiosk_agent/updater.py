@@ -81,6 +81,7 @@ MANAGED_FILES = [
     "voice/__init__.py",
     "voice/api.py",
     "voice/capture.py",
+    "voice/cloud.py",
     "voice/defaults.py",
     "voice/engines.py",
     "voice/extract.py",

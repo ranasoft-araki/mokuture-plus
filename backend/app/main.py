@@ -37,6 +37,9 @@ _ENSURE_COLUMNS = {
         "department_list": "TEXT",
         # 審査用デモモード。既存行は FALSE。demo1/demo2 は下でバックフィルして有効化。
         "is_demo": "BOOLEAN DEFAULT FALSE",
+        # 受付の音声をクラウド音声認識へ中継してよいか。既存行は FALSE(従来どおり
+        # 端末内だけで完結する)。
+        "voice_cloud_enabled": "BOOLEAN DEFAULT FALSE",
     },
     "lockers": {
         "name": "VARCHAR(255)",

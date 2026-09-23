@@ -17,9 +17,9 @@ import logging
 import secrets
 import threading
 import time
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass, field as dc_field, replace
 
-from voice import (capture, engines, extract, metrics, quality, settings, textnorm,
+from voice import (capture, cloud, engines, extract, metrics, quality, settings, textnorm,
                    vad, vosk_engine, whisper_cpp)
 from voice.types import Phase, Recognition
 
@@ -193,6 +193,13 @@ class Session:
             # ここが「発話終了」。ここから結果表示までが §3-1 の計測対象。
             speech_end = time.monotonic()
 
+            # クラウドへは**ここで投げ始める**。ローカルの認識と並走させ、予算内に
+            # 返ればそちらを採る。返らなければローカルの結果を使うので遅くならない。
+            # 一文の名乗りだけが対象(項目ごとの入口は短く、候補もあるのでローカルで足りる)。
+            cloud_job = None
+            if field_name == "reception" and not self._cancel.is_set():
+                cloud_job = cloud.start(seg, cloud.words_for(extract.build_staff(self._staff_names)))
+
             if self._cancel.is_set():
                 self.phase = "cancelled"
                 metrics.record({
@@ -228,6 +235,17 @@ class Session:
                     self._fail("internal", engine_name, model, seg.total_ms, 0,
                                int((time.monotonic() - speech_end) * 1000), stop_reason=seg.stop_reason)
                     return
+
+            # ローカルが終わった。残りの予算でクラウドを待つ。
+            if cloud_job is not None:
+                cloud_text = cloud.finish(cloud_job, float(settings.get("cloud.wait_after_local_sec")))
+                if cloud_text:
+                    # 固有名詞はこちらの方が当たる(実測: 会社名 5/10 → 9/10)。
+                    # 担当者の候補はローカルの 2 パス目も併せて使う(下の _host_pass)。
+                    tr = replace(tr, text=cloud_text, engine="amivoice",
+                                 model_name="amivoice/-a-general")
+                    engine_name, model = tr.engine, tr.model_name
+                    log.info("[voice] クラウドの文字起こしを採用しました")
 
             normalized = textnorm.normalize(field_name, tr.text)
             extracted = None

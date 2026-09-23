@@ -20,7 +20,8 @@ _JST = zoneinfo.ZoneInfo("Asia/Tokyo")
 logger = logging.getLogger(__name__)
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException,
+                     Request, UploadFile)
 from fastapi.responses import FileResponse, Response
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -47,6 +48,7 @@ from app.services import events as event_bus
 from app.services import reception_notify
 from app.services import analytics as analytics_service
 from app.services import analytics_link
+from app.services import speech as speech_service
 from app.config import settings
 
 _PIN_RE = re.compile(r"^\d{4}$")
@@ -201,6 +203,7 @@ BUNDLE_FILES = [
     "voice/__init__.py",
     "voice/api.py",
     "voice/capture.py",
+    "voice/cloud.py",
     "voice/defaults.py",
     "voice/engines.py",
     "voice/extract.py",
@@ -1458,3 +1461,49 @@ async def kiosk_bundle_file(
         raise HTTPException(status_code=404, detail="File not found")
     media = "text/html; charset=utf-8" if file_path.endswith(".html") else "application/octet-stream"
     return Response(content=data, media_type=media)
+
+
+# ── 音声認識の中継 ────────────────────────────────────────────────────────────
+# **鍵を端末に置かないための口。** 発売済みのキオスクすべてに APPKEY を配って回るのは
+# 現実的でなく、端末が持ち出されたときに止められない。キオスクはここへ音声を送り、
+# サーバが AmiVoice を呼ぶ(app/services/speech.py)。
+#
+# 有効になるのは **サーバに鍵があり、かつテナントが許可している** ときだけ。片方でも
+# 欠ければ 503 を返し、端末はローカル認識だけで従来どおり動く。
+#
+# 音声も認識結果も保存しない。ここに残すのは大きさと所要時間だけ。
+
+@router.post("/voice/transcribe")
+async def kiosk_voice_transcribe(
+    audio: UploadFile = File(...),
+    words: str = Form(""),
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+):
+    """受付の一文を文字起こしして返す。失敗したら端末はローカルの結果を使う。
+
+    words は「表記 読み」の並び(改行区切り)。担当者の読みを渡すと固有名詞が当たり
+    やすくなる。読みが無いものは speech 側で捨てる(読みの推測は禁止)。
+    """
+    tenant, device = ctx
+    if (device.status or "active") == "pending":
+        raise HTTPException(status_code=403, detail="device not approved")
+    if not settings.cloud_asr_enabled or not bool(getattr(tenant, "voice_cloud_enabled", False)):
+        # 端末はこれを見て、しばらく問い合わせを止める。
+        raise HTTPException(status_code=503, detail="cloud asr disabled")
+
+    data = await audio.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty audio")
+    if len(data) > settings.voice_max_audio_bytes:
+        raise HTTPException(status_code=413, detail="audio too large")
+
+    entries = [line.strip() for line in (words or "").splitlines() if line.strip()]
+    try:
+        text, ms = await speech_service.transcribe(data, entries)
+    except speech_service.SpeechUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except speech_service.SpeechFailed as e:
+        # 端末はローカルへ落ちるだけなので、受付は止まらない。
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"text": text, "engine": "amivoice", "ms": ms}
+
