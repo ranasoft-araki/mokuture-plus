@@ -28,10 +28,8 @@
 set -u
 
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-AGENT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 KIOSK_UNIT="mokuture-kiosk"
 VOICE_UNIT="mokuture-voice"
-BROWSER_UNIT="mokuture-browser"
 # 落とす対象。端末ごとに起動の仕方(URL も実行ファイル名も)が違うので、既定は
 # 「デスクトップのユーザーが動かしているブラウザ全部」と広めに取る。
 # 変えたいときは MOKUTURE_BROWSER_PAT で上書きする。
