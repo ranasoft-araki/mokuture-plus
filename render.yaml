@@ -59,3 +59,10 @@ services:
         sync: false
       - key: SMTP_SSL
         sync: false
+      # クラウド音声認識(AmiVoice)への中継。**ここに鍵を置くと、端末側の作業なしで
+      # 全キオスクが使えるようになる**(実際に中継するのは tenants.voice_cloud_enabled
+      # が有効なテナントだけ)。未設定なら中継APIは 503 を返すだけで、端末はローカル
+      # 認識のまま従来どおり動く。値は Render ダッシュボードで設定(このリポジトリは公開)。
+      # 発行元: AmiVoice Cloud Platform マイページ →「接続情報」→ APIキー。
+      - key: AMIVOICE_APPKEY
+        sync: false
