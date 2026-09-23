@@ -38,7 +38,8 @@ AGENT_DIR = Path(__file__).resolve().parent.parent
 if str(AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(AGENT_DIR))
 
-from voice import capture, quality, settings, textnorm, vad, whisper_cpp  # noqa: E402
+from voice import (capture, engines, extract, quality, settings, textnorm, vad,  # noqa: E402
+                   whisper_cpp)
 from voice.types import message  # noqa: E402
 
 
@@ -113,9 +114,13 @@ def run_once(field: str, source: str, wav: Path | None, show_text: bool) -> int:
     if not ok:
         print(f"マイク/音源を使えません: {detail}")
         return 1
-    ok, detail = whisper_cpp.available()
+    # **本番と同じ選び方をする。** 一文の名乗り(既定)は Vosk、項目ごとの入口は
+    # whisper。ここを whisper 固定にしていたせいで、実際には使われないエンジンの
+    # 精度を見て判断しかねない状態だった。
+    engine = engines.pick(field)
+    ok, detail = engine.available()
     if not ok:
-        print(f"whisper.cpp を使えません: {detail}")
+        print(f"{engine.ENGINE_NAME} を使えません: {detail}")
         return 1
 
     fcfg = settings.field_cfg(field)
@@ -146,7 +151,7 @@ def run_once(field: str, source: str, wav: Path | None, show_text: bool) -> int:
         return 1
 
     try:
-        tr = whisper_cpp.transcribe(seg)
+        tr = engine.transcribe(seg)
     except whisper_cpp.EngineTimeout:
         print("  → 認識がタイムアウトしました")
         seg.clear()
@@ -168,6 +173,20 @@ def run_once(field: str, source: str, wav: Path | None, show_text: bool) -> int:
     else:
         print(f"  文字数    : {len(normalized)}（中身を見るには --show-text）")
 
+    if field == "reception" and show_text:
+        # 画面に並ぶのはこの 4 項目。文字起こしだけ見ても実際の使い勝手は分からない。
+        # 実機の担当者一覧は管理画面から来るが、ここには無いので端末ローカルの
+        # staff_readings.yaml を名簿の代わりに使う。空なら「担当者が自由入力の端末」
+        # と同じ扱いになり、敬称から訪問先を拾う経路を試せる。
+        book = list(extract.load_readings().values())
+        purposes = ["打ち合わせ", "商談", "納品", "面接", "点検・工事", "その他"]
+        got = extract.extract(tr.text, book, purposes)
+        print(f"  名簿      : {len(book)} 名 (staff_readings.yaml)")
+        print(f"  会社名    : {got.visitor_company}")
+        print(f"  お名前    : {got.visitor_name}")
+        print(f"  訪問先    : {got.host_candidates or '(なし)'}")
+        print(f"  ご用件    : {got.purpose} / アポ {got.has_appointment}")
+
     if verdict.accepted:
         print(f"  判定      : 採用（色={verdict.tone}）")
     else:
@@ -187,7 +206,8 @@ def main() -> int:
     ap.add_argument("--mic", action="store_true", help="実際のマイクから録る")
     ap.add_argument("--wav", type=Path, help="この WAV をマイクの代わりに流す")
     ap.add_argument("--say", help="この文を読み上げた音で試す（Windows のみ）")
-    ap.add_argument("--field", default="company", choices=("company", "person_name", "staff"),
+    ap.add_argument("--field", default="reception",
+                    choices=("reception", "company", "person_name", "staff"),
                     help="どの項目として整形・判定するか")
     ap.add_argument("--show-text", action="store_true",
                     help="認識結果を画面に出す（保存はしない）")
