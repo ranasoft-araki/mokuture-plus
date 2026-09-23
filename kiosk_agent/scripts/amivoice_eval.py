@@ -14,7 +14,10 @@
     # ローカル(Vosk 2パス)とも並べる
     .venv/bin/python scripts/amivoice_eval.py --with-local
 
-    # 実機で録った 1 件だけ試す
+    # 実機のマイクで3回録って、そのつどローカルと並べる（本番と同じ録音経路）
+    .venv/bin/python scripts/amivoice_eval.py --record 3
+
+    # すでに録ってある WAV で比べる
     .venv/bin/python scripts/amivoice_eval.py --wav /dev/shm/s.wav
 
 測るもの: 会社名・氏名・訪問先・用件・アポ有無の正解数 / 往復時間 / 概算費用。
@@ -83,19 +86,24 @@ def recognize(appkey: str, wav: bytes, *, words: str = "", nolog: bool = True,
     return r.json(), elapsed
 
 
-def local_passes(wav_path: Path, staff_names: list[str]) -> dict | None:
+def load_segment(wav_path: Path):
+    """WAV を本番と同じ形(16bit モノラル PCM)の AudioSegment にする。"""
+    from voice.types import AudioSegment
+
+    with wave.open(str(wav_path), "rb") as w:
+        pcm, rate = w.readframes(w.getnframes()), w.getframerate()
+    ms = int(len(pcm) / 2 / rate * 1000)
+    return AudioSegment(pcm=pcm, sample_rate=rate, total_ms=ms, speech_ms=ms,
+                        stop_reason="manual", peak_db=-12.0, noise_floor_db=-60.0)
+
+
+def local_from_segment(seg, staff_names: list[str]) -> dict | None:
     """比較用のローカル認識（フリー＋担当者の語彙の2パス目）。使えなければ None。"""
     from voice import vosk_engine
-    from voice.types import AudioSegment
 
     ok, _ = vosk_engine.available()
     if not ok:
         return None
-    with wave.open(str(wav_path), "rb") as w:
-        pcm, rate = w.readframes(w.getnframes()), w.getframerate()
-    ms = int(len(pcm) / 2 / rate * 1000)
-    seg = AudioSegment(pcm=pcm, sample_rate=rate, total_ms=ms, speech_ms=ms,
-                       stop_reason="manual", peak_db=-12.0, noise_floor_db=-60.0)
     started = time.monotonic()
     tr = vosk_engine.transcribe(seg)
     try:
@@ -104,6 +112,47 @@ def local_passes(wav_path: Path, staff_names: list[str]) -> dict | None:
         gtext, sure = "", []
     return {"text": tr.text, "grammar_text": gtext, "sure": sure,
             "ms": (time.monotonic() - started) * 1000}
+
+
+def local_passes(wav_path: Path, staff_names: list[str]) -> dict | None:
+    return local_from_segment(load_segment(wav_path), staff_names)
+
+
+def compare_one(args, label: str, seg, wav: bytes, book, purposes,
+                staff_names: list[str], words: str) -> None:
+    """1 発話について ローカル / AmiVoice素 / AmiVoice単語登録 を並べる。
+
+    実機で確かめるとき用。正解が分からないので採点はせず、文字起こしと取り出した
+    項目をそのまま出す。判断するのは人。
+    """
+    print(f"\n── {label} ({seg.total_ms}ms) ──")
+    rows: list[tuple[str, str, float]] = []
+    blob = local_from_segment(seg, staff_names)
+    if blob is not None:
+        rows.append(("ローカル Vosk 2パス", blob["text"], blob["ms"]))
+    for name, w in (("AmiVoice 素", ""), ("AmiVoice 単語登録", words)):
+        if w and args.no_words:
+            continue
+        try:
+            payload, ms = recognize(args.appkey, wav, words=w, nolog=not args.log)
+        except Exception as e:
+            print(f"  [{name}] 送れません: {type(e).__name__}")
+            continue
+        if payload.get("code"):
+            print(f"  [{name}] エラー {payload.get('code')} {payload.get('message')}")
+            continue
+        rows.append((name, str(payload.get("text") or ""), ms))
+
+    for name, text, ms in rows:
+        if name.startswith("ローカル") and blob is not None:
+            got = extract.extract(text, book, purposes,
+                                  grammar_text=blob["grammar_text"], host_tokens=blob["sure"])
+        else:
+            got = extract.extract(text, book, purposes)
+        print(f"  [{name}] {ms:.0f}ms")
+        print(f"      {text}")
+        print(f"      会社={got.visitor_company} 氏名={got.visitor_name}"
+              f" 訪問先={got.host_candidates} 用件={got.purpose} アポ={got.has_appointment}")
 
 
 def tally(name: str, rows: list[dict]) -> None:
@@ -141,7 +190,10 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--appkey", default=os.environ.get("AMIVOICE_APPKEY", ""),
                     help="既定は環境変数 AMIVOICE_APPKEY")
-    ap.add_argument("--wav", type=Path, help="この WAV 1 件だけ投げる（採点はしない）")
+    ap.add_argument("--wav", type=Path, nargs="+",
+                    help="この WAV を比べる（採点はしない。複数可）")
+    ap.add_argument("--record", type=int, metavar="N",
+                    help="実機のマイクから N 回録って比べる（本番と同じ録音経路）")
     ap.add_argument("--log", action="store_true",
                     help="ログを残すエンドポイントを使う（マイページで確認したいとき）")
     ap.add_argument("--with-local", action="store_true", help="ローカル Vosk とも並べる")
@@ -171,20 +223,26 @@ def main() -> int:
         print(f"単語登録: {len(words.split('|')) if words else 0} 件")
         print("※ 音声を外部へ送ります。")
 
+    if args.record:
+        from voice import capture
+        from voice_bench import level_report, record
+
+        print("\n実機のマイクで録ります。一文で名乗ってください。")
+        print("例:「磯野木工所の荒木と申します。服部様と打ち合わせのお約束で参りました」")
+        for i in range(args.record):
+            seg = record(None)
+            level_report(seg)
+            wav = capture.to_wav(seg.pcm, seg.sample_rate)
+            compare_one(args, f"{i + 1}回目", seg, wav, book, purposes, staff_names, words)
+            seg.clear()
+        return 0
+
     if args.wav:
-        wav = args.wav.read_bytes()
-        for label, w in (("素", ""), ("単語登録", words)):
-            if w and args.no_words:
-                continue
-            payload, ms = recognize(args.appkey, wav, words=w, nolog=not args.log)
-            if payload.get("code"):
-                print(f"[{label}] エラー {payload.get('code')} {payload.get('message')}")
-                continue
-            text = str(payload.get("text") or "")
-            got = extract.extract(text, book, purposes)
-            print(f"\n[{label}] {ms:.0f}ms  {text}")
-            print(f"  会社={got.visitor_company} 氏名={got.visitor_name}"
-                  f" 訪問先={got.host_candidates} 用件={got.purpose} アポ={got.has_appointment}")
+        for path in args.wav:
+            seg = load_segment(path)
+            compare_one(args, path.name, seg, path.read_bytes(),
+                        book, purposes, staff_names, words)
+            seg.clear()
         return 0
 
     runs: dict[str, list[dict]] = {}
