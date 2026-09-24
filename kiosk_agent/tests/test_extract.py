@@ -537,3 +537,102 @@ def test_抽出結果はJSONにできる形で返る():
     assert isinstance(payload["company_name"]["confidence"], float)
     from card.types import FIELD_NAMES
     assert set(payload) == set(FIELD_NAMES)
+
+
+def test_法人格の頭が欠けても会社名として拾う():
+    """「株式会社◯◯」が「式会社◯◯」と読まれた行を社名として拾い、頭の 1 文字を戻す。
+
+    株は画数が多く行頭にあるので落ちやすい。実機で 2 枚（ラナソフト・イノベイド）
+    が社名候補から外れ、代わりに背景のゴミが会社名に採られて空欄になった。
+    「式会社」で終わる法人格は株式会社しかない＝推測ではなく確定なので書き戻す
+    （この模組の方針「分かっている場所だけ補正し、信頼度を下げて返す」に沿う）。
+    """
+    lines = [
+        line("式会社ラナソフト", 0, height=34),
+        line("荒木 秀人", 1, height=60),
+        line("araki@example.co.jp", 2, height=22),
+    ]
+    fields = extract(lines, CARD_SIZE)
+    assert fields.company_name.value == "株式会社ラナソフト"
+    # 補正したので「ご確認ください」の帯に留める
+    fill_min = float(settings.get("confidence.fill_min"))
+    assert fill_min <= fields.company_name.confidence < float(settings.get("confidence.ok"))
+
+
+@pytest.mark.parametrize("read,expected", [
+    ("式会社サンプル商会", "株式会社サンプル商会"),
+    ("限会社きらめき工房", "有限会社きらめき工房"),
+    ("同会社ミライデザイン", "合同会社ミライデザイン"),
+    ("般社団法人サンプル協会", "一般社団法人サンプル協会"),
+])
+def test_欠けた法人格を書き戻す(read, expected):
+    fields = extract([
+        line(read, 0, height=34),
+        line("荒木 秀人", 1, height=60),
+        line("araki@example.co.jp", 2, height=22),
+    ], CARD_SIZE)
+    assert fields.company_name.value == expected
+
+
+def test_元の法人格を特定できないときは補正しない():
+    """「業協同組合」は農業協同組合と事業協同組合のどちらか分からない。
+
+    分からないものを埋めると、画像に無い文字を作ることになる。読めたまま返す。
+    """
+    fields = extract([
+        line("業協同組合サンプル", 0, height=34),
+        line("荒木 秀人", 1, height=60),
+        line("araki@example.co.jp", 2, height=22),
+    ], CARD_SIZE)
+    assert fields.company_name.value == "業協同組合サンプル"
+
+
+def test_法人格が揃っている行を優先する():
+    """頭の欠けた行より、法人格が揃っている行を先に採る。"""
+    lines = [
+        line("式会社ダミー", 0, height=34),
+        line("株式会社ラナソフト", 1, height=34),
+        line("荒木 秀人", 2, height=60),
+    ]
+    fields = extract(lines, CARD_SIZE)
+    assert fields.company_name.value == "株式会社ラナソフト"
+
+
+@pytest.mark.parametrize("phrase", [
+    "難しいほど面白い",      # 名刺の惹句（漢字→かな→漢字）
+    "心を込めて作る",
+    "しいまとい白い",        # 上の惹句が崩れて読まれた形（かな→漢字→かな）
+    "しいほどい町白り",
+])
+def test_惹句は氏名に採らない(phrase):
+    """名刺のキャッチコピーを氏名として確定しない。
+
+    実機で「難しいほど面白い」が氏名に採られ、本当の氏名（磯野敏寛）に競り勝った。
+    崩れて読まれると漢字が 1 つしか残らないので、かなで挟む形も見る。
+    """
+    lines = [
+        line("株式会社サンプル商会", 0, height=30),
+        line(phrase, 1, height=64),          # 惹句のほうが大きく刷ってある
+        line("磯野 敏寛", 2, height=48),
+        line("isono@example.co.jp", 3, height=20),
+    ]
+    fields = extract(lines, CARD_SIZE)
+    assert fields.person_name.value != phrase
+    assert fields.person_name.value == "磯野 敏寛"
+
+
+@pytest.mark.parametrize("name", [
+    "小野ゆかり",    # 漢字で始まり、末尾がひと続きのかな
+    "佐々木みゆき",
+    "あき子",        # かなで始まる氏名（そこで終わるので惹句の並びにはならない）
+    "なつ美",
+    "さくら",        # 全部かな
+])
+def test_かなを含む氏名は落とさない(name):
+    lines = [
+        line("株式会社サンプル商会", 0, height=30),
+        line(name, 1, height=60),
+        line("sample@example.co.jp", 2, height=20),
+    ]
+    fields = extract(lines, CARD_SIZE)
+    assert fields.person_name.value == name

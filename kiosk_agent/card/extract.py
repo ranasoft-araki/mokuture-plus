@@ -50,14 +50,24 @@ DOMAIN_RE = re.compile(r"^[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}$")
 # 英文氏名（"Alex Morgan" / "ALEX MORGAN"）
 EN_NAME_RE = re.compile(r"^[A-Z][a-zA-Z'\-]+(?:\s+[A-Z][a-zA-Z'\-]+){1,2}$")
 EN_NAME_UPPER_RE = re.compile(r"^[A-Z][A-Z'\-]+(?:\s+[A-Z][A-Z'\-]+){1,2}$")
-# 和文氏名（姓名の間の空白はあってもなくてもよい）
-JA_NAME_RE = re.compile(r"^[一-鿿぀-ヿ]{1,5}[\s　]?[一-鿿぀-ヿ]{1,5}$")
-# 「漢字のかたまり → ひらがな → 漢字のかたまり」は氏名ではなく語句。
-# 実機で名刺の惹句「難しいほど面白い」が氏名として採られ、本当の氏名（磯野敏寛）に
-# 競り勝った。JA_NAME_RE は 2〜10 文字の和文なら何でも通すので、ここで落とす。
-# 氏名にもひらがなは出るが（小野ゆかり・佐々木みゆき）、それは**末尾のひと続き**で
-# あって、漢字を挟み込む形にはならない。
-JA_PHRASE_RE = re.compile(r"[一-鿿][ぁ-ゖ]+[一-鿿]")
+# 和文氏名（姓名の間の空白はあってもなくてもよい）。
+# **踊り字「々」を文字範囲に含める。** 々(U+3005) は漢字の範囲(一-鿿)にもかなの
+# 範囲(぀-ヿ)にも入らないため、佐々木・野々村・佐々といった姓が一度も氏名候補に
+# ならなかった（佐々木は日本で 20 番目に多い姓）。
+JA_NAME_RE = re.compile(r"^[一-鿿぀-ヿ々]{1,5}[\s　]?[一-鿿぀-ヿ々]{1,5}$")
+# 語句（惹句・キャッチコピー）を氏名から外すための並び。JA_NAME_RE は 2〜10 文字の
+# 和文なら何でも通すので、ここで落とす。実機で名刺の惹句「難しいほど面白い」が
+# 氏名として採られ、本当の氏名（磯野敏寛）に競り勝った。
+#
+# 2 通りを見る。**氏名は「漢字で始まる」か「全部かな」のどちらか**で、ひらがなが
+# 漢字を挟んだり、ひらがなで始まって漢字を挟んだりはしない。
+#   ① 漢字 → ひらがな → 漢字   「難しいほど面白い」「心を込めて作る」
+#   ② ひらがな → 漢字 → ひらがな 「しいまとい白い」（①の惹句が崩れて読まれた形。
+#      漢字が 1 つしか残らず①をすり抜けた）
+# 氏名にもひらがなは出るが（小野ゆかり・佐々木みゆき）、それは**末尾のひと続き**。
+# 逆に「あき子」「なつ美」のようにかなで始まる氏名もあるが、そこで終わるので
+# ②には当たらない。
+JA_PHRASE_RE = re.compile(r"[一-鿿][ぁ-ゖ]+[一-鿿]|[ぁ-ゖ][一-鿿]+[ぁ-ゖ]")
 
 
 @dataclass
@@ -430,6 +440,25 @@ def _extract_company_strong(items: list[Item], email: str | None,
             return Field(value=text, source_line=it.idx,
                          confidence=_company_conf(min(0.98, 0.95 * it.conf), text, domain_key))
 
+    # 法人格の**頭が 1 文字欠けた**行も社名として拾う。「株式会社ラナソフト」が
+    # 「式会社ラナソフト」と読まれて社名候補から外れ、代わりに背景のゴミが
+    # 会社名に採られて空欄になった（実機で 2 枚。株は画数が多く行頭にあるので落ちやすい）。
+    # 残りが 3 文字以上あれば「式会社」「限会社」「同会社」のように法人格以外では
+    # まず現れない並びになるので、誤爆しない（辞書 33 件で確認）。
+    #
+    # **欠けた 1 文字は書き戻す。** 「式会社」で終わる法人格は株式会社しかない＝
+    # 推測ではなく確定なので、この模組の方針（「その並びがこうであるべき」と
+    # 分かっている場所だけ補正し、補正した値は信頼度を下げて返す）に沿う。
+    # 落とした形が複数の法人格に対応するもの（業協同組合 → 農業/事業）は補正しない。
+    for it in items:
+        if {"email", "website", "phone", "postal", "address"} & it.used_by:
+            continue
+        restored = _restore_suffix_head(it.text, jp)
+        if restored is not None:
+            it.used_by.add("company")
+            return Field(value=restored, source_line=it.idx,
+                         confidence=round(min(0.75, 0.72 * it.conf), 3))
+
     for it in items:
         if {"email", "website", "phone", "postal", "address"} & it.used_by:
             continue
@@ -439,6 +468,30 @@ def _extract_company_strong(items: list[Item], email: str | None,
                          confidence=_company_conf(min(0.95, 0.90 * it.conf), it.text, domain_key))
 
     return Field()
+
+
+def _restore_suffix_head(text: str, suffixes: list[str]) -> str | None:
+    """法人格の頭 1 文字が欠けた行なら、その 1 文字を書き戻した社名を返す。
+
+    「式会社ラナソフト」→「株式会社ラナソフト」。該当しなければ None。
+    書き戻すのは、落とした形から元の法人格が**1 つに決まる**ときだけ
+    （業協同組合 は農業協同組合と事業協同組合のどちらか分からないので補正しない）。
+    """
+    key = canon(text)
+    hits = [s for s in suffixes if len(s) >= 4 and canon(s[1:]) in key]
+    if not hits:
+        return None
+    # 落とした形が同じになる法人格が他にもあるなら、元を特定できない
+    trimmed = {canon(s[1:]) for s in hits}
+    for t in trimmed:
+        if len({s for s in suffixes if len(s) >= 4 and canon(s[1:]) == t}) > 1:
+            return text            # 曖昧。読めたまま返す
+    best = max(hits, key=len)
+    # canon は 1 文字→1 文字の置き換えなので、素の文字列でも同じ位置に現れる
+    pos = text.find(best[1:])
+    if pos < 0:
+        return text                # 正規化を通さないと一致しない形。そのまま返す
+    return text[:pos] + best[0] + text[pos:]
 
 
 def _website_domain_key(website: str | None) -> str:
