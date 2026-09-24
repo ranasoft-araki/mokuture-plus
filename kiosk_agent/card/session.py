@@ -32,6 +32,12 @@ class Session:
     created_at: float
     touched_at: float
     prev_quad: Quad | None = None
+    # 直前のフレームで四隅を「何から」決めたか（"edge" = 紙の縁 / "text" = 文字）。
+    # **これを持たないと、由来が切り替わっただけで動いたと判定されてしまう。**
+    # 文字のかたまりの四隅は名刺の縁より内側なので、静止したままでも
+    # 文字→縁 の切り替わりで四隅の平均移動量が 0.163（上限 0.030）まで跳ねる。
+    # 実機ではここで静止カウントが毎回ゼロに戻り、撮影に進めなかった。
+    prev_source: str | None = None
     steady_count: int = 0
     state: CaptureState = "no_card"
     frames: int = 0
@@ -39,6 +45,13 @@ class Session:
     result: ReadResult | None = None
     # 自動での撮り直しの回数。確認画面へ進んだ時点で数えるのをやめる。
     attempts: int = 0
+    # 1 行も読めなかった撮影の回数。名刺がまだ写っていないフレームを撮っただけ
+    # なので撮り直しとは別に数える（api.card_capture の説明を参照）。
+    blank_attempts: int = 0
+    # ボケていて OCR へ進めなかった回数。撮り直しの回数（attempts）とは別に数える。
+    # 規定回数を超えたら弾くのをやめる（どうしても合焦しない端末で出口が
+    # 無くならないようにする）。読めた撮影が 1 回あればゼロに戻す。
+    blur_rejects: int = 0
     # 確認画面を表示中（＝これ以上자動撮影しない）。撮り直しで False に戻す。
     awaiting_confirm: bool = False
     # 確認画面で利用者が直した項目名（元の OCR 値と区別して持つ）
@@ -58,6 +71,7 @@ class Session:
 
     def reset_tracking(self) -> None:
         self.prev_quad = None
+        self.prev_source = None
         self.steady_count = 0
         self.state = "no_card"
 
@@ -146,7 +160,7 @@ def _process_frame_locked(session: Session, bgr) -> dict:
     session.frames += 1
 
     detection = detect_card(bgr, session.prev_quad)
-    state, metrics = evaluate(bgr, detection, session.prev_quad)
+    state, metrics = evaluate(bgr, detection, session.prev_quad, session.prev_source)
 
     if state == "steady":
         session.steady_count += 1
@@ -154,6 +168,7 @@ def _process_frame_locked(session: Session, bgr) -> dict:
         session.steady_count = 0
 
     session.prev_quad = detection.quad if detection else None
+    session.prev_source = detection.source if detection else None
     session.state = state
     session.touch()
 
@@ -184,6 +199,10 @@ def _process_frame_locked(session: Session, bgr) -> dict:
         # 四隅は「送られてきたフレームの幅・高さに対する比」で返す。ブラウザ側の
         # 表示解像度が違っても、そのまま掛け算で枠を描ける。
         "quad": _quad_ratio(detection.quad, w, h) if detection else None,
+        # 四隅を何から決めたか（"edge"=紙の縁 / "text"=文字のかたまり / None=検出なし）。
+        # 画面のデバッグ表示がこれを出す。読み取れないときに「縁が出ていないのか、
+        # 文字も拾えていないのか」が分かると、直すべき場所が一つに絞れる。
+        "source": detection.source if detection else None,
         "metrics": _metrics_payload(metrics),
     }
 
@@ -202,4 +221,8 @@ def _metrics_payload(m: FrameMetrics) -> dict:
         "aspect": round(m.aspect, 3),
         "text_regions": m.text_regions,
         "motion": round(m.motion, 4),
+        # 以下は文字ベースの検出でだけ入る。大きさの判定がこの 2 つで決まるので、
+        # 「近づけてください」が出続ける原因を画面から読めるようにしておく。
+        "text_height": round(m.text_height, 1),
+        "text_clipped": m.text_clipped,
     }

@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from card import settings
-from card.detect import fill_ratio, quad_motion
+from card.detect import fill_ratio, quad_center_motion, quad_motion
 from card.types import CaptureState, Detection, FrameMetrics, Quad
 
 # 画面に出す案内。spec の文言をそのまま使う（en は補助表示用）。
@@ -98,6 +98,7 @@ def evaluate(
     bgr,
     detection: Detection | None,
     prev_quad: Quad | None = None,
+    prev_source: str | None = None,
 ) -> tuple[CaptureState, FrameMetrics]:
     """このフレーム単体の状態を返す。連続フレーム数の管理は session 側。
 
@@ -120,7 +121,30 @@ def evaluate(
 
     quad = detection.quad
     focus, bright, glare = region_metrics(bgr, quad)
-    motion = quad_motion(prev_quad, quad, short_side) if prev_quad is not None else 1.0
+    # 静止しているかの測り方は四隅の決め方で変える。文字から決めた四隅は名刺の角
+    # ではないので、そのまま平均移動量を取ると、名刺を止めていても端の文字の増減で
+    # 揺れているように見える（detect.quad_center_motion の実測を参照）。
+    is_text = detection.source == "text"
+    # 由来が切り替わったフレームは、前の四隅と比べても動きを測れない。文字から
+    # 決めた四隅は名刺の縁より内側なので、静止していても 文字→縁 で 0.163 動いた
+    # ことになり（上限 0.030）、必ず moving に落ちる。**測れないものを「動いた」と
+    # 断じない**。測れないだけなので、この 1 枚は動きの判定を見送る（他のゲートは
+    # そのまま効く）。次のフレームからは同じ由来どうしで測れる。
+    #
+    # **由来が「切り替わったと分かる」ときだけ見送る。** prev_source=None は
+    # 「呼び出し側が由来を持っていない」であって「切り替わった」ではないので、
+    # 従来どおり測る（ここを混同すると、由来を渡さない呼び出しで動き判定が
+    # 丸ごと効かなくなり、動いている名刺でも撮影してしまう）。
+    changed_source = prev_source is not None and prev_source != detection.source
+    if prev_quad is None:
+        motion = 1.0
+    elif changed_source:
+        motion = None
+    elif is_text:
+        motion = quad_center_motion(prev_quad, quad, short_side)
+    else:
+        motion = quad_motion(prev_quad, quad, short_side)
+    motion_limit = float(q["text_motion_max"] if is_text else q["motion_max"])
     base = detection.metrics
     fill = fill_ratio(quad, w, h)
     metrics = FrameMetrics(
@@ -131,7 +155,7 @@ def evaluate(
         fill_ratio=fill,
         aspect=base.aspect,
         text_regions=base.text_regions,
-        motion=motion,
+        motion=motion if motion is not None else -1.0,
         text_height=base.text_height,
         text_clipped=base.text_clipped,
     )
@@ -167,7 +191,7 @@ def evaluate(
         return "glare", metrics
     if focus < float(q["focus_min"]):
         return "blurry", metrics
-    if motion > float(q["motion_max"]):
+    if motion is not None and motion > motion_limit:
         return "moving", metrics
     return "steady", metrics
 

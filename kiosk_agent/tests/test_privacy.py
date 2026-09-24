@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import socket
 from pathlib import Path
@@ -230,3 +231,47 @@ def test_エラー応答に内部パスやスタックトレースを出さな�
     assert "Traceback" not in detail
     assert "\\" not in detail and "/home" not in detail
     assert str(AGENT_DIR) not in detail
+
+
+# ── 実機調整用のフレーム保存 ──────────────────────────────────────────────────
+# 画像を保存しないのがこの機能の前提なので、「既定では 1 バイトも書かない」ことと
+# 「明示的に設定したときだけ書く」ことを固定する。
+
+def test_フレーム保存は既定で無効(tmp_path, monkeypatch):
+    monkeypatch.delenv("CARD_DEBUG__DUMP_DIR", raising=False)
+    settings.reload()
+    from card import dump
+    assert dump.enabled() is False
+    assert dump.target_dir() is None
+    # 無効のまま呼んでも何も書かない
+    dump.save_capture(None, None, None)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_フレーム保存は設定したときだけ書き出す(tmp_path, monkeypatch, scene):
+    import cv2
+    from card.detect import detect_card
+    from card.pipeline import read_card
+    from card import dump
+
+    bgr, _truth, _spec = scene("landscape_ja")
+    monkeypatch.setenv("CARD_DEBUG__DUMP_DIR", str(tmp_path / "dump"))
+    settings.reload()
+    dump._seq = 0
+    assert dump.enabled() is True
+
+    det = detect_card(bgr)
+    res = read_card(bgr, det.quad if det else None)
+    dump.save_capture(bgr, det, res, {"accepted": True})
+
+    out = sorted(p.name for p in (tmp_path / "dump").iterdir())
+    assert "0001_capture.jpg" in out
+    assert "0001_region.jpg" in out
+    assert "0001.json" in out
+    meta = json.loads((tmp_path / "dump" / "0001.json").read_text(encoding="utf-8"))
+    assert meta["detection"]["source"] in ("edge", "text")
+    assert "company_name" in meta["result"]["fields"]
+
+    # 後片付けできること
+    assert dump.purge() > 0
+    assert list((tmp_path / "dump").iterdir()) == []

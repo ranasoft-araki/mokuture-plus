@@ -90,3 +90,7 @@ kiosk_agent/**/metrics.jsonl*
 # Misc
 .DS_Store
 *.log
+
+# 名刺読み取りの調整用フレーム保存(card.debug.dump_dir)。**撮影した名刺そのもの**が
+# 入るのでコミットしない。既定は無効で、調整が終わったらフォルダごと消すこと。
+kiosk_agent/card_dump/

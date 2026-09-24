@@ -69,8 +69,10 @@ let ST = {
   kiosk_calling_message: "担当者をお呼びしています",
   kiosk_complete_message: "担当者がご案内します",
   kiosk_menu_title: "ご用件をお選びください",
-  kiosk_welcome_qr_guide: "ご予約QRをお持ちの方はカメラへかざしてください",
-  kiosk_welcome_form_label: "QRをお持ちでない方はこちら",
+  // 「〜をお持ちの方は」(条件)ではなく「かざしてください」(動作)を主見出しにする。
+  // かざす対象(QR / 名刺)は見出しに書かず、案内カードのアイコンで示す。
+  kiosk_welcome_qr_guide: "カメラにかざしてください",
+  kiosk_welcome_form_label: "画面で入力して受付する",
   kiosk_idle_timeout_sec: 60,
   kiosk_complete_timeout_sec: 10,
   kiosk_style: "default",
@@ -413,8 +415,8 @@ async function mockFetch(method, path, body) {
     kiosk_welcome_message: "磯野木工所", kiosk_sub_message: "ご用件をお選びください",
     kiosk_calling_message: "担当者をお呼びしています", kiosk_complete_message: "担当者がご案内します",
     kiosk_menu_title: "ご用件をお選びください",
-    kiosk_welcome_qr_guide: "ご予約QRをお持ちの方はカメラへかざしてください",
-    kiosk_welcome_form_label: "QRをお持ちでない方はこちら",
+    kiosk_welcome_qr_guide: "カメラにかざしてください",
+    kiosk_welcome_form_label: "画面で入力して受付する",
     kiosk_idle_timeout_sec: 60, kiosk_complete_timeout_sec: 10,
     staff_list: ["山田 太郎", "佐藤 花子", "鈴木 一郎"], purpose_list: [],
     department_list: ["営業部", "総務部", "開発部"],
@@ -604,6 +606,7 @@ const ICO = {
   qr:        `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14h1M14 20h1M17 18v3M20 17v4"/></svg>`,
   truck:     `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>`,
   more:      `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`,
+  keyboard:  `<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 13.5h.01M10 13.5h.01M14 13.5h.01M18 13.5h.01M8 16.5h8"/></svg>`,
   card:      `<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="11" r="2"/><path d="M5 16c.6-1.3 1.7-2 3-2s2.4.7 3 2"/><path d="M14 9.5h5M14 13h5M14 16h3"/></svg>`,
   mic:       `<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 18v4M8 22h8"/></svg>`,
   mic_lg:    `<svg width="76" height="76" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 18v4M8 22h8"/></svg>`,
@@ -619,11 +622,61 @@ const ICO = {
   home:      `<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5"/></svg>`,
 };
 
-// ─── 「最初の画面に戻る」共通ボタン ────────────────────────────────────────────
-// 待機画面(idle)へ即戻す導線。各画面の「← 戻る」(一つ前へ戻る)とは別に、どの画面からでも
-// 最初の状態へ戻れるよう全画面の右上へ統一配置する(タッチ操作用に大型)。
+// ─── 「戻る」と「やめる」 ──────────────────────────────────────────────────────
+// 画面のヘッダは必ず [← 戻る] … [残り時間] … [やめる] の 3 つで構成する。
+//   左上「← 戻る」 = 必ず 1 つ前へ。画面か画面内のステップかは問わない
+//   右上「やめる」  = 待機画面へ
+// 以前は右上が「最初の画面に戻る」で、左の「← 戻る」と字面も形も似ていて役割を
+// 見分けられなかった。短くし、塗りを外して(戻る=面、やめる=線)見た目でも分ける。
+function backBtnHtml(id) {
+  return `<button id="${id}" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer;white-space:nowrap">← 戻る</button>`;
+}
 function homeBtnHtml(id) {
-  return `<button id="${id}" style="display:inline-flex;align-items:center;gap:12px;padding:24px 44px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:30px;font-weight:600;color:${T.sub};cursor:pointer;white-space:nowrap">${ICO.home}<span>最初の画面に戻る</span></button>`;
+  return `<button id="${id}" style="display:inline-flex;align-items:center;gap:12px;padding:22px 40px;background:transparent;border:2px solid ${T.border};border-radius:999px;font-size:28px;font-weight:600;color:${T.muted};cursor:pointer;white-space:nowrap">${ICO.home}<span>やめる</span></button>`;
+}
+
+// ─── 残り時間(全画面共通) ──────────────────────────────────────────────────────
+// 「待機画面に戻るまで ○秒」。以前は かざす面・ご用件・結果・完了 にしか無く、
+// **いちばん入力が消えて困る画面(受付フォーム・暗証番号・配達)にだけ出ていなかった**。
+// 置き場所もヘッダに統一する(戻る／やめるを押すか決める場所と同じ所に出す)。
+function idleMeterHtml(id) {
+  return `<div id="${id}" style="display:flex;align-items:center;gap:13px;color:${T.muted};font-size:20px;white-space:nowrap">
+    ${ICO.clock}<span data-lbl>待機画面に戻るまで</span>
+    <span data-cnt style="font-size:30px;font-weight:700;font-family:'JetBrains Mono',monospace;color:${T.sub};min-width:48px;text-align:right;transition:color .3s">–</span><span data-s>秒</span>
+    <div style="width:170px;height:8px;background:${T.border};border-radius:4px;overflow:hidden"><div data-bar style="width:100%;height:100%;background:${T.sub};border-radius:4px;transition:width 1s linear,background .3s"></div></div>
+  </div>`;
+}
+function paintIdleMeter(id, c, total) {
+  const root = document.getElementById(id);
+  if (!root) return;
+  const urgent = c <= 10, color = urgent ? T.urgent : T.sub;
+  const cnt = root.querySelector("[data-cnt]"), bar = root.querySelector("[data-bar]");
+  if (cnt) { cnt.textContent = c; cnt.style.color = color; }
+  if (bar) { bar.style.width = `${Math.max(0, (c / total) * 100)}%`; bar.style.background = color; }
+  root.querySelectorAll("[data-lbl],[data-s]").forEach(el => { el.style.color = urgent ? T.urgent : T.muted; });
+}
+
+// 入力のある画面(受付フォーム・暗証番号)は、黙って待機へ落とすと書きかけが消える。
+// 残り IDLE_PROMPT_AT 秒で一度だけ聞く。画面のどこを触っても延長する。
+const IDLE_PROMPT_AT = 15;
+function showIdlePrompt(onExtend) {
+  if (document.getElementById("idle-ask")) return;
+  const el = document.createElement("div");
+  el.id = "idle-ask";
+  el.style.cssText = "position:absolute;inset:0;z-index:9800;background:rgba(20,18,14,.55);display:flex;align-items:center;justify-content:center;font-family:'Noto Sans JP',Inter,system-ui,sans-serif";
+  el.innerHTML = `<div style="background:${T.canvas};border-radius:28px;box-shadow:0 30px 90px rgba(0,0,0,.45);padding:60px 80px;text-align:center;max-width:1100px">
+    <div style="font-size:52px;font-weight:700;color:${T.ink};letter-spacing:-1px">まだご利用中ですか？</div>
+    <div style="font-size:26px;color:${T.sub};margin-top:16px;line-height:1.6">このままですと、まもなく最初の画面に戻ります。<br>入力中の内容は消えてしまいます。</div>
+    <button id="idle-go" style="margin-top:40px;min-height:104px;padding:0 88px;background:${ST.brand_color};border:none;border-radius:18px;font-size:34px;font-weight:700;color:#fff;cursor:pointer;font-family:inherit">続ける</button>
+  </div>`;
+  sc.appendChild(el);
+  // ボタンでも、画面のどこを触っても延長する(押す場所を探させない)。
+  el.addEventListener("click", () => { hideIdlePrompt(); if (typeof onExtend === "function") onExtend(); });
+  CLEANUPS.push(hideIdlePrompt);
+}
+function hideIdlePrompt() {
+  const el = document.getElementById("idle-ask");
+  if (el) el.remove();
 }
 // ヘッダの無い画面(呼び出し中/結果/完了)向け: 画面ルート(position:relative)の右上へ絶対配置する。
 function homeBtnCornerHtml(id) {
@@ -718,7 +771,7 @@ function go(screen, data = {}) {
     if      (screen === "idle")           showIdle();
     else if (screen === "welcome")        showWelcome();
     else if (screen === "top")            showTop();
-    else if (screen === "reception")      showReception(data.purpose ?? "");
+    else if (screen === "reception")      showReception(data.purpose ?? "", data.cardValues ?? null, data.from ?? "top");
     else if (screen === "lockerMode")     showLockerMode();
     else if (screen === "locker")         showLocker(data.mode ?? "all");
     else if (screen === "delivery")       showDelivery();
@@ -878,6 +931,22 @@ const REDUCE_MOTION = (() => {
   catch { return false; }
 })();
 function devName() { return escHtml(localStorage.getItem(NAME_KEY) ?? "kiosk"); }
+
+// かざす面の案内文。受付設定に保存されている値が「以前の既定値そのもの」なら、
+// 現場が選んだ文面ではなく古い既定が残っているだけなので、新しい案内を使う。
+// (利用者が自分で書いた文面はそのまま尊重する)
+const LEGACY_WELCOME_COPY = {
+  kiosk_welcome_qr_guide: [
+    "ご予約QRをお持ちの方はカメラへかざしてください",
+    "ご予約QR、または名刺をカメラへかざしてください",
+  ],
+  kiosk_welcome_form_label: ["QRをお持ちでない方はこちら"],
+};
+function welcomeCopy(key, fallback) {
+  const v = (ST[key] || "").trim();
+  if (!v || (LEGACY_WELCOME_COPY[key] || []).includes(v)) return fallback;
+  return v;
+}
 // 管理画面での端末名変更をスケジュール応答から反映。変更があり待機画面表示中なら再描画してフッターを更新。
 function syncDeviceName(name) {
   if (typeof name !== "string" || !name || name === localStorage.getItem(NAME_KEY)) return;
@@ -1086,7 +1155,7 @@ function camGuideCard() {
       <div style="flex-shrink:0;height:100%;width:210px;display:flex;align-items:center;justify-content:center">${svg}</div>
       <div style="flex:1;min-width:0">
         <div style="font-size:44px;font-weight:700;color:${T.ink};line-height:1.25">画面のすぐ下が<br>カメラです</div>
-        <div style="font-size:22px;color:${T.sub};margin-top:16px;line-height:1.5">QRコードをこのカメラにかざしてください</div>
+        <div style="font-size:22px;color:${T.sub};margin-top:16px;line-height:1.5">ここにかざしてください</div>
       </div>
     </div>
   </div>`;
@@ -1187,64 +1256,327 @@ function showWelcome() {
   let idleId, countId, cooldownId = null, paused = false, disposed = false;
   let lastScanTs = 0;
   const QR_SCAN_INTERVAL_MS = 120;
+  // jsQR に渡す幅。映像のままだとメインスレッドを 1 回 689ms 占有してしまう。
+  const QR_SCAN_WIDTH = 480;
   const QR_UNSUPPORTED_COOLDOWN_MS = 3500;
   const QR_ERROR_COOLDOWN_MS = 2500;
+
+  // ── 名刺の同時待ち受け ──────────────────────────────────────────────────────
+  // QR と同じカメラ・同じフレーム列で名刺も待つ。利用者の動作を「カメラに何かを
+  // かざす」の 1 種類にするため、ここで名刺に気づけないと受付フォームまで 3 タッチ
+  // 進まないと名刺が使えない。QR は毎フレーム(120ms)、名刺は端末内 API への POST が
+  // 要るので間隔を空けて相乗りさせる。**名刺側が落ちても QR は止めない**
+  // (ようこそ画面の主役は予約 QR で、名刺はそこに足す機能)。
+  let cardSid = null, cardBusy = false, cardShooting = false, lastCardTs = 0;
+  let cardCanvas = null, cardCtx = null, cardShotCanvas = null, cardShotCtx = null;
+  // 検出間隔は 2 段階。**探している間は控えめ、掴んだら詰める。**
+  // 自動撮影には「条件を満たしたフレームが連続 3 枚」要る(stable_frames)ので、
+  // 間隔がそのまま待ち時間になる。320ms のままだと緑になってから撮影まで 0.64 秒
+  // かかり、その間に手が揺れて 1 枚でも外れるとカウントがゼロに戻る。
+  // 名刺を掴んでいる間は QR ではなく名刺を見に来ているので、そちらを優先してよい。
+  let cardTracking = false;            // 直近のフレームで名刺を掴んでいるか
+  const CARD_SCAN_INTERVAL_MS = 320;   // 探している間(QR と同じループに相乗りするので控えめ)
   function resetIdle() {
     clearTimeout(idleId); clearInterval(countId);
     let c = ST.kiosk_idle_timeout_sec;
-    const update = () => {
-      const cEl = document.getElementById("qr-cnt"), bEl = document.getElementById("qr-bar");
-      const urgent = c <= 10, color = urgent ? T.urgent : bc;
-      if (cEl) { cEl.textContent = c; cEl.style.color = color; }
-      if (bEl) { bEl.style.width = `${(c / ST.kiosk_idle_timeout_sec) * 100}%`; bEl.style.background = color; }
-      [document.getElementById("qr-cnt-lbl"), document.getElementById("qr-cnt-s")].forEach(el => { if (el) el.style.color = urgent ? T.urgent : T.muted; });
-    };
+    const update = () => paintIdleMeter("wel-idle", c, ST.kiosk_idle_timeout_sec);
     update();
     idleId = setTimeout(() => { anEnd("timeout"); stopStream(); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
     countId = setInterval(() => { c--; if (c <= 0) { clearInterval(countId); return; } update(); }, 1000);
   }
-  CLEANUPS.push(() => { disposed = true; clearTimeout(idleId); clearInterval(countId); clearTimeout(cooldownId); stopStream(); });
+  CLEANUPS.push(() => { disposed = true; clearTimeout(idleId); clearInterval(countId); clearTimeout(cooldownId); stopStream(); dropCardSession(); });
   function stopStream() { scanning = false; stream?.getTracks().forEach(t => t.stop()); stream = null; }
+
+  // セッションの破棄 = 端末メモリ上の名刺画像と抽出結果の破棄。画面を離れるときに必ず呼ぶ
+  // (失敗しても端末側の TTL で消えるが、待たせる理由は無い)。
+  function dropCardSession() {
+    if (!cardSid) return;
+    fetch(`/card/session/${cardSid}`, { method: "DELETE" }).catch(() => {});
+    cardSid = null;
+  }
+
+  // 名刺の待ち受けを始める。**ここから先は何が起きても例外を外に出さない** —
+  // startCamera の catch は「カメラを起動できませんでした」を出すので、名刺側の
+  // 失敗でその文言を出すと原因を取り違える。
+  async function initCardScan() {
+    try {
+      // 可否確認は boot で走らせているが、まだ解決していないことがある。
+      await ensureCardStatus();
+      if (disposed || !cardAvailable()) return;
+      // 可否が最初の描画に間に合わなかった場合だけ描き直す。案内カードは cam-box の
+      // 外にあるので refreshCam では届かず、画面ごと描き直す必要がある。
+      if (!document.getElementById("qr-card")) render();
+      await startCardSession();
+    } catch (e) { /* 名刺が使えないだけ。QR の読み取りは続ける */ }
+  }
+
+  // 名刺セッションを用意する。使えない端末・失敗した端末では黙って何もしない
+  // (QR の読み取りだけが今までどおり動く)。
+  async function startCardSession() {
+    if (disposed || cardSid || !cardAvailable()) return;
+    try {
+      const s = await cardApi("POST", "/card/session", {});
+      if (disposed || !s || !s.session_id) {
+        if (s && s.session_id) fetch(`/card/session/${s.session_id}`, { method: "DELETE" }).catch(() => {});
+        return;
+      }
+      cardSid = s.session_id;
+    } catch (e) { cardSid = null; }
+  }
+
+  function cardCfg() {
+    const cap = (CARD.status && CARD.status.capture) || {};
+    return {
+      detectW: cap.detect_frame_max_width || 640,
+      shotW: cap.capture_max_width || 2048,
+      trackMs: cap.detect_interval_ms || 120,   // 掴んでいる間の間隔(端末の設定値)
+    };
+  }
+
+  // 映像から 1 枚切り出して JPEG にする。検出用(小さく速く)と撮影用(大きく綺麗に)で
+  // キャンバスを分けて使い回す。毎フレーム作り直すと GC が効いて描画が引っかかる。
+  function cardFrameBlob(kind, width, quality) {
+    const vid = document.getElementById("qr-vid");
+    if (!vid || !vid.videoWidth) return Promise.resolve(null);
+    const w = Math.min(width, vid.videoWidth);
+    const h = Math.round(vid.videoHeight * (w / vid.videoWidth));
+    let cv, ctx;
+    if (kind === "detect") {
+      if (!cardCanvas) { cardCanvas = document.createElement("canvas"); cardCtx = cardCanvas.getContext("2d"); }
+      cv = cardCanvas; ctx = cardCtx;
+    } else {
+      if (!cardShotCanvas) { cardShotCanvas = document.createElement("canvas"); cardShotCtx = cardShotCanvas.getContext("2d"); }
+      cv = cardShotCanvas; ctx = cardShotCtx;
+    }
+    cv.width = w; cv.height = h;
+    ctx.drawImage(vid, 0, 0, w, h);
+    return new Promise(res => cv.toBlob(res, "image/jpeg", quality));
+  }
+
+  // 検出した名刺の四隅を映像の上に描く。**利用者が「読まれている」と分かるのは
+  // 文字ではなくこの枠**なので、名刺読み取り専用画面と同じ見え方に揃える:
+  // 白い破線 = まだ条件が揃っていない / 緑の実線＋薄い塗り＋四隅の点 = 撮影に入る。
+  function drawCardQuad(quad, state) {
+    const cv = document.getElementById("qr-card-ov");
+    const vid = document.getElementById("qr-vid");
+    const box = document.getElementById("cam-box");
+    if (!cv || !vid || !box) return;
+    const cw = box.clientWidth, ch = box.clientHeight;
+    if (!cw || !ch) return;
+    if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
+    const ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, cw, ch);
+    // QR を探している間だけ走査線を流す。名刺を掴んでいる間も流し続けると、
+    // 緑の枠と競合して「いま何を見ているのか」が読み取りにくくなる。
+    const line = document.getElementById("qr-scanline");
+    if (line) line.style.visibility = quad ? "hidden" : "visible";
+    if (!quad || !vid.videoWidth) return;
+    // 四隅は「送ったフレームに対する比」で返ってくる。ようこそ画面の映像は
+    // object-fit:cover(はみ出した分を切り落とす)なので、名刺専用画面の contain とは
+    // 逆に拡大率は大きいほうを採る(ox/oy は負になる＝画面の外へはみ出す)。
+    const scale = Math.max(cw / vid.videoWidth, ch / vid.videoHeight);
+    const dw = vid.videoWidth * scale, dh = vid.videoHeight * scale;
+    const ox = (cw - dw) / 2, oy = (ch - dh) / 2;
+    const pts = quad.map(([rx, ry]) => [ox + rx * dw, oy + ry * dh]);
+    const good = state === "steady" || state === "capturing";
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = good ? bc : "rgba(255,255,255,.85)";
+    ctx.setLineDash(good ? [] : [16, 12]);
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < 4; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+    ctx.stroke();
+    if (good) { ctx.fillStyle = "rgba(255,255,255,.10)"; ctx.fill(); }
+    ctx.setLineDash([]);
+    ctx.fillStyle = good ? bc : "rgba(255,255,255,.9)";
+    pts.forEach(([x, y]) => { ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill(); });
+  }
+
+  // 名刺の検出状況をカメラ映像の上に出す。これが無いと利用者は「読まれているか」が
+  // 分からず、認識される前に名刺を引っ込めてしまう。
+  // **名刺が見つかっていないときは何も出さない** — 予約 QR をかざしに来ただけの人に
+  // 「名刺を枠内に入れてください」と言い続けることになるため。
+  function setCardHint(r) {
+    const box = document.getElementById("qr-card");
+    if (!box) return;
+    const tracking = !!(r && (r.quad || r.state === "capturing"));
+    if (!tracking) { box.style.display = "none"; return; }
+    box.style.display = "flex";
+    const m = document.getElementById("qr-card-msg");
+    if (m) m.textContent = r.message || "";
+    const s = document.getElementById("qr-card-steady");
+    if (s) {
+      const need = r.steady_needed || 0, got = r.steady || 0;
+      let html = "";
+      for (let i = 0; i < need; i++) {
+        html += `<div style="width:22px;height:8px;border-radius:4px;background:${i < got ? "#fff" : "rgba(255,255,255,.35)"}"></div>`;
+      }
+      s.innerHTML = html;
+    }
+  }
+
+  function setCardHintText(msg) {
+    const box = document.getElementById("qr-card"), m = document.getElementById("qr-card-msg");
+    if (!box || !m) return;
+    box.style.display = "flex"; m.textContent = msg;
+    const s = document.getElementById("qr-card-steady");
+    if (s) s.innerHTML = "";
+  }
+
+  // 検出フレームを 1 枚送る。**await しない**で呼ぶ＝名刺の POST を待っている間も
+  // QR の検出は今までどおり 120ms ごとに回り続ける。
+  async function cardTick() {
+    if (!cardSid || cardBusy || cardShooting || !scanning || paused || submitting) return;
+    const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    if (now - lastCardTs < (cardTracking ? cardCfg().trackMs : CARD_SCAN_INTERVAL_MS)) return;
+    lastCardTs = now;
+    cardBusy = true;
+    try {
+      const blob = await cardFrameBlob("detect", cardCfg().detectW, 0.62);
+      if (!blob || !cardSid || cardShooting || disposed || !scanning) return;
+      const r = await cardPostImage(`/card/frame?session_id=${cardSid}`, blob);
+      if (disposed || cardShooting || !scanning) return;
+      cardTracking = !!r.quad;   // 見失ったら探すペースへ戻す
+      drawCardQuad(r.quad, r.state);
+      setCardHint(r);
+      if (r.should_capture) cardCapture();
+    } catch (e) {
+      // 1 フレームの失敗は無視して次へ。QR の読み取りは巻き込まない。
+    } finally {
+      cardBusy = false;
+    }
+  }
+
+  // 撮り直しに戻る。fresh=true はセッションを作り直す(撮影回数の数え直し)。
+  function resumeCardScan(fresh, waitMs) {
+    setTimeout(async () => {
+      if (disposed) return;
+      if (fresh) { dropCardSession(); await startCardSession(); }
+      if (disposed) return;
+      setCardHint(null);
+      drawCardQuad(null);
+      cardShooting = false;
+      cardTracking = false;
+      lastCardTs = 0;
+      if (stream && !paused && !submitting) { scanning = true; scanLoop(); }
+    }, waitMs);
+  }
+
+  // 自動撮影。読めたら既存の確認画面(openCardCapture)へ引き継ぐ。
+  async function cardCapture() {
+    if (cardShooting || !cardSid || disposed) return;
+    cardShooting = true;
+    scanning = false;             // 撮影中は QR も止める(同じ映像を奪い合わない)
+    setCardHintText("名刺を読み取っています");
+    let r = null;
+    try {
+      const blob = await cardFrameBlob("shot", cardCfg().shotW, 0.92);
+      if (!blob) throw new Error("no frame");
+      r = await cardPostImage(`/card/capture?session_id=${cardSid}`, blob);
+    } catch (e) {
+      if (!disposed) resumeCardScan(false, 800);
+      return;
+    }
+    if (disposed) return;
+
+    // 受付フォームに入る項目(氏名・会社名)が 1 つも取れていないときは確認画面を
+    // 出さずに待ちへ戻す。ようこそ画面は「名刺をかざすつもりの無い人」も立っている
+    // 画面なので、背景の文字を拾った空撮りで確認画面を出すと巻き込んでしまう。
+    const f = r.fields || {};
+    const usable = !!((f.person_name && f.person_name.value) || (f.company_name && f.company_name.value));
+    const wait = Math.round(((r.retry_cooldown_sec || 0.8)) * 1000);
+    if (!r.proceed) { resumeCardScan(false, wait); return; }   // 撮り直し(回数はサーバが数える)
+    if (!usable)    { resumeCardScan(true, wait); return; }    // 上限まで読めなかった → 待ちに戻す
+
+    // 読めた。**確認画面は挟まず**、受付フォームへ直接入れる。フォームには
+    // 名刺から入った項目の案内が出て、その場でキーボードで直せる。
+    anEnsureSession("card");
+    AN.inputCompleted("card_capture", "card");
+    setCardHintText("受付フォームに入力しています");
+    const values = {};
+    CARD_FIELD_ORDER.forEach(k => { values[k] = (r.fields[k] && r.fields[k].value) || ""; });
+    let payload;
+    try {
+      // confirm はサーバ側のセッション(名刺画像と抽出結果)の破棄も兼ねる
+      payload = await cardApi("POST", `/card/session/${cardSid}/confirm`, { values });
+    } catch (e) {
+      payload = { ...values };   // 確定APIが落ちても読み取った値は手元にある
+    }
+    cardSid = null;              // 破棄済み。cleanup での二重 DELETE を避ける
+    if (disposed) return;
+    stopStream();
+    cleanup();
+    go("reception", { cardValues: payload, from: "welcome" });
+  }
 
   function camContent() {
     if (submitting) return `<div style="text-align:center;color:#fff"><div style="width:64px;height:64px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:${bc};animation:spin .8s linear infinite;margin:0 auto 20px"></div><div style="font-size:20px;opacity:.7">受付処理中…</div></div>`;
     const corners = [[0,0,0],[0,1,90],[1,1,180],[1,0,270]].map(([tb,lr,rot]) =>
       `<div style="position:absolute;${tb ? "bottom" : "top"}:-3px;${lr ? "right" : "left"}:-3px;width:60px;height:60px;transform:rotate(${rot}deg);border-top:5px solid ${bc};border-left:5px solid ${bc};border-radius:14px 0 0 0"></div>`
     ).join("");
-    // 案内文はカメラ映像の上にオーバーレイ表示する。
-    const guide = `<div style="position:absolute;top:0;left:0;right:0;padding:34px 40px 60px;background:linear-gradient(180deg,rgba(0,0,0,.66),transparent);text-align:center;pointer-events:none">
-      <div style="font-size:40px;font-weight:700;color:#fff;line-height:1.35;text-shadow:0 2px 14px rgba(0,0,0,.6)">${escHtml(ST.kiosk_welcome_qr_guide || "ご予約QRをお持ちの方はカメラへかざしてください")}</div>
-      <div style="font-size:19px;color:rgba(255,255,255,.78);margin-top:10px;font-family:Inter,system-ui,sans-serif">Hold your reservation QR code over the camera</div>
-    </div>`;
+    // **案内文はカメラ映像の上に重ねない。** 映っているのが利用者自身の顔・白い壁・
+    // 照明だと白文字が読めず、それを補うための暗いグラデーションで画面も重くなる。
+    // 案内は映像の外(guideCardHtml)に出し、映像には枠と状態の表示だけを残す。
+    const withCard = cardAvailable();
+    // 名刺を認識している間だけ出る帯(既定は非表示)。QR だけの端末では作らない。
+    const cardHint = withCard
+      ? `<div id="qr-card" style="position:absolute;left:40px;right:40px;bottom:88px;display:none;align-items:center;gap:16px;padding:16px 26px;background:${bc}e6;border-radius:14px;color:#fff;font-size:26px;font-weight:600"><span id="qr-card-msg"></span><span style="flex:1"></span><span id="qr-card-steady" style="display:flex;gap:8px"></span></div>`
+      : "";
     const errBanner = errMsg ? `<div style="position:absolute;left:40px;right:40px;bottom:84px;padding:16px 22px;background:rgba(168,66,56,.94);border-radius:14px;color:#fff;font-size:22px;line-height:1.5;text-align:center">${escHtml(errMsg)}</div>` : "";
     return `
-<div style="position:absolute;inset:64px;border:3px dashed rgba(255,255,255,.2);border-radius:22px">${corners}${scanning ? `<div style="position:absolute;left:0;right:0;height:3px;background:${bc};box-shadow:0 0 24px ${bc};animation:scan-line 2s linear infinite"></div>` : ""}</div>
+<div style="position:absolute;inset:44px;border:3px dashed rgba(255,255,255,.2);border-radius:22px">${corners}${scanning ? `<div id="qr-scanline" style="position:absolute;left:0;right:0;height:3px;background:${bc};box-shadow:0 0 24px ${bc};animation:scan-line 2s linear infinite"></div>` : ""}</div>
 <video id="qr-vid" muted playsinline style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.85"></video>
-${guide}
+${withCard ? `<canvas id="qr-card-ov" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas>` : ""}
+${cardHint}
 ${errBanner}
 <div style="position:absolute;bottom:24px;left:0;right:0;display:flex;justify-content:center"><span style="display:inline-flex;align-items:center;gap:8px;background:rgba(0,0,0,.5);color:#fff;padding:10px 22px;border-radius:999px;font-size:17px"><span style="width:8px;height:8px;border-radius:50%;background:${bc};animation:dot-pulse 1.4s ease-in-out infinite"></span>${scanning ? "読み取り中…" : paused ? "少々お待ちください…" : "カメラ準備中…"}</span></div>`;
+  }
+
+  // 映像の外に出した案内。主見出しは**動作**(かざしてください)で、かざす対象は
+  // アイコンで示す。「QR をお持ちの方は」のような条件文にすると、利用者は自分が
+  // どれに当てはまるかを判断してからでないと動けない。
+  function guideCardHtml() {
+    const withCard = cardAvailable();
+    const ja = welcomeCopy("kiosk_welcome_qr_guide", "カメラにかざしてください");
+    const tgt = (svg, scale, jaT, enT) => `<div style="display:flex;align-items:center;gap:14px">
+      <div style="width:56px;height:56px;flex:none;display:flex;align-items:center;justify-content:center;color:${T.ink}"><div style="transform:scale(${scale})">${svg}</div></div>
+      <div><div style="font-size:36px;font-weight:700;color:${T.ink};line-height:1.2">${jaT}</div>
+      <div style="font-size:18px;color:${T.muted};font-family:Inter,system-ui,sans-serif">${enT}</div></div></div>`;
+    const targets = tgt(ICO.qr, 1.3, "ご予約のQRコード", "Reservation QR")
+      + (withCard ? `<div style="font-size:26px;color:${T.muted};font-weight:600">または</div>`
+                  + tgt(ICO.card, 1.73, "お名刺", "Business card") : "");
+    return `<div style="flex:none;background:${T.canvas};border:2px solid ${T.border};border-radius:24px;padding:26px 30px;text-align:center">
+      <div style="font-size:52px;font-weight:700;color:${T.ink};line-height:1.2;letter-spacing:-1px">${escHtml(ja)}</div>
+      <div style="font-size:20px;color:${T.muted};margin-top:6px;font-family:Inter,system-ui,sans-serif">Hold it over the camera</div>
+      <div style="margin-top:20px;padding-top:20px;border-top:1px solid ${T.border};display:flex;align-items:center;justify-content:center;gap:${withCard ? 40 : 0}px">${targets}</div>
+    </div>`;
   }
 
   function render() {
     sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
   <div style="padding:28px 80px 4px;flex-shrink:0;display:flex;align-items:center;gap:40px">
-    <button id="wel-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button>
     <div>
       <div style="font-size:16px;color:${T.muted};letter-spacing:4px;text-transform:uppercase;font-family:Inter,system-ui,sans-serif">WELCOME</div>
       <div style="font-size:56px;font-weight:600;color:${T.ink};letter-spacing:-2px;line-height:1.05">${escHtml(ST.kiosk_welcome_message || "ようこそ")}</div>
     </div>
     <div style="flex:1"></div>
+    ${idleMeterHtml("wel-idle")}
+    <div style="flex:1"></div>
     ${homeBtnHtml("wel-home")}
   </div>
   <div style="flex:1;padding:12px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center;min-height:0">
-    <div id="cam-box" style="background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;width:100%;height:760px;max-height:100%">${camContent()}</div>
+    <div style="display:flex;flex-direction:column;height:760px;max-height:100%;gap:18px;min-height:0">
+      ${guideCardHtml()}
+      <div id="cam-box" style="flex:1;min-height:0;background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center">${camContent()}</div>
+    </div>
     <div style="display:flex;flex-direction:column;height:760px;max-height:100%;gap:20px">
       ${camGuideCard()}
       <button id="wel-form" style="flex:1;min-height:0;width:100%;background:${T.dark};border:none;border-radius:28px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center;padding:28px 24px">
-        <div style="width:112px;height:112px;flex-shrink:0;border-radius:30px;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.1)">${ICO.reception}</div></div>
+        <div style="width:112px;height:112px;flex-shrink:0;border-radius:30px;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.1)">${ICO.keyboard}</div></div>
         <div>
-          <div style="font-size:44px;font-weight:700;color:#fff;line-height:1.15;white-space:nowrap">${escHtml(ST.kiosk_welcome_form_label || "QRをお持ちでない方はこちら")}</div>
-          <div style="font-size:23px;color:rgba(255,255,255,.74);margin-top:12px;line-height:1.5">ご予約の無い方・お荷物の配達、ロッカーのご利用</div>
+          <div style="font-size:44px;font-weight:700;color:#fff;line-height:1.15;white-space:nowrap">${escHtml(welcomeCopy("kiosk_welcome_form_label", "画面で入力して受付する"))}</div>
+          <div style="font-size:23px;color:rgba(255,255,255,.74);margin-top:12px;line-height:1.5">${cardAvailable() ? "QR も名刺もお持ちでない方" : "QR をお持ちでない方"} ／ お荷物の配達・ロッカー</div>
         </div>
         <div style="color:rgba(255,255,255,.55);transform:scale(1.6)">${ICO.arrow_lg}</div>
       </button>
@@ -1252,14 +1584,15 @@ ${errBanner}
     </div>
   </div>
   <div style="padding:16px 80px 28px;display:flex;align-items:center;color:${T.muted};font-size:22px;flex-shrink:0">
-    <span id="qr-clk" style="font-family:'JetBrains Mono',monospace;font-size:22px"></span><span style="flex:1"></span>
-    <div style="display:flex;align-items:center;gap:16px"><span id="qr-cnt-lbl">待機画面に戻るまで</span><span id="qr-cnt" style="font-size:32px;font-weight:700;font-family:'JetBrains Mono',monospace;color:${T.sub};min-width:52px;text-align:right;transition:color .3s">${ST.kiosk_idle_timeout_sec}</span><span id="qr-cnt-s">秒</span><div style="width:200px;height:8px;background:${T.border};border-radius:4px;overflow:hidden"><div id="qr-bar" style="width:100%;height:100%;background:${bc};border-radius:4px;transition:width 1s linear,background .3s"></div></div></div>
+    <span id="qr-clk" style="font-family:'JetBrains Mono',monospace;font-size:22px"></span>
     <span style="flex:1"></span><span style="font-family:'JetBrains Mono',monospace">${devName()}</span>
   </div>
 </div>`;
     rescale();
+    paintIdleMeter("wel-idle", ST.kiosk_idle_timeout_sec, ST.kiosk_idle_timeout_sec);
     document.getElementById("qr-clk").textContent = fmtClock();
-    document.getElementById("wel-back").addEventListener("click", () => { anEnd("cancelled"); stopStream(); cleanup(); go("idle"); });
+    // 「← 戻る」はここには置かない(1 つ前が無人の待機＝戻る概念が無い)。
+    // 以前は左上の「戻る」と右上の「最初の画面に戻る」が同じ待機画面へ行っていた。
     bindHomeBtn("wel-home");
     document.getElementById("wel-form").addEventListener("click", () => { anEnsureSession("touch"); stopStream(); cleanup(); go("top"); });
     if (MOCK) { const mb = document.getElementById("qr-mock"); if (mb) mb.addEventListener("click", () => { stopStream(); handleQR("appt:mock"); }); }
@@ -1276,13 +1609,20 @@ ${errBanner}
 
   async function startCamera() {
     try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } });
+      // 名刺の撮影もこの映像から切り出す。**1280x720 だと漢字の細部が潰れる** —
+      // 実機の撮影画像で会社名の漢字が 16〜18px しかなく、磯→暖 のような 1 文字
+      // 誤りが出ていた（1080p なら 24〜27px 相当＝縦横 1.5 倍・画素 2.25 倍）。
+      // 名刺読み取りの専用画面は元から 1920x1080 を要求していたので、そちらへ
+      // 統合したときに引き継ぎ漏れていた。ideal なので未対応のカメラでは落ちる。
+      // QR 走査は 480px へ落としてから渡すので、ここを上げても負荷は増えない。
+      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } });
       if (disposed) { s.getTracks().forEach(t => t.stop()); return; }
       stream = s;
       const vid = document.getElementById("qr-vid");
       if (vid) { vid.srcObject = stream; await vid.play(); }
       if (disposed) { stopStream(); return; }
       scanning = true; refreshCam(); scanLoop();
+      initCardScan();   // 名刺の待ち受け。失敗しても QR はこのまま動く
     } catch {
       if (!disposed) { errMsg = "カメラを起動できませんでした。ご予約のない方は「こちら」からお進みください。"; render(); }
     }
@@ -1296,18 +1636,30 @@ ${errBanner}
     const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
     if (now - lastScanTs < QR_SCAN_INTERVAL_MS) { if (scanning) requestAnimationFrame(scanLoop); return; }
     lastScanTs = now;
+    // 名刺はここに相乗りさせる。await しない＝名刺の検出結果を待つ間も QR は止まらない。
+    cardTick();
     if (typeof BarcodeDetector !== "undefined") {
       try {
         if (!_barcodeDet) _barcodeDet = new BarcodeDetector({ formats: ["qr_code"] });
         const codes = await _barcodeDet.detect(vid);
         if (codes.length > 0 && codes[0].rawValue) { scanning = false; await handleQR(codes[0].rawValue); return; }
       } catch {}
-    } else if (typeof jsQR !== "undefined") {
+    } else if (typeof jsQR !== "undefined" && !cardTracking) {
+      // jsQR は**同期実行でメインスレッドを止める**。実測(この開発PC)で 1 回あたり
+      //   1280x720 = 689ms / 640x360 = 160ms / 480x270 = 96ms
+      // で、映像のまま(1280x720)を 120ms ごとに回すとメインスレッドが埋まり、
+      // 名刺の検出フレームが 2 秒に 1 枚しか流れなくなっていた(静止 3 連続に永久に
+      // 届かない)。QR は画面にかざす大きさなので 480px 幅あれば読める。
+      // **名刺を掴んでいる間(cardTracking)は QR を見ない** — その人は QR ではなく
+      // 名刺を出しに来ているので、空いた時間を名刺の検出に回す。
+      // BarcodeDetector がある端末(ネイティブ実装)は従来どおり毎フレーム見る。
       if (!_qrCanvas) { _qrCanvas = document.createElement("canvas"); _qrCtx = _qrCanvas.getContext("2d", { willReadFrequently: true }); }
-      _qrCanvas.width = vid.videoWidth || 640; _qrCanvas.height = vid.videoHeight || 480;
-      _qrCtx.drawImage(vid, 0, 0);
-      const imageData = _qrCtx.getImageData(0, 0, _qrCanvas.width, _qrCanvas.height);
-      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+      const vw = vid.videoWidth || 640, vh = vid.videoHeight || 480;
+      const qw = Math.min(QR_SCAN_WIDTH, vw), qh = Math.max(1, Math.round(vh * (qw / vw)));
+      if (_qrCanvas.width !== qw || _qrCanvas.height !== qh) { _qrCanvas.width = qw; _qrCanvas.height = qh; }
+      _qrCtx.drawImage(vid, 0, 0, qw, qh);
+      const imageData = _qrCtx.getImageData(0, 0, qw, qh);
+      const code = jsQR(imageData.data, qw, qh, { inversionAttempts: "dontInvert" });
       if (code) { scanning = false; await handleQR(code.data); return; }
     }
     if (scanning) requestAnimationFrame(scanLoop);
@@ -1409,16 +1761,22 @@ function showTop() {
     : "";
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;position:relative">
   ${logoOverlay}
-  <div style="padding:48px 80px 0;flex-shrink:0;display:flex;align-items:flex-end;gap:32px">
+  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center;gap:24px">
+    ${backBtnHtml("top-back")}
+    <div style="flex:1"></div>
+    ${idleMeterHtml("top-idle")}
+    <div style="flex:1"></div>
+    ${homeBtnHtml("top-home")}
+  </div>
+  <div style="padding:20px 80px 0;flex-shrink:0;display:flex;align-items:flex-end;gap:32px">
     <div>
       <div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px;line-height:1.1">${escHtml(ST.kiosk_menu_title || "ご用件をお選びください")}</div>
       <div style="font-size:38px;color:${T.muted};font-family:Inter,system-ui,sans-serif;letter-spacing:1px;margin-top:8px">Please select</div>
       <div style="width:72px;height:3px;background:${bc};border-radius:2px;margin-top:16px;transform-origin:left;animation:line-draw .7s .15s cubic-bezier(.2,.9,.3,1) both"></div>
     </div>
     <div style="flex:1"></div>
-    <div style="align-self:flex-start">${homeBtnHtml("top-home")}</div>
   </div>
-  <div id="tiles" style="flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:28px;padding:44px 80px;min-height:0">
+  <div id="tiles" style="flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:28px;padding:26px 80px 30px;min-height:0">
     ${TILES.map((t, i) => `<button data-ti="${i}" data-ev="top-${t.screen}" style="background:${t.primary ? T.dark : T.canvas};color:${t.primary ? "#fff" : T.ink};border:2px solid ${t.primary ? T.dark : T.border};border-radius:28px;padding:56px 44px;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;position:relative;cursor:pointer;text-align:left;overflow:hidden">
       <div style="width:150px;height:150px;border-radius:32px;background:${t.primary ? "rgba(255,255,255,.1)" : bc + "1a"};color:${t.primary ? "#fff" : bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.15)">${t.icon}</div></div>
       <div>
@@ -1433,8 +1791,6 @@ function showTop() {
   <div style="padding:0 80px 34px;display:flex;align-items:center;color:${T.muted};font-size:22px;flex-shrink:0">
     <span id="top-clk" style="font-family:'JetBrains Mono',monospace;font-size:22px"></span>
     <span style="flex:1"></span>
-    <div style="display:flex;align-items:center;gap:16px"><span id="top-cnt-lbl">待機画面に戻るまで</span><span id="top-cnt" style="font-size:32px;font-weight:700;font-family:'JetBrains Mono',monospace;color:${T.sub};min-width:52px;text-align:right;transition:color .3s">${ST.kiosk_idle_timeout_sec}</span><span id="top-cnt-s">秒</span><div style="width:200px;height:8px;background:${T.border};border-radius:4px;overflow:hidden"><div id="top-bar" style="width:100%;height:100%;background:${T.sub};border-radius:4px;transition:width 1s linear,background .3s"></div></div></div>
-    <span style="flex:1"></span>
     <span style="font-family:'JetBrains Mono',monospace">${devName()}</span>
   </div>
 </div>`;
@@ -1443,18 +1799,14 @@ function showTop() {
   document.getElementById("top-clk").textContent = fmtClock();
   every(30000, () => { const c = document.getElementById("top-clk"); if (c) c.textContent = fmtClock(); });
   bindHomeBtn("top-home");
+  // 1 つ前はかざす面。QR や名刺をかざし直したい人がここで行き止まりになっていた。
+  document.getElementById("top-back").addEventListener("click", () => { cleanup(); go("welcome"); });
 
   let idleId, countId;
   function resetIdle() {
     clearTimeout(idleId); clearInterval(countId);
     let c = ST.kiosk_idle_timeout_sec;
-    const update = () => {
-      const cEl = document.getElementById("top-cnt"), bEl = document.getElementById("top-bar");
-      const urgent = c <= 10, color = urgent ? T.urgent : T.sub;
-      if (cEl) { cEl.textContent = c; cEl.style.color = color; }
-      if (bEl) { bEl.style.width = `${(c / ST.kiosk_idle_timeout_sec) * 100}%`; bEl.style.background = color; }
-      [document.getElementById("top-cnt-lbl"), document.getElementById("top-cnt-s")].forEach(el => { if (el) el.style.color = urgent ? T.urgent : T.muted; });
-    };
+    const update = () => paintIdleMeter("top-idle", c, ST.kiosk_idle_timeout_sec);
     update();
     idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
     countId = setInterval(() => { c--; if (c <= 0) { clearInterval(countId); return; } update(); }, 1000);
@@ -1480,10 +1832,20 @@ function showTop() {
 function showLockerMode() {
   const bc = ST.brand_color;
   let idleId;
-  function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
-  CLEANUPS.push(() => clearTimeout(idleId));
+  let countId = null, idleLeft = ST.kiosk_idle_timeout_sec;
+  function resetIdle() {
+    clearTimeout(idleId); clearInterval(countId);
+    idleLeft = ST.kiosk_idle_timeout_sec;
+    paintIdleMeter("lm-idle", idleLeft, ST.kiosk_idle_timeout_sec);
+    idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
+    countId = setInterval(() => {
+      idleLeft--; if (idleLeft <= 0) { clearInterval(countId); return; }
+      paintIdleMeter("lm-idle", idleLeft, ST.kiosk_idle_timeout_sec);
+    }, 1000);
+  }
+  CLEANUPS.push(() => { clearTimeout(idleId); clearInterval(countId); });
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center"><button id="lm-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button><div style="flex:1"></div>${homeBtnHtml("lm-home")}</div>
+  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center;gap:24px">${backBtnHtml("lm-back")}<div style="flex:1"></div>${idleMeterHtml("lm-idle")}<div style="flex:1"></div>${homeBtnHtml("lm-home")}</div>
   <div style="padding:14px 80px 0;flex-shrink:0"><div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">ロッカーのご利用</div><div style="font-size:36px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Lockers</div></div>
   <div data-stagger style="flex:1;display:flex;align-items:center;justify-content:center;gap:44px;padding:0 80px;min-height:0">
     <button id="lm-store" style="width:620px;height:520px;border-radius:32px;border:3px solid ${bc};background:#eef4ee;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;cursor:pointer;text-align:center;padding:0 40px">
@@ -1500,6 +1862,7 @@ function showLockerMode() {
 </div>`;
   rescale();
   resetIdle();
+  paintIdleMeter("lm-idle", idleLeft, ST.kiosk_idle_timeout_sec);
   onSc("click", resetIdle);
   document.getElementById("lm-back").addEventListener("click", () => { cleanup(); go("top"); });
   bindHomeBtn("lm-home");
@@ -1526,9 +1889,19 @@ function showLocker(mode) {
   let idleId, resultTimer = null, lastView = "loading";
   let doorWatchId = null, doorOpenedSinceWait = false, doorAutoAdvancing = false;
 
+  let countId = null, idleLeft = ST.kiosk_idle_timeout_sec;
+  const paintIdle = () => paintIdleMeter("lk-idle", idleLeft, ST.kiosk_idle_timeout_sec);
   function resetIdle() {
-    clearTimeout(idleId);
+    clearTimeout(idleId); clearInterval(countId); hideIdlePrompt();
+    idleLeft = ST.kiosk_idle_timeout_sec;
+    paintIdle();
     idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
+    countId = setInterval(() => {
+      idleLeft--; if (idleLeft <= 0) { clearInterval(countId); return; }
+      paintIdle();
+      // 暗証番号を入れている途中で黙って消さない(入れ直しは負担が大きい)。
+      if (idleLeft === IDLE_PROMPT_AT && (view === "pininput" || view === "pinset")) showIdlePrompt(resetIdle);
+    }, 1000);
   }
   function stopDoorWatch() {
     if (doorWatchId) {
@@ -1583,7 +1956,7 @@ function showLocker(mode) {
   }
 
   const shell = (inner, backTo) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center"><button id="lk-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button><div style="flex:1"></div>${homeBtnHtml("lk-home")}</div>
+  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center;gap:24px">${backBtnHtml("lk-back")}<div style="flex:1"></div>${idleMeterHtml("lk-idle")}<div style="flex:1"></div>${homeBtnHtml("lk-home")}</div>
   ${inner}
 </div>`;
 
@@ -1672,11 +2045,17 @@ function showLocker(mode) {
       </div>`);
     }
     rescale();
+    paintIdle();   // render() は resetIdle() のあとに innerHTML を差し替えるので描き戻す
     if (view !== lastView) { lastView = view; softEnter(sc.firstElementChild); }  // view切替時のみ立ち上げ(PIN連打では動かさない)
 
     const back = document.getElementById("lk-back");
-    // モード指定時(store/pickup)はロッカーモード選択へ、旧allは受付メニューへ戻る。
-    if (back) back.addEventListener("click", () => { cleanup(); go(mode === "all" ? "top" : "lockerMode"); });
+    // 「戻る」は必ず 1 つ前へ。画面内のステップも 1 つずつ戻す。
+    // 以前は暗証番号の画面からでも一気に外(モード選択)へ出ていたので、口を押し
+    // 間違えただけの人がモード選択からやり直しになっていた。
+    if (back) back.addEventListener("click", () => {
+      if (view === "pininput" || view === "pinset") { pin = ""; err = ""; sel = null; view = "grid"; render(); return; }
+      cleanup(); go(mode === "all" ? "top" : "lockerMode");
+    });
     bindHomeBtn("lk-home");
 
     if (view === "grid") {
@@ -1836,11 +2215,22 @@ function showDelivery() {
   let view = "loading";  // loading | choose | pick | openwait | sending | result | error
   let sel = null, err = "", resultTitle = "", resultSub = "";
   let idleId, resultTimer = null, callId = null, lastView = "loading";
-  function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
-  CLEANUPS.push(() => { clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); });
+  let countId = null, idleLeft = ST.kiosk_idle_timeout_sec;
+  const paintIdle = () => paintIdleMeter("dl-idle", idleLeft, ST.kiosk_idle_timeout_sec);
+  function resetIdle() {
+    clearTimeout(idleId); clearInterval(countId);
+    idleLeft = ST.kiosk_idle_timeout_sec;
+    paintIdle();
+    idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
+    countId = setInterval(() => {
+      idleLeft--; if (idleLeft <= 0) { clearInterval(countId); return; }
+      paintIdle();
+    }, 1000);
+  }
+  CLEANUPS.push(() => { clearTimeout(idleId); clearInterval(countId); if (resultTimer) clearTimeout(resultTimer); });
 
   const shell = (inner) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center"><button id="dl-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button><div style="flex:1"></div>${homeBtnHtml("dl-home")}</div>
+  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center;gap:24px">${backBtnHtml("dl-back")}<div style="flex:1"></div>${idleMeterHtml("dl-idle")}<div style="flex:1"></div>${homeBtnHtml("dl-home")}</div>
   ${inner}
 </div>`;
 
@@ -1909,6 +2299,7 @@ function showDelivery() {
       </div>`);
     }
     rescale();
+    paintIdle();   // render() は resetIdle() のあとに innerHTML を差し替えるので描き戻す
     if (view !== lastView) { lastView = view; softEnter(sc.firstElementChild); }  // view切替時のみ立ち上げ
 
     const back = document.getElementById("dl-back");
@@ -2019,6 +2410,24 @@ function showDelivery() {
 // 確認せずに受付が確定することはない。
 const CARD = { status: null, checked: false };
 
+// ?carddebug=1 で読み取り画面に状態と数値を重ねて出す(調整・実機調査用)。MOCK と同じく
+// 明示オプトインを localStorage に覚える。解除は ?carddebug=0。
+// 案内文言だけでは「検出できていない」のか「フレームの送信自体が失敗している」のかを
+// 区別できない(送信に失敗したフレームは黙って捨てるので、初期文言が残り続ける)。
+// 実機の Chromium はキオスク表示でアドレスバーが無いので、設定画面(Ctrl+Shift+M)と
+// 同じ作法でキーボードからも切り替えられるようにしてある(Ctrl+Shift+D)。
+const CARD_DEBUG_KEY = "mokuture_card_debug";
+let CARD_DEBUG = (() => {
+  const p = new URLSearchParams(location.search);
+  if (p.has("carddebug")) {
+    const v = p.get("carddebug");
+    const on = v !== "0" && v !== "false";
+    try { on ? localStorage.setItem(CARD_DEBUG_KEY, "1") : localStorage.removeItem(CARD_DEBUG_KEY); } catch {}
+    return on;
+  }
+  try { return localStorage.getItem(CARD_DEBUG_KEY) === "1"; } catch { return false; }
+})();
+
 // 名刺APIはローカルエージェント直通。MOCK(?mock=1)や未導入端末では status が取れず、
 // 導線そのものを出さない。
 async function cardApi(method, path, body) {
@@ -2029,7 +2438,7 @@ async function cardApi(method, path, body) {
   });
   if (!r.ok) {
     const e = await r.json().catch(() => ({ detail: r.statusText }));
-    throw new Error(e.detail ?? "card request failed");
+    throw cardError(r.status, e.detail);
   }
   return r.status === 204 ? null : r.json();
 }
@@ -2038,9 +2447,17 @@ async function cardPostImage(path, blob) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob });
   if (!r.ok) {
     const e = await r.json().catch(() => ({ detail: r.statusText }));
-    throw new Error(e.detail ?? "card request failed");
+    throw cardError(r.status, e.detail);
   }
   return r.json();
+}
+
+// HTTP ステータスを例外に残す。403(ループバック外)・404(セッション切れ)・500 を
+// 画面のデバッグ表示で見分けるため。文面は今までどおり detail をそのまま使う。
+function cardError(status, detail) {
+  const e = new Error(detail ?? "card request failed");
+  e.status = status;
+  return e;
 }
 
 // 起動時に一度だけ利用可否を調べる。失敗しても例外は投げない(名刺導線を隠すだけ)。
@@ -2056,40 +2473,15 @@ async function ensureCardStatus() {
 }
 function cardAvailable() { return !!(CARD.status && CARD.status.available); }
 
-// 項目名 → 画面表示。受付フォームに入る項目を上に並べる。
-const CARD_FIELD_LABELS = {
-  company_name:     ["会社名", "Company"],
-  person_name:      ["お名前", "Name"],
-  person_name_kana: ["ふりがな", "Name (kana)"],
-  department:       ["部署", "Department"],
-  title:            ["役職", "Title"],
-  email:            ["メール", "Email"],
-  phone:            ["電話番号", "Phone"],
-  mobile:           ["携帯電話", "Mobile"],
-  fax:              ["FAX", "Fax"],
-  postal_code:      ["郵便番号", "Postal code"],
-  address:          ["住所", "Address"],
-  website:          ["Webサイト", "Website"],
-};
+// 確定して受付フォームへ渡す項目の順序。**受付に使うのは お名前・会社名・部署 の
+// 3 つだけ**で、残りは confirm と同時に破棄される(applyCardValues 参照)。
 const CARD_FIELD_ORDER = [
   "company_name", "person_name", "person_name_kana", "department", "title",
   "email", "phone", "mobile", "fax", "postal_code", "address", "website",
 ];
-// 受付フォームへ引き継ぐ項目(この3つ以外は画面で確認するだけで、保存も送信もしない)
-const CARD_TO_FORM = { person_name: "visitor_name", company_name: "company", department: "department" };
-
-// 信頼度 → 表示色。しきい値は端末の設定(/card/status)から受け取る。
-function cardConfTone(conf, value, thresholds) {
-  const ok = (thresholds && thresholds.ok) ?? 0.85;
-  const warn = (thresholds && thresholds.warn) ?? 0.60;
-  if (!value) return { label: "未入力", color: T.muted, bg: T.panel, border: T.border };
-  if (conf >= ok) return { label: "", color: T.ink, bg: T.canvas, border: T.borderStrong };
-  if (conf >= warn) return { label: "要確認", color: "#8a6d1f", bg: "#fdf6e3", border: "#e3cf94" };
-  return { label: "要入力", color: T.urgent, bg: T.urgentBg, border: "rgba(168,66,56,.45)" };
-}
-
-// 名刺読み取りのオーバーレイを開く。確定されたら onConfirm(values) を呼ぶ。
-// 呼び出し側の画面(受付フォーム)はそのまま生きているので、入力途中の値は失われない。
+// 名刺読み取りのオーバーレイを開く(受付フォームの「名刺で入力」から)。
+// 読み取れたら**確認画面を出さずに** onConfirm(values) を呼んで閉じる。呼び出し側の
+// 受付フォームはそのまま生きているので、入力途中の値は失われない。
 function openCardCapture({ onConfirm }) {
   const bc = ST.brand_color;
   const st = CARD.status || {};
@@ -2097,12 +2489,10 @@ function openCardCapture({ onConfirm }) {
   const DETECT_INTERVAL = cap.detect_interval_ms || 120;
   const DETECT_WIDTH = cap.detect_frame_max_width || 640;
   const CAPTURE_WIDTH = cap.capture_max_width || 2048;
-  const THRESHOLDS = st.confidence || { ok: 0.85, warn: 0.6 };
 
   let sessionId = null, stream = null, closed = false, looping = false, busy = false;
   let result = null;                 // /card/capture の戻り
   let values = {};                   // 確認画面で編集中の値
-  let focusedField = null, kbMode = "kana", cands = [];
   let detectCanvas = null, detectCtx = null, shotCanvas = null, shotCtx = null;
 
   const root = document.createElement("div");
@@ -2122,8 +2512,75 @@ function openCardCapture({ onConfirm }) {
       sessionId = null;
     }
     root.remove();
+    if (dbg.el) { dbg.el.remove(); dbg.el = null; }
   }
   CLEANUPS.push(close);
+
+  // ── デバッグ表示(?carddebug=1) ─────────────────────────────────────────────
+  // 画面に出るのは案内文言だけなので、うまく読めないときに何を直せばよいか分からない。
+  // ここでは「検出の由来・品質の数値・直近の通信エラー・撮影結果」をそのまま出す。
+  // root は再描画のたびに innerHTML を捨てるので、パネルは root の外(sc)に置く。
+  const dbg = { el: null, frame: null, ms: 0, err: "", shot: "", times: [] };
+
+  function dbgSetup() {
+    if (!CARD_DEBUG || dbg.el) return;
+    dbg.el = document.createElement("div");
+    dbg.el.style.cssText = "position:absolute;right:26px;bottom:26px;z-index:9700;width:600px;padding:16px 18px;background:rgba(12,10,8,.88);color:#cfe9b6;border:1px solid rgba(255,255,255,.22);border-radius:14px;font-family:'JetBrains Mono',monospace;font-size:18px;line-height:1.6;white-space:pre-wrap;pointer-events:none";
+    sc.appendChild(dbg.el);
+    dbgPaint();
+  }
+
+  function dbgFrame(r, ms) {
+    if (!CARD_DEBUG) return;
+    dbg.frame = r; dbg.ms = ms;
+    const now = performance.now();
+    dbg.times.push(now);
+    while (dbg.times.length > 12) dbg.times.shift();
+    dbgPaint();
+  }
+
+  function dbgNote(where, e) {
+    if (!CARD_DEBUG) return;
+    const code = e && e.status ? e.status + " " : "";
+    dbg.err = `${new Date().toLocaleTimeString()} ${where}: ${code}${(e && e.message) || e || "失敗"}`;
+    dbgPaint();
+  }
+
+  function dbgCapture(r, ms) {
+    if (!CARD_DEBUG) return;
+    const filled = r && r.fields
+      ? CARD_FIELD_ORDER.filter(k => r.fields[k] && r.fields[k].value).length : 0;
+    dbg.shot = r
+      ? `受理=${r.accepted} 理由=${r.accept_reason} 進む=${r.proceed} ${r.attempt}/${r.max_attempts}回目 `
+        + `overall=${(r.overall ?? 0).toFixed(2)} 項目=${filled}/${CARD_FIELD_ORDER.length} ${Math.round(ms)}ms`
+      : `撮影に失敗 ${Math.round(ms)}ms`;
+    dbgPaint();
+  }
+
+  // 表示の組み立てで失敗しても読み取りは続ける。デバッグ表示はあくまで覗き窓で、
+  // ここで例外を投げると検出ループが止まり、調べたかった症状ごと変わってしまう。
+  function dbgPaint() {
+    try { dbgPaintInner(); } catch {}
+  }
+
+  function dbgPaintInner() {
+    if (!dbg.el) return;
+    const r = dbg.frame, m = (r && r.metrics) || {};
+    const t = dbg.times;
+    // 実測のフレーム数。間隔が 0 になることがある(時刻の解像度が粗い環境)ので割らない。
+    const span = t.length > 1 ? t[t.length - 1] - t[0] : 0;
+    const fps = span > 0 ? ((t.length - 1) * 1000 / span).toFixed(1) : "-";
+    const src = r ? (r.source === "text" ? "文字" : r.source === "edge" ? "縁" : "検出なし") : "-";
+    const num = (v, d = 2) => (typeof v === "number" ? v.toFixed(d) : "-");
+    dbg.el.textContent = [
+      `engine=${st.engine || "?"} ${DETECT_WIDTH}px/${DETECT_INTERVAL}ms  実測 ${fps}fps  1枚 ${Math.round(dbg.ms)}ms`,
+      r ? `state=${r.state} 由来=${src} 静止=${r.steady}/${r.steady_needed}` : "まだ応答がありません",
+      `focus=${num(m.focus, 0)} bright=${num(m.brightness, 0)} glare=${num(m.glare, 3)} motion=${num(m.motion, 3)}`,
+      `area=${num(m.area, 3)} fill=${num(m.fill, 3)} asp=${num(m.aspect)} 文字=${m.text_regions ?? "-"} 字高=${num(m.text_height, 1)}px${m.text_clipped ? " 見切れ" : ""}`,
+      dbg.shot ? `撮影: ${dbg.shot}` : "撮影: まだ",
+      dbg.err ? `直近のエラー: ${dbg.err}` : "通信エラー: なし",
+    ].join("\n");
+  }
 
   function stopCamera() {
     looping = false;
@@ -2140,7 +2597,7 @@ function openCardCapture({ onConfirm }) {
       <div style="font-size:20px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:2px">Scan your business card</div>
     </div>
     <div style="flex:1"></div>
-    <button id="cd-cancel" style="min-height:72px;padding:0 40px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:26px;font-weight:600;color:${T.sub};cursor:pointer;font-family:inherit">やめる</button>
+    <button id="cd-cancel" style="min-height:72px;padding:0 40px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:26px;font-weight:600;color:${T.sub};cursor:pointer;font-family:inherit">← 戻る</button>
   </div>
   <div style="flex:1;display:flex;gap:28px;padding:28px 40px;min-height:0">
     <div id="cd-box" style="position:relative;flex:1;background:#14110d;border-radius:20px;overflow:hidden;min-width:0">
@@ -2236,8 +2693,11 @@ function openCardCapture({ onConfirm }) {
       sessionId = started.session_id;
       looping = true;
       setMessage("名刺を枠内に入れてください", "Place your card inside the frame");
+      dbgSetup();
       loop();
     } catch (e) {
+      dbgSetup();
+      dbgNote("カメラ/セッション開始", e);
       if (!closed) setMessage("カメラを起動できませんでした", "Camera unavailable");
     }
   }
@@ -2269,7 +2729,9 @@ function openCardCapture({ onConfirm }) {
       try {
         const blob = await frameBlob("detect", DETECT_WIDTH, 0.62);
         if (blob && sessionId && looping) {
+          const t0 = performance.now();
           const r = await cardPostImage(`/card/frame?session_id=${sessionId}`, blob);
+          dbgFrame(r, performance.now() - t0);
           if (!closed && looping) {
             setMessage(r.message, r.message_en);
             setSteady(r.steady, r.steady_needed);
@@ -2277,7 +2739,11 @@ function openCardCapture({ onConfirm }) {
             if (r.should_capture) { busy = false; capture(false); return; }
           }
         }
-      } catch (e) { /* 1 フレームの失敗は無視して次へ */ }
+      } catch (e) {
+        // 1 フレームの失敗は無視して次へ。ただし黙って捨てると画面は初期文言のまま
+        // 止まり、「検出できない」と見分けがつかないのでデバッグ表示には残す。
+        dbgNote("フレーム送信", e);
+      }
       busy = false;
     }
     setTimeout(loop, DETECT_INTERVAL);
@@ -2292,11 +2758,13 @@ function openCardCapture({ onConfirm }) {
     if (closed || !sessionId) return;
     looping = false;
     setMessage("名刺を読み取っています", "Reading the card");
+    const shotAt = performance.now();
     try {
       const blob = await frameBlob("shot", CAPTURE_WIDTH, 0.92);
       if (!blob) throw new Error("no frame");
       const url = `/card/capture?session_id=${sessionId}${force ? "&force=1" : ""}`;
       const r = await cardPostImage(url, blob);
+      dbgCapture(r, performance.now() - shotAt);
       if (closed) return;
 
       if (!r.proceed) {
@@ -2308,8 +2776,10 @@ function openCardCapture({ onConfirm }) {
       result = r;
       values = {};
       CARD_FIELD_ORDER.forEach(k => { values[k] = (r.fields[k] && r.fields[k].value) || ""; });
-      renderConfirm();
+      confirm();
     } catch (e) {
+      dbgNote("撮影", e);
+      dbgCapture(null, performance.now() - shotAt);
       if (closed) return;
       retryScan(null);
     }
@@ -2336,252 +2806,23 @@ function openCardCapture({ onConfirm }) {
     setTimeout(loop, wait);
   }
 
-  // ── 確認画面 ───────────────────────────────────────────────────────────────
-  function fieldRow(key) {
-    const [ja, en] = CARD_FIELD_LABELS[key];
-    const f = (result && result.fields[key]) || { value: "", confidence: 0 };
-    const tone = cardConfTone(f.confidence, values[key], THRESHOLDS);
-    const pct = Math.round((f.confidence || 0) * 100);
-    const cands = (f.candidates || []).filter(c => c && c !== values[key]).slice(0, 3);
-    const toForm = CARD_TO_FORM[key];
-    return `
-<div style="margin-bottom:14px">
-  <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
-    <span style="font-size:21px;font-weight:600;color:${T.ink}">${ja}</span>
-    <span style="font-size:15px;color:${T.muted};font-family:Inter,system-ui,sans-serif">${en}</span>
-    ${toForm ? `<span style="font-size:14px;color:${bc};border:1px solid ${bc};border-radius:6px;padding:1px 7px">受付に入力</span>` : ""}
-    <span style="flex:1"></span>
-    ${tone.label ? `<span style="font-size:15px;font-weight:700;color:${tone.color}">${tone.label}</span>` : ""}
-    <span style="font-size:14px;color:${T.muted};font-family:'JetBrains Mono',monospace">${values[key] ? pct + "%" : "—"}</span>
-  </div>
-  <input id="cf-${key}" data-cf="${key}" type="text" value="${escHtml(values[key] || "")}"
-    style="width:100%;height:56px;background:${tone.bg};border:2px solid ${focusedField === key ? bc : tone.border};border-radius:12px;padding:0 16px;font-size:22px;color:${T.ink};outline:none;font-family:inherit">
-  ${cands.length ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:8px">${cands.map(c =>
-      `<button type="button" data-cand-for="${key}" data-cand-val="${escHtml(c)}" style="padding:6px 14px;background:${T.panel};border:1px solid ${T.borderStrong};border-radius:8px;font-size:17px;color:${T.sub};cursor:pointer;font-family:inherit">${escHtml(c)}</button>`
-    ).join("")}</div>` : ""}
-</div>`;
-  }
-
-  function renderConfirm() {
-    const img = result && result.card_image;
-    root.innerHTML = `
-<div style="width:1820px;height:1010px;background:${T.bg};border-radius:28px;box-shadow:0 30px 90px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden">
-  <div style="padding:22px 36px;border-bottom:1px solid ${T.border};display:flex;align-items:center;gap:18px;flex-shrink:0">
-    <div>
-      <div style="font-size:36px;font-weight:600;color:${T.ink};letter-spacing:-1px">読み取り結果をご確認ください</div>
-      <div style="font-size:18px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:2px">Please check the result</div>
-    </div>
-    <div style="flex:1"></div>
-    <div style="font-size:19px;color:${T.sub};text-align:right;line-height:1.5">
-      黄色=要確認 / 赤=要入力<br>
-      <span style="color:${T.muted};font-size:16px">違うところはタップして直せます</span>
-    </div>
-  </div>
-  <div style="flex:1;display:flex;gap:24px;padding:22px 36px;min-height:0">
-    <div style="width:560px;display:flex;flex-direction:column;gap:16px;flex-shrink:0">
-      <div style="background:${T.panel};border:2px solid ${T.border};border-radius:16px;padding:14px;display:flex;align-items:center;justify-content:center;min-height:0;flex:1">
-        ${img ? `<img src="${img}" alt="名刺" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:8px">` : `<div style="color:${T.muted};font-size:20px">画像なし</div>`}
-      </div>
-      <div style="background:${T.canvas};border:2px solid ${T.border};border-radius:16px;padding:16px 20px;font-size:18px;color:${T.sub};line-height:1.7;flex-shrink:0">
-        全体の読み取り精度 <span style="font-weight:700;color:${T.ink};font-family:'JetBrains Mono',monospace">${Math.round((result.ocr_confidence || 0) * 100)}%</span><br>
-        <span style="font-size:16px;color:${T.muted}">この画像は確定後に消去されます</span>
-      </div>
-    </div>
-    <div style="flex:1;display:flex;flex-direction:column;min-width:0">
-      <div id="cf-list" style="flex:1;overflow-y:auto;padding-right:10px;min-height:0">
-        ${CARD_FIELD_ORDER.map(fieldRow).join("")}
-      </div>
-      <div id="cf-kb" style="flex-shrink:0"></div>
-    </div>
-  </div>
-  <div style="padding:18px 36px 22px;border-top:1px solid ${T.border};display:flex;gap:16px;flex-shrink:0">
-    <button id="cf-retry" style="min-height:84px;padding:0 44px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:16px;font-size:27px;font-weight:600;color:${T.sub};cursor:pointer;font-family:inherit">再撮影</button>
-    <button id="cf-clear" style="min-height:84px;padding:0 44px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:16px;font-size:27px;font-weight:600;color:${T.sub};cursor:pointer;font-family:inherit">すべてクリア</button>
-    <div style="flex:1"></div>
-    <button id="cf-cancel" style="min-height:84px;padding:0 44px;background:transparent;border:2px solid ${T.border};border-radius:16px;font-size:27px;font-weight:600;color:${T.muted};cursor:pointer;font-family:inherit">やめる</button>
-    <button id="cf-ok" style="min-height:84px;padding:0 72px;background:${T.dark};border:none;border-radius:16px;font-size:30px;font-weight:600;color:#fff;cursor:pointer;font-family:inherit">この内容で入力する →</button>
-  </div>
-</div>`;
-
-    root.querySelectorAll("[data-cf]").forEach(el => {
-      el.addEventListener("input", () => { values[el.dataset.cf] = el.value; });
-      el.addEventListener("focus", () => {
-        focusedField = el.dataset.cf;
-        renderKeyboard(); markFocus();
-        // キーボードが出ると一覧が縮むので、編集中の項目を見える位置へ寄せる
-        setTimeout(() => el.scrollIntoView({ block: "nearest" }), 0);
-      });
-      el.addEventListener("touchstart", (e) => { e.preventDefault(); el.focus(); });
-    });
-    root.querySelectorAll("[data-cand-for]").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const key = btn.dataset.candFor;
-        values[key] = btn.dataset.candVal;
-        const input = g("cf-" + key);
-        if (input) input.value = values[key];
-      });
-    });
-    g("cf-retry").addEventListener("click", () => { restart(); });
-    g("cf-clear").addEventListener("click", () => {
-      CARD_FIELD_ORDER.forEach(k => { values[k] = ""; const el = g("cf-" + k); if (el) el.value = ""; });
-    });
-    g("cf-cancel").addEventListener("click", () => { close(); });
-    g("cf-ok").addEventListener("click", () => { confirm(); });
-    renderKeyboard();
-  }
-
-  function markFocus() {
-    root.querySelectorAll("[data-cf]").forEach(el => {
-      el.style.borderColor = el.dataset.cf === focusedField ? bc : T.borderStrong;
-    });
-  }
-
-  // ── 確認画面の簡易キーボード ───────────────────────────────────────────────
-  // 受付フォームの五十音キーボードと同じ考え方の縮小版。実機キオスクは OS の
-  // ソフトキーボードが出ないため、修正できるようにこれを備える。
-  const KB_HIRA = [
-    ["あ","か","さ","た","な","は","ま","や","ら","わ"],
-    ["い","き","し","ち","に","ひ","み","",  "り",""],
-    ["う","く","す","つ","ぬ","ふ","む","ゆ","る",""],
-    ["え","け","せ","て","ね","へ","め","",  "れ",""],
-    ["お","こ","そ","と","の","ほ","も","よ","ろ","を"],
-  ];
-  const KB_ABC = [
-    ["A","B","C","D","E","F","G","H","I","J"],
-    ["K","L","M","N","O","P","Q","R","S","T"],
-    ["U","V","W","X","Y","Z","-","_",".","@"],
-    ["a","b","c","d","e","f","g","h","i","j"],
-    ["k","l","m","n","o","p","q","r","s","t"],
-    ["u","v","w","x","y","z","/",":","+","~"],
-  ];
-  const KB_NUM = [
-    ["1","2","3","4","5","6","7","8","9","0"],
-    ["-","(",")","〒","#","*"," ",".","@","/"],
-  ];
-  const kataOf = (s) => s.replace(/[ぁ-ゖ]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60));
-  const hiraOf = (s) => s.replace(/[ァ-ヶ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60));
-  const KB_DAKU = { "か":"が","き":"ぎ","く":"ぐ","け":"げ","こ":"ご","さ":"ざ","し":"じ","す":"ず","せ":"ぜ","そ":"ぞ","た":"だ","ち":"ぢ","つ":"づ","て":"で","と":"ど","は":"ば","ひ":"び","ふ":"ぶ","へ":"べ","ほ":"ぼ","が":"か","ぎ":"き","ぐ":"く","げ":"け","ご":"こ","ざ":"さ","じ":"し","ず":"す","ぜ":"せ","ぞ":"そ","だ":"た","ぢ":"ち","づ":"つ","で":"て","ど":"と","ば":"は","び":"ひ","ぶ":"ふ","べ":"へ","ぼ":"ほ" };
-  const KB_HANDAKU = { "は":"ぱ","ひ":"ぴ","ふ":"ぷ","へ":"ぺ","ほ":"ぽ","ぱ":"は","ぴ":"ひ","ぷ":"ふ","ぺ":"へ","ぽ":"ほ" };
-  const KB_SMALL = { "あ":"ぁ","い":"ぃ","う":"ぅ","え":"ぇ","お":"ぉ","つ":"っ","や":"ゃ","ゆ":"ゅ","よ":"ょ","ぁ":"あ","ぃ":"い","ぅ":"う","ぇ":"え","ぉ":"お","っ":"つ","ゃ":"や","ゅ":"ゆ","ょ":"よ" };
-  const withKata = (m) => { const r = { ...m }; for (const k in m) r[kataOf(k)] = kataOf(m[k]); return r; };
-
-  function kbRows() {
-    if (kbMode === "abc") return KB_ABC;
-    if (kbMode === "num") return KB_NUM;
-    if (kbMode === "kata") return KB_HIRA.map(r => r.map(c => c ? kataOf(c) : ""));
-    return KB_HIRA;
-  }
-
-  function renderKeyboard() {
-    const pane = g("cf-kb");
-    if (!pane) return;
-    if (!focusedField) {
-      pane.innerHTML = `<div style="margin-top:10px;padding:18px;border-top:1px solid ${T.border};font-size:19px;color:${T.muted};text-align:center">直したい項目をタップするとキーボードが出ます</div>`;
-      return;
-    }
-    const [ja] = CARD_FIELD_LABELS[focusedField];
-    const key = (label, id, extra) => `<button type="button" ${id ? `id="${id}"` : ""} ${extra || ""} style="height:52px;min-width:52px;flex:1;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:22px;color:${T.ink};cursor:pointer;font-family:inherit">${label}</button>`;
-    const tab = (label, mode) => `<button type="button" data-kbmode="${mode}" style="height:44px;padding:0 18px;background:${kbMode === mode ? bc : T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:17px;font-weight:600;color:${kbMode === mode ? "#fff" : T.ink};cursor:pointer;font-family:inherit">${label}</button>`;
-    const rows = kbRows().map(row =>
-      `<div style="display:flex;gap:6px">${row.map(c => c ? key(c, "", `data-kbkey="${escHtml(c)}"`) : `<div style="flex:1;min-width:52px"></div>`).join("")}</div>`
-    ).join("");
-    const isKana = kbMode === "kana" || kbMode === "kata";
-    pane.innerHTML = `
-<div style="margin-top:10px;border-top:1px solid ${T.border};padding-top:12px">
-  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-    <span style="font-size:18px;color:${T.sub}">「${ja}」を入力中</span>
-    <span style="flex:1"></span>
-    ${tab("かな","kana")}${tab("カナ","kata")}${tab("ABC","abc")}${tab("123","num")}
-    <button type="button" id="kb-done" style="height:44px;padding:0 20px;background:${T.panel};border:1px solid ${T.borderStrong};border-radius:8px;font-size:17px;font-weight:600;color:${T.sub};cursor:pointer;font-family:inherit">閉じる</button>
-  </div>
-  <div style="display:flex;flex-direction:column;gap:6px">
-    ${rows}
-    <div style="display:flex;gap:6px">
-      ${isKana ? key("ん","kb-n") + key("゛","kb-daku") + key("゜","kb-handaku") + key("小","kb-small") + key("ー","kb-choon") + key("変換","kb-conv") : ""}
-      ${key("空白","kb-space")}
-      ${key("⌫","kb-bs")}
-    </div>
-  </div>
-  <div id="kb-cands" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px"></div>
-</div>`;
-    pane.querySelectorAll("[data-kbmode]").forEach(b =>
-      b.addEventListener("mousedown", e => { e.preventDefault(); kbMode = b.dataset.kbmode; renderKeyboard(); }));
-    const act = (e) => {
-      const btn = e.target.closest("button");
-      if (!btn || !pane.contains(btn)) return;
-      e.preventDefault();
-      if (btn.dataset.kbmode) return;
-      const input = g("cf-" + focusedField);
-      if (!input) return;
-      const k = btn.dataset.kbkey;
-      if (btn.id === "kb-done") { focusedField = null; renderKeyboard(); markFocus(); return; }
-      if (btn.dataset.candVal != null) { applyCand(btn.dataset.candVal); return; }
-      if (btn.id === "kb-conv") { convert(); return; }
-      if (btn.id === "kb-bs") input.value = input.value.slice(0, -1);
-      else if (btn.id === "kb-space") input.value += " ";
-      else if (btn.id === "kb-n") input.value += (kbMode === "kata" ? "ン" : "ん");
-      else if (btn.id === "kb-choon") input.value += "ー";
-      else if (btn.id === "kb-daku") input.value = modLast(input.value, withKata(KB_DAKU));
-      else if (btn.id === "kb-handaku") input.value = modLast(input.value, withKata(KB_HANDAKU));
-      else if (btn.id === "kb-small") input.value = modLast(input.value, withKata(KB_SMALL));
-      else if (k != null) input.value += k;
-      else return;
-      values[focusedField] = input.value;
-      if (btn.id !== "kb-conv") clearCands();
-    };
-    pane.addEventListener("mousedown", act);
-    pane.addEventListener("touchstart", act, { passive: false });
-  }
-
-  function modLast(v, map) {
-    if (!v) return v;
-    const last = v[v.length - 1];
-    return map[last] !== undefined ? v.slice(0, -1) + map[last] : v;
-  }
-  function clearCands() { const el = g("kb-cands"); if (el) el.innerHTML = ""; cands = []; }
-  function applyCand(val) {
-    const input = g("cf-" + focusedField);
-    if (!input) return;
-    input.value = input.value.replace(/[ぁ-ゖァ-ヶー]+$/, val);
-    values[focusedField] = input.value;
-    clearCands();
-  }
-  async function convert() {
-    const input = g("cf-" + focusedField);
-    if (!input) return;
-    const m = input.value.match(/[ぁ-ゖァ-ヶー]+$/);
-    if (!m) return;
-    let list = await deviceConvert(m[0], 60);
-    const hira = hiraOf(m[0]), kata = kataOf(hira);
-    for (const x of [hira, kata]) if (x && !list.includes(x)) list.push(x);
-    cands = [...new Set(list)].slice(0, 40);
-    const el = g("kb-cands");
-    if (el) el.innerHTML = cands.map(c =>
-      `<button type="button" data-cand-val="${escHtml(c)}" style="height:46px;padding:0 16px;background:${T.canvas};border:1px solid ${T.borderStrong};border-radius:8px;font-size:21px;color:${T.ink};cursor:pointer;font-family:inherit">${escHtml(c)}</button>`
-    ).join("");
-  }
-
-  // ── 確定 / やり直し ────────────────────────────────────────────────────────
+  // ── 確定 ──────────────────────────────────────────────────────────────────
+  // **確認画面は挟まない。** 返す先の受付フォームが同じ 3 項目(お名前・会社名・部署)を
+  // 編集できる画面なので、確認するだけの画面をもう 1 枚見せても利用者の手間が増える
+  // だけだった。読み取れなかった項目はフォームの案内文で伝える。
+  // confirm API はサーバ側のセッション(名刺画像と抽出結果)の破棄も兼ねる。
   async function confirm() {
-    const btn = g("cf-ok");
-    if (btn) { btn.disabled = true; btn.textContent = "確定しています…"; }
+    setMessage("受付フォームに入力しています", "Filling in the form");
     let payload = null;
     try {
       payload = await cardApi("POST", `/card/session/${sessionId}/confirm`, { values });
     } catch (e) {
-      // 確定APIが落ちても、画面で確認済みの値は使える（保存はもともとしない）
-      payload = { ...values, confirmed_by_user: true };
+      // 確定APIが落ちても読み取った値は手元にある(もともとどこにも保存しない)
+      payload = { ...values };
     }
     sessionId = null;         // confirm でサーバ側は破棄済み
     close();
     if (typeof onConfirm === "function") onConfirm(payload);
-  }
-
-  async function restart() {
-    if (sessionId) { fetch(`/card/session/${sessionId}`, { method: "DELETE" }).catch(() => {}); sessionId = null; }
-    result = null; values = {}; focusedField = null;
-    renderScan("カメラを準備しています");
-    startCamera();
   }
 
   renderScan();
@@ -3202,7 +3443,11 @@ function openVoiceInput({ initial, onApply, context }) {
 // 左=入力フォーム / 右=五十音表キーボード。列＝行(あ/か/さ…)の五十音表に、撥音ん・
 // 濁点゛・半濁点゜・小文字・長音ー・スペースのコントロール行を備える。ひらがな/カタカナ/ABC
 // を切替。OS標準キーボードは使わず(実機キオスクは非表示のため)、この内蔵キーボードで入力する。
-function showReception(initPurpose) {
+// initCard: ようこそ画面で名刺を読み取って来た場合の確定値。受付フォームを
+// 開いてから「名刺で入力」を押した場合と同じ経路で反映する。
+// from: 来た画面。「← 戻る」は必ず来た道へ返す(以前は常にご用件へ行っていたので、
+// 名刺でかざす面から直接来た人が、通っていない画面に出されていた)。
+function showReception(initPurpose, initCard, from) {
   const bc = ST.brand_color;
   const STAFF_LIST = Array.isArray(ST.staff_list) ? ST.staff_list.filter(Boolean) : [];
   const PURPOSE_LIST = Array.isArray(ST.purpose_list) ? ST.purpose_list.filter(Boolean) : [];
@@ -3242,8 +3487,23 @@ function showReception(initPurpose) {
   const SMALL = withKata({あ:"ぁ",い:"ぃ",う:"ぅ",え:"ぇ",お:"ぉ",つ:"っ",や:"ゃ",ゆ:"ゅ",よ:"ょ",わ:"ゎ",ぁ:"あ",ぃ:"い",ぅ:"う",ぇ:"え",ぉ:"お",っ:"つ",ゃ:"や",ゅ:"ゆ",ょ:"よ",ゎ:"わ"});
   const g = id => document.getElementById(id);
 
-  function resetIdle() { clearTimeout(idleId); idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000); }
-  CLEANUPS.push(() => clearTimeout(idleId));
+  // 五十音キーボードでの入力は 1 分を超えることがある。黙って待機へ落とさず、
+  // 残り 15 秒で一度聞く(IDLE_PROMPT_AT)。
+  let countId = null, idleLeft = ST.kiosk_idle_timeout_sec;
+  const paintIdle = () => paintIdleMeter("rec-idle", idleLeft, ST.kiosk_idle_timeout_sec);
+  function resetIdle() {
+    clearTimeout(idleId); clearInterval(countId); hideIdlePrompt();
+    idleLeft = ST.kiosk_idle_timeout_sec;
+    paintIdle();
+    idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
+    countId = setInterval(() => {
+      idleLeft--;
+      if (idleLeft <= 0) { clearInterval(countId); return; }
+      paintIdle();
+      if (idleLeft === IDLE_PROMPT_AT) showIdlePrompt(resetIdle);
+    }, 1000);
+  }
+  CLEANUPS.push(() => { clearTimeout(idleId); clearInterval(countId); });
   resetIdle();
 
   const addKey = (key) => {
@@ -3441,17 +3701,38 @@ function showReception(initPurpose) {
   // 確認画面で表示するだけで、端末にもサーバにも保存せず、ここで捨てる。
   function applyCardValues(v) {
     if (!v) return;
-    const applied = [];
-    if (v.person_name) { form.visitor_name = v.person_name; applied.push("お名前"); }
-    if (v.company_name) { form.company = v.company_name; applied.push("会社名"); }
+    // **確からしさの低い値は欄に入れない。**
+    // 抽出側は「裏付けが 1 つも無いが大きい文字だった」行も 0.45〜0.55 程度の
+    // 確からしさで返す（そういう設計で、確認画面が赤く「要入力」と出す前提だった）。
+    // 確認画面を廃止したので、その線引きをここで引く。必須のお名前に読み違えを
+    // 黙って入れるより、空のまま「読み取れませんでした」と言うほうが親切。
+    const TH = (CARD.status && CARD.status.confidence) || { ok: 0.85, warn: 0.60, fill_min: 0.45 };
+    const FILL_MIN = typeof TH.fill_min === "number" ? TH.fill_min : 0.45;
+    const CONF = v.field_confidence || {};
+    const confOf = (k) => (typeof CONF[k] === "number" ? CONF[k] : 1);   // 旧端末は従来どおり
+    const applied = [], unsure = [], dropped = [];
+    const take = (key, label, set) => {
+      const val = v[key];
+      if (!val) return;
+      const c = confOf(key);
+      if (c < FILL_MIN) { dropped.push(label); return; }   // 抽出も出さない水準＝入れない
+      set(val);
+      (c < TH.ok ? unsure : applied).push(label);           // ok 未満＝入れるが確認を促す
+    };
+    take("person_name", "お名前", (x) => { form.visitor_name = x; });
+    take("company_name", "会社名", (x) => { form.company = x; });
     // 部署は管理画面で登録された選択肢にあるものだけ反映する(自由入力欄が無いため)
-    if (v.department && DEPARTMENT_LIST.includes(v.department)) {
+    if (v.department && DEPARTMENT_LIST.includes(v.department) && confOf("department") >= FILL_MIN) {
       form.department = v.department;
       applied.push("部署");
     }
-    cardNote = applied.length
-      ? `名刺から ${applied.join("・")} を入力しました。違うところは右のキーボードで直してください。`
-      : "名刺から読み取れる情報がありませんでした。お手数ですが入力してください。";
+    const parts = [];
+    if (applied.length) parts.push(`名刺から ${applied.join("・")} を入力しました。`);
+    if (unsure.length) parts.push(`${unsure.join("・")} は読み取りが不確かです。ご確認ください。`);
+    if (dropped.length) parts.push(`${dropped.join("・")} は読み取れませんでした。`);
+    if (!parts.length) parts.push("名刺から読み取れる情報がありませんでした。");
+    if (applied.length || unsure.length || dropped.length) parts.push("右のキーボードで入力・修正できます。");
+    cardNote = parts.join("");
     errMsg = "";
     render();
   }
@@ -3502,7 +3783,9 @@ function showReception(initPurpose) {
       <div style="margin-top:16px;border-top:1px solid ${T.border};padding-top:14px;font-size:22px;color:${T.sub}">※営業・セールス・勧誘等のご訪問はお受けしておりません。</div>`;
     sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;position:relative">
   <div style="padding:28px 40px 0;flex-shrink:0;display:flex;align-items:center;gap:20px">
-    <button id="rec-back" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer">← 戻る</button>
+    ${backBtnHtml("rec-back")}
+    <div style="flex:1"></div>
+    ${idleMeterHtml("rec-idle")}
     <div style="flex:1"></div>
     ${homeBtnHtml("rec-home")}
   </div>
@@ -3554,7 +3837,7 @@ function showReception(initPurpose) {
     g("f-name").value = form.visitor_name;
     g("f-company").value = form.company;
     if (g("f-staff")) g("f-staff").value = form.staff;
-    g("rec-back").addEventListener("click", () => { cleanup(); go("top"); });
+    g("rec-back").addEventListener("click", () => { cleanup(); go(from === "welcome" ? "welcome" : "top"); });
     bindHomeBtn("rec-home");
     const cardBtn = g("rec-card");
     if (cardBtn) cardBtn.addEventListener("click", () => { resetIdle(); AN.inputStarted("card_capture", "card"); openCardCapture({ onConfirm: applyCardValues }); });
@@ -3620,6 +3903,7 @@ function showReception(initPurpose) {
     // キーボード初期化 + 操作ハンドラ登録（mousedown/touchstart 委譲）
     updateKeyboard();
     bindKeyboard();
+    paintIdle();   // 再描画でヘッダごと作り直されるので、残り時間を描き戻す
 
     // デフォルトでお名前フィールドにフォーカス（最初から文字入力できるように）
     focusedField = "f-name";
@@ -3662,6 +3946,10 @@ function showReception(initPurpose) {
   }
 
   render();
+
+  // ようこそ画面で名刺を読み取って来た場合は、その値が入った状態から始める
+  // (applyCardValues が案内文の表示と再描画まで持つ)。
+  if (initCard) applyCardValues(initCard);
 
   // boot 時の可否確認(ensureCardStatus / ensureVoiceStatus)がまだ終わっていない場合に備える。
   // 解決してからこの画面が生きていれば描き直して「名刺で入力」「音声で入力」を出す。
@@ -5123,6 +5411,24 @@ document.addEventListener("keydown", function(e) {
   if (e.ctrlKey && e.shiftKey && e.key === "M" && CURRENT_SCREEN !== "kiosk-settings") {
     showKioskSettings();
   }
+});
+
+// Ctrl+Shift+D → 名刺読み取りのデバッグ表示を切り替える(?carddebug=1 と同じ)。
+// 実機で読み取れないときに、案内文言だけでなく状態と数値を見るための保守用。
+// 次に名刺読み取りを開いたときから反映する(開いている画面には触らない)。
+document.addEventListener("keydown", function(e) {
+  if (!(e.ctrlKey && e.shiftKey && e.key === "D")) return;
+  CARD_DEBUG = !CARD_DEBUG;
+  try {
+    CARD_DEBUG ? localStorage.setItem(CARD_DEBUG_KEY, "1") : localStorage.removeItem(CARD_DEBUG_KEY);
+  } catch {}
+  const note = document.createElement("div");
+  note.textContent = CARD_DEBUG
+    ? "名刺読み取りのデバッグ表示: ON（次に開いたときから）"
+    : "名刺読み取りのデバッグ表示: OFF";
+  note.style.cssText = "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483647;pointer-events:none;background:rgba(29,26,21,.92);color:#fffefb;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;font-size:16px;padding:10px 22px;border-radius:999px";
+  document.body.appendChild(note);
+  setTimeout(() => note.remove(), 2600);
 });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────

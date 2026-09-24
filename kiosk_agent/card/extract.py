@@ -52,6 +52,12 @@ EN_NAME_RE = re.compile(r"^[A-Z][a-zA-Z'\-]+(?:\s+[A-Z][a-zA-Z'\-]+){1,2}$")
 EN_NAME_UPPER_RE = re.compile(r"^[A-Z][A-Z'\-]+(?:\s+[A-Z][A-Z'\-]+){1,2}$")
 # 和文氏名（姓名の間の空白はあってもなくてもよい）
 JA_NAME_RE = re.compile(r"^[一-鿿぀-ヿ]{1,5}[\s　]?[一-鿿぀-ヿ]{1,5}$")
+# 「漢字のかたまり → ひらがな → 漢字のかたまり」は氏名ではなく語句。
+# 実機で名刺の惹句「難しいほど面白い」が氏名として採られ、本当の氏名（磯野敏寛）に
+# 競り勝った。JA_NAME_RE は 2〜10 文字の和文なら何でも通すので、ここで落とす。
+# 氏名にもひらがなは出るが（小野ゆかり・佐々木みゆき）、それは**末尾のひと続き**で
+# あって、漢字を挟み込む形にはならない。
+JA_PHRASE_RE = re.compile(r"[一-鿿][ぁ-ゖ]+[一-鿿]")
 
 
 @dataclass
@@ -385,10 +391,34 @@ def _email_domain_key(email: str | None) -> str:
     return romaji_key(labels[0])
 
 
-def _extract_company_strong(items: list[Item]) -> Field:
+def _company_conf(raw: float, text: str, domain_key: str) -> float:
+    """会社名の確からしさ。**裏付けが無ければ「そのまま入れてよい」帯へ上げない。**
+
+    法人格（株式会社 / Inc.）が一致したという事実は「この行は社名だ」の証拠であって
+    「社名の文字が正しく読めた」証拠ではない。実機では社名本体の漢字 1 文字を
+    読み違えた「株式会社暖野木工所」が 0.857 で通り、受付フォームへ無警告で
+    入った（正しくは磯野木工所）。氏名側は姓辞書・メールとの一致・役職の隣といった
+    裏付けが 1 つも無ければ要確認の帯を越えない作りなので、そちらへ揃える。
+
+    裏付けはメール／URL のドメインとの一致で見る。取れる場合は上限を外す。
+    """
+    ok = float(settings.get("confidence.ok"))
+    if raw < ok:
+        return raw
+    if domain_key:
+        key = kana_to_romaji(text) or romaji_key(text)
+        if key and prefix_overlap(key, domain_key) >= 4:
+            return raw                      # ドメインが社名本体を裏付けた
+    # 裏付け無し。値は返すが「ご確認ください」の帯に留める。
+    return round(min(raw, ok - 0.01), 3)
+
+
+def _extract_company_strong(items: list[Item], email: str | None,
+                            website: str | None) -> Field:
     """法人格（株式会社 / Inc. など）を手掛かりに会社名を決める。確実な方。"""
     jp = dicts.company_suffixes()
     en = _en_suffix_patterns()
+    domain_key = _email_domain_key(email) or _website_domain_key(website)
 
     for it in items:
         if {"email", "website", "phone", "postal", "address"} & it.used_by:
@@ -397,16 +427,33 @@ def _extract_company_strong(items: list[Item]) -> Field:
         key = canon(text)
         if any(canon(s) in key for s in jp):
             it.used_by.add("company")
-            return Field(value=text, confidence=min(0.98, 0.95 * it.conf), source_line=it.idx)
+            return Field(value=text, source_line=it.idx,
+                         confidence=_company_conf(min(0.98, 0.95 * it.conf), text, domain_key))
 
     for it in items:
         if {"email", "website", "phone", "postal", "address"} & it.used_by:
             continue
         if any(pattern.search(it.text) for _word, pattern in en):
             it.used_by.add("company")
-            return Field(value=it.text, confidence=min(0.95, 0.90 * it.conf), source_line=it.idx)
+            return Field(value=it.text, source_line=it.idx,
+                         confidence=_company_conf(min(0.95, 0.90 * it.conf), it.text, domain_key))
 
     return Field()
+
+
+def _website_domain_key(website: str | None) -> str:
+    """URL から比較用のキーを作る（www.example.co.jp/ → example）。
+
+    例に scheme を書かないのは、「card/ に外部 URL を書かない」ことを見張っている
+    テスト(test_ソースに外部URLが書かれていない)に引っかかるため。あれは OCR API や
+    CDN を呼ぶコードが紛れ込むのを防ぐ見張りで、例示でも通してしまうと意味が薄れる。
+    """
+    if not website:
+        return ""
+    s = re.sub(r"^https?://", "", website.strip(), flags=re.I)
+    s = s.split("/")[0]
+    labels = [x for x in s.split(".") if x and x.lower() != "www"]
+    return romaji_key(labels[0]) if labels else ""
 
 
 def _extract_company_fallback(items: list[Item], email: str | None, max_h: float) -> Field:
@@ -566,7 +613,29 @@ def _romaji_matches_local(text: str, local_raw: str, local_key: str) -> bool:
     return any(len(p) == 1 and p in initials for p in parts) or len(parts) >= 2
 
 
+def _looks_like_furigana(item: Item, items: list[Item]) -> bool:
+    """このかなの行が、すぐ隣の漢字の氏名に振られた読みか。
+
+    ふりがなは氏名のすぐ上（まれに下）に、氏名より小さく印字される。逆に言うと、
+    隣に「自分より大きい、漢字を含む氏名らしい行」が無ければ、それは読みではなく
+    **氏名そのもの**である可能性が高い。カタカナで氏名を書いた名刺（外国籍の方の
+    名刺で珍しくない）が、かなだけを理由に候補から外れて氏名が空欄になっていた。
+    """
+    for other in items:
+        if other is item or abs(other.idx - item.idx) > 1:
+            continue
+        if is_all_kana(other.text) or not has_cjk(other.text):
+            continue                  # 漢字を含む行だけが「読みを振られる側」
+        if _name_shape_score(other.text) <= 0.0:
+            continue
+        if other.height > item.height * 1.15:
+            return True
+    return False
+
+
 def _name_shape_score(text: str) -> float:
+    if JA_PHRASE_RE.search(text.replace(" ", "").replace("　", "")):
+        return 0.0                      # 惹句・キャッチコピーの類（氏名ではない）
     if JA_NAME_RE.match(text) and 2 <= len(text.replace(" ", "")) <= 8:
         return 1.0
     if EN_NAME_RE.match(text) or EN_NAME_UPPER_RE.match(text):
@@ -586,7 +655,8 @@ def _surname_reading(text: str) -> str:
 
 
 def _extract_name(
-    items: list[Item], email: str | None, max_h: float, card_h: float
+    items: list[Item], email: str | None, max_h: float, card_h: float,
+    has_contact: bool = False,
 ) -> Field:
     # ローカル部は「区切りを残した形」と「英字だけの形」の両方を使う。
     # 前者は "k.sato" を ["k", "sato"] に割るのに要る（頭文字＋姓の突き合わせ）。
@@ -595,6 +665,12 @@ def _extract_name(
         local_raw = email.split("@", 1)[0].lower()
         local = romaji_key(local_raw)
 
+    # 会社名・連絡先・役職を先に確定させたあと、残っている行のうちいちばん大きい
+    # ものは氏名であることが多い（名刺は会社名の次に氏名を大きく刷る）。姓の辞書に
+    # 載らない氏名では、これが大きさに関する唯一の手がかりになる。画面全体の最大
+    # （＝たいてい会社名）と比べる size だけでは、ロゴが大きい名刺で氏名が沈む。
+    free_max_h = max((i.height for i in items if not i.used_by), default=0.0)
+
     candidates: list[tuple[float, Item]] = []
     for it in items:
         if it.used_by:
@@ -602,11 +678,15 @@ def _extract_name(
         text = it.text
         if not text or re.search(r"\d", text):
             continue
-        if is_all_kana(text):
-            continue                      # 読み仮名は氏名そのものではない
         shape = _name_shape_score(text)
         if shape <= 0.0:
             continue
+        if is_all_kana(text):
+            if _looks_like_furigana(it, items):
+                continue                  # 隣の漢字の氏名に振られた読み
+            # かなだけの氏名は根拠としては弱いので、漢字・ローマ字の候補に
+            # 競り負けるようにしておく（他に候補が無ければこれが採られる）。
+            shape = min(shape, 0.8)
 
         size = (it.height / max_h) if max_h > 0 else 0.0
         # 「大きい文字で、氏名らしい形」だけでは 0.62 までしか行かないように配分する。
@@ -625,10 +705,32 @@ def _extract_name(
         if sum(1 for other in items if other.text == text) > 1:
             score -= 0.25
 
+        # 大きさの手がかりは「その紙が名刺らしい」ときだけ使う。連絡先が 1 つも
+        # 取れていない紙（A4 の書類・案内文）では、いちばん大きい文字は見出しで
+        # あって氏名ではない。ここを無条件に加点すると書類の見出しを氏名として
+        # 確定してしまう（実際にテストで落ちた）。
+        if has_contact and free_max_h > 0 and it.height >= free_max_h * 0.98:
+            score += 0.10
+
+        # 名刺は「役職／部署 → 氏名」の順に並べるのが普通。姓の辞書に載らない氏名
+        # （カタカナ書き・外国語表記）では、この並びが数少ない裏付けになる。
+        if any(abs(other.idx - it.idx) <= 1
+               and ("title" in other.used_by or "department" in other.used_by)
+               for other in items):
+            score += 0.10
+
         reading = _surname_reading(text)
         if reading:
             score += 0.12
             if local and reading in local:
+                score += 0.18
+        elif is_all_kana(text) and local:
+            # かな書きの氏名は、それ自体が読み。漢字の姓を辞書で読みに直して
+            # メールと突き合わせるのと同じことを、辞書無しでできる。
+            # ローカル部は姓だけ・名だけのことが多い（レミンハイ → hai@）ので、
+            # どちらが相手を含んでいても一致と見る。2 文字以下の一致は偶然。
+            kana_reading = kana_to_romaji(text.replace(" ", ""))
+            if len(local) >= 3 and (local in kana_reading or kana_reading in local):
                 score += 0.18
 
         if local:
@@ -722,9 +824,14 @@ def extract(lines: list[OcrLine], card_size: tuple[int, int] | None = None) -> C
 
     # 会社名は「法人格が書いてある行」を先に押さえる（氏名より確実なため）。
     # 法人格が無い名刺向けの推測は、氏名・部署・役職を確定させたあとに回す。
-    fields.company_name = _extract_company_strong(items)
+    fields.company_name = _extract_company_strong(
+        items, fields.email.value, fields.website.value)
     fields.department, fields.title = _extract_department_title(items)
-    fields.person_name = _extract_name(items, fields.email.value, max_h, card_h)
+    # 連絡先が 1 つでも取れていれば「名刺らしい紙」として扱う（氏名の手がかりの強さを変える）
+    has_contact = any(f.value for f in
+                      (fields.email, fields.phone, fields.mobile, fields.fax))
+    fields.person_name = _extract_name(items, fields.email.value, max_h, card_h,
+                                       has_contact)
     if not fields.company_name.value:
         fields.company_name = _extract_company_fallback(items, fields.email.value, max_h)
     # 読み仮名は最後。カタカナ主体の社名（「あおぞらクリエイティブ」など）を
@@ -732,6 +839,15 @@ def extract(lines: list[OcrLine], card_size: tuple[int, int] | None = None) -> C
     fields.person_name_kana = _extract_name_kana(
         items, fields.person_name.source_line, max_h
     )
+    # 氏名そのものがかな書きなら、それが読みでもある。受付の「ふりがな」を
+    # 利用者に打ち直させる必要はない（違っていれば確認画面で直せる）。
+    if (fields.person_name.value and not fields.person_name_kana.value
+            and is_all_kana(fields.person_name.value)):
+        fields.person_name_kana = Field(
+            value=fields.person_name.value,
+            confidence=round(fields.person_name.confidence * 0.9, 3),
+            source_line=fields.person_name.source_line,
+        )
 
     return fields
 

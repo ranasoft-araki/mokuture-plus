@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field as PydField
 
-from card import dicts, session as session_mod, settings
+from card import dicts, dump, session as session_mod, settings
 from card.ocr import describe_all, get_engine
 from card.ocr.base import OcrUnavailable
 from card.pipeline import evaluate_acceptance, lines_payload, read_card
@@ -118,6 +118,8 @@ async def card_status(request: Request):
     _require_local(request)
     enabled = bool(settings.get("enabled"))
     engine = get_engine()
+    # フレーム保存が有効なら画面からも分かるようにする（入れっぱなしを防ぐ）。
+    dump_dir = dump.target_dir()
     try:
         ok, detail = engine.available()
     except Exception as e:                      # モデル破損などで落ちないように
@@ -131,6 +133,7 @@ async def card_status(request: Request):
         "engines": describe_all(),
         "dictionaries": dicts.summary(),
         "config_notes": settings.notes(),
+        "debug_dump_dir": str(dump_dir) if dump_dir else None,
         "capture": {
             "detect_interval_ms": int(settings.get("camera.detect_interval_ms")),
             "detect_frame_max_width": int(settings.get("camera.detect_frame_max_width")),
@@ -138,6 +141,7 @@ async def card_status(request: Request):
             "stable_frames": int(settings.get("quality.stable_frames")),
         },
         "confidence": {
+            "fill_min": float(settings.get("confidence.fill_min")),
             "ok": float(settings.get("confidence.ok")),
             "warn": float(settings.get("confidence.warn")),
         },
@@ -215,8 +219,10 @@ async def card_capture(request: Request, session_id: str = "", force: int = 0):
     started = time.perf_counter()
     try:
         async with _ocr_gate:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(_read_with_detection, image),
+            # ボケ続きで出口が無くならないよう、規定回数を超えたら弾かずに読む。
+            allow_blurry = session.blur_rejects >= max(1, int(settings.get("accept.max_attempts")))
+            detection, result, focus = await asyncio.wait_for(
+                asyncio.to_thread(_detect_and_read, image, bool(force) or allow_blurry),
                 timeout=float(settings.get("ocr.timeout_sec")) + 10.0,
             )
     except OcrUnavailable as e:
@@ -226,19 +232,47 @@ async def card_capture(request: Request, session_id: str = "", force: int = 0):
         log.warning("[card] ocr timed out")
         raise HTTPException(status_code=504, detail="ocr timeout")
 
+    if result is None and focus is not None:
+        # ボケていて読まなかった。撮り直しの回数には数えない（利用者は何も
+        # 間違えていない）。ブラウザは proceed=False を見て黙って撮り直す。
+        session.blur_rejects += 1
+        session.touch()
+        log.info("[card] capture skipped: blurry card (focus=%.0f, %d 回目)",
+                 focus, session.blur_rejects)
+        return {
+            "proceed": False,
+            "accepted": False,
+            "accept_reason": "blurry capture",
+            "attempt": session.attempts,
+            "max_attempts": max(1, int(settings.get("accept.max_attempts"))),
+            "retry_cooldown_sec": float(settings.get("accept.retry_cooldown_sec")),
+        }
+    session.blur_rejects = 0
     if result is None:
         raise HTTPException(status_code=422, detail="could not read card")
 
     accepted, reason = evaluate_acceptance(result.fields, result.overall)
     max_attempts = max(1, int(settings.get("accept.max_attempts")))
-    session.attempts += 1
+    # 1 行も読めていない撮影は「名刺がまだ写っていないフレームを撮っただけ」。
+    # 利用者が名刺を出す前でも、背景の文字（天井の斑点・棚・扉枠）で自動撮影が
+    # 走ることがある。これを撮り直しの回数に数えると、本命の 1 枚が来る前に
+    # 上限へ達し、読めていない結果のまま確認画面へ進んでしまう。
+    blank = not result.lines
+    if blank:
+        session.blank_attempts += 1
+    else:
+        session.attempts += 1
     attempt_no = session.attempts
 
     # 何も読めていなければ確認画面へ進まず、画面側が黙って撮り直す。
     # ただし撮り直しの上限に達したら、取れた分だけで確認画面へ進む
     # （利用者が手で入力できるようにする。無限に撮り直さない）。
+    # 1 行も読めない撮影が続く場合も、その 2 倍で同じように逃がす。名刺が写って
+    # いないだけのことが多いが、どうしても読めない名刺のときに出口が無くなる。
     # 手動撮影(force=1)は利用者の明示的な操作なので、内容に関わらず進む。
-    proceed = bool(accepted or force or attempt_no >= max_attempts)
+    stuck = session.blank_attempts >= max_attempts * 2
+    proceed = bool(accepted or force or stuck
+                   or (not blank and attempt_no >= max_attempts))
 
     session.result = result
     session.edited.clear()
@@ -246,6 +280,7 @@ async def card_capture(request: Request, session_id: str = "", force: int = 0):
     session.awaiting_confirm = proceed
     if proceed:
         session.attempts = 0
+        session.blank_attempts = 0
     session.touch()
 
     elapsed = round((time.perf_counter() - started) * 1000, 1)
@@ -256,6 +291,13 @@ async def card_capture(request: Request, session_id: str = "", force: int = 0):
         result.fields.filled_count(), len(FIELD_NAMES),
         accepted, reason, proceed, attempt_no, max_attempts,
     )
+    # 実機調整用（既定は無効）。**読み取りが終わってから**書き出す＝保存の失敗や
+    # 遅れが読み取りに影響しない。
+    dump.save_capture(image, detection, result, {
+        "accepted": accepted, "accept_reason": reason, "proceed": proceed,
+        "attempt": attempt_no, "max_attempts": max_attempts, "forced": bool(force),
+    })
+
     payload = _result_payload(session, elapsed)
     payload.update({
         "accepted": accepted,
@@ -268,10 +310,43 @@ async def card_capture(request: Request, session_id: str = "", force: int = 0):
     return payload
 
 
-def _read_with_detection(image):
+def _capture_focus(image, detection) -> float | None:
+    """**検出できた名刺の中**のピント。名刺が見つからなければ None。
+
+    画像全体ではなく名刺の中で測る。全体だと、名刺の無い絵（空の机・無地の壁）が
+    「模様が少ない」だけでボケ扱いになり、撮り直しの行き止まりを作ってしまう。
+    測り方が `quality.focus_min`（検出ループの縮小フレーム）と揃うよう、ここでも
+    検出フレームと同じ幅へ落としてから測る。
+    """
+    if detection is None:
+        return None
+    import cv2
+    from card.quality import region_metrics
+    w = int(settings.get("camera.detect_frame_max_width"))
+    h, iw = image.shape[:2]
+    quad = detection.quad
+    if iw > w:
+        r = w / float(iw)
+        image = cv2.resize(image, (w, max(2, int(h * r))), interpolation=cv2.INTER_AREA)
+        quad = tuple((x * r, y * r) for x, y in quad)
+    return float(region_metrics(image, quad)[0])
+
+
+def _detect_and_read(image, allow_blurry: bool):
+    """検出 → ピント確認 → OCR。ボケていれば OCR へ進まず (detection, None, focus)。
+
+    OCR は 1 枚 4.5〜5.8 秒かかる。検出用フレームで合焦と判定しても、ブラウザが
+    実際に撮るのは別の瞬間の別フレームなので、ボケた 1 枚が回ってくることがある。
+    読む前に弾いて撮り直すほうが速い。検出は OCR と同じスレッドで 1 回だけ行い、
+    その四隅をそのまま読み取りへ渡す（二度検出しない）。
+    """
     from card.detect import detect_card
     detection = detect_card(image)
-    return read_card(image, detection.quad if detection else None)
+    focus = _capture_focus(image, detection)
+    if (not allow_blurry and focus is not None
+            and focus < float(settings.get("quality.capture_focus_min"))):
+        return detection, None, focus
+    return detection, read_card(image, detection.quad if detection else None), focus
 
 
 def _result_payload(session: session_mod.Session, elapsed_ms: float) -> dict:
@@ -294,6 +369,7 @@ def _result_payload(session: session_mod.Session, elapsed_ms: float) -> dict:
         "lines": lines_payload(result.lines),
         "timings_ms": {**result.timings_ms, "total": elapsed_ms},
         "confidence": {
+            "fill_min": float(settings.get("confidence.fill_min")),
             "ok": float(settings.get("confidence.ok")),
             "warn": float(settings.get("confidence.warn")),
         },
@@ -350,8 +426,21 @@ async def card_confirm(sid: str, body: ConfirmBody, request: Request):
     if unknown:
         raise HTTPException(status_code=400, detail="unknown field")
 
+    # 項目ごとの確からしさも返す。**これが無いと受け取り側は「確定した値」と
+    # 「大きい文字だったので氏名かもしれない、という推測」を区別できない。**
+    # 氏名の抽出は、裏付け（姓辞書・メールとの一致・役職の隣）が 1 つも無いと
+    # 0.45〜0.55 程度の値を返す設計で、これは confidence.warn(0.60) に届かない
+    # ＝「要入力」として赤く出す前提だった。確認画面を廃止した経路では、
+    # 受け取り側がこの帯を自分で見て扱いを変える必要がある。
+    # 利用者が直した項目は「本人が入れた値」なので最高扱いにする。
+    conf = {}
+    for name in FIELD_NAMES:
+        conf[name] = 1.0 if name in edited else round(original.get(name).confidence, 3)
     payload = {
         **values,
+        "field_confidence": conf,
+        # 氏名が決めきれなかったときの候補（value が空でもここには入る）
+        "name_candidates": list(original.get("person_name").candidates or []),
         "ocr_confidence": session.result.overall,
         "confirmed_by_user": True,
         "edited_fields": edited,

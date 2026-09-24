@@ -41,11 +41,22 @@ def test_名刺モジュールが配信対象に入っている():
     assert not missing, f"OTA に入っていない名刺モジュール: {sorted(missing)}"
 
 
-def test_辞書とモデルは配信対象に入れない():
-    """辞書は現場で追記されうるので上書きしない。モデルは大きすぎる。"""
+def test_モデルは配信対象に入れない():
+    """OCR モデルは大きすぎる（約 23MB）。導入時にだけ置く。"""
     for rel in _managed():
         assert not rel.startswith("models/"), rel
-        assert not rel.startswith("card/dictionaries/"), rel
+
+
+def test_辞書は配信するが現場の追記ファイルは配信しない():
+    """辞書の中身はコードと一緒に育つので配信する。
+
+    以前は「現場で追記されうるので上書きしない」として配信対象から外していたが、
+    そのままだと辞書を直しても既設の端末に届かない（姓辞書を 113 件から約 2 万件へ
+    増やしたときに問題になった）。現場の追記は `*.local.*` に分けることで守る。
+    """
+    managed = set(_managed())
+    assert "card/dictionaries/surnames.tsv" in managed
+    assert not [r for r in managed if ".local." in r]
 
 
 def test_agentとbackendの配信リストが一致する():

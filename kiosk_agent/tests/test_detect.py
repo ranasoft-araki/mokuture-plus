@@ -376,8 +376,11 @@ def test_顔のように肌が多い候補は名刺として採らない(scene, 
     assert det is not None
     assert skin_ratio(frame, det.quad) < float(settings.get("detection.max_skin_ratio"))
 
-    # 名刺の内側の肌率でも落ちる値まで下げれば、検出されなくなる
+    # 名刺の内側の肌率でも落ちる値まで下げれば、検出されなくなる。
+    # max_skin_ratio は縁から決めた候補にだけ効くので、文字ベースの予備は止める
+    # （文字から決めた範囲の肌色は text_skin_box_ratio が別の測り方で見る）。
     monkeypatch.setenv("CARD_DETECTION__MAX_SKIN_RATIO", "-1")
+    monkeypatch.setenv("CARD_DETECTION__TEXT_FALLBACK", "false")
     settings.reload()
     assert detect_card(frame) is None
 
@@ -447,6 +450,84 @@ def test_縁が見えない名刺は文字の並びから見つける(scene, mon
     monkeypatch.setenv("CARD_DETECTION__TEXT_FALLBACK", "false")
     settings.reload()
     assert detect_card(frame) is None
+
+
+def test_名刺の中の小さな四角形で確定しない(scene, monkeypatch):
+    """縁から取れたのが「撮影に進めない大きさ」なら、文字からも決め直す。
+
+    実機の録画で起きたこと: 氏名の周りの余白が名刺らしい縦横比の四角形として
+    取れてしまい、そこで検出が確定していた。画面には「もう少し近づけてください」
+    が出続け、名刺をいくら近づけても撮影に進まない（近づけても掴んでいるのは
+    名刺の中の一部分なので、占有率は上がらない）。その間、文字からは名刺全体が
+    取れていた。小さい候補で確定せず、文字からも決めて広いほうを採ること。
+    """
+    import card.detect as detect_mod
+
+    bgr, _truth, _spec = scene("no_edges")
+    frame = _detect_frame(bgr)
+    h, w = frame.shape[:2]
+
+    # 名刺の中に収まる小さな四角形（名刺らしい縦横比）を縁の経路が返す状況を作る
+    small = ((0.40 * w, 0.45 * h), (0.53 * w, 0.45 * h),
+             (0.53 * w, 0.53 * h), (0.40 * w, 0.53 * h))
+    from card.types import Detection, FrameMetrics
+    fake = Detection(quad=small, metrics=FrameMetrics(
+        area_ratio=quad_area(small) / float(w * h), aspect=quad_aspect(small),
+        text_regions=4), score=0.9, source="edge")
+    monkeypatch.setattr(detect_mod, "_best_quad", lambda *a, **k: fake)
+
+    det = detect_card(frame)
+    assert det is not None
+    assert det.source == "text", "小さな四角形のまま確定している"
+    assert quad_area(det.quad) > quad_area(small) * 3
+
+    # 文字からは決められない絵（何も写っていない机）では、小さくても縁の候補を残す。
+    # ここで None にしてしまうと「近づけてください」の案内自体が出せなくなる。
+    bgr, _truth, _spec = scene("empty_desk")
+    empty = _detect_frame(bgr)
+    det = detect_card(empty)
+    assert det is not None and det.source == "edge"
+
+
+def test_縁の候補が十分な大きさなら文字の経路は使わない(scene, monkeypatch):
+    """毎フレーム文字まで走らせると Pi の検出間隔に間に合わない。
+
+    縁で名刺らしい大きさが取れているときは、そのまま使うこと。
+    """
+    import card.text_detect as text_mod
+
+    bgr, _truth, _spec = scene("landscape_ja")
+    frame = _detect_frame(bgr)
+
+    def fail(*a, **k):
+        raise AssertionError("縁で足りているのに文字の経路を呼んでいる")
+
+    monkeypatch.setattr(text_mod, "detect_by_text", fail)
+    det = detect_card(frame)
+    assert det is not None and det.source == "edge"
+
+
+def test_紙の上の字と顔の造作を肌色で見分ける(scene):
+    """文字から決めた範囲の肌色は「広げた四角形の内側」では測れない。
+
+    手に持つと余白ぶん必ず手が入るので、名刺でも顔でも同じくらいの値になる
+    （実測 0.16-0.21 と 0.12-0.20 で重なった）。箱の中身で測れば、印刷された字は
+    紙の上・目や鼻は肌の上、という違いがそのまま出る。
+    """
+    from card.text_detect import skin_box_ratio
+
+    h, w = 120, 200
+    boxes = [(20 + 30 * i, 40, 18, 24) for i in range(5)]
+
+    paper = np.full((h, w, 3), 235, np.uint8)          # 白い紙
+    skin = np.zeros((h, w, 3), np.uint8)
+    skin[:] = (95, 120, 175)                           # 肌色(BGR)。Y は上限より暗い
+    for img in (paper, skin):
+        for x, y, bw, bh in boxes:
+            cv2.rectangle(img, (x, y), (x + bw, y + bh), (30, 30, 30), 2)
+
+    assert skin_box_ratio(paper, boxes) < float(settings.get("detection.text_skin_box_ratio"))
+    assert skin_box_ratio(skin, boxes) > float(settings.get("detection.text_skin_box_ratio"))
 
 
 def test_文字から決めたときは字の大きさで近さを見る(scene, monkeypatch):

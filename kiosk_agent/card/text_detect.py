@@ -185,6 +185,39 @@ def row_count(boxes: list[Box]) -> int:
     return rows
 
 
+def skin_box_ratio(bgr, boxes: list[Box]) -> float:
+    """拾った文字の箱のうち、中身が肌色で埋まっているものの割合 0-1。
+
+    「顔や手のひらの模様を文字と見ない」ための判定。**広げた四角形の内側の肌率
+    （detect.skin_ratio）ではここを判定できない。** 文字から決めた範囲は字の高さぶん
+    外へ広げてあり、名刺を手に持てばその余白に必ず手が入るので、名刺でも顔でも
+    同じくらいの値になる。実測（実機の録画と、名刺を持たず顔だけの映像）:
+
+        広げた四角形の内側   名刺を手のひらに載せて構える 0.16-0.21
+                             名刺を持たず顔だけ           0.12-0.20   ← 重なる
+        箱の中身（ここ）     名刺                         0.05-0.12
+                             顔                           0.24-0.37   ← 分かれる
+
+    分かれる理由は単純で、印刷された字は紙の上にあり、目・鼻・口は肌の上にある。
+    箱の中身を見れば「その字が何の上に乗っているか」が分かる。
+
+    肌かどうかの明るさの上限は skin_reject_luma_max（厳しい側）を使う。候補を落とす
+    側の判定なので、生成りの紙を肌と取り違えて名刺を永久に読めなくしないため。
+    """
+    if not boxes:
+        return 0.0
+    from card.detect import _skin_bool                      # 循環 import を避ける
+    skin = _skin_bool(bgr, settings.get("detection")["skin_reject_luma_max"])
+    h, w = skin.shape[:2]
+    on_skin = 0
+    for x, y, bw, bh in boxes:
+        x0, y0 = max(0, int(x)), max(0, int(y))
+        sub = skin[y0:min(h, y0 + int(bh)), x0:min(w, x0 + int(bw))]
+        if sub.size and float(np.count_nonzero(sub)) / float(sub.size) > 0.5:
+            on_skin += 1
+    return on_skin / float(len(boxes))
+
+
 def _clamp(quad, width: int, height: int) -> Quad:
     return tuple((float(min(max(x, 0.0), width - 1.0)),
                   float(min(max(y, 0.0), height - 1.0))) for x, y in quad)
@@ -233,14 +266,14 @@ def detect_by_text(bgr) -> Detection | None:
     if not (float(d["min_area_ratio"]) <= area_ratio <= float(d["max_area_ratio"])):
         return None
 
-    from card.detect import quad_aspect, skin_ratio        # 循環 import を避ける
+    from card.detect import quad_aspect                    # 循環 import を避ける
     aspect = quad_aspect(quad)
     # 名刺の「文字が入る範囲」は正方形に近いことも横長なこともあるが、細長い帯に
     # はならない。レシートのような細長い印刷物を落とすための上限。
     if aspect > float(d["text_max_region_aspect"]):
         return None
-    if skin_ratio(bgr, quad) > float(d["max_skin_ratio"]):
-        return None                    # 顔や手のひらの上の模様を文字と見ない
+    if skin_box_ratio(bgr, core) > float(d["text_skin_box_ratio"]):
+        return None                    # 顔の造作を文字と見ない
 
     metrics = FrameMetrics(
         area_ratio=area_ratio,

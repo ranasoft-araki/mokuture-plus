@@ -1,8 +1,13 @@
 """辞書ファイルの読み込み。
 
-`card/dictionaries/*.txt` は運用側が編集する前提のファイル。1 行 1 語、`#` で始まる
-行と空行は無視する。読み込みはプロセス内でキャッシュし、ファイルの更新時刻が
-変わっていれば読み直す（端末に入ったまま辞書を足しても再起動が要らない）。
+`card/dictionaries/*.txt` は 1 行 1 語、`#` で始まる行と空行は無視する。読み込みは
+プロセス内でキャッシュし、ファイルの更新時刻が変わっていれば読み直す（端末に
+入ったまま辞書を足しても再起動が要らない）。
+
+**現場で足した語は `*.local.*` に書く。** 本体の辞書（surnames.tsv など）は OTA で
+配信するので、端末上で直接書き足すと次の配信で消える。同じ名前に `.local` を挟んだ
+ファイル（`surnames.local.tsv` / `titles.local.txt`）があれば、本体の後ろに足して
+読む。こちらは配信対象ではないので上書きされない。
 """
 from __future__ import annotations
 
@@ -25,14 +30,29 @@ def load(name: str) -> list[str]:
 
     name に拡張子が含まれていればそれを使い、無ければ .txt を補う
     （「値<TAB>表記」形式のものは .tsv にしてある）。
+    現場で足した `*.local.*` があれば後ろに足して返す。
     """
+    words = _load_one(name)
+    extra = _load_one(_local_name(name))
+    return words + extra if extra else words
+
+
+def _local_name(name: str) -> str:
+    """surnames.tsv → surnames.local.tsv / titles → titles.local"""
+    stem, dot, ext = name.partition(".")
+    return f"{stem}.local{dot}{ext}" if dot else f"{stem}.local"
+
+
+def _load_one(name: str) -> list[str]:
     filename = name if "." in name else f"{name}.txt"
     path = _dict_dir() / filename
     try:
         mtime = path.stat().st_mtime
     except OSError:
         if name not in _cache:
-            log.warning("[card] dictionary not found: %s.txt", name)
+            # 現場の追記ファイルは無いのが普通なので騒がない
+            if ".local" not in name:
+                log.warning("[card] dictionary not found: %s", filename)
             _cache[name] = (0.0, [])
         return _cache[name][1]
 

@@ -124,6 +124,34 @@ def test_フレームを送ると案内と枠が返る(client, scene):
     assert payload["metrics"]["area"] > 0
 
 
+def test_応答に四隅の由来が入る(client, scene):
+    """画面のデバッグ表示(?carddebug=1)が「縁で取れたのか文字で取れたのか」を出す。
+
+    読み取れないときに直すべき場所（縁が出ていない / 文字も拾えていない）を
+    利用者ではなく調整する側が切り分けられるようにするための値。
+    """
+    sid = start(client)
+
+    bgr, _truth, _spec = scene("landscape_ja")
+    payload = client.post(f"/card/frame?session_id={sid}",
+                          content=jpeg(bgr, 640),
+                          headers={"Content-Type": "image/jpeg"}).json()
+    assert payload["source"] == "edge"
+
+    bgr, _truth, _spec = scene("no_edges")           # 縁が出ず文字から決まる場面
+    payload = client.post(f"/card/frame?session_id={sid}",
+                          content=jpeg(bgr, 640),
+                          headers={"Content-Type": "image/jpeg"}).json()
+    assert payload["source"] == "text"
+    assert payload["metrics"]["text_height"] > 0     # 大きさの判定に使う字の高さ
+
+    bgr, _truth, _spec = scene("empty_desk")         # 名刺が無い
+    payload = client.post(f"/card/frame?session_id={sid}",
+                          content=jpeg(bgr, 640),
+                          headers={"Content-Type": "image/jpeg"}).json()
+    assert payload["source"] is None
+
+
 def test_静止したフレームが続くと自動撮影が立つ(client, scene):
     sid = start(client)
     bgr, _truth, _spec = scene("landscape_ja")
@@ -350,10 +378,12 @@ def test_手動撮影は内容に関わらず確認画面へ進む(ocr_engine, c
 
 @pytest.mark.ocr
 def test_撮り直しの上限に達したら取れた分で進む(ocr_engine, client, scene, monkeypatch):
+    """読めた行はあるが受理できない撮影は、上限まで数えてから手入力へ逃がす。"""
     monkeypatch.setenv("CARD_ACCEPT__MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("CARD_ACCEPT__MIN_CONFIDENCE", "0.99")  # 受理されない状況を作る
     settings.reload()
     sid = start(client)
-    bgr, _truth, _spec = scene("empty_desk")
+    bgr, _truth, _spec = scene("landscape_ja")                # 文字は読める名刺
     body = jpeg(bgr, 1280, 92)
 
     first = client.post(f"/card/capture?session_id={sid}", content=body,
@@ -368,6 +398,30 @@ def test_撮り直しの上限に達したら取れた分で進む(ocr_engine, c
 
 
 @pytest.mark.ocr
+def test_何も読めない撮影は撮り直しの回数に数えない(ocr_engine, client, scene, monkeypatch):
+    """名刺を出す前でも、背景の文字で自動撮影が走ることがある。
+
+    それを撮り直しの回数に数えると、本命の 1 枚が来る前に上限へ達し、何も
+    読めていない確認画面が出てしまう。ただし数えないだけだと「どうしても
+    読めない名刺」で出口が無くなるので、上限の 2 倍で同じように逃がす。
+    """
+    monkeypatch.setenv("CARD_ACCEPT__MAX_ATTEMPTS", "2")
+    settings.reload()
+    sid = start(client)
+    bgr, _truth, _spec = scene("empty_desk")                  # 1 行も読めない絵
+    body = jpeg(bgr, 1280, 92)
+
+    for _ in range(3):
+        r = client.post(f"/card/capture?session_id={sid}", content=body,
+                        headers={"Content-Type": "image/jpeg"}).json()
+        assert r["attempt"] == 0 and r["proceed"] is False
+
+    r = client.post(f"/card/capture?session_id={sid}", content=body,
+                    headers={"Content-Type": "image/jpeg"}).json()
+    assert r["proceed"] is True               # 2 倍に達したので手入力へ逃がす
+
+
+@pytest.mark.ocr
 def test_受理条件は設定で変えられる(ocr_engine, client, scene, monkeypatch):
     """会社名だけでも進めたい現場向けに、要求する項目を緩められること。"""
     monkeypatch.setenv("CARD_ACCEPT__REQUIRE_ANY", "email")
@@ -378,3 +432,38 @@ def test_受理条件は設定で変えられる(ocr_engine, client, scene, monk
     r = client.post(f"/card/capture?session_id={sid}", content=jpeg(bgr, 1280, 92),
                     headers={"Content-Type": "image/jpeg"}).json()
     assert r["accepted"] is True
+
+
+# ── 撮影画像のピント判定 ──────────────────────────────────────────────────────
+# 検出用フレームで合焦と判定しても、ブラウザが実際に撮るのは別の瞬間の別フレーム。
+# ボケた撮影に OCR（1 枚 4.5〜5.8 秒）を使う前に弾いて撮り直させる。
+
+def test_ボケた撮影はOCRへ進まず撮り直しになる(client, scene, monkeypatch):
+    import cv2
+    bgr, _truth, _spec = scene("landscape_ja")
+    sid = client.post("/card/session").json()["session_id"]
+
+    blurred = cv2.GaussianBlur(bgr, (31, 31), 0)
+    body = cv2.imencode(".jpg", blurred, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes()
+    r = client.post(f"/card/capture?session_id={sid}",
+                    content=body, headers={"Content-Type": "image/jpeg"})
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["proceed"] is False
+    assert payload["accept_reason"] == "blurry capture"
+    # OCR を通していないので項目は返らない
+    assert "fields" not in payload
+
+
+def test_手動撮影はボケていても読む(client, scene):
+    import cv2
+    bgr, _truth, _spec = scene("landscape_ja")
+    sid = client.post("/card/session").json()["session_id"]
+
+    blurred = cv2.GaussianBlur(bgr, (31, 31), 0)
+    body = cv2.imencode(".jpg", blurred, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes()
+    r = client.post(f"/card/capture?session_id={sid}&force=1",
+                    content=body, headers={"Content-Type": "image/jpeg"})
+    assert r.status_code == 200
+    # 利用者が自分で押した撮影は内容に関わらず進む（手入力できるようにするため）
+    assert r.json()["proceed"] is True

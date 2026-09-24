@@ -181,6 +181,20 @@ BUNDLE_FILES = [
     "card/detect.py",
     "card/text_detect.py",
     "card/dicts.py",
+    # 辞書そのものも配信対象にする。**コードだけ配っても中身が古いままになる。**
+    # 姓辞書を 113 件から約 2 万件へ増やしたとき、ここに無いと既設の端末には
+    # 届かず、読めた氏名が確信度不足で空欄になる挙動が残ったままになる。
+    # 現場で足した語は `*.local.*` に書く（そちらは配信しないので消えない）。
+    "card/dictionaries/surnames.tsv",
+    "card/dictionaries/company_suffixes.txt",
+    "card/dictionaries/company_suffixes_en.txt",
+    "card/dictionaries/departments.txt",
+    "card/dictionaries/department_suffixes.txt",
+    "card/dictionaries/titles.txt",
+    "card/dictionaries/prefectures.txt",
+    "card/dictionaries/address_keywords.txt",
+    "card/dictionaries/phone_labels.txt",
+    "card/dump.py",
     "card/extract.py",
     "card/pipeline.py",
     "card/preprocess.py",

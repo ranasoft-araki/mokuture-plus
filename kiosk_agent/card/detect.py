@@ -95,6 +95,24 @@ def quad_motion(a: Quad | None, b: Quad | None, short_side: float) -> float:
     return (total / 4.0) / short_side
 
 
+def quad_center_motion(a: Quad | None, b: Quad | None, short_side: float) -> float:
+    """2 つの四隅の「中心」の移動量を画面短辺との比で返す。
+
+    文字のかたまりから決めた四隅に使う。あちらの角は名刺の角ではなく「拾えた文字の
+    いちばん外側」なので、名刺が静止していても端の文字が 1 つ増減するだけで大きく
+    動く。実機で名刺を静止させたまま測ると、四隅の平均移動量が中央値 0.149 に対し
+    中心の移動量は 0.033 だった（面積は毎フレーム 17% 変動していた）。
+    静止しているかを知りたいのだから、位置だけを見る。
+    """
+    if a is None or b is None or short_side <= 0:
+        return 1.0
+    ax = sum(p[0] for p in a) / 4.0
+    ay = sum(p[1] for p in a) / 4.0
+    bx = sum(p[0] for p in b) / 4.0
+    by = sum(p[1] for p in b) / 4.0
+    return math.hypot(bx - ax, by - ay) / short_side
+
+
 def _find_contours(edges):
     """OpenCV 3 系(3 返り値) と 4/5 系(2 返り値) の差を吸収する。"""
     res = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
@@ -614,11 +632,19 @@ def _detect_at_scale(bgr, prev_quad: Quad | None) -> Detection | None:
         # 枠線や背景の一部）で止めてしまうと、本体を見つける機会を失う。
         if best_overall is not None and best_overall.metrics.area_ratio >= stop_area:
             break
+    # 縁で見つかったものが「そのままでは撮影に進めない大きさ」なら、名刺そのもの
+    # ではなく名刺の中の小さな四角形（氏名の周りの余白・枠線・ロゴの囲み）を掴んで
+    # いる疑いがある。実機の録画では氏名の周りだけを囲ったまま確定してしまい、
+    # 「もう少し近づけてください」が出続けて、どれだけ近づけても撮影に進まなかった
+    # （その間、文字からは名刺全体が取れていた）。小さい候補は捨てずに持っておき、
+    # 文字からも決めてみて広いほうを採る。
     if best_overall is not None:
-        return best_overall
-    # 紙の縁では四角形が組めなかった。名刺を手に持つと縁が指・逆光・同系色の
-    # 背景で消えるので、実機ではここに落ちてくるほうが多い。文字の並びから
-    # 位置を決め直す（card/text_detect.py）。
+        if (fill_ratio(best_overall.quad, w, h) >= float(d["text_fallback_min_fill"])
+                and _has_print(bgr, best_overall.quad, d)):
+            return best_overall
+    # 紙の縁では四角形が組めなかった（あるいは小さすぎた）。名刺を手に持つと縁が
+    # 指・逆光・同系色の背景で消えるので、実機ではここに落ちてくるほうが多い。
+    # 文字の並びから位置を決め直す（card/text_detect.py）。
     #
     # text_detect は OTA で後から届く。バックエンドの配信リストの更新が
     # 端末へのコード配信より遅れると、この import だけが失敗しうる。その場合は
@@ -626,10 +652,15 @@ def _detect_at_scale(bgr, prev_quad: Quad | None) -> Detection | None:
     try:
         from card.text_detect import detect_by_text
     except ImportError:
-        return None
+        return best_overall
     found = detect_by_text(bgr)
     if found is None:
-        return None
+        return best_overall
+    # 文字から決めた範囲のほうが狭いなら、縁で見つけたものを残す（文字が名刺の
+    # 一部しか拾えていない場合に、わざわざ狭いほうへ乗り換えない）。
+    if (best_overall is not None
+            and found.metrics.area_ratio <= best_overall.metrics.area_ratio):
+        return best_overall
     # A4 の書類やスマートフォンの画面のように、外形がはっきり測れていて名刺の
     # 形ではない物体が写っていて、拾った文字がその中にあるなら、それは名刺の
     # 文字ではない。物体が画面の別の場所にあるだけなら止めない（無条件に
@@ -641,8 +672,35 @@ def _detect_at_scale(bgr, prev_quad: Quad | None) -> Detection | None:
         # ここで初めて測る。毎フレーム測ると 1 フレームの処理が 3 割伸びるため。
         if edge_support(support_gray, bad, edge_thresh,
                         window=int(d["edge_support_window"])) >= float(d["text_veto_support"]):
-            return None
+            return best_overall
     return found
+
+
+def _has_print(bgr, quad: Quad, d) -> bool:
+    """この四角形の中に「名刺らしい量の印字」があるか。
+
+    縁から組めた四角形は、名刺でなくても名刺の縦横比になりうる（実機では顔が
+    1.69 の四角形になった）。名刺には字が刷ってあり、顔や壁には無い、という
+    当たり前のことをここで一度だけ確かめる。
+
+    見るのは**枠内の文字成分が画面全体の何割か**。個数そのものだと、字の少ない
+    名刺と字の多い背景で基準を共有できない。画面全体の文字が少なすぎるときは
+    割合が当てにならないので判定しない（通す）。
+    """
+    try:
+        from card.text_detect import text_boxes
+    except ImportError:
+        return True                      # 文字検出が無い端末では従来どおり通す
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    boxes = text_boxes(gray)
+    if len(boxes) < int(d["edge_text_check_min_boxes"]):
+        return True
+    xs = [p[0] for p in quad]
+    ys = [p[1] for p in quad]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    inside = sum(1 for bx, by, bw, bh in boxes
+                 if x0 <= bx + bw / 2.0 <= x1 and y0 <= by + bh / 2.0 <= y1)
+    return (inside / float(len(boxes))) >= float(d["edge_text_share_min"])
 
 
 def _overlap_ratio(quad: Quad, other: Quad, shape) -> float:

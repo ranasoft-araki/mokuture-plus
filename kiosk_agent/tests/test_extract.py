@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from card import settings
 from card.extract import extract, overall_confidence
 from card.types import OcrLine
 
@@ -59,9 +60,36 @@ CARD_SIZE = (1024, 620)
     "特定非営利活動法人サンプルネット",
 ])
 def test_法人格から会社名を取る(company):
+    """法人格が書いてあれば、その行を会社名として取る。
+
+    **確信度は「そのまま入れてよい」帯(confidence.ok)まで上げない。** 法人格の一致は
+    「この行は社名だ」の証拠であって「社名の文字が正しく読めた」証拠ではないため。
+    実機で社名の漢字 1 文字を読み違えた「株式会社暖野木工所」が 0.857 で通り、
+    受付フォームへ無警告で入った（正しくは磯野木工所）。裏付けの取り方は
+    test_ドメインが社名を裏付ければ確信度を下げない を参照。
+    """
+    ok = float(settings.get("confidence.ok"))
     fields = extract(standard_card(company=company), CARD_SIZE)
     assert fields.company_name.value == company
-    assert fields.company_name.confidence >= 0.85
+    assert float(settings.get("confidence.fill_min")) <= fields.company_name.confidence < ok
+
+
+def test_ドメインが社名を裏付ければ確信度を下げない():
+    """メール／URL のドメインが社名本体と一致していれば、頭打ちを外す。
+
+    これが無いと、正しく読めた社名にも常に「ご確認ください」が付いてしまう。
+    """
+    ok = float(settings.get("confidence.ok"))
+    lines = standard_card(company="株式会社ミライデザイン")
+    # 社名の読みと同じドメイン（miraidesign）を持つ名刺にする
+    lines = [
+        OcrLine(text=("miraidesign@miraidesign.co.jp" if "@" in l.text else l.text),
+                conf=l.conf, box=l.box, order=l.order)
+        for l in lines
+    ]
+    fields = extract(lines, CARD_SIZE)
+    assert fields.company_name.value == "株式会社ミライデザイン"
+    assert fields.company_name.confidence >= ok
 
 
 @pytest.mark.parametrize("company", [
@@ -115,7 +143,11 @@ def test_英文の法人格は語として認識する(name):
     ]
     fields = extract(lines, CARD_SIZE)
     assert fields.company_name.value == name
-    assert fields.company_name.confidence >= 0.85
+    # 欄に入る水準であること。上限は名刺によって変わる —「Example Holdings Corp.」は
+    # メール(alex.morgan@example.com)のドメインが社名を裏付けるので頭打ちが外れ、
+    # 裏付けの無いものは「ご確認ください」の帯に留まる
+    # （test_法人格から会社名を取る / test_ドメインが社名を裏付ければ確信度を下げない）。
+    assert fields.company_name.confidence >= float(settings.get("confidence.fill_min"))
 
 
 def test_法人格が省略された会社名をメールドメインから推定する():
@@ -361,6 +393,57 @@ def test_電話番号や住所を氏名にしない():
     fields = extract(standard_card(), CARD_SIZE)
     name = fields.person_name.value or ""
     assert "03-" not in name and "東京都" not in name and "@" not in name
+
+
+def test_カタカナ書きの氏名を拾う():
+    """外国籍の方の名刺では氏名をカタカナで書くことがある。
+
+    「かなだけの行は読み仮名」と決め打ちすると、この名刺の氏名は候補にすら
+    挙がらず**永久に空欄**になる（実機で空欄のまま確認画面まで進んだ）。
+    読みかどうかは、隣に「自分より大きい漢字の氏名」があるかで決める。
+    """
+    lines = [
+        line("LUMI株式会社", 0, height=60),
+        line("代表取締役", 1, height=22),
+        line("レミン ハイ", 2, height=58),
+        line("hai@lumi.co.jp", 3, height=22),
+    ]
+    fields = extract(lines, CARD_SIZE)
+    assert fields.person_name.value == "レミン ハイ"
+    # かな書きの氏名はそれ自体が読みでもある（受付のふりがな欄を打ち直させない）
+    assert fields.person_name_kana.value == "レミン ハイ"
+
+
+def test_姓辞書にもメールにも根拠が無い氏名を確定できる():
+    """外国籍の方の名刺。姓の辞書に載らず、メールのローカル部とも符合しない。
+
+    ロゴが大きい名刺では氏名が相対的に小さくなり、「大きい文字」の加点が効かない。
+    実機ではこれで 0.42 となり、しきい値 0.45 に届かず**候補のまま空欄**で確認画面へ
+    出ていた（利用者からは「名前は読めているのに入らない」と見える）。
+    名刺らしさ（連絡先がある）と、残った行の中でいちばん大きいこと、役職の隣で
+    あることを根拠にして確定させる。
+    """
+    lines = [
+        line("LUMI株式会社", 0, height=60),          # ロゴ。氏名より大きい
+        line("代表取締役", 1, height=22),
+        line("レミン ハイ", 2, height=38),
+        line("0565-42-8382", 3, height=22),
+    ]
+    fields = extract(lines, CARD_SIZE)
+    assert fields.person_name.value == "レミン ハイ"
+    assert fields.person_name.confidence >= 0.45
+
+
+def test_漢字の氏名があるときはカタカナ行を氏名にしない():
+    """社名や商品名のカタカナが氏名を押しのけないこと。"""
+    lines = [
+        line("株式会社サンプル商会", 0, height=34),
+        line("アオゾラ クリエイティブ", 1, height=30),   # ブランド名
+        line("山田 太郎", 2, height=64),
+        line("taro.yamada@example.jp", 3, height=22),
+    ]
+    fields = extract(lines, CARD_SIZE)
+    assert fields.person_name.value == "山田 太郎"
 
 
 def test_ふりがなを氏名の近くから拾う():
