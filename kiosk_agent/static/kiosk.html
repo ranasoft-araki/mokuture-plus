@@ -689,6 +689,77 @@ function bindHomeBtn(id, reason = "cancelled") {
   if (b) b.addEventListener("click", () => { anEnd(reason); cleanup(); go("idle"); });
 }
 
+// ─── 下部の常設帯（座位レイアウト） ───────────────────────────────────────────
+// 「戻る」「やめる」を画面上端から画面最下部へ移し、どの画面からでも人を呼べる
+// 「担当者を呼ぶ」を足す。車いす座位だと画面の上半分に手が届かないため、
+// **押す必要があるものは画面の下へ集める**（Doc/kiosk-voice-touchless.html §10）。
+// 上端に残すのは待機メーター＝読むだけの情報のみ。
+//
+// opts.back    : "戻る" を出すか（既定 true）。押したときの遷移は bindBottomBand の onBack で渡す
+// opts.extra   : 画面固有のボタン HTML（受付フォームの「名刺で入力」など）を挟む
+// opts.slim    : 高さを詰めた版。到達線の下が狭い画面（暗証番号）で使う
+// opts.call    : "担当者を呼ぶ" を出すか（既定 true）
+const BAND_H = 132, BAND_SLIM_H = 100;
+function bottomBandHtml(opts = {}) {
+  const slim = !!opts.slim;
+  const h = slim ? 74 : 92;
+  const pad = slim ? "10px 60px 16px" : "16px 60px 24px";
+  const back = opts.back === false ? "" :
+    `<button id="bb-back" style="height:${h}px;padding:0 ${slim ? 32 : 40}px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:${slim ? 26 : 30}px;font-weight:600;color:${T.sub};cursor:pointer;font-family:inherit;white-space:nowrap">← 戻る</button>`;
+  const home = slim ? "" :
+    `<button id="bb-home" style="height:${h}px;padding:0 34px;background:transparent;border:2px solid ${T.border};border-radius:999px;font-size:28px;font-weight:600;color:${T.muted};cursor:pointer;font-family:inherit;white-space:nowrap">やめる</button>`;
+  const call = opts.call === false ? "" :
+    `<button id="bb-call" style="height:${h}px;padding:0 ${slim ? 30 : 34}px;border:2px solid ${LOCKER_AMBER};border-radius:18px;background:${T.canvas};color:${LOCKER_AMBER};font-size:${slim ? 26 : 28}px;font-weight:700;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:12px;white-space:nowrap">${ICO.bell_sm}担当者を呼ぶ</button>`;
+  // bb-voice-slot は音声コマンド(段階2)の差し込み口。**帯の構造を触らずに**
+  // 「声で操作する」とマイク動作中の表示をここへ入れられるようにしてある。
+  // 段階1では空のまま = 何も描かれない(幅 0)。
+  return `<div style="flex-shrink:0;display:flex;align-items:center;gap:16px;padding:${pad};border-top:2px solid ${T.border};background:${T.panel}">
+    ${back}${home}<div style="flex:1"></div>${opts.extra || ""}<span id="bb-voice-slot" data-band-h="${h}"></span>${call}
+  </div>`;
+}
+// onBack を渡さない画面では「戻る」を出さないこと（押しても何も起きない帯を作らない）。
+function bindBottomBand({ onBack, reason = "cancelled" } = {}) {
+  const back = document.getElementById("bb-back");
+  if (back && onBack) back.addEventListener("click", onBack);
+  bindHomeBtn("bb-home", reason);
+  const call = document.getElementById("bb-call");
+  if (call) call.addEventListener("click", () => callStaffFromBand());
+}
+
+// 「担当者を呼ぶ」。配達の呼び出しと同じ /proxy/call-staff を使う（通知先は同じ）。
+// **押したあとはこの画面だけで完結させる**（案内を出して待ってもらう）。声が出せない人・
+// 手が届かない人にとって最後の逃げ道なので、失敗しても「お声がけください」で終わらせない。
+let _bandCalling = false;
+async function callStaffFromBand() {
+  if (_bandCalling) return;
+  _bandCalling = true;
+  const token = localStorage.getItem(TOKEN_KEY);
+  showBandCallNotice("お呼びしています…", "", true);
+  try {
+    AN.notificationRequested();
+    await apiPost("/proxy/call-staff", { message: "", analytics_session_id: AN.sessionId() }, token);
+    showBandCallNotice("担当者をお呼びしました", "まもなく参りますので、そのままお待ちください。", false);
+  } catch (e) {
+    AN.apiError("api_5xx", { fieldId: "call_staff" });
+    showBandCallNotice("うまくお呼びできませんでした", "恐れ入りますが、もう一度お試しください。", false);
+  }
+  _bandCalling = false;
+}
+function showBandCallNotice(title, sub, busy) {
+  document.getElementById("band-call-ov")?.remove();
+  const el = document.createElement("div");
+  el.id = "band-call-ov";
+  el.style.cssText = `position:absolute;inset:0;z-index:9700;background:rgba(20,18,14,.55);display:flex;align-items:center;justify-content:center;font-family:'Noto Sans JP',Inter,system-ui,sans-serif`;
+  el.innerHTML = `<div style="width:1100px;background:${T.bg};border-radius:28px;box-shadow:0 30px 90px rgba(0,0,0,.45);padding:60px 70px;text-align:center">
+    <div style="width:120px;height:120px;margin:0 auto 30px;border-radius:50%;background:${LOCKER_AMBER}22;color:${LOCKER_AMBER};display:flex;align-items:center;justify-content:center"><div style="transform:scale(1.6)">${ICO.bell_lg}</div></div>
+    <div style="font-size:54px;font-weight:600;color:${T.ink};letter-spacing:-1.5px;line-height:1.2">${escHtml(title)}</div>
+    ${sub ? `<div style="font-size:28px;color:${T.sub};margin-top:20px;line-height:1.6">${escHtml(sub)}</div>` : ""}
+    ${busy ? "" : `<button id="band-call-ok" style="margin-top:38px;min-height:96px;padding:0 70px;background:${T.dark};border:none;border-radius:18px;font-size:30px;font-weight:700;color:#fff;cursor:pointer;font-family:inherit">閉じる</button>`}
+  </div>`;
+  sc.appendChild(el);
+  document.getElementById("band-call-ok")?.addEventListener("click", () => el.remove());
+}
+
 // ─── Navigate ─────────────────────────────────────────────────────────────────
 // 画面遷移は「新画面を旧画面の上に重ねてフェードインし、旧画面は不透明のまま背後に残す」
 // オーバーラップ・クロス遷移。旧来の「旧画面を完全に消してから新画面を作る(=中間で暗転)」を廃す。
@@ -1563,14 +1634,13 @@ ${errBanner}
     <div style="flex:1"></div>
     ${idleMeterHtml("wel-idle")}
     <div style="flex:1"></div>
-    ${homeBtnHtml("wel-home")}
   </div>
   <div style="flex:1;padding:12px 80px 0;display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center;min-height:0">
-    <div style="display:flex;flex-direction:column;height:760px;max-height:100%;gap:18px;min-height:0">
+    <div style="display:flex;flex-direction:column;height:672px;max-height:100%;gap:16px;min-height:0">
       ${guideCardHtml()}
       <div id="cam-box" style="flex:1;min-height:0;background:${T.dark};border-radius:28px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center">${camContent()}</div>
     </div>
-    <div style="display:flex;flex-direction:column;height:760px;max-height:100%;gap:20px">
+    <div style="display:flex;flex-direction:column;height:672px;max-height:100%;gap:18px">
       ${camGuideCard()}
       <button id="wel-form" style="flex:1;min-height:0;width:100%;background:${T.dark};border:none;border-radius:28px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center;padding:28px 24px">
         <div style="width:112px;height:112px;flex-shrink:0;border-radius:30px;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.1)">${ICO.keyboard}</div></div>
@@ -1583,17 +1653,18 @@ ${errBanner}
       ${MOCK ? `<button id="qr-mock" style="margin-top:0;padding:12px;background:transparent;border:1.5px dashed ${T.muted};border-radius:12px;font-size:16px;color:${T.muted};cursor:pointer;flex-shrink:0">（MOCK）予約QRを読み取ったことにする</button>` : ""}
     </div>
   </div>
-  <div style="padding:16px 80px 28px;display:flex;align-items:center;color:${T.muted};font-size:22px;flex-shrink:0">
-    <span id="qr-clk" style="font-family:'JetBrains Mono',monospace;font-size:22px"></span>
+  <div style="padding:12px 80px 10px;display:flex;align-items:center;color:${T.muted};font-size:20px;flex-shrink:0">
+    <span id="qr-clk" style="font-family:'JetBrains Mono',monospace;font-size:20px"></span>
     <span style="flex:1"></span><span style="font-family:'JetBrains Mono',monospace">${devName()}</span>
   </div>
+  ${bottomBandHtml({ back: false })}
 </div>`;
     rescale();
     paintIdleMeter("wel-idle", ST.kiosk_idle_timeout_sec, ST.kiosk_idle_timeout_sec);
     document.getElementById("qr-clk").textContent = fmtClock();
     // 「← 戻る」はここには置かない(1 つ前が無人の待機＝戻る概念が無い)。
     // 以前は左上の「戻る」と右上の「最初の画面に戻る」が同じ待機画面へ行っていた。
-    bindHomeBtn("wel-home");
+    bindBottomBand();
     document.getElementById("wel-form").addEventListener("click", () => { anEnsureSession("touch"); stopStream(); cleanup(); go("top"); });
     if (MOCK) { const mb = document.getElementById("qr-mock"); if (mb) mb.addEventListener("click", () => { stopStream(); handleQR("appt:mock"); }); }
     onSc("click", resetIdle);
@@ -1761,46 +1832,46 @@ function showTop() {
     : "";
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;position:relative">
   ${logoOverlay}
-  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center;gap:24px">
-    ${backBtnHtml("top-back")}
+  <div style="padding:24px 80px 0;flex-shrink:0;display:flex;align-items:center;gap:24px">
     <div style="flex:1"></div>
     ${idleMeterHtml("top-idle")}
     <div style="flex:1"></div>
-    ${homeBtnHtml("top-home")}
   </div>
-  <div style="padding:20px 80px 0;flex-shrink:0;display:flex;align-items:flex-end;gap:32px">
+  <div style="padding:14px 80px 0;flex-shrink:0;display:flex;align-items:flex-end;gap:32px">
     <div>
-      <div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px;line-height:1.1">${escHtml(ST.kiosk_menu_title || "ご用件をお選びください")}</div>
-      <div style="font-size:38px;color:${T.muted};font-family:Inter,system-ui,sans-serif;letter-spacing:1px;margin-top:8px">Please select</div>
-      <div style="width:72px;height:3px;background:${bc};border-radius:2px;margin-top:16px;transform-origin:left;animation:line-draw .7s .15s cubic-bezier(.2,.9,.3,1) both"></div>
+      <div style="font-size:54px;font-weight:600;color:${T.ink};letter-spacing:-1.5px;line-height:1.1">${escHtml(ST.kiosk_menu_title || "ご用件をお選びください")}</div>
+      <div style="font-size:32px;color:${T.muted};font-family:Inter,system-ui,sans-serif;letter-spacing:1px;margin-top:6px">Please select</div>
+      <div style="width:72px;height:3px;background:${bc};border-radius:2px;margin-top:14px;transform-origin:left;animation:line-draw .7s .15s cubic-bezier(.2,.9,.3,1) both"></div>
     </div>
     <div style="flex:1"></div>
   </div>
-  <div id="tiles" style="flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:28px;padding:26px 80px 30px;min-height:0">
-    ${TILES.map((t, i) => `<button data-ti="${i}" data-ev="top-${t.screen}" style="background:${t.primary ? T.dark : T.canvas};color:${t.primary ? "#fff" : T.ink};border:2px solid ${t.primary ? T.dark : T.border};border-radius:28px;padding:56px 44px;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;position:relative;cursor:pointer;text-align:left;overflow:hidden">
-      <div style="width:150px;height:150px;border-radius:32px;background:${t.primary ? "rgba(255,255,255,.1)" : bc + "1a"};color:${t.primary ? "#fff" : bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.15)">${t.icon}</div></div>
-      <div>
-        <div style="font-size:58px;font-weight:600;letter-spacing:-1px;line-height:1.1">${t.label}</div>
-        <div style="font-size:36px;font-weight:500;opacity:.55;letter-spacing:1.5px;font-family:Inter,system-ui,sans-serif;margin-top:4px">${t.en}</div>
-        <div style="font-size:25px;margin-top:18px;color:${t.primary ? "rgba(255,255,255,.7)" : T.sub}">${t.desc}</div>
-        <div style="font-size:19px;opacity:.5;letter-spacing:.5px;margin-top:4px;font-family:Inter,system-ui,sans-serif">${t.descEn}</div>
+  <div style="flex:1;min-height:0"></div>
+  <div id="tiles" style="flex:none;height:520px;display:grid;grid-template-columns:repeat(3,1fr);gap:24px;padding:0 80px;min-height:0">
+    ${TILES.map((t, i) => `<button data-ti="${i}" data-ev="top-${t.screen}" style="background:${t.primary ? T.dark : T.canvas};color:${t.primary ? "#fff" : T.ink};border:2px solid ${t.primary ? T.dark : T.border};border-radius:26px;padding:26px 34px 24px;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;position:relative;cursor:pointer;text-align:left;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:20px">
+        <div style="width:78px;height:78px;flex-shrink:0;border-radius:50%;background:${t.primary ? "rgba(255,255,255,.16)" : bc};color:#fff;display:flex;align-items:center;justify-content:center;font-size:44px;font-weight:700">${i + 1}</div>
+        <div style="width:96px;height:96px;border-radius:24px;background:${t.primary ? "rgba(255,255,255,.1)" : bc + "1a"};color:${t.primary ? "#fff" : bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(1.5)">${t.icon}</div></div>
       </div>
-      <div style="position:absolute;top:44px;right:44px;color:${t.primary ? "rgba(255,255,255,.5)" : T.muted};transform:scale(1.3)">${ICO.arrow}</div>
+      <div>
+        <div style="font-size:52px;font-weight:600;letter-spacing:-1px;line-height:1.1">${t.label}</div>
+        <div style="font-size:23px;margin-top:8px;color:${t.primary ? "rgba(255,255,255,.7)" : T.sub}">${t.desc}</div>
+      </div>
+      <div style="position:absolute;top:30px;right:34px;color:${t.primary ? "rgba(255,255,255,.5)" : T.muted};transform:scale(1.2)">${ICO.arrow}</div>
     </button>`).join("")}
   </div>
-  <div style="padding:0 80px 34px;display:flex;align-items:center;color:${T.muted};font-size:22px;flex-shrink:0">
-    <span id="top-clk" style="font-family:'JetBrains Mono',monospace;font-size:22px"></span>
+  <div style="padding:18px 80px 12px;display:flex;align-items:center;color:${T.muted};font-size:20px;flex-shrink:0">
+    <span id="top-clk" style="font-family:'JetBrains Mono',monospace;font-size:20px"></span>
     <span style="flex:1"></span>
     <span style="font-family:'JetBrains Mono',monospace">${devName()}</span>
   </div>
+  ${bottomBandHtml()}
 </div>`;
   rescale();
   document.querySelectorAll("#tiles [data-ti]").forEach((btn, i) => { btn.style.animation = `slide-in-up 1.0s cubic-bezier(.2,.9,.3,1) ${i * 0.12}s both`; });
   document.getElementById("top-clk").textContent = fmtClock();
   every(30000, () => { const c = document.getElementById("top-clk"); if (c) c.textContent = fmtClock(); });
-  bindHomeBtn("top-home");
   // 1 つ前はかざす面。QR や名刺をかざし直したい人がここで行き止まりになっていた。
-  document.getElementById("top-back").addEventListener("click", () => { cleanup(); go("welcome"); });
+  bindBottomBand({ onBack: () => { cleanup(); go("welcome"); } });
 
   let idleId, countId;
   function resetIdle() {
@@ -1845,27 +1916,29 @@ function showLockerMode() {
   }
   CLEANUPS.push(() => { clearTimeout(idleId); clearInterval(countId); });
   sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center;gap:24px">${backBtnHtml("lm-back")}<div style="flex:1"></div>${idleMeterHtml("lm-idle")}<div style="flex:1"></div>${homeBtnHtml("lm-home")}</div>
-  <div style="padding:14px 80px 0;flex-shrink:0"><div style="font-size:58px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">ロッカーのご利用</div><div style="font-size:36px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Lockers</div></div>
-  <div data-stagger style="flex:1;display:flex;align-items:center;justify-content:center;gap:44px;padding:0 80px;min-height:0">
-    <button id="lm-store" style="width:620px;height:520px;border-radius:32px;border:3px solid ${bc};background:#eef4ee;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;cursor:pointer;text-align:center;padding:0 40px">
-      <div style="width:150px;height:150px;border-radius:34px;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.3)">${ICO.locker}</div></div>
-      <div><div style="font-size:54px;font-weight:700;color:${T.ink}">手荷物一時保管</div><div style="font-size:34px;color:${T.sub};font-family:Inter,system-ui,sans-serif;margin-top:6px">Store your belongings</div></div>
+  <div style="padding:24px 80px 0;flex-shrink:0;display:flex;align-items:center;gap:24px"><div style="flex:1"></div>${idleMeterHtml("lm-idle")}<div style="flex:1"></div></div>
+  <div style="padding:14px 80px 0;flex-shrink:0"><div style="font-size:54px;font-weight:600;color:${T.ink};letter-spacing:-1.5px">ロッカーのご利用</div><div style="font-size:32px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:6px">Lockers</div></div>
+  <div style="flex:1;min-height:0"></div>
+  <div data-stagger style="flex:none;height:520px;display:flex;justify-content:center;gap:44px;padding:0 80px">
+    <button id="lm-store" style="width:620px;border-radius:30px;border:3px solid ${bc};background:#eef4ee;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;cursor:pointer;text-align:center;padding:0 40px">
+      <div style="width:140px;height:140px;border-radius:32px;background:${bc}22;color:${bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.1)">${ICO.locker}</div></div>
+      <div><div style="font-size:52px;font-weight:700;color:${T.ink}">手荷物一時保管</div><div style="font-size:32px;color:${T.sub};font-family:Inter,system-ui,sans-serif;margin-top:6px">Store your belongings</div></div>
       <div style="font-size:24px;color:${T.sub}">空きロッカーに預け、暗証番号を設定します</div>
     </button>
-    <button id="lm-pickup" style="width:620px;height:520px;border-radius:32px;border:3px solid ${LOCKER_AMBER};background:#faf2e6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;cursor:pointer;text-align:center;padding:0 40px">
-      <div style="width:150px;height:150px;border-radius:34px;background:${LOCKER_AMBER}22;color:${LOCKER_AMBER};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.3)">${ICO.pin}</div></div>
-      <div><div style="font-size:54px;font-weight:700;color:${T.ink}">荷物受け取り</div><div style="font-size:34px;color:${T.sub};font-family:Inter,system-ui,sans-serif;margin-top:6px">Pick up your item</div></div>
+    <button id="lm-pickup" style="width:620px;border-radius:30px;border:3px solid ${LOCKER_AMBER};background:#faf2e6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;cursor:pointer;text-align:center;padding:0 40px">
+      <div style="width:140px;height:140px;border-radius:32px;background:${LOCKER_AMBER}22;color:${LOCKER_AMBER};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.1)">${ICO.pin}</div></div>
+      <div><div style="font-size:52px;font-weight:700;color:${T.ink}">荷物受け取り</div><div style="font-size:32px;color:${T.sub};font-family:Inter,system-ui,sans-serif;margin-top:6px">Pick up your item</div></div>
       <div style="font-size:24px;color:${T.sub}">暗証番号を入力してお荷物を受け取ります</div>
     </button>
   </div>
+  <div style="height:18px;flex:none"></div>
+  ${bottomBandHtml()}
 </div>`;
   rescale();
   resetIdle();
   paintIdleMeter("lm-idle", idleLeft, ST.kiosk_idle_timeout_sec);
   onSc("click", resetIdle);
-  document.getElementById("lm-back").addEventListener("click", () => { cleanup(); go("top"); });
-  bindHomeBtn("lm-home");
+  bindBottomBand({ onBack: () => { cleanup(); go("top"); } });
   document.getElementById("lm-store").addEventListener("click", () => { cleanup(); go("locker", { mode: "store" }); });
   document.getElementById("lm-pickup").addEventListener("click", () => { cleanup(); go("locker", { mode: "pickup" }); });
 }
@@ -1876,6 +1949,28 @@ function showLockerMode() {
 //  利用中: タッチ→4桁PIN入力→照合OKで開錠(GPIO)→お受け取り
 // ※実機に扉開閉センサーが無いため「扉を閉めました」ボタンでPIN設定へ進む(センサー導入時は自動化可)。
 const LOCKER_AMBER = "#bd7e2e";
+
+// ロッカーの扉が床から何 cm にあるか。**画面のタイルは同じ大きさでも実物の高さは違う**ので、
+// 車いす座位で使えるかどうかを選ぶ前に見せる（Doc/kiosk-voice-touchless.html §05）。
+// 比率は什器の線画 v8 の実測座標（フレーム y=61..1472、ロッカー部の仕切り y=718/920/1123/1423）。
+//
+// **什器の全高（床から天面まで）が分からないと cm は出せない**ので、設定されていなければ
+// 何も出さない（推測した数字を出さない）。段の別は名称（A（上段）等）が元から伝えている。
+// 出したい場合は受付設定に kiosk_fixture_height_mm（実測値）を入れること。
+const FIXTURE_Y = { bottom: 1472, span: 1411 };
+const LOCKER_TIER_Y = [[920, 718], [1123, 920], [1423, 1123]];   // [下端, 上端] 上段→下段
+function lockerDoorHeightMm(locker, all) {
+  const h = Number(ST.kiosk_fixture_height_mm);
+  if (!h || !isFinite(h) || h <= 0) return null;
+  // 段の対応が線画から決まるのは 3 段構成のときだけ。7 口では扉と段の対応が図から読めない。
+  if (!Array.isArray(all) || all.length !== 3) return null;
+  const idx = all.indexOf(locker);
+  if (idx < 0 || idx > 2) return null;
+  const [y0, y1] = LOCKER_TIER_Y[idx];
+  const mm = (y) => (FIXTURE_Y.bottom - y) / FIXTURE_Y.span * h;
+  const lo = mm(y0), hi = mm(y1);
+  return { lo: Math.round(lo / 10), hi: Math.round(hi / 10), low: hi < 450 };
+}
 // mode: "store"(手荷物一時保管=空きロッカーのみ) / "pickup"(荷物受け取り=PIN設定済のみ) / "all"(旧・両方)
 function showLocker(mode) {
   mode = mode || "all";
@@ -1955,9 +2050,12 @@ function showLocker(mode) {
     });
   }
 
-  const shell = (inner, backTo) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center;gap:24px">${backBtnHtml("lk-back")}<div style="flex:1"></div>${idleMeterHtml("lk-idle")}<div style="flex:1"></div>${homeBtnHtml("lk-home")}</div>
+  // 上端には待機メーターだけを残し、押すもの(戻る/やめる/担当者を呼ぶ)は下部の帯へ集める。
+  // 暗証番号の画面は到達線の下が狭いので slim 版(戻る＋担当者を呼ぶ)にしてテンキーの高さを稼ぐ。
+  const shell = (inner, bandOpts) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
+  <div style="padding:24px 80px 0;flex-shrink:0;display:flex;align-items:center;gap:24px"><div style="flex:1"></div>${idleMeterHtml("lk-idle")}<div style="flex:1"></div></div>
   ${inner}
+  ${bottomBandHtml(bandOpts || {})}
 </div>`;
 
   function render() {
@@ -1987,12 +2085,20 @@ function showLocker(mode) {
       const stateJa = delivery ? "配達保管中" : (used ? "利用中" : "空き");
       const stateEn = delivery ? "Held for pickup" : (used ? "In use" : "Available");
       const cta = delivery ? "スタッフが対応します" : (used ? "暗証番号で解錠 →" : "タッチして開ける →");
-      return `<button data-li="${i}" ${delivery ? "disabled" : ""} style="position:relative;display:flex;align-items:center;gap:40px;width:100%;flex:1;min-height:0;background:${used ? "#faf2e6" : "#eef4ee"};border:3px solid ${accent};border-radius:24px;padding:0 56px;cursor:${delivery ? "not-allowed" : "pointer"};opacity:${delivery ? .6 : 1};text-align:left">
-        <div style="width:116px;height:152px;border-radius:12px;background:${T.canvas};border:3px solid ${accent};position:relative;flex-shrink:0"><div style="position:absolute;top:50%;right:16px;transform:translateY(-50%);width:9px;height:50px;border-radius:5px;background:${accent}"></div></div>
-        <div style="flex:1"><div style="font-size:60px;font-weight:700;color:${T.ink};letter-spacing:-1px">${escHtml(l.name)}</div>
-          <div style="margin-top:12px;display:inline-flex;align-items:center;gap:10px;padding:8px 22px;border-radius:999px;background:${accent};color:#fff;font-size:28px;font-weight:600">${stateJa}<span style="font-size:20px;font-weight:500;opacity:.85;font-family:Inter,system-ui,sans-serif">${stateEn}</span></div>
+      // 口数は 3 口 / 7 口 で変わる。**縦積みの順番＝実物の段の順番**なので並べ替えない。
+      // 行が増えても崩れないよう、口数で寸法だけ落とす。
+      const big = shownLockers.length <= 3;
+      const doorH = lockerDoorHeightMm(l, shownLockers);
+      return `<button data-li="${i}" ${delivery ? "disabled" : ""} style="position:relative;display:flex;align-items:center;gap:${big ? 34 : 22}px;width:100%;flex:1;min-height:0;background:${used ? "#faf2e6" : "#eef4ee"};border:3px solid ${accent};border-radius:${big ? 24 : 16}px;padding:0 ${big ? 48 : 32}px;cursor:${delivery ? "not-allowed" : "pointer"};opacity:${delivery ? .6 : 1};text-align:left">
+        <div style="width:${big ? 74 : 50}px;height:${big ? 74 : 50}px;flex-shrink:0;border-radius:50%;background:${accent};color:#fff;display:flex;align-items:center;justify-content:center;font-size:${big ? 38 : 27}px;font-weight:700">${i + 1}</div>
+        <div style="width:${big ? 100 : 46}px;height:${big ? 132 : 60}px;border-radius:${big ? 12 : 8}px;background:${T.canvas};border:3px solid ${accent};position:relative;flex-shrink:0"><div style="position:absolute;top:50%;right:${big ? 14 : 7}px;transform:translateY(-50%);width:${big ? 9 : 6}px;height:${big ? 44 : 20}px;border-radius:5px;background:${accent}"></div></div>
+        <div style="flex:1;min-width:0"><div style="font-size:${big ? 56 : 34}px;font-weight:700;color:${T.ink};letter-spacing:-1px">${escHtml(l.name)}</div>
+          <div style="margin-top:${big ? 10 : 3}px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+            <span style="display:inline-flex;align-items:center;gap:10px;padding:${big ? "8px 22px" : "5px 16px"};border-radius:999px;background:${accent};color:#fff;font-size:${big ? 26 : 19}px;font-weight:600">${stateJa}<span style="font-size:${big ? 20 : 15}px;font-weight:500;opacity:.85;font-family:Inter,system-ui,sans-serif">${stateEn}</span></span>
+            ${doorH ? `<span style="font-size:${big ? 24 : 19}px;font-weight:700;color:${doorH.low ? T.urgent : T.sub};background:${doorH.low ? T.urgentBg : "transparent"};border-radius:8px;padding:${doorH.low ? "4px 12px" : "0"}">床から ${doorH.lo}〜${doorH.hi}cm${doorH.low ? "・低い位置です" : ""}</span>` : ""}
+          </div>
         </div>
-        <div style="font-size:24px;color:${accent};font-weight:600;flex-shrink:0">${cta}</div>
+        <div style="font-size:${big ? 24 : 19}px;color:${accent};font-weight:600;flex-shrink:0">${cta}</div>
       </button>`;
     }).join("")}
   </div>`;
@@ -2032,30 +2138,42 @@ function showLocker(mode) {
     } else { // pinset | pininput
       const isSet = view === "pinset";
       const dots = Array.from({ length: 4 }, (_, i) => `<div style="width:30px;height:30px;border-radius:50%;border:2px solid ${i < pin.length ? bc : T.borderStrong};background:${i < pin.length ? bc : "transparent"}"></div>`).join("");
-      const PAD = ["1","2","3","4","5","6","7","8","9","⌫","0","→"];
+      // **スマホ型の 3 列×4 段をやめ、6 列×2 段にする。** 縦 372px→238px になり、
+      // 座位の到達範囲（画面の下 1/3）にキーパッド全体が収まる。画面は横に 1920px
+      // 余っていて縦だけが足りないので、足りない方向に積み上げない。
+      // 1 キーでも届かないと **その数字を含む暗証番号が入らない** ＝機能ごと死ぬ。
+      const PAD = ["1","2","3","4","5","⌫","6","7","8","9","0","→"];
       const padHtml = PAD.map(k => {
         const confirm = k === "→", disabled = busy || (confirm && pin.length < 4);
-        return `<button data-pk="${k}" style="height:96px;border-radius:18px;font-size:${confirm ? 24 : 40}px;font-weight:600;cursor:${disabled ? "not-allowed" : "pointer"};border:1px solid ${confirm ? bc : T.borderStrong};background:${confirm ? bc : T.canvas};color:${confirm ? "#fff" : T.ink};opacity:${disabled ? .4 : 1}">${confirm ? (busy ? "…" : "決定") : k}</button>`;
+        return `<button data-pk="${k}" style="height:112px;border-radius:18px;font-size:${confirm ? 30 : 48}px;font-weight:600;cursor:${disabled ? "not-allowed" : "pointer"};border:1px solid ${confirm ? bc : T.borderStrong};background:${confirm ? bc : T.canvas};color:${confirm ? "#fff" : T.ink};opacity:${disabled ? .4 : 1}">${confirm ? (busy ? "…" : "決定") : k}</button>`;
       }).join("");
-      sc.innerHTML = shell(`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px">
-        <div style="text-align:center"><div style="font-size:46px;font-weight:600;color:${T.ink};letter-spacing:-1px">${isSet ? "暗証番号を設定してください" : "暗証番号を入力してください"}</div><div style="font-size:22px;color:${T.muted};margin-top:6px">${escHtml(sel.name)} ・ 4桁 (4 digits)</div></div>
-        <div style="display:flex;gap:22px;margin:6px 0">${dots}</div>
-        ${err ? `<div style="padding:10px 20px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.3);border-radius:10px;color:${T.urgent};font-size:20px">${escHtml(err)}</div>` : ""}
-        <div style="display:grid;grid-template-columns:repeat(3,128px);gap:14px">${padHtml}</div>
-      </div>`);
+      sc.innerHTML = shell(`<div style="flex:none;padding:14px 80px 0;text-align:center">
+        <div style="font-size:46px;font-weight:600;color:${T.ink};letter-spacing:-1px">${isSet ? "暗証番号を設定してください" : "暗証番号を入力してください"}</div>
+        <div style="font-size:22px;color:${T.muted};margin-top:6px">${escHtml(sel.name)} ・ 4桁 (4 digits)</div>
+        <div style="display:flex;gap:22px;justify-content:center;margin-top:18px">${dots}</div>
+      </div>
+      <div style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:0 80px">
+        ${err ? `<div style="padding:12px 24px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.3);border-radius:10px;color:${T.urgent};font-size:24px">${escHtml(err)}</div>` : ""}
+      </div>
+      <div style="flex:none;display:flex;justify-content:center;padding:0 80px 12px">
+        <div style="display:grid;grid-template-columns:repeat(6,200px);gap:14px">${padHtml}</div>
+      </div>`, { slim: true });
     }
     rescale();
     paintIdle();   // render() は resetIdle() のあとに innerHTML を差し替えるので描き戻す
     if (view !== lastView) { lastView = view; softEnter(sc.firstElementChild); }  // view切替時のみ立ち上げ(PIN連打では動かさない)
 
-    const back = document.getElementById("lk-back");
     // 「戻る」は必ず 1 つ前へ。画面内のステップも 1 つずつ戻す。
     // 以前は暗証番号の画面からでも一気に外(モード選択)へ出ていたので、口を押し
     // 間違えただけの人がモード選択からやり直しになっていた。
-    if (back) back.addEventListener("click", () => {
-      if (view === "pininput" || view === "pinset") { pin = ""; err = ""; sel = null; view = "grid"; render(); return; }
-      cleanup(); go(mode === "all" ? "top" : "lockerMode");
+    bindBottomBand({
+      onBack: () => {
+        if (view === "pininput" || view === "pinset") { pin = ""; err = ""; sel = null; view = "grid"; render(); return; }
+        cleanup(); go(mode === "all" ? "top" : "lockerMode");
+      },
     });
+    // 解錠ガイド(openwait)と扉ガイド付き result は shell を使わない全画面で、
+    // 右上の角に「やめる」を持つ。下部帯は出ないのでこちらを個別に束縛する。
     bindHomeBtn("lk-home");
 
     if (view === "grid") {
@@ -2229,9 +2347,11 @@ function showDelivery() {
   }
   CLEANUPS.push(() => { clearTimeout(idleId); clearInterval(countId); if (resultTimer) clearTimeout(resultTimer); });
 
+  // 他の画面と同じく、押すものは下部の常設帯へ。上端は待機メーターだけ。
   const shell = (inner) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
-  <div style="padding:28px 80px 0;flex-shrink:0;display:flex;align-items:center;gap:24px">${backBtnHtml("dl-back")}<div style="flex:1"></div>${idleMeterHtml("dl-idle")}<div style="flex:1"></div>${homeBtnHtml("dl-home")}</div>
+  <div style="padding:24px 80px 0;flex-shrink:0;display:flex;align-items:center;gap:24px"><div style="flex:1"></div>${idleMeterHtml("dl-idle")}<div style="flex:1"></div></div>
   ${inner}
+  ${bottomBandHtml()}
 </div>`;
 
   function render() {
@@ -2302,11 +2422,13 @@ function showDelivery() {
     paintIdle();   // render() は resetIdle() のあとに innerHTML を差し替えるので描き戻す
     if (view !== lastView) { lastView = view; softEnter(sc.firstElementChild); }  // view切替時のみ立ち上げ
 
-    const back = document.getElementById("dl-back");
-    if (back) back.addEventListener("click", () => {
-      if (view === "pick" || view === "openwait") { view = "choose"; render(); }
-      else { cleanup(); go("top"); }
+    bindBottomBand({
+      onBack: () => {
+        if (view === "pick" || view === "openwait") { view = "choose"; render(); }
+        else { cleanup(); go("top"); }
+      },
     });
+    // 扉ガイド付きの全画面(shell を使わない view)は右上の角に「やめる」を持つ。
     bindHomeBtn("dl-home");
 
     if (view === "choose") {
@@ -3447,6 +3569,16 @@ function openVoiceInput({ initial, onApply, context }) {
 // 開いてから「名刺で入力」を押した場合と同じ経路で反映する。
 // from: 来た画面。「← 戻る」は必ず来た道へ返す(以前は常にご用件へ行っていたので、
 // 名刺でかざす面から直接来た人が、通っていない画面に出されていた)。
+// 受付フォームの入力手段(音声・名刺)は下部の常設帯に置く。以前は画面右上にあり、
+// **座位では届かない＝音声にも名刺にも入れない**という詰み方をしていた。
+// 名刺はかざすだけで済み、押す精度も発話も要らないので、届く位置に置くのが特に効く。
+function recInputBtns() {
+  const bc = ST.brand_color;
+  const btn = (id, icon, label) => `<button id="${id}" type="button" style="display:inline-flex;align-items:center;gap:12px;height:92px;padding:0 30px;background:${T.canvas};border:2px solid ${bc};border-radius:18px;font-size:28px;font-weight:700;color:${bc};cursor:pointer;font-family:inherit;white-space:nowrap">${icon}${label}</button>`;
+  return (voiceAvailable() ? btn("rec-voice", ICO.mic, "音声で入力") : "")
+       + (cardAvailable() ? btn("rec-card", ICO.card, "名刺で入力") : "");
+}
+
 function showReception(initPurpose, initCard, from) {
   const bc = ST.brand_color;
   const STAFF_LIST = Array.isArray(ST.staff_list) ? ST.staff_list.filter(Boolean) : [];
@@ -3782,12 +3914,10 @@ function showReception(initPurpose, initCard, from) {
       </div>
       <div style="margin-top:16px;border-top:1px solid ${T.border};padding-top:14px;font-size:22px;color:${T.sub}">※営業・セールス・勧誘等のご訪問はお受けしておりません。</div>`;
     sc.innerHTML = `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif;position:relative">
-  <div style="padding:28px 40px 0;flex-shrink:0;display:flex;align-items:center;gap:20px">
-    ${backBtnHtml("rec-back")}
+  <div style="padding:22px 40px 0;flex-shrink:0;display:flex;align-items:center;gap:20px">
     <div style="flex:1"></div>
     ${idleMeterHtml("rec-idle")}
     <div style="flex:1"></div>
-    ${homeBtnHtml("rec-home")}
   </div>
   <div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px 32px;overflow:hidden">
     <!-- 左側：入力フォーム -->
@@ -3798,8 +3928,6 @@ function showReception(initPurpose, initCard, from) {
           <div style="font-size:24px;color:${T.muted};font-family:Inter,system-ui,sans-serif;margin-top:2px">Visit Details</div>
         </div>
         <div style="flex:1"></div>
-        ${voiceAvailable() ? `<button id="rec-voice" type="button" style="display:inline-flex;align-items:center;gap:12px;min-height:72px;padding:0 28px;background:${T.canvas};border:2px solid ${bc};border-radius:16px;font-size:25px;font-weight:600;color:${bc};cursor:pointer;font-family:inherit">${ICO.mic}音声で入力</button>` : ""}
-        ${cardAvailable() ? `<button id="rec-card" type="button" style="display:inline-flex;align-items:center;gap:12px;min-height:72px;padding:0 28px;background:${T.canvas};border:2px solid ${bc};border-radius:16px;font-size:25px;font-weight:600;color:${bc};cursor:pointer;font-family:inherit">${ICO.card}名刺で入力</button>` : ""}
       </div>
       ${cardNote ? `<div style="margin-bottom:10px;background:${T.panel};border:1px solid ${T.border};border-radius:12px;padding:12px 16px;color:${T.sub};font-size:19px">${escHtml(cardNote)}</div>` : ""}
       ${errMsg ? `<div style="margin-bottom:14px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.35);border-radius:12px;padding:12px 14px;color:${T.urgent};font-size:16px">${escHtml(errMsg)}</div>` : ""}
@@ -3817,11 +3945,12 @@ function showReception(initPurpose, initCard, from) {
     <!-- 右側：キーボード -->
     <div id="kb-pane" style="display:flex;flex-direction:column;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:12px;padding:14px;overflow:hidden;font-size:0">${buildKeyboardHtml()}</div>
   </div>
-  <div style="padding:10px 40px 16px;display:flex;align-items:center;color:${T.muted};font-size:16px;flex-shrink:0">
+  <div style="padding:8px 40px 10px;display:flex;align-items:center;color:${T.muted};font-size:16px;flex-shrink:0">
     <span style="font-family:Inter,system-ui,sans-serif">右のキーボードで入力してください</span>
     <span style="flex:1"></span>
     <span style="font-family:'JetBrains Mono',monospace">${devName()}</span>
   </div>
+  ${bottomBandHtml({ extra: recInputBtns() })}
   <!-- 変換候補パネル(フローティング一括表示。背景タップ/閉じるで閉じる) -->
   <div id="kb-cand-pop" style="display:none;position:absolute;inset:0;z-index:9500;background:rgba(20,18,14,0.45);align-items:center;justify-content:center">
     <div style="width:1200px;max-width:92%;max-height:80%;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:20px;box-shadow:0 24px 70px rgba(0,0,0,.35);display:flex;flex-direction:column;overflow:hidden">
@@ -3837,8 +3966,7 @@ function showReception(initPurpose, initCard, from) {
     g("f-name").value = form.visitor_name;
     g("f-company").value = form.company;
     if (g("f-staff")) g("f-staff").value = form.staff;
-    g("rec-back").addEventListener("click", () => { cleanup(); go(from === "welcome" ? "welcome" : "top"); });
-    bindHomeBtn("rec-home");
+    bindBottomBand({ onBack: () => { cleanup(); go(from === "welcome" ? "welcome" : "top"); } });
     const cardBtn = g("rec-card");
     if (cardBtn) cardBtn.addEventListener("click", () => { resetIdle(); AN.inputStarted("card_capture", "card"); openCardCapture({ onConfirm: applyCardValues }); });
     const voiceBtn = g("rec-voice");
