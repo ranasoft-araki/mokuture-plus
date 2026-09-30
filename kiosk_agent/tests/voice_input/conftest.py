@@ -1,14 +1,18 @@
-"""音声入力テストの共通土台(fixture のみ)。
+"""声で操作するテストの共通土台(fixture のみ)。
 
-実マイクも whisper.cpp のバイナリも使わずに、録音ループ・整形・判定・API の流れを
-そのまま検証できるようにする。音声は `voice_audio.py` で合成し、
-`capture.BufferStream` で流す。
+実マイクも実モデルも使わずに、録音ループ・語彙・照合・API の流れをそのまま検証
+できるようにする。音声は `voice_audio.py` で合成し、`capture.BufferStream` で流す。
+Vosk は `voice_fakes.py` のふりに差し替える。
 """
 from __future__ import annotations
 
+import sys
+import types
+
 import pytest
 
-from voice import capture, cloud, session as session_mod, settings
+from voice import capture, session as session_mod, settings, vosk_engine
+from voice_fakes import LEXICON, FakeRecognizer
 
 
 @pytest.fixture(autouse=True)
@@ -20,16 +24,13 @@ def _reset_voice(tmp_path):
     settings.reload()
     cfg = settings.cfg()
     cfg["metrics"]["path"] = str(tmp_path / "metrics.jsonl")
-    # whisper の一時ファイルもテスト用の場所へ(/dev/shm は Windows に無い)
-    cfg["whisper"]["tmp_dir"] = str(tmp_path)
     session_mod.store.clear()
     capture.set_override(None)
     # 録音デバイスの解決結果はモジュールに覚えるので、テスト間で持ち越さない。
     capture.forget_device()
-    # **テストが外へ音声を送らないようにする。** 中継を使うテストは自分で入れ直す。
-    cfg["cloud"]["enabled"] = False
-    cloud.reset()
+    vosk_engine.unload()
     yield
+    vosk_engine.unload()
     capture.set_override(None)
     capture.forget_device()
     session_mod.store.clear()
@@ -54,3 +55,27 @@ def feed():
         return created
 
     return _feed
+
+
+@pytest.fixture
+def fake_vosk(monkeypatch, tmp_path):
+    """vosk パッケージとモデル(語彙を絞れる版)を差し替える。作った認識器の一覧を返す。"""
+    model_dir = tmp_path / "vosk-model"
+    graph = model_dir / "graph"
+    graph.mkdir(parents=True)
+    (graph / "words.txt").write_text("\n".join(f"{w} {i}" for i, w in enumerate(LEXICON)), encoding="utf-8")
+    (graph / "Gr.fst").write_bytes(b"")
+    (graph / "HCLr.fst").write_bytes(b"")
+    settings.cfg()["vosk"]["model_path"] = str(model_dir)
+    made: list[FakeRecognizer] = []
+
+    def kaldi(model, rate, grammar=None):
+        r = FakeRecognizer(model, rate, grammar)
+        made.append(r)
+        return r
+
+    mod = types.SimpleNamespace(Model=lambda path: object(), KaldiRecognizer=kaldi, SetLogLevel=lambda n: None)
+    monkeypatch.setitem(sys.modules, "vosk", mod)
+    FakeRecognizer.words = []
+    FakeRecognizer.free_words = []
+    return made

@@ -1,7 +1,7 @@
 [Unit]
-Description=mokuture+ Voice Input (experimental, local only)
+Description=mokuture+ Voice Command (experimental, local only)
 # キオスク本体とは独立させる。音声サービスが落ちても受付は従来どおり動くべきで、
-# 逆に本体の再起動(OTA 適用など)で認識中の音声入力を巻き込む必要もない。
+# 逆に本体の再起動(OTA 適用など)で聞き取り中の音声を巻き込む必要もない。
 # 音声サービス側は自分のソースが差し替わったのを検知して自分で終了する。
 After=network.target sound.target
 # 異常終了が続くときに再起動を繰り返して CPU を焼かないようにする
@@ -32,8 +32,7 @@ ProtectHome=read-only
 # 匿名メトリクス(~/.mokuture-voice/metrics.jsonl)だけ書けるようにする。
 # 先頭の "-" は「無ければ黙って飛ばす」印(install_voice.sh が作る)。
 ReadWritePaths=-HOME_DIR/.mokuture-voice
-# whisper.cpp へ渡す WAV は tmpfs(/dev/shm)に置く。PrivateTmp=yes により
-# /dev/shm もこのプロセス専用になり、他のプロセスからは見えない。
+# PrivateTmp=yes により /tmp・/dev/shm はこのプロセス専用(音声はディスクに書かないが念のため)。
 
 [Install]
 WantedBy=multi-user.target

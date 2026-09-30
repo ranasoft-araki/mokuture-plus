@@ -1,7 +1,7 @@
-"""実証実験用の匿名メトリクス(§11・§12)。
+"""実証実験用の匿名メトリクス(声で操作する)。
 
-**書いてよいのは個人を特定できない数値と固定語彙だけ。** 認識したテキスト・氏名・
-会社名・担当者名は 1 文字も書かない。修正されたかどうかは真偽値だけを残す(§12)。
+**書いてよいのは個人を特定できない数値と固定語彙だけ。** 認識した言葉は 1 文字も書かない。
+残すのは画面名・選ばれた選択肢の id(画面が決めた固定語彙)・外れた理由・所要時間だけ。
 
 安全のしくみは「書ける項目を列挙しておき、それ以外は捨てる」方式にした(`_ALLOWED`)。
 あとから項目を足すときに、うっかり本文を混ぜても落ちるだけで漏れない。
@@ -11,12 +11,12 @@
 
 レコード例:
 
-    {"sessionId": "8f3c…", "screenId": "visitor-name-input", "inputMethod": "voice",
-     "model": "whisper-base-q5", "audioDurationMs": 3200, "recognitionDurationMs": 1400,
-     "result": "success", "retryCount": 0, "errorCode": null, "timestamp": "..."}
+    {"sessionId": "8f3c…", "screenId": "command-top", "model": "vosk-small-ja-0.22",
+     "recognitionDurationMs": 62, "result": "success", "choiceId": "locker",
+     "errorCode": null, "timestamp": "..."}
 
-`sessionId` は音声入力を始めるたびに作る使い捨ての乱数で、受付ログ(reception_logs)とは
-一切ひも付けない。受付が終わった後にこの ID から個人へ戻る経路は存在しない(§11)。
+`sessionId` は音声モードに入るたびに作る使い捨ての乱数で、受付ログ(reception_logs)とは
+一切ひも付けない。
 """
 from __future__ import annotations
 
@@ -34,31 +34,21 @@ log = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 
-# 画面(項目)→ screenId。要件の例に合わせた固定語彙。
-SCREEN_IDS = {
-    "company": "company-input",
-    "person_name": "visitor-name-input",
-    "staff": "host-select",
-    "command": "voice-command",
-}
-
 # 書き出してよいキーと型。ここに無いキーは黙って捨てる。
 _ALLOWED: dict[str, type | tuple[type, ...]] = {
     "sessionId": str,
-    "screenId": str,
-    "inputMethod": str,          # "voice" | "touch"
+    "screenId": str,             # command-<画面名>
     "model": str,
     "engine": str,
     "audioDurationMs": int,
     "recognitionDurationMs": int,
-    "totalMs": int,              # 発話終了 → 結果表示(§3-1・§12)
-    "result": str,               # success | retry | cancel | error | confirm | fallback_touch
-    "retryCount": int,
+    "totalMs": int,              # 話し終わり → 判定
+    "result": str,               # success | error
+    "accepted": bool,
+    # 選ばれた選択肢。画面が決めた固定語彙(「visit」「back」)で、話した言葉そのものではない。
+    "choiceId": (str, type(None)),
     "errorCode": (str, type(None)),
     "stopReason": (str, type(None)),
-    "edited": bool,              # 利用者が結果を直したか(中身は残さない)
-    "accepted": bool,
-    "candidateCount": int,
     "timestamp": str,
 }
 
@@ -123,7 +113,6 @@ def record(event: dict[str, Any]) -> None:
     if not row:
         return
     row.setdefault("timestamp", datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"))
-    row.setdefault("inputMethod", "voice")
     path = _path()
     try:
         with _lock:
@@ -168,84 +157,46 @@ def _percentile(values: list[int], pct: float) -> int | None:
 
 
 def summary() -> dict[str, Any]:
-    """§12 の指標を集計する。個票は返さない(件数と割合と時間だけ)。"""
-    rows = _read_rows()
-    attempts = [r for r in rows if r.get("result") in ("success", "error", "cancel")]
-    total = len(attempts)
-    success = sum(1 for r in attempts if r.get("result") == "success")
-    errors = sum(1 for r in attempts if r.get("result") == "error")
-    cancels = sum(1 for r in attempts if r.get("result") == "cancel")
-    retries = sum(1 for r in attempts if int(r.get("retryCount") or 0) > 0)
+    """話しかけられた回のうち、画面が動いた割合と外れ方。個票は返さない。
 
-    confirms = [r for r in rows if r.get("result") == "confirm"]
-    edited = sum(1 for r in confirms if r.get("edited") is True)
-    fallbacks = sum(1 for r in rows if r.get("result") == "fallback_touch")
-    sessions = {r.get("sessionId") for r in rows if r.get("sessionId")}
-
-    def ratio(n: int, d: int) -> float | None:
-        return round(n / d, 4) if d else None
-
-    # 項目別の再入力率
+    embedded(文の一部として言われた)が多い画面は、周りの会話を拾っている。
+    誤爆(言っていないのに当たった)はここからは分からない。ロビーの録音で測る
+    (scripts/voice_command_eval.py / VOICE_COMMAND.md)。
+    """
+    rows = [r for r in _read_rows() if str(r.get("screenId") or "").startswith("command-")]
     by_screen: dict[str, dict[str, Any]] = {}
-    for r in attempts:
-        sid = str(r.get("screenId") or "unknown")
-        b = by_screen.setdefault(sid, {"attempts": 0, "success": 0, "retried": 0, "cancel": 0, "error": 0})
+    by_choice: dict[str, int] = {}
+    rec_ms: list[int] = []
+    tot_ms: list[int] = []
+    for r in rows:
+        screen = str(r.get("screenId") or "unknown").removeprefix("command-")
+        b = by_screen.setdefault(screen, {"attempts": 0, "matched": 0, "unmatched": 0,
+                                          "ambiguous": 0, "embedded": 0, "error": 0})
         b["attempts"] += 1
-        if r.get("result") == "success":
-            b["success"] += 1
-        if r.get("result") == "cancel":
-            b["cancel"] += 1
-        if r.get("result") == "error":
-            b["error"] += 1
-        if int(r.get("retryCount") or 0) > 0:
-            b["retried"] += 1
-    for b in by_screen.values():
-        b["success_rate"] = ratio(b["success"], b["attempts"])
-        b["retry_rate"] = ratio(b["retried"], b["attempts"])
-
-    # モデル別の処理時間
-    by_model: dict[str, dict[str, Any]] = {}
-    for r in attempts:
-        model = str(r.get("model") or "unknown")
-        m = by_model.setdefault(model, {"count": 0, "_rec": [], "_total": []})
-        m["count"] += 1
-        rec = r.get("recognitionDurationMs")
-        if isinstance(rec, int):
-            m["_rec"].append(rec)
-        tot = r.get("totalMs")
-        if isinstance(tot, int):
-            m["_total"].append(tot)
-    for m in by_model.values():
-        rec, tot = m.pop("_rec"), m.pop("_total")
-        m["recognition_ms_p50"] = _percentile(rec, 0.5)
-        m["recognition_ms_p95"] = _percentile(rec, 0.95)
-        m["end_to_display_ms_p50"] = _percentile(tot, 0.5)
-        m["end_to_display_ms_p95"] = _percentile(tot, 0.95)
-
-    # 失敗の内訳。「精度が出ない」が、聞き取れていない(empty_result)のか、
-    # 聞き取れているが自信が足りない(low_confidence)のか、幻聴(repetition)なのかで
-    # 打つ手が変わる。件数だけなので個人情報は入らない。
-    by_error: dict[str, int] = {}
-    for r in attempts:
         code = r.get("errorCode")
-        if code:
-            by_error[str(code)] = by_error.get(str(code), 0) + 1
-
-    all_total = [r["totalMs"] for r in attempts if isinstance(r.get("totalMs"), int)]
+        if r.get("choiceId"):
+            b["matched"] += 1
+            by_choice[str(r["choiceId"])] = by_choice.get(str(r["choiceId"]), 0) + 1
+        elif code in ("unmatched", "ambiguous", "embedded"):
+            b[code] += 1
+        else:
+            b["error"] += 1
+        if isinstance(r.get("recognitionDurationMs"), int):
+            rec_ms.append(r["recognitionDurationMs"])
+        if isinstance(r.get("totalMs"), int):
+            tot_ms.append(r["totalMs"])
+    total = sum(b["attempts"] for b in by_screen.values())
+    matched = sum(b["matched"] for b in by_screen.values())
+    for b in by_screen.values():
+        b["matched_rate"] = round(b["matched"] / b["attempts"], 4) if b["attempts"] else None
     return {
-        "voice_sessions": len(sessions),
+        "voice_sessions": len({r.get("sessionId") for r in rows if r.get("sessionId")}),
         "attempts": total,
-        "success_rate": ratio(success, total),
-        "error_rate": ratio(errors, total),
-        "cancel_rate": ratio(cancels, total),
-        "retry_rate": ratio(retries, total),
-        "edited_rate": ratio(edited, len(confirms)),
-        "confirms": len(confirms),
-        "fallback_to_touch": fallbacks,
-        "fallback_rate": ratio(fallbacks, len(sessions)) if sessions else None,
-        "end_to_display_ms_p50": _percentile(all_total, 0.5),
-        "end_to_display_ms_p95": _percentile(all_total, 0.95),
+        "matched_rate": round(matched / total, 4) if total else None,
+        "recognition_ms_p50": _percentile(rec_ms, 0.5),
+        "recognition_ms_p95": _percentile(rec_ms, 0.95),
+        "end_to_display_ms_p50": _percentile(tot_ms, 0.5),
+        "end_to_display_ms_p95": _percentile(tot_ms, 0.95),
         "by_screen": by_screen,
-        "by_model": by_model,
-        "by_error": by_error,
+        "by_choice": by_choice,
     }

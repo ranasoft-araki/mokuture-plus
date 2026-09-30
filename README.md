@@ -159,12 +159,10 @@ kiosk_agent/
 ├── .env.example          環境変数サンプル
 ├── card/                 名刺読み取り (QR無し来訪者の受付フォーム自動入力)
 ├── card_reader.yaml.example  名刺読み取りの設定例 (しきい値・OCR エンジン)
-├── voice/                音声入力 (実験導入。別プロセス・127.0.0.1:8181 で動く)
-├── voice_input.yaml.example  音声入力の設定例 (マイク・モデル・しきい値)
-├── staff_readings.yaml.example  担当者の読み仮名 (音声で訪問先を指名する用)
+├── voice/                声で操作する (実験導入。別プロセス・127.0.0.1:8181 で動く)
+├── voice_input.yaml.example  声で操作するの設定例 (マイク・しきい値)
 ├── mokuture-voice.service  音声サービスの systemd ユニットファイル
-├── voice_models/         音声認識モデル (Git LFS。whisper.cpp / Vosk)
-├── vendor/               whisper.cpp の固定版ソース (Git LFS)
+├── voice_models/         音声認識モデル (Git LFS。Vosk 日本語軽量)
 ├── scripts/              OCR/音声モデル取得・処理時間の計測・開発用の確認スクリプト
 └── tests/                テスト (架空名刺をその場で生成して使う / 音声は合成波形)
 ```
@@ -181,38 +179,40 @@ kiosk_agent/
 → セットアップ・API 仕様・しきい値調整・トラブルシューティングは
 [kiosk_agent/CARD_READER.md](kiosk_agent/CARD_READER.md)
 
-### 音声入力（実験導入）
+### 声で操作する（実験導入）
 
-受付フォームで「音声で入力」を押すと、会社名・お名前を声で入力できます。**認識は端末の
+待機画面から進むと**押さなくても**聞き取りを始め、「ごほうもん」「ロッカー」「もどる」のような短い
+言葉で画面を操作できます（来訪者が「声の操作をやめる」を押したらその人の間は止まる。
+`voice_input.yaml` の `command.auto_start: false` で「声で操作する」を押したときだけにできる）。
+待機画面（動画）ではマイクを開けません。声で選べるボタンには言う言葉の札が付きます。**認識は端末の
 中だけで完結し**、クラウドの音声認識 API も Web Speech API も生成 AI も使いません。
-インターネットが切れていても動きます。音声も認識結果も保存しません。
+インターネットが切れていても動きます。音声も認識した言葉も保存しません。
 
-**音声だけで受付は確定しません。** 認識結果は入力欄に入るだけで、送信は従来どおり
-利用者が「受付する」を押したときです。認識に失敗しても、いつでもタッチ入力に戻れます。
+声で起こすのは画面の遷移と選択までです。**受付の送信・担当者の呼び出しは声では押せません。**
+ロッカーの空きの口は声で選べますが、開ける前に確認を挟みます。暗証番号の画面では
+マイクを開けません。
 
 キオスク本体とは**別プロセス**（`mokuture-voice.service` / `127.0.0.1:8181` のみ待ち受け）
-で動きます。未セットアップ・マイク未接続・サービス停止の端末では受付画面に導線が出ない
-だけで、キオスク本体は従来どおり動きます。
+で動きます。未セットアップ・マイク未接続・サービス停止の端末では「声で操作する」が
+出ないだけで、キオスク本体は従来どおり動きます。
 
 ```bash
 bash kiosk_agent/scripts/install_voice.sh     # USB マイクを挿してから
 curl -s http://127.0.0.1:8181/voice/status    # available:true なら使える
 ```
 
-**Windows でも動作試験できます**（Pi を用意しなくても、録音〜認識〜整形〜判定の経路と
-画面の導線を確認できます）。
+**Windows でも動作試験できます**。
 
 ```powershell
 cd kiosk_agent
 powershell -ExecutionPolicy Bypass -File scripts\install_voice_windows.ps1
-.venv\Scripts\python scripts\voice_selftest.py --say "株式会社ラナソフトです" --show-text
+.venv\Scripts\python scripts\voice_selftest.py --say "ロッカー" --screen top
 ```
 
-→ インストール・マイク調整・性能計測・チェックリスト・元に戻す手順は
-[kiosk_agent/VOICE_INPUT.md](kiosk_agent/VOICE_INPUT.md)
+→ インストール・画面ごとの言葉・マイク調整・ロビーでの測り方・チェックリストは
+[kiosk_agent/VOICE_COMMAND.md](kiosk_agent/VOICE_COMMAND.md)
 
-> モデル（whisper.cpp base/small 量子化・Vosk 日本語軽量）と whisper.cpp のソースは
-> **Git LFS** でリポジトリに入っています。clone 後に `git lfs pull` が必要です。
+> 以前あった「音声で入力」（受付フォームを声で埋める）は 2026-09-29 に削除しました。
 
 ### 起動コマンド
 
@@ -308,19 +308,16 @@ curl -X POST http://<RPiのIPアドレス>:8080/register
 | `GET` | `/device/analytics/status` | 未送信件数・オンライン状態（分析ログの動作確認用） |
 | `GET` | `/analytics.js` | キオスク画面が読み込む行動ロガー |
 
-音声入力は**別プロセス**（`http://127.0.0.1:8181` のみ。外部からは接続不可）:
+声で操作するは**別プロセス**（`http://127.0.0.1:8181` のみ。外部からは接続不可）:
 
 | メソッド | パス | 説明 |
 |---|---|---|
-| `GET` | `/voice/status` | 音声入力の利用可否・モデル・項目の文言・しきい値 |
-| `POST` | `/voice/session` | 音声入力セッションの開始 |
-| `POST` | `/voice/session/{id}/listen` | 1 項目ぶんの録音と認識を開始（すぐ返る） |
-| `GET` | `/voice/session/{id}/state` | 進行状態（phase・音量・結果）のポーリング |
-| `POST` | `/voice/session/{id}/stop` | 「入力を終了」＝そこまでを発話として確定 |
-| `POST` | `/voice/session/{id}/cancel` | 「キャンセル」＝録音も認識も破棄 |
-| `POST` | `/voice/session/{id}/retry` | 「もう一度話す」＝再入力回数を数える |
-| `POST` | `/voice/session/{id}/event` | 確定・タッチへ切替の匿名イベント記録 |
-| `DELETE` | `/voice/session/{id}` | セッション破棄（音声と認識結果を捨てる） |
+| `GET` | `/voice/status` | 使えるか（マイク・Vosk・語彙を絞れるモデルか） |
+| `POST` | `/voice/session` | 音声モードの開始 |
+| `POST` | `/voice/session/{id}/command` | 画面の選択肢のどれが言われたかを 1 回聞く（すぐ返る） |
+| `GET` | `/voice/session/{id}/state` | 進行状態（phase・音量・判定）のポーリング。認識した言葉は返さない |
+| `POST` | `/voice/session/{id}/cancel` | 聞き取りの取り消し |
+| `DELETE` | `/voice/session/{id}` | セッション破棄（音声と判定を捨てる） |
 | `GET` | `/voice/metrics` | 実証実験の集計（件数・割合・時間のみ） |
 | `GET` | `/voice/devices` | マイク一覧（設定手順用） |
 

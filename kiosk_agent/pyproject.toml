@@ -35,9 +35,7 @@ card = [
 # 録音は arecord（alsa-utils）を使うので、録音まわりの Python 依存は無い。
 voice = [
     "PyYAML>=6.0",
-    # 一文の名乗り（受付の既定の入口）で使う。固有名詞の読みは whisper より
-    # Vosk の方が当たる（読みCER 0.118 / whisper base 0.217）。
-    # 入っていなければ whisper へ自動で落ちるが、精度は下がる。
+    # 声で操作する（画面ごとに語彙を絞って聞き分ける）。
     "vosk>=0.3.45",
     # 任意: 入っていれば VAD を webrtcvad に切り替えられる
     # "webrtcvad-wheels>=2.0.14",

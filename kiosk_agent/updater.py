@@ -85,30 +85,24 @@ MANAGED_FILES = [
     # 辞書は運用中に現場で追記されうる。OTA で上書きされると消えてしまうため
     # 配信対象に入れない(初期セットは install / git pull で入る)。
     #
-    # 音声入力(実験導入)。**別プロセス**(mokuture-voice.service / 127.0.0.1:8181)で
+    # 声で操作する(実験導入)。**別プロセス**(mokuture-voice.service / 127.0.0.1:8181)で
     # 動くが、コードはここに置いてあるので OTA で配れる。エージェント本体の再起動では
     # 音声サービスは新しいコードにならないため、音声サービス側が自分のソースの
     # ハッシュ変化を検知して自ら終了し、systemd に起こし直してもらう
     # (voice/server.py の _watch_sources)。
-    # whisper.cpp のバイナリ・ggml モデル・Vosk モデルは OTA では配れない(サイズと
-    # ビルドの都合)。それらは scripts/install_voice.sh の担当。
+    # Vosk モデルは OTA では配れない(サイズの
+    # 都合)。それは scripts/install_voice.sh の担当。
     "voice/__init__.py",
     "voice/api.py",
     "voice/capture.py",
-    "voice/cloud.py",
     "voice/defaults.py",
-    "voice/engines.py",
-    "voice/extract.py",
     "voice/metrics.py",
-    "voice/quality.py",
     "voice/server.py",
     "voice/session.py",
     "voice/settings.py",
-    "voice/textnorm.py",
     "voice/types.py",
     "voice/vad.py",
     "voice/vosk_engine.py",
-    "voice/whisper_cpp.py",
     # 端末ごとに現場で調整する設定(voice_input.yaml / staff_readings.yaml)は
     # 上書きしたくないので配信対象に入れない。
 ]
@@ -154,6 +148,12 @@ class BundleUpdater:
     # ── Background loop ───────────────────────────────────────────────────────
 
     async def run(self) -> None:
+        # 端末は Raspberry Pi(Linux)だけ。Windows などの開発機で本体を起動すると、master の版と
+        # 違う手元のファイル(未コミットの kiosk.html や voice/*.py)を取り寄せ、待機画面へ戻った
+        # ときに上書きしてしまう。開発機では自動更新しない(試す必要があるときは Pi で)。
+        if os.name != "posix" or os.environ.get("KIOSK_OTA_DISABLE") == "1":
+            log.info("[updater] 開発機(非Linux)または KIOSK_OTA_DISABLE=1 のため自動更新しません")
+            return
         await asyncio.sleep(15)  # let the server fully start first
         while True:
             try:

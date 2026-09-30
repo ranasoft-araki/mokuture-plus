@@ -37,7 +37,7 @@ def noise(ms: int, *, rate: int = RATE, dbfs: float = -60.0) -> bytes:
 
 
 def parse_wav(data: bytes) -> tuple[int, bytes]:
-    """(サンプリングレート, PCM) を返す。whisper へ渡した WAV の検証用。"""
+    """(サンプリングレート, PCM) を返す。WAV の読み込みの検証用。"""
     assert data[:4] == b"RIFF" and data[8:12] == b"WAVE"
     rate = struct.unpack("<I", data[24:28])[0]
     idx = data.find(b"data")

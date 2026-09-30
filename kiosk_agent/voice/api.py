@@ -1,37 +1,33 @@
-"""音声入力の HTTP API(キオスクのブラウザから叩く)。
+"""声で操作する(画面操作のキーワード)の HTTP API。キオスクのブラウザから叩く。
 
-    GET    /voice/status                    利用可否・エンジン・モデル・項目の文言
-    POST   /voice/session                   セッション開始
-    POST   /voice/session/{sid}/listen      1 項目ぶんの録音と認識を開始(すぐ返る)
-    GET    /voice/session/{sid}/state       進行状態(phase / 音量 / 結果)をポーリング
-    POST   /voice/session/{sid}/stop        「入力を終了」= そこまでを発話として確定
-    POST   /voice/session/{sid}/cancel      「キャンセル」= 録音も認識も捨てる
-    POST   /voice/session/{sid}/retry       「もう一度話す」= 再入力回数を数える
-    POST   /voice/session/{sid}/event       確定・タッチへ切替の匿名イベント(§12)
-    DELETE /voice/session/{sid}             破棄(音声と認識結果を捨てる)
-    GET    /voice/metrics                   実証実験の集計(§12)
+    GET    /voice/status                    使えるか(マイク・Vosk・語彙を絞れるモデルか)
+    POST   /voice/session                   セッション開始(音声モードに入ったとき)
+    POST   /voice/session/{sid}/command     画面の選択肢のどれが言われたかを 1 回聞く(すぐ返る)
+    GET    /voice/session/{sid}/state       進行状態(phase / 音量 / 判定)をポーリング
+    POST   /voice/session/{sid}/cancel      聞き取りを取り消す(暗証番号の画面へ移った等)
+    DELETE /voice/session/{sid}             破棄(音声と判定を捨てる)
+    GET    /voice/metrics                   実証実験の集計
     GET    /voice/devices                   マイク一覧(設定手順用)
 
-音声はここへは流れてこない。マイクを握るのはサービス側で(§10)、ブラウザが送るのは
-「どの項目を録るか」だけ。認識結果は state のレスポンスでだけ返し、保存はしない。
+音声はここへは流れてこない。マイクを握るのはサービス側で、ブラウザが送るのは
+「いまの画面で受け付ける言葉」だけ。判定は state のレスポンスでだけ返し、保存はしない。
 
 外部へは一切通信しない。待ち受けも 127.0.0.1 に限定してあるが、念のため発信元が
 ループバックであることをここでも確かめる(二重の網)。
-
-ログに氏名・会社名・担当者名・認識結果を出さない。出すのは項目名・状態・所要時間だけ。
 """
 from __future__ import annotations
 
 import ipaddress
 import logging
 import re
+from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
+from starlette.concurrency import run_in_threadpool
 
-from voice import (capture, cloud, engines, extract, metrics, session as session_mod,
-                   settings, whisper_cpp)
-from voice.types import FIELDS, message
+from voice import capture, metrics, session as session_mod, settings, vosk_engine
+from voice.types import message
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/voice", tags=["voice"])
@@ -43,11 +39,11 @@ _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{16,64}$")
 
 def _require_enabled() -> None:
     if not bool(settings.get("enabled")):
-        raise HTTPException(status_code=404, detail="voice input disabled")
+        raise HTTPException(status_code=404, detail="voice disabled")
 
 
 def _require_local(request: Request) -> None:
-    """ループバックからのみ受け付ける(§10・§13)。"""
+    """ループバックからのみ受け付ける。"""
     host = request.client.host if request.client else ""
     try:
         addr = ipaddress.ip_address(host)
@@ -66,81 +62,67 @@ def _require_session(sid: str) -> session_mod.Session:
     return session
 
 
-class ListenBody(BaseModel):
-    field: str = Field(default="company")
-    # field="reception"(一文の名乗り)でだけ使う。**誰がいるか**の出どころは管理画面の
-    # 社員マスターなので、それを持っている画面から渡してもらう。音声サービスは読み仮名
-    # だけを端末ローカルの staff_readings.yaml から補う。
-    # 上限があるのは、長い一覧を投げ込まれて照合が重くならないようにするため。
-    staff: list[str] = Field(default_factory=list, max_length=500)
-    purposes: list[str] = Field(default_factory=list, max_length=50)
+class CommandChoice(BaseModel):
+    # id は画面が決める固定語彙(「visit」「back」)。実験ログにそのまま書くので、
+    # 人の名前などが紛れ込まない形に限る。
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")
+    # 受け付ける言い回し。1 つの読みには 1 つの表記だけ(同じ読みを並べると信頼度が
+    # 割れて、どちらも当たらなくなる / voice/vosk_engine.py)。
+    phrases: list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=16)]] = \
+        Field(min_length=1, max_length=8)
 
 
-class EventBody(BaseModel):
-    # confirm = この内容で進む / fallback_touch = 音声をやめて通常操作へ
-    result: str
-    edited: bool = False
-    field: str | None = None
+class CommandBody(BaseModel):
+    # 実験ログの画面名(kiosk.html の CURRENT_SCREEN)。
+    screen: str = Field(default="unknown", pattern=r"^[A-Za-z][A-Za-z0-9_\-]{0,31}$")
+    choices: list[CommandChoice] = Field(min_length=1, max_length=24)
+    # 話し始めを待つ長さ。省略時は command.window_sec。
+    window_sec: float | None = Field(default=None, ge=1.0, le=30.0)
+    # 番号で選ぶ画面(ロッカー)。語彙を絞って外れたら通常の認識で聞き直す。
+    fallback: bool = False
+
+
+def command_available() -> tuple[bool, str]:
+    """声で操作できるか。語彙を絞れる Vosk のモデルが要る。"""
+    if not bool(settings.get("command.enabled")):
+        return False, "command.enabled が false"
+    ok, detail = vosk_engine.available()
+    if not ok:
+        return False, detail
+    if not vosk_engine.grammar_supported():
+        return False, "このモデルは語彙を絞れません(graph/Gr.fst が無い)"
+    return True, ""
 
 
 # ── 状態 ──────────────────────────────────────────────────────────────────────
 
 @router.get("/status")
 async def voice_status(request: Request):
-    """音声入力が使えるかと、画面が必要とする文言・しきい値を返す。
+    """声で操作できるかを返す。
 
-    キオスクは起動時にこれを見て、使えないときは「音声で入力」を描画しない。
+    キオスクは起動時にこれを見て、使えないときは「声で操作する」を描画しない。
     """
     _require_local(request)
     enabled = bool(settings.get("enabled"))
     mic_ok, mic_detail = capture.available()
-    described = engines.describe_all()
-    cloud_ok, cloud_detail = cloud.available()
-    # 「使える」は、どれか1つでも動くエンジンがあること。項目ごとにどれを使うかは
-    # fields[].engine に出す。
-    engine_ok = any(d["available"] for d in described.values())
-
-    fields = {}
-    for name in FIELDS:
-        f = settings.field_cfg(name)
-        fields[name] = {
-            "prompt_ja": f.get("prompt_ja", ""),
-            "prompt_en": f.get("prompt_en", ""),
-            "example_ja": f.get("example_ja", ""),
-            "max_record_sec": float(f.get("max_record_sec") or settings.get("vad.max_record_sec")),
-            # 設定に書かれた指定と、実際に使われるエンジン。auto のときに
-            # どちらが選ばれているかが画面と実験ログから分かるようにする。
-            "engine": engines.wanted(name),
-            "engine_used": engines.pick(name).ENGINE_NAME,
-        }
-
+    command_ok, command_detail = command_available()
     return {
-        "available": enabled and mic_ok and engine_ok,
+        "available": enabled and mic_ok and command_ok,
         "enabled": enabled,
         "microphone": {"available": mic_ok, "detail": mic_detail},
-        "engines": described,
-        # クラウド中継の状態。実際に使えるかはサーバが決めるので、ここに出るのは
-        # 「端末として問い合わせられる状態か」まで。
-        "cloud": {"available": cloud_ok, "detail": cloud_detail},
-        # 第4段階(音声操作)はまだ。画面が導線を出さないよう false を返す。
+        "engine": vosk_engine.describe(),
         "features": {
-            # 一文の名乗りをまとめて受ける。こちらが受付の既定の入口。
-            "reception": True,
-            "company": True,
-            "person_name": True,
-            # 担当者だけを単独で言わせる入口は作らない(一文の中で拾う)。
-            "staff": False,
-            "command": False,
+            # false の端末では画面に「声で操作する」を出さない。
+            "command": enabled and mic_ok and command_ok,
         },
-        # 読み仮名が登録されている担当者の数。0 なら一文から担当者を拾えない
-        # (読みを推測してはいけないため)。画面はこれを見て案内を変えられる。
-        "staff_readings": {"registered": len(extract.load_readings())},
-        "fields": fields,
+        "command": {
+            "available": command_ok,
+            "detail": command_detail,
+            "window_sec": float(settings.get("command.window_sec")),
+            # 画面を開いたら自動で音声モードに入るか(押さなくても聞き取る)。
+            "auto_start": bool(settings.get("command.auto_start")),
+        },
         "timing": {
-            "start_timeout_sec": float(settings.get("vad.start_timeout_sec")),
-            "silence_sec": float(settings.get("vad.silence_sec")),
-            "max_record_sec": float(settings.get("vad.max_record_sec")),
-            "recognition_timeout_sec": float(settings.get("whisper.timeout_sec")),
             # 画面のポーリング間隔の目安。録音中の音量バーをなめらかに描くため。
             "poll_interval_ms": 120,
         },
@@ -166,22 +148,27 @@ async def voice_session_start(request: Request):
     return {"session_id": session.id}
 
 
-@router.post("/session/{sid}/listen")
-async def voice_listen(sid: str, body: ListenBody, request: Request):
-    """1 項目ぶんの録音を始める。すぐ返るので、画面は state をポーリングする。
+@router.post("/session/{sid}/command")
+async def voice_command(sid: str, body: CommandBody, request: Request):
+    """画面の選択肢のどれが言われたかを 1 回だけ聞く。すぐ返るので state をポーリングする。
 
-    呼ぶ前に、端末の音声案内と受付開始音の再生を終えていること(§9)。案内を
-    鳴らしながらマイクを開くと、自分の案内を認識してしまう。
+    結果は state の `command`(matched / confidence / reason)。**認識した言葉そのものは
+    返さない。** 話しかけられずに窓が閉じたら phase=error・error_code=no_speech で、
+    画面は黙って開け直してよい。
+
+    同じセッションで前の画面の聞き取りが走っていたら、畳んでから開け直す。
     """
     _require_local(request)
     _require_enabled()
     session = _require_session(sid)
-    if body.field not in FIELDS:
-        raise HTTPException(status_code=400, detail="unknown field")
-    if not settings.field_cfg(body.field):
-        raise HTTPException(status_code=400, detail="field not configured")
+    ok, detail = command_available()
+    if not ok:
+        raise HTTPException(status_code=409, detail=f"command unavailable: {detail}")
+    choices = [(c.id, list(c.phrases)) for c in body.choices]
     try:
-        session.listen(body.field, staff=body.staff, purposes=body.purposes)
+        # 前の聞き取りを畳むのを待つことがある(最大 2 秒)ので、イベントループを塞がない。
+        await run_in_threadpool(session.listen_command, choices, screen=body.screen,
+                                window_sec=body.window_sec, fallback=body.fallback)
     except session_mod.Busy:
         raise HTTPException(status_code=409, detail="already listening")
     return session.state()
@@ -200,18 +187,9 @@ async def voice_state(sid: str, request: Request):
     return state
 
 
-@router.post("/session/{sid}/stop")
-async def voice_stop(sid: str, request: Request):
-    """「入力を終了」。無音を待たずにそこまでを発話として確定する。"""
-    _require_local(request)
-    session = _require_session(sid)
-    session.stop()
-    return session.state()
-
-
 @router.post("/session/{sid}/cancel")
 async def voice_cancel(sid: str, request: Request):
-    """「キャンセル」。録音中の音声を捨てる。"""
+    """聞き取りを取り消す。録音中の音声を捨てる。"""
     _require_local(request)
     session = _require_session(sid)
     session.cancel()
@@ -219,47 +197,9 @@ async def voice_cancel(sid: str, request: Request):
     return session.state()
 
 
-@router.post("/session/{sid}/retry")
-async def voice_retry(sid: str, request: Request):
-    """「もう一度話す」。前の結果を捨て、再入力回数を 1 増やす(§12)。"""
-    _require_local(request)
-    session = _require_session(sid)
-    session.clear_result()
-    count = session.note_retry()
-    return {"session_id": session.id, "retry_count": count}
-
-
-@router.post("/session/{sid}/event")
-async def voice_event(sid: str, body: EventBody, request: Request):
-    """画面側でしか分からない結果を匿名で記録する(§12)。
-
-    - confirm        …… 利用者が「この内容で進む」を押した(edited=直したかどうか)
-    - fallback_touch …… 音声をやめて通常のタッチ入力へ戻った
-
-    **直した中身は送らない・受け取らない。** 送られてきても metrics 側が捨てる。
-    """
-    _require_local(request)
-    session = _require_session(sid)
-    if body.result not in ("confirm", "fallback_touch"):
-        raise HTTPException(status_code=400, detail="unknown event")
-    if body.result == "fallback_touch":
-        session.fell_back = True
-    field_name = body.field or session.field or ""
-    metrics.record({
-        "sessionId": session.id,
-        "screenId": metrics.SCREEN_IDS.get(field_name, field_name or "unknown"),
-        "result": body.result,
-        "edited": bool(body.edited),
-        "model": engines.pick(field_name).model_name(),
-        "retryCount": session.retry_count.get(field_name, 0),
-        "errorCode": None,
-    })
-    return {"ok": True}
-
-
 @router.delete("/session/{sid}", status_code=204)
 async def voice_session_drop(sid: str, request: Request):
-    """破棄。音声も認識結果も捨てる(§11)。"""
+    """破棄。音声も判定も捨てる。"""
     _require_local(request)
     if not sid or not _SESSION_ID_RE.match(sid):
         raise HTTPException(status_code=400, detail="invalid session id")
@@ -272,6 +212,6 @@ async def voice_session_drop(sid: str, request: Request):
 
 @router.get("/metrics")
 async def voice_metrics(request: Request):
-    """§12 の指標。件数・割合・時間だけで、個票も本文も含まない。"""
+    """件数・割合・時間だけで、個票も本文も含まない。"""
     _require_local(request)
     return metrics.summary()

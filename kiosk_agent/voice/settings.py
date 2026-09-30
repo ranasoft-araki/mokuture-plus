@@ -122,12 +122,6 @@ def get(path: str, default: Any = None) -> Any:
     return node
 
 
-def field_cfg(field: str) -> dict[str, Any]:
-    """項目(company / person_name / staff / command)の設定。未知の項目は command 扱い。"""
-    fields = get("fields") or {}
-    return fields.get(field) or fields.get("command") or {}
-
-
 def resolve_path(value: str) -> Path:
     """設定に書かれた相対パスを kiosk_agent 直下基準で絶対化する。"""
     p = Path(value).expanduser()

@@ -1,4 +1,4 @@
-"""音声入力サービスの起動口(別プロセス・127.0.0.1 限定)。
+"""声で操作する(画面操作のキーワード)サービスの起動口(別プロセス・127.0.0.1 限定)。
 
     .venv/bin/python -m voice.server
     .venv/bin/uvicorn voice.server:app --host 127.0.0.1 --port 8181
@@ -8,7 +8,7 @@
 
   1. 音声 API を LAN から見えなくする(bind を 127.0.0.1 にする)
   2. 実験機能が落ちても受付本体(GPIO・ロッカー・扉)を巻き込まない
-  3. whisper.cpp が CPU を占有する影響を切り分けやすくする
+  3. 音声認識が CPU を使う影響を切り分けやすくする
 
 systemd(`mokuture-voice.service`, Restart=always)が起動と再起動を受け持つ。
 OTA で `voice/` のソースが差し替わったら、このプロセスが自分で気づいて終了し、
@@ -28,7 +28,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from voice import engines, session as session_mod, settings, vosk_engine, whisper_cpp
+from voice import session as session_mod, settings, vosk_engine
 from voice.api import router as voice_router
 
 log = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ def _sources_digest() -> str:
 
 
 async def _purge_loop() -> None:
-    """放置されたセッション(= メモリ上の音声と結果)を定期的に捨てる(§11)。"""
+    """放置されたセッション(= メモリ上の音声と結果)を定期的に捨てる。"""
     while True:
         try:
             await asyncio.sleep(30)
@@ -86,19 +86,16 @@ async def _watch_sources() -> None:
 async def lifespan(app: FastAPI):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    for name, mod in engines.ENGINES.items():
-        ok, detail = mod.available()
-        log.info("[voice] %s: %s (%s)", name, "ready" if ok else "unavailable", detail)
+    ok, detail = vosk_engine.available()
+    log.info("[voice] vosk: %s (%s)", "ready" if ok else "unavailable", detail)
     mic_ok, mic_detail = _mic_status()
     log.info("[voice] microphone: %s (%s)", "ready" if mic_ok else "unavailable", mic_detail)
 
     tasks = [
         asyncio.create_task(_purge_loop()),
         asyncio.create_task(_watch_sources()),
-        # モデルをページキャッシュに載せる。初回の待ち時間を削る。
-        # モデルの読み込みは数秒かかる。使うものだけ先に温めておく。
-        *[asyncio.create_task(asyncio.to_thread(mod.warmup))
-          for mod in engines.ENGINES.values() if mod.available()[0]],
+        # モデルの読み込みは数秒かかる。先に温めておき、最初に話しかけた人を待たせない。
+        *([asyncio.create_task(asyncio.to_thread(vosk_engine.warmup))] if ok else []),
     ]
     try:
         yield
@@ -116,7 +113,7 @@ def _mic_status() -> tuple[bool, str]:
         return False, type(e).__name__
 
 
-app = FastAPI(title="mokuture+ Voice Input (experimental)", lifespan=lifespan)
+app = FastAPI(title="mokuture+ Voice Command (experimental)", lifespan=lifespan)
 
 # CORS はキオスク画面のオリジン(ループバックの 8080)だけ。ワイルドカードにはしない。
 app.add_middleware(
@@ -131,9 +128,7 @@ app.include_router(voice_router)
 
 @app.get("/health")
 async def health():
-    ready = {name: mod.available()[0] for name, mod in engines.ENGINES.items()}
-    return {"ok": True, "engine_ready": any(ready.values()), "engines": ready,
-            "sources": _sources_digest()}
+    return {"ok": True, "engine_ready": vosk_engine.available()[0], "sources": _sources_digest()}
 
 
 def main() -> None:
@@ -146,7 +141,7 @@ def main() -> None:
     except ValueError:
         loopback = False
     if not loopback:
-        # §13「localhost の音声認識 API を外部公開しない」に反する設定。
+        # 「localhost の音声認識 API を外部公開しない」に反する設定。
         # 黙って従わず、はっきり警告を出す(止めはしない。閉じた検証環境もあるため)。
         log.warning("[voice] bind_host=%s はループバックではありません。"
                     "音声 API が端末の外から見える状態です", host)

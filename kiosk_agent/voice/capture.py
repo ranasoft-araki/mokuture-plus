@@ -9,7 +9,7 @@
   file         …… WAV を「マイクから入ってきた音」として流す。マイクが無くても
                    録音ループから認識までを本番と同じ経路で通せる(何度でも同じ結果)
   none         …… どれも使えない環境。available() が False を返し、画面には
-                   「音声で入力」ボタンが出ない = 受付は従来どおり動く
+                   「声で操作する」が出ない = 受付は従来どおり動く
 
 `auto` は arecord → sounddevice の順に探す。Windows には arecord が無いので、
 `pip install sounddevice` さえ入っていれば自動で sounddevice を選ぶ。
@@ -26,7 +26,6 @@ import os
 import queue
 import re
 import shutil
-import struct
 import subprocess
 import threading
 import time
@@ -636,14 +635,3 @@ def apply_gain(pcm: bytes, gain: float) -> bytes:
         v = int(s * gain)
         samples[i] = 32767 if v > 32767 else (-32768 if v < -32768 else v)
     return samples.tobytes()
-
-
-def to_wav(pcm: bytes, sample_rate: int, channels: int = 1) -> bytes:
-    """16bit PCM を WAV(RIFF)にする。whisper.cpp へ渡すため。"""
-    data_len = len(pcm)
-    byte_rate = sample_rate * channels * SAMPLE_WIDTH
-    block_align = channels * SAMPLE_WIDTH
-    header = b"RIFF" + struct.pack("<I", 36 + data_len) + b"WAVE"
-    header += b"fmt " + struct.pack("<IHHIIHH", 16, 1, channels, sample_rate, byte_rate, block_align, 16)
-    header += b"data" + struct.pack("<I", data_len)
-    return header + pcm

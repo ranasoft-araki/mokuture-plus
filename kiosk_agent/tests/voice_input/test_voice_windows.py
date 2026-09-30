@@ -1,8 +1,7 @@
 """Windows 開発機での動作試験まわり。
 
-実機(Pi)は arecord + 自前ビルドの whisper-cli、Windows は sounddevice + 配布バイナリ、
-という二本立てになる。**同じ設定ファイルで両方動く**ことと、マイクが無い環境でも
-WAV で経路を通せることを確かめる。
+実機(Pi)は arecord、Windows は sounddevice で録る。**同じ設定ファイルで両方動く**ことと、
+マイクが無い環境でも WAV で経路を通せることを確かめる。
 """
 from __future__ import annotations
 
@@ -11,7 +10,7 @@ from array import array
 
 import pytest
 
-from voice import capture, settings, whisper_cpp
+from voice import capture, settings
 from voice_audio import silence, tone
 
 
@@ -21,38 +20,6 @@ def write_wav(path, pcm: bytes, *, rate: int = 16000, channels: int = 1, width: 
         w.setsampwidth(width)
         w.setframerate(rate)
         w.writeframes(pcm)
-
-
-# ── whisper-cli の場所を OS で持ち替える ──────────────────────────────────────
-
-def test_windowsでは配布バイナリを見る(monkeypatch):
-    monkeypatch.setattr(whisper_cpp.platform, "system", lambda: "Windows")
-    assert whisper_cpp.binary_path().name == "whisper-cli.exe"
-
-
-def test_linuxではビルドしたものを見る(monkeypatch):
-    monkeypatch.setattr(whisper_cpp.platform, "system", lambda: "Linux")
-    assert whisper_cpp.binary_path().name == "whisper-cli"
-
-
-def test_windows用が空なら共通の設定に落ちる(monkeypatch):
-    """片方の環境だけ別の場所に置きたいときに、空にして共通側へ寄せられる。"""
-    monkeypatch.setattr(whisper_cpp.platform, "system", lambda: "Windows")
-    settings.cfg()["whisper"]["binary_windows"] = ""
-    assert whisper_cpp.binary_path().name == "whisper-cli"
-
-
-def test_未導入の案内がOSごとに変わる(monkeypatch, tmp_path):
-    settings.cfg()["whisper"]["binary"] = str(tmp_path / "nope")
-    settings.cfg()["whisper"]["binary_windows"] = str(tmp_path / "nope.exe")
-
-    monkeypatch.setattr(whisper_cpp.platform, "system", lambda: "Windows")
-    ok, detail = whisper_cpp.available()
-    assert not ok and "install_voice_windows.ps1" in detail
-
-    monkeypatch.setattr(whisper_cpp.platform, "system", lambda: "Linux")
-    ok, detail = whisper_cpp.available()
-    assert not ok and "install_voice.sh" in detail
 
 
 # ── WAV をマイクの代わりに流す ────────────────────────────────────────────────
@@ -171,13 +138,13 @@ def test_ps1はUTF8_BOM付きで保存されている():
 def test_ps1のネイティブ呼び出しはInvoke_Nativeを通している():
     """$ErrorActionPreference='Stop' のままネイティブコマンドを呼ぶと、stderr へ
     1 行書かれただけで NativeCommandError になり、成功していても止まる
-    (whisper-cli の "load_backend: ..."、uv の進捗表示が該当する)。
+    (uv の進捗表示が該当する)。
     """
     ps1 = settings.AGENT_DIR / "scripts" / "install_voice_windows.ps1"
     text = ps1.read_bytes().decode("utf-8-sig")
     assert "function Invoke-Native" in text
 
-    # `& $Python` / `& $WhisperExe` / `& uv` のような外部コマンド呼び出しが
+    # `& $Python` / `& uv` のような外部コマンド呼び出しが
     # 素のまま残っていないこと（Invoke-Native の中に書かれているものは除く）。
     for n, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()

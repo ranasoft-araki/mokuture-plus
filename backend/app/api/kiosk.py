@@ -20,8 +20,7 @@ _JST = zoneinfo.ZoneInfo("Asia/Tokyo")
 logger = logging.getLogger(__name__)
 
 import httpx
-from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException,
-                     Request, UploadFile)
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -48,7 +47,6 @@ from app.services import events as event_bus
 from app.services import reception_notify
 from app.services import analytics as analytics_service
 from app.services import analytics_link
-from app.services import speech as speech_service
 from app.config import settings
 
 _PIN_RE = re.compile(r"^\d{4}$")
@@ -207,30 +205,24 @@ BUNDLE_FILES = [
     "card/ocr/base.py",
     "card/ocr/paddle_onnx.py",
     "card/ocr/tesseract.py",
-    # 音声入力(QR無し来訪の受付フォームを声で埋める / 実験導入)。こちらも agent の
+    # 声で操作する(画面操作のキーワード / 実験導入)。こちらも agent の
     # updater.MANAGED_FILES と同じ並びにしておくこと。
     # 名刺と違って端末では**別プロセス**(mokuture-voice.service / 127.0.0.1:8181)で動く。
     # エージェント本体を再起動しても入れ替わらないので、音声サービスが自分のソースの
     # ハッシュ変化を検知して自ら終了し、systemd に起こし直してもらう。
-    # whisper.cpp のバイナリ・ggml モデル・Vosk モデルは OTA では配らない
+    # Vosk モデルは OTA では配らない
     # (scripts/install_voice.sh の担当)。
     "voice/__init__.py",
     "voice/api.py",
     "voice/capture.py",
-    "voice/cloud.py",
     "voice/defaults.py",
-    "voice/engines.py",
-    "voice/extract.py",
     "voice/metrics.py",
-    "voice/quality.py",
     "voice/server.py",
     "voice/session.py",
     "voice/settings.py",
-    "voice/textnorm.py",
     "voice/types.py",
     "voice/vad.py",
     "voice/vosk_engine.py",
-    "voice/whisper_cpp.py",
 ]
 _FORCE_WINDOW_SEC = 7200  # force flag stays active for 2 hours after trigger
 
@@ -1476,51 +1468,4 @@ async def kiosk_bundle_file(
     media = "text/html; charset=utf-8" if file_path.endswith(".html") else "application/octet-stream"
     return Response(content=data, media_type=media)
 
-
-# ── 音声認識の中継 ────────────────────────────────────────────────────────────
-# **鍵を端末に置かないための口。** 発売済みのキオスクすべてに APPKEY を配って回るのは
-# 現実的でなく、端末が持ち出されたときに止められない。キオスクはここへ音声を送り、
-# サーバが AmiVoice を呼ぶ(app/services/speech.py)。
-#
-# 有効になるのは **サーバに鍵があり、かつテナントが許可している** ときだけ。片方でも
-# 欠ければ 503 を返し、端末はローカル認識だけで従来どおり動く。
-#
-# 音声も認識結果も保存しない。ここに残すのは大きさと所要時間だけ。
-
-@router.post("/voice/transcribe")
-async def kiosk_voice_transcribe(
-    audio: UploadFile = File(...),
-    words: str = Form(""),
-    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
-):
-    """受付の一文を文字起こしして返す。失敗したら端末はローカルの結果を使う。
-
-    words は「表記 読み」の並び(改行区切り)。担当者の読みを渡すと固有名詞が当たり
-    やすくなる。読みが無いものは speech 側で捨てる(読みの推測は禁止)。
-    """
-    tenant, device = ctx
-    if (device.status or "active") == "pending":
-        raise HTTPException(status_code=403, detail="device not approved")
-    # 既定(VOICE_CLOUD_DEFAULT)を入れておけば全店で有効になる。店舗ごとの操作は
-    # 「既定が false のときに先行して開ける」か「断られた店舗を止める」ときだけ。
-    allowed = (settings.voice_cloud_default or bool(getattr(tenant, "voice_cloud_enabled", False)))         and not bool(getattr(tenant, "voice_cloud_opt_out", False))
-    if not settings.cloud_asr_enabled or not allowed:
-        # 端末はこれを見て、しばらく問い合わせを止める。
-        raise HTTPException(status_code=503, detail="cloud asr disabled")
-
-    data = await audio.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="empty audio")
-    if len(data) > settings.voice_max_audio_bytes:
-        raise HTTPException(status_code=413, detail="audio too large")
-
-    entries = [line.strip() for line in (words or "").splitlines() if line.strip()]
-    try:
-        text, ms = await speech_service.transcribe(data, entries)
-    except speech_service.SpeechUnavailable as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except speech_service.SpeechFailed as e:
-        # 端末はローカルへ落ちるだけなので、受付は止まらない。
-        raise HTTPException(status_code=502, detail=str(e))
-    return {"text": text, "engine": "amivoice", "ms": ms}
 

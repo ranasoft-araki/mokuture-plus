@@ -31,11 +31,8 @@ from pathlib import Path
 
 AGENT_DIR = Path(__file__).resolve().parent.parent
 MODEL_DIR = AGENT_DIR / "voice_models"
-VENDOR_DIR = AGENT_DIR / "vendor"
 
-HF = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 VOSK = "https://alphacephei.com/vosk/models"
-WHISPER_SRC = "https://github.com/ggml-org/whisper.cpp/archive/refs/tags"
 
 # Git LFS のポインタファイルはこの行で始まる(実体なら絶対に一致しない)。
 _LFS_MAGIC = b"version https://git-lfs.github.com/spec/v1"
@@ -53,36 +50,12 @@ class Asset:
 
 ASSETS: tuple[Asset, ...] = (
     Asset(
-        path=MODEL_DIR / "ggml-base-q5_1.bin",
-        url=f"{HF}/ggml-base-q5_1.bin",
-        sha256="422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
-        size=59_707_625,
-        required=True,
-        note="whisper.cpp base 量子化。実証実験の既定モデル",
-    ),
-    Asset(
-        path=MODEL_DIR / "ggml-small-q5_1.bin",
-        url=f"{HF}/ggml-small-q5_1.bin",
-        sha256="ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
-        size=190_085_487,
-        required=False,
-        note="whisper.cpp small 量子化。比較用(Pi では遅すぎて実用にならない)",
-    ),
-    Asset(
         path=MODEL_DIR / "vosk-model-small-ja-0.22.zip",
         url=f"{VOSK}/vosk-model-small-ja-0.22.zip",
         sha256="efa092d280153a77615e9e0c7d7283e93e600de3d19d3bec686c57ef19d52eac",
         size=49_704_573,
         required=True,
-        note="Vosk 日本語軽量。一文の名乗り(受付の既定の入口)で使う",
-    ),
-    Asset(
-        path=VENDOR_DIR / "whisper.cpp-1.9.3.tar.gz",
-        url=f"{WHISPER_SRC}/v1.9.3.tar.gz",
-        sha256="1650f884effba487025143bd8facd2f9fb40a83b3737a732803c67a8d659d9c0",
-        size=9_132_196,
-        required=True,
-        note="whisper.cpp v1.9.3 ソース。Pi 上でビルドする",
+        note="Vosk 日本語軽量。声で操作する(語彙を絞れる Gr.fst を持つ)",
     ),
 )
 
@@ -243,7 +216,7 @@ def main() -> int:
         extract_vosk()
 
     if failed:
-        print("\n必須のモデルが揃いませんでした。音声入力は無効のまま起動します。")
+        print("\n必須のモデルが揃いませんでした。声で操作するは無効のまま起動します。")
         for line in lfs_advice():
             print(line)
         return 1

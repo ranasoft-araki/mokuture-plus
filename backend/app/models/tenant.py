@@ -49,12 +49,10 @@ class Tenant(Base):
     # デモバッジ表示・配達導線の無効化・手荷物預かりの固定PIN化を行う(非デモは一切不変)。
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    # 受付の音声をクラウド音声認識へ中継してよいか。**既定は False。**
-    # 来訪者の氏名・所属・訪問先を外部へ出すかどうかはテナントの判断なので、
-    # サーバに鍵があるだけでは有効にならない(両方そろって初めて中継する)。
-    # 全体の既定(VOICE_CLOUD_DEFAULT)が false のときに、このテナントだけ先に有効化する。
+    # 【廃止】受付の音声のクラウド中継(AmiVoice)の可否。機能は 2026-09-29 に削除した。
+    # 列は本番 DB に残っており、既定値なしの NOT NULL で作られた DB もあるので、
+    # 定義だけ残して INSERT が失敗しないようにしている。読み書きするコードは無い。
     voice_cloud_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    # 既定が true でも、このテナントだけは使わない(顧客に断られた場合)。こちらが強い。
     voice_cloud_opt_out: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # OTA: timestamp set by admin to trigger force-push to all devices of this tenant

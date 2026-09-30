@@ -1,24 +1,29 @@
-"""Vosk での文字起こし。一文の名乗りはこちらを使う。
+"""Vosk で画面操作のキーワードを聞き分ける(声で操作する)。
 
-**whisper.cpp との使い分け**
+画面ごとに「いま受け付ける言葉」だけの語彙で decode する(Doc/kiosk-voice-touchless.html
+段階2)。Vosk は語彙を絞れる(`Gr.fst` を持つモデルに限る)うえ、48MB と小さく
+Raspberry Pi のような機械を想定している。
 
-一文受付で当てたいのは固有名詞の**読み**で、漢字は当てにいかない(同じ読みでも字が
-違うことがあるため)。その前提で肉声10発話を測ると、こちらの方が良かった。
+Windows の合成音声で測って分かった性質:
 
-                 読みCER   固有名詞が残った   1発話(Windows)
-  whisper base    0.217      14/21            1.8秒
-  whisper small   0.179      15/21           10.1秒
-  Vosk small-ja   0.118      16/21            4.3秒
+1. **句ではなく語で絞られる。** グラマーに「三 番」と書いても「三」だけが単独で返る
+   (無関係な「たなかさんいますか」→「三 いいえ ます」)。句として成立したかは
+   こちらで確かめる(_find_phrases)。
+2. **同じ読み・近い音の表記を並べると信頼度が割れる。** 「戻る」と「もどる」を両方入れると
+   どちらも 0.5 になり、しきい値を越えない。「受け取る」と「受け取り」も割れた。
+3. **短い数字は発話頭の雑音([unk])に吸われる。** 語彙を絞ると「にばん」「さんばん」は
+   「番」だけが残る(辞書に 1 語である「一番」だけは当たる)。語彙を絞らない通常の認識では
+   「二 番」と出るので、番号で選ぶ画面(ロッカー)だけ通常の認識で聞き直す(fallback)。
+   ロッカー 7 口の番号で 11/21 → 25/28(聞き直しのしきい値 0.4)。
+4. **雑談に紛れたキーワードは信頼度 1.0 で当たる**(「ロッカーの鍵どこだっけ」)。
+   しきい値では切れないので、キーワードの後ろに語彙外の発話が続いたら捨てる(embedded)。
 
-差は仕組みから来ている。Vosk は**辞書にある語しか出せない**ので「磯野」「荒木」
-「服部」という実在の語を選ぶ。whisper は文字を自由に生成するので「伊藻」「新き」
-「張っとり」のような存在しない綴りを作る。読みで照合する方針ではこれが効く。
-
-**弱点も仕組みから来る。** 辞書に無い語は別の実在語に化ける(「服部様」→「酉様」、
-「磯野」→「五所川原」)。whisper なら仮名で残るところが、Vosk では読みごと失われる。
-初めて来る会社名では whisper の方が拾えることがある。
-
-モデルは 48MB と小さく、Vosk はもともと Raspberry Pi のような機械を想定している。
+実測(scripts/voice_command_eval.py・7 画面の語彙・しきい値 0.85):
+  画面への操作 222 発話(札のひらがな・「えーと、〜」「〜でお願いします」込み)
+    当たり 218・取り違え 0(外れた 4 件はすべて「二番」「三番」)
+  無関係な雑談 28 本 × 7 画面   誤爆 31 → 「文の一部」を捨てて 7
+    残りは「ちょっと待って」→ 待って(待機を延ばすだけ)と、結果画面の
+    「わかりました、完了です」→ 完了 で、どちらも意味どおり
 """
 from __future__ import annotations
 
@@ -26,10 +31,11 @@ import json
 import logging
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 from voice import settings
-from voice.types import AudioSegment, Transcript
+from voice.types import AudioSegment, CommandMatch
 
 log = logging.getLogger(__name__)
 
@@ -51,14 +57,17 @@ _model_lock = threading.Lock()
 # 認識器も使い回す。**毎回作り直すと 3 倍以上遅くなる**(実測: 中央値 4.45秒 → 1.28秒)。
 # デコード用のグラフを組み直すのがそれだけ重い。Kaldi の認識器はスレッド安全では
 # ないので、ここで直列化する(認識自体も session 側で 1 件ずつに絞っている)。
-_rec = None
-_rec_rate = 0
 _rec_lock = threading.Lock()
-
-# 語彙を絞った 2 パス目の認識器。フリー認識とは別に持つ(片方ずつ暖まっていてほしい)。
-_gram_rec = None
-_gram_key: tuple[int, str] | None = None
-_gram_warned: tuple[str, ...] = ()      # 語彙に入れられなかった名前(同じ顔ぶれでは黙る)
+# 語彙を絞らない認識器(番号の聞き直し用)。
+_free_rec = None
+_free_rate = 0
+# 語彙ごとの認識器。画面を行き来するたびに作り直さない。
+_cmd_recs: "OrderedDict[tuple[int, str], object]" = OrderedDict()
+# 言い回し → 発音辞書の語の並び(辞書に無ければ None)。語彙は画面ごとにほぼ固定なので、
+# 20 万語の辞書を読むのは初めて見た言い回しのときだけで済む。
+_seg_cache: dict[str, tuple[str, ...] | None] = {}
+_seg_warned: set[str] = set()
+_PHRASE_MAX = 16
 
 
 def model_path() -> Path:
@@ -88,6 +97,12 @@ def available() -> tuple[bool, str]:
     return True, f"{model_name()} ({path.name})"
 
 
+def grammar_supported() -> bool:
+    """語彙を絞れるモデルか。1GB 版(vosk-model-ja-0.22)は HCLG.fst しか無く絞れない。"""
+    graph = model_path() / "graph"
+    return (graph / "Gr.fst").is_file() and (graph / "HCLr.fst").is_file()
+
+
 def describe() -> dict:
     ok, detail = available()
     return {
@@ -97,7 +112,7 @@ def describe() -> dict:
         "model": model_name(),
         "model_file": model_path().name,
         "loaded": _model is not None,
-        "timeout_sec": float(settings.get("vosk.timeout_sec")),
+        "grammar": grammar_supported() if ok else False,
     }
 
 
@@ -121,52 +136,35 @@ def load(force: bool = False) -> object:
 
 def unload() -> None:
     """モデルと認識器を手放す。設定を変えて読み直すときだけ使う。"""
-    global _model, _rec, _rec_rate, _gram_rec, _gram_key
+    global _model, _free_rec, _free_rate
     with _rec_lock:
-        _rec, _rec_rate = None, 0
-        _gram_rec, _gram_key = None, None
+        _free_rec, _free_rate = None, 0
+        _cmd_recs.clear()
+        _seg_cache.clear()
     with _model_lock:
         _model = None
 
 
-def _recognizer(rate: int):
-    """使い回す認識器を返す。呼ぶ側は _rec_lock を持っていること。"""
-    global _rec, _rec_rate
+def _free_recognizer(rate: int):
+    """語彙を絞らない認識器。呼ぶ側は _rec_lock を持っていること。"""
+    global _free_rec, _free_rate
     import vosk
 
-    if _rec is None or _rec_rate != rate:
-        _rec = vosk.KaldiRecognizer(load(), float(rate))
-        _rec.SetWords(True)          # 語ごとの信頼度(品質判定に使う)。速度への影響は無い
-        _rec_rate = rate
+    if _free_rec is None or _free_rate != rate:
+        _free_rec = vosk.KaldiRecognizer(load(), float(rate))
+        _free_rec.SetWords(True)
+        _free_rate = rate
     else:
-        # 前の発話の状態を持ち越さない。§11 の「認識結果を残さない」も兼ねる。
-        _rec.Reset()
-    return _rec
+        _free_rec.Reset()
+    return _free_rec
 
 
-# ── 語彙を絞った 2 パス目 ─────────────────────────────────────────────────────
-# 一般語の言語モデルは固有名詞に弱い。実測(クリーン音源10本)では「服部」が
-# 「酉」「都立」「服部祖」に化けた。**辞書に無いのではなく**、文脈で別語に負けて
-# いる(辞書 206,715 語に「服部」「磯野」「荒木」はある)。
-#
-# 担当者は「誰がいるか」が分かっているので、その語彙だけに絞って decode し直すと
-# 当たる。実測: 担当者の特定が 8/10 → 10/10、誤爆 0。
-#
-# **絞った側の結果は候補にしか使わない。** 呼ばれた担当者が名簿に無いとき、別人の
-# 名前を埋めることがある(実測 10件中 2件: 「服部様」→「林様」「山本」)。ただし誤って
-# 埋めた語は信頼度が落ちる(実測 0.657〜0.871 / 正解は 6/6 すべて 1.000)ので、
-# grammar_min_conf で捨てられる。捨てた場合は候補なし = 画面で選ぶ従来の動きに戻る。
-
-# 姓は 2〜4 文字で見る。1 文字の姓を入れないのは、短い語ほどどこにでも当たるうえ、
-# 照合側(extract.scan_staff)が 2 文字以上でしか名簿と突き合わせないため。
-_NAME_PREFIX_MAX = 4
-
+# ── 語彙 ──────────────────────────────────────────────────────────────────────
 
 def lexicon_words(candidates: set[str]) -> set[str]:
     """モデルの発音辞書にある語だけを返す。
 
-    **読み仮名を staff_readings.yaml に登録しても Vosk の発音辞書には入らない。**
-    辞書に無い表記をグラマーに渡すと Vosk が失敗するので、ここで落とす。
+    辞書に無い表記をグラマーに渡すと Vosk がその語を黙って落とすので、ここで確かめる。
     辞書は 20 万語あるので、常駐させずに必要な語だけ拾って捨てる。
     """
     path = model_path() / "graph" / "words.txt"
@@ -181,133 +179,273 @@ def lexicon_words(candidates: set[str]) -> set[str]:
     return found
 
 
-def grammar_tokens(names: list[str]) -> tuple[list[str], list[str]]:
-    """(グラマーに入れる語, 入れられなかった名前)。
+def _segment(text: str, known: set[str]) -> tuple[str, ...] | None:
+    """辞書の語でいちばん少ない数に切る。切れなければ None。
 
-    姓だけ言われるのが普通なので、名前の先頭から辞書にある一番長い並びを採る。
-    入れられなかった名前は、音声では指名できない(従来どおりフリー認識の読み照合
-    だけが頼りになる)ので、呼ぶ側が気づけるように返す。
+    同じ数なら前の語が長いほうを採る(「違います」→「違い ます」。「違 います」は
+    辞書にあっても読みが怪しい)。
     """
-    compact = [str(n or "").replace(" ", "").replace("　", "").strip() for n in names]
-    sizes = range(2, _NAME_PREFIX_MAX + 1)
-    known = lexicon_words({n[:i] for n in compact for i in sizes if len(n) >= i})
-    tokens: list[str] = []
-    missing: list[str] = []
-    for name in compact:
-        best = max((name[:i] for i in sizes if len(name) >= i and name[:i] in known),
-                   key=len, default="")
-        if best:
-            tokens.append(best)
-        elif name:
-            missing.append(name)
-    return sorted(set(tokens)), missing
+    def rank(t: tuple[str, ...]) -> tuple[int, list[int]]:
+        return len(t), [-len(w) for w in t]
+
+    n = len(text)
+    best: list[tuple[str, ...] | None] = [None] * (n + 1)
+    best[0] = ()
+    for end in range(1, n + 1):
+        for start in range(max(0, end - _PHRASE_MAX), end):
+            head = best[start]
+            piece = text[start:end]
+            if head is None or piece not in known:
+                continue
+            cand = head + (piece,)
+            if best[end] is None or rank(cand) < rank(best[end]):
+                best[end] = cand
+    return best[n]
 
 
-def _grammar_json(tokens: list[str]) -> str:
-    """Vosk に渡すグラマー。定型句を混ぜないと、周りが全部 [unk] に寄る。"""
-    phrases = [str(p) for p in (settings.get("vosk.grammar_phrases") or [])]
-    usable = lexicon_words({w for p in phrases for w in p.split(" ")})
-    keep = [p for p in phrases if all(w in usable for w in p.split(" "))]
-    # [unk] は語彙外の音の逃げ場。無いと未知の会社名が候補の名前に化ける。
-    return json.dumps(tokens + keep + ["[unk]"], ensure_ascii=False)
+def phrase_tokens(phrases: list[str]) -> dict[str, tuple[str, ...] | None]:
+    """言い回しを発音辞書の語の並びに直す。
 
-
-def _grammar_recognizer(rate: int, grammar: str):
-    """語彙を絞った認識器。呼ぶ側は _rec_lock を持っていること。
-
-    作り直しは重い(フリー側の実測で 1.28秒 → 4.45秒)ので、語彙が変わったときだけ
-    作り直す。担当者一覧が変わるのは一日に数回で、発話ごとではない。
+    空白で区切ってあればその区切りのまま(「お 願い し ます」)、無ければ辞書の語で
+    いちばん少ない数に切る(「ご訪問」→「ご 訪問」)。**辞書の語で書けない言い回しは
+    None** — グラマーに渡すと Vosk がその語を黙って落とし、残りの語だけで当たって
+    しまう(「二 番」の「二」が落ちて「番」単独が当たりになる)。
     """
-    global _gram_rec, _gram_key
+    wanted = [p for p in phrases if p not in _seg_cache]
+    if wanted:
+        pieces: set[str] = set()
+        for p in wanted:
+            if " " in p:
+                pieces.update(w for w in p.split(" ") if w)
+            else:
+                pieces.update(p[i:j] for i in range(len(p))
+                              for j in range(i + 1, min(len(p), i + _PHRASE_MAX) + 1))
+        known = lexicon_words(pieces)
+        for p in wanted:
+            if " " in p:
+                words = tuple(w for w in p.split(" ") if w)
+                _seg_cache[p] = words if words and all(w in known for w in words) else None
+            else:
+                _seg_cache[p] = _segment(p, known) if p else None
+    return {p: _seg_cache.get(p) for p in phrases}
+
+
+def command_table(choices: list[tuple[str, list[str]]]) -> tuple[list[tuple[str, tuple[str, ...]]], list[str]]:
+    """(選択肢 id, 語の並び) の一覧と、使えなかった言い回し。"""
+    phrases = [p for _, ps in choices for p in ps]
+    tokens = phrase_tokens(phrases)
+    table: list[tuple[str, tuple[str, ...]]] = []
+    unusable: list[str] = []
+    for cid, ps in choices:
+        for p in ps:
+            t = tokens.get(p)
+            if t:
+                if (cid, t) not in table:
+                    table.append((cid, t))
+            else:
+                unusable.append(p)
+    return table, unusable
+
+
+def _filler_seqs() -> list[tuple[str, ...]]:
+    return [t for t in phrase_tokens([str(f) for f in (settings.get("command.fillers") or [])]).values() if t]
+
+
+def _command_grammar(table: list[tuple[str, tuple[str, ...]]]) -> str:
+    """語彙。選択肢の言い回しに、言い添え(「お願いします」「えっと」)を混ぜる。
+
+    言い添えを入れないと、それが [unk] か選択肢の語に寄せられる。実測で
+    「いちどもどってください」が「戻る」0.78 で誤爆していたのが、入れると消えた。
+    選択肢と同じ言葉の言い添えは入れない。切り方が違うだけの同じ言葉(「お 願い します」と
+    「お 願い し ます」)を両方入れると信頼度が割れて、選択肢として当たらなくなる(実測 0.79)。
+    """
+    choice_seqs = {t for _, t in table}
+    choice_text = {"".join(t) for t in choice_seqs}
+    extra = [t for t in _filler_seqs() if "".join(t) not in choice_text]
+    seqs = sorted({" ".join(t) for t in choice_seqs} | {" ".join(t) for t in extra})
+    return json.dumps(seqs + ["[unk]"], ensure_ascii=False)
+
+
+def _command_recognizer(rate: int, grammar: str):
+    """画面ごとの語彙の認識器。呼ぶ側は _rec_lock を持っていること。
+
+    画面を行き来するたびに語彙が変わるので、いくつかを持ち回す(古いものから捨てる)。
+    """
     import vosk
 
     key = (rate, grammar)
-    if _gram_rec is None or _gram_key != key:
-        _gram_rec = vosk.KaldiRecognizer(load(), float(rate), grammar)
-        _gram_rec.SetWords(True)
-        _gram_key = key
+    rec = _cmd_recs.get(key)
+    if rec is None:
+        rec = vosk.KaldiRecognizer(load(), float(rate), grammar)
+        rec.SetWords(True)
+        _cmd_recs[key] = rec
+        limit = max(1, int(settings.get("command.cache_size") or 1))
+        while len(_cmd_recs) > limit:
+            _cmd_recs.popitem(last=False)
     else:
-        _gram_rec.Reset()
-    return _gram_rec
+        _cmd_recs.move_to_end(key)
+        rec.Reset()
+    return rec
 
 
-def transcribe_vocabulary(seg: AudioSegment, names: list[str]) -> tuple[str, list[str]]:
-    """担当者の語彙だけで decode し直す。(文字起こし, 信頼できた語) を返す。
+# ── 照合 ──────────────────────────────────────────────────────────────────────
 
-    2 パス目なので、失敗しても 1 パス目の結果は使える。呼ぶ側で握りつぶしてよい。
+def _find_phrases(words: list[tuple], table: list[tuple[str, tuple[str, ...]]],
+                  min_conf: float) -> list[tuple[int, int, str, float]]:
+    """認識した語の列から、選択肢の言い回しが**続けて**現れた所を拾う。
+
+    語で絞られるので、句の一部の語だけが返ることがある(上の 1)。句のすべての語が
+    並び順どおりに続き、どの語もしきい値を越えたときだけ当たりにする。
+    重なった当たりは長いほうを残す(「ご 訪問」と「訪問」なら「ご 訪問」)。
+    words は (語, 信頼度) か (語, 信頼度, 開始秒, 終了秒)。
     """
-    global _gram_warned
-    tokens, missing = grammar_tokens(names)
-    if tuple(missing) != _gram_warned:
-        _gram_warned = tuple(missing)
-        if missing:
-            # 読み仮名の登録とは別の話なので、運用者が気づけるようにしておく。
-            log.warning("[voice] 発音辞書に無いため音声で指名できない担当者: %s",
-                        "、".join(missing))
-    if not tokens:
-        return "", []
-    grammar = _grammar_json(tokens)
-    floor = float(settings.get("vosk.grammar_min_conf"))
-    with _rec_lock:
-        try:
-            rec = _grammar_recognizer(seg.sample_rate, grammar)
-            rec.AcceptWaveform(seg.pcm)
-            payload = json.loads(rec.FinalResult() or "{}")
-        except Exception as e:
-            globals()["_gram_rec"], globals()["_gram_key"] = None, None
-            raise EngineFailed(f"{type(e).__name__}") from e
-        finally:
-            try:
-                if _gram_rec is not None:
-                    _gram_rec.Reset()
-            except Exception:
-                pass
-
-    text = str(payload.get("text") or "").replace(" ", "").strip()
-    sure = [str(w.get("word", "")) for w in payload.get("result") or []
-            if str(w.get("word", "")) in tokens and float(w.get("conf", 0.0)) >= floor]
-    return text, sure
+    # 語の切れ目ではなく**続けた文字列**で比べる。同じ言葉でも辞書の切り方が 2 通りある
+    # (「お 願い します」と「お 願い し ます」)ので、切れ目で比べると取りこぼす。
+    toks = [w[0] for w in words]
+    hits: list[tuple[int, int, str, float]] = []
+    for cid, seq in table:
+        target = "".join(seq)
+        for i in range(len(toks)):
+            joined = ""
+            for j in range(i, len(toks)):
+                joined += toks[j]
+                if not target.startswith(joined):
+                    break
+                if joined == target:
+                    conf = min(w[1] for w in words[i:j + 1])
+                    if conf >= min_conf:
+                        hits.append((i, j + 1, cid, conf))
+                    break
+    hits.sort(key=lambda h: (-(h[1] - h[0]), h[0]))
+    kept: list[tuple[int, int, str, float]] = []
+    for h in hits:
+        if all(h[1] <= k[0] or h[0] >= k[1] for k in kept):
+            kept.append(h)
+    return kept
 
 
-def transcribe(seg: AudioSegment) -> Transcript:
-    """1 発話ぶんを文字起こしする。
+def _unknown_sec(words: list[tuple], lo: int, hi: int) -> float:
+    """[unk](語彙に無い発話)が占める長さ。時刻の無い語は 0 として数える。"""
+    return sum(max(0.0, w[3] - w[2]) for w in words[lo:hi] if w[0] == "[unk]" and len(w) >= 4)
 
-    whisper と違って外部プロセスを起こさないので、一時ファイルを作らない
-    (=音声がディスクに残らない)。渡された PCM はそのまま渡して捨てる。
+
+def match_command(words: list[tuple], table: list[tuple[str, tuple[str, ...]]], min_conf: float, *,
+                  trailing_unk_sec: float | None = None,
+                  leading_unk_sec: float | None = None) -> tuple[str | None, float | None, str | None]:
+    """(当たった選択肢, 信頼度, 外れた理由)。
+
+    **2 つの選択肢が同時に当たったら何もしない**(ambiguous)。どちらか分からないまま
+    画面を動かすより、言い直してもらうほうが害が小さい。
+
+    **文の一部として言われたキーワードでは動かさない**(embedded)。合成音声の実測で、
+    雑談に紛れたキーワード(「ロッカーの鍵どこだっけ」「やめるって言ってたよ」)は
+    信頼度 1.0 で当たり、しきい値では切れなかった。違いは後ろに続く語で、画面へ向けた
+    操作では言い添え(「で」「お願いします」)しか続かないのに、雑談では語彙に無い発話が
+    0.29〜0.93 秒続いた。前に付く「えーと」「ちょっと」は 0.4 秒ほどなので、前は緩く見る。
+    """
+    if trailing_unk_sec is None:
+        trailing_unk_sec = float(settings.get("command.trailing_unk_sec"))
+    if leading_unk_sec is None:
+        leading_unk_sec = float(settings.get("command.leading_unk_sec"))
+    kept = _find_phrases(words, table, min_conf)
+    ids = {cid for _, _, cid, _ in kept}
+    if len(ids) > 1:
+        # 言い添えと同じ言葉の選択肢(ようこそ画面の「お願いします」)は、ほかの言葉と
+        # 一緒に言われたら譲る(「やめるでお願いします」は「やめる」)。
+        weak = {"".join(t) for t in _filler_seqs()}
+        strong = [k for k in kept if "".join(w[0] for w in words[k[0]:k[1]]) not in weak]
+        if strong and len({k[2] for k in strong}) == 1:
+            kept = strong
+            ids = {kept[0][2]}
+    if len(ids) > 1:
+        return None, None, "ambiguous"
+    if not ids:
+        return None, None, "unmatched"
+    first = min(k[0] for k in kept)
+    last = max(k[1] for k in kept)
+    if (_unknown_sec(words, last, len(words)) >= trailing_unk_sec
+            or _unknown_sec(words, 0, first) >= leading_unk_sec):
+        return None, None, "embedded"
+    cid = next(iter(ids))
+    return cid, round(max(c for _, _, i, c in kept if i == cid), 3), None
+
+
+def _as_unknown(words: list[tuple], table: list[tuple[str, tuple[str, ...]]]) -> list[tuple]:
+    """通常の認識の結果のうち、選択肢にも言い添えにも無い語を [unk] に置き換える。
+
+    語彙を絞った認識と同じ物差し(「文の一部なら捨てる」)で照合するため。
+    """
+    allowed = {w for _, t in table for w in t} | {w for t in _filler_seqs() for w in t}
+    return [w if w[0] in allowed else ("[unk]",) + tuple(w[1:]) for w in words]
+
+
+def _decode(rec, seg: AudioSegment) -> list[tuple]:
+    rec.AcceptWaveform(seg.pcm)
+    payload = json.loads(rec.FinalResult() or "{}")
+    return [(str(w.get("word", "")), float(w.get("conf", 0.0)),
+             float(w.get("start", 0.0)), float(w.get("end", 0.0)))
+            for w in payload.get("result") or [] if w.get("word")]
+
+
+def recognize_command(seg: AudioSegment, choices: list[tuple[str, list[str]]],
+                      min_conf: float | None = None, *, fallback: bool = False) -> CommandMatch:
+    """画面の選択肢の語彙だけで 1 発話を decode し、どの選択肢かを返す。
+
+    fallback=True の画面(番号で選ぶロッカー)は、語彙を絞って外れたときだけ通常の認識で
+    聞き直す(上の 3)。聞き直しの結果も同じ照合(続けて現れたか・文の一部でないか)に通す。
+
+    認識した語そのもの(words)は調整用のスクリプトのためだけに持たせる。画面へも
+    ログへも出さない(来訪者が何を話したかは残さない)。
     """
     load()
     started = time.monotonic()
+    table, unusable = command_table(choices)
+    fresh = [p for p in unusable if p not in _seg_warned]
+    if fresh:
+        _seg_warned.update(fresh)
+        # 画面に書いた言葉が辞書に無い = その言葉では選べない。運用者が気づけるように。
+        log.warning("[voice] 発音辞書の語で書けないため受け付けられない言い回し: %s", "、".join(fresh))
+    if not table:
+        return CommandMatch(matched=None, confidence=None, reason="no_vocabulary",
+                            recognition_ms=0)
+    floor = float(min_conf if min_conf is not None else settings.get("command.min_conf"))
+    grammar = _command_grammar(table)
     with _rec_lock:
+        rec = None
         try:
-            rec = _recognizer(seg.sample_rate)
-            rec.AcceptWaveform(seg.pcm)
-            payload = json.loads(rec.FinalResult() or "{}")
+            rec = _command_recognizer(seg.sample_rate, grammar)
+            words = _decode(rec, seg)
         except Exception as e:
-            # 壊れた認識器を使い回さない。次回は作り直す。
-            globals()["_rec"], globals()["_rec_rate"] = None, 0
+            _cmd_recs.pop((seg.sample_rate, grammar), None)
             raise EngineFailed(f"{type(e).__name__}") from e
         finally:
-            # 認識結果を認識器の中に残さない(§11)。
             try:
-                if _rec is not None:
-                    _rec.Reset()
+                if rec is not None:
+                    rec.Reset()
             except Exception:
                 pass
+    matched, conf, reason = match_command(words, table, floor)
 
-    # 日本語は語の間に空白が入って返るので詰める。
-    text = str(payload.get("text") or "").replace(" ", "").strip()
-    words = [(str(w.get("word", "")), float(w.get("conf", 0.0)))
-             for w in payload.get("result") or [] if w.get("word")]
-    avg = sum(c for _, c in words) / len(words) if words else None
+    if matched is None and reason != "ambiguous" and fallback:
+        with _rec_lock:
+            try:
+                free = _free_recognizer(seg.sample_rate)
+                free_words = _as_unknown(_decode(free, seg), table)
+            except Exception as e:
+                globals()["_free_rec"], globals()["_free_rate"] = None, 0
+                raise EngineFailed(f"{type(e).__name__}") from e
+            finally:
+                try:
+                    if _free_rec is not None:
+                        _free_rec.Reset()
+                except Exception:
+                    pass
+        m2, c2, r2 = match_command(free_words, table, float(settings.get("command.fallback_min_conf")))
+        if m2 is not None or r2 in ("ambiguous", "embedded"):
+            matched, conf, reason, words = m2, c2, r2, free_words
 
-    return Transcript(
-        text=text,
-        engine=ENGINE_NAME,
-        model_name=model_name(),
-        recognition_ms=int((time.monotonic() - started) * 1000),
-        avg_token_prob=avg,
-        words=words,
-    )
+    return CommandMatch(matched=matched, confidence=conf, reason=reason,
+                        recognition_ms=int((time.monotonic() - started) * 1000), words=words)
 
 
 def warmup() -> None:
@@ -315,12 +453,8 @@ def warmup() -> None:
 
     **最初の1件だけ大きく遅い。** Windows の実測で 1 回目 4.7秒 → 2 回目以降 0.7秒。
     モデルの読み込みでも認識器の生成でもなく、Kaldi が**最初に実際のデコードを
-    行うとき**に払う費用で、モデルファイルを先読みしても消えなかった。
-    雑音を流しておくと 4.7秒 → 3.3秒 程度までは減る(語の候補を辿らないので
-    全部は肩代わりできない)。
-
-    運用上は、サービスが起動してから最初の来訪者 1 人だけが余分に待つ。
-    OTA でサービスが再起動するたびに 1 回起きる。
+    行うとき**に払う費用で、モデルファイルを先読みしても消えなかった。雑音を流して
+    おくと一部を肩代わりできる。運用上は、起動後に最初に話しかけた 1 人だけが余分に待つ。
     """
     import random
 
@@ -332,7 +466,7 @@ def warmup() -> None:
             int(max(-32000, min(32000, random.gauss(0, 900)))).to_bytes(2, "little", signed=True)
             for _ in range(rate * 2))
         with _rec_lock:
-            rec = _recognizer(rate)
+            rec = _free_recognizer(rate)
             rec.AcceptWaveform(noise)
             rec.FinalResult()
             rec.Reset()

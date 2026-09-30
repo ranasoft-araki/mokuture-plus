@@ -94,7 +94,7 @@ do_kill_browser() {
 }
 
 # 音声サービスが「使える」と答えるまで待つ。モデルの読み込みで数秒〜十数秒かかるので、
-# ここを待たずにブラウザを開くと受付画面から「音声で入力」が消える(latch のため復帰は
+# ここを待たずにブラウザを開くと受付画面から「声で操作する」が消える(latch のため復帰は
 # ページ再読込まで戻らない)。マイク未接続などで永遠に available にならない端末もあるので
 # 上限付き。待てなかったときは false を返すだけで、起動そのものは止めない。
 wait_voice_ready() {
@@ -144,7 +144,7 @@ do_stop() {
     if as_root systemctl stop "$KIOSK_UNIT"; then echo "  停止しました"; else echo "  停止できませんでした"; fi
 
     if unit_exists_system "$VOICE_UNIT"; then
-        echo "--- 音声入力($VOICE_UNIT) ---"
+        echo "--- 声で操作する($VOICE_UNIT) ---"
         if as_root systemctl stop "$VOICE_UNIT"; then echo "  停止しました"; else echo "  停止できませんでした"; fi
     fi
 
@@ -183,19 +183,19 @@ do_start() {
     guard_stop
 
     # **起動は停止の逆順**。受付画面は起動時に一度だけ /voice/status を見て、届かなければ
-    # そのページが閉じるまで「音声で入力」を出さない(kiosk.html の ensureVoiceStatus は
+    # そのページが閉じるまで「声で操作する」を出さない(kiosk.html の ensureVoiceStatus は
     # VOICE.checked で latch する)。本体を先に上げるとブラウザが数秒で開き、まだ起動中の
     # 音声サービスに間に合わず、**ボタンが消えたまま**になる。だから音声を先に上げ、
     # 応答を確かめてから本体(= ブラウザ)を起こす。
     if unit_exists_system "$VOICE_UNIT"; then
-        echo "--- 音声入力($VOICE_UNIT) ---"
+        echo "--- 声で操作する($VOICE_UNIT) ---"
         if as_root systemctl start "$VOICE_UNIT"; then echo "  起動しました"; else echo "  起動できませんでした"; fi
         printf '  利用できるようになるまで待っています'
         if wait_voice_ready; then
             echo " → 準備できました"
         else
             echo " → 待ちきれませんでした"
-            echo "  ※ このまま進めます。受付画面に「音声で入力」が出ない場合は次を確認:"
+            echo "  ※ このまま進めます。受付画面に「声で操作する」が出ない場合は次を確認:"
             echo "     systemctl status $VOICE_UNIT / curl -s $VOICE_STATUS_URL"
         fi
     fi
@@ -223,13 +223,13 @@ do_status() {
     if unit_exists_system "$VOICE_UNIT"; then
         printf '%-26s %s\n' "$VOICE_UNIT" "$(systemctl is-active "$VOICE_UNIT" 2>/dev/null || echo unknown)"
         # サービスが active でも、モデル読み込み中やマイク未接続だと available にならない。
-        # 受付画面の「音声で入力」が出るかどうかはこちらで決まる。
+        # 受付画面の「声で操作する」が出るかどうかはこちらで決まる。
         if command -v curl >/dev/null 2>&1; then
             if curl -fsS --max-time 2 "$VOICE_STATUS_URL" 2>/dev/null \
                 | grep -q '"available"[[:space:]]*:[[:space:]]*true'; then
-                printf '%-26s %s\n' "「音声で入力」" "出る(available)"
+                printf '%-26s %s\n' "「声で操作する」" "出る(available)"
             else
-                printf '%-26s %s\n' "「音声で入力」" "出ない($VOICE_STATUS_URL が available を返さない)"
+                printf '%-26s %s\n' "「声で操作する」" "出ない($VOICE_STATUS_URL が available を返さない)"
             fi
         fi
     fi

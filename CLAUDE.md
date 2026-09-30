@@ -630,46 +630,51 @@ mokuture/
   架空の社名・氏名と予約済みドメインで名刺画像を生成する（横型/縦型/日英混在/白/色付き/木目/斜め/
   反射/ぼけ/暗所/名刺でない紙/スマホ画面 等19パターン）。モデル未取得なら `-m ocr` のテストが自動 skip。
 
-### 音声入力（QR無し来訪者の受付フォームを声で埋める / 実験導入）
+### 声で操作する（画面操作のキーワード / 実験導入 / Doc/kiosk-voice-touchless.html 段階2）
 
-受付フォーム(`showReception`)の「音声で入力」から、**会社名・お名前**を声で入力する。
-**端末内で完結**し、クラウド音声認識API・Web Speech API・外部生成AIは一切使わない。
-ネット切断中でも動く。詳細は [`kiosk_agent/VOICE_INPUT.md`](kiosk_agent/VOICE_INPUT.md)。
+**語彙を持つ画面が出たら押さなくても音声モードに入る**(`command.auto_start`・既定 true、`/voice/status` の
+`command.auto_start` で画面へ渡す。false なら下部帯の「声で操作する」を押したときだけ)。**画面が選択を待っている間だけ**
+マイクを開けて、その画面の言葉だけ(「ごほうもん」「ロッカー」「にばん」「もどる」…)を受け付ける。待機画面へ戻ると抜け、
+**待機画面ではマイクを開けない**。「声の操作をやめる」を押した来訪者には待機画面へ戻るまで自動で入らない(`VCMD.optOut`)。
+自動で入ったときは開始音を鳴らさず、分析セッションは最初に声で操作した時点(`vcFire`)で始める。
+**端末内で完結**し、クラウド音声認識API・Web Speech API・外部生成AIは使わない。詳細は
+[`kiosk_agent/VOICE_COMMAND.md`](kiosk_agent/VOICE_COMMAND.md)。
+**以前の「音声で入力」(受付フォームを声で埋める・一文の名乗り・whisper.cpp・AmiVoice 中継・staff_readings.yaml)
+は 2026-09-29 に利用者の指示で削除した。** テナントの `voice_cloud_enabled/opt_out` 列だけは DB 互換のため
+モデルに定義を残してある(読み書きするコードは無い)。
 
 - **実装場所は `kiosk_agent/voice/` だが、名刺と違って別プロセス・別ポート・別systemd**
-  (`mokuture-voice.service` / `127.0.0.1:8181`)。理由は3つ: ①本体は端末管理のため 0.0.0.0 で
-  待つので、相乗りすると音声APIがLANから見える(**ソケットの時点で閉じたい**) ②実験機能の
-  クラッシュで受付本体(GPIO/ロッカー/扉)を巻き込まない ③whisper.cpp のCPU占有を切り分けやすい。
-- **マイクを握るのはブラウザではなくサービス側**(`arecord`)。名刺(カメラ=ブラウザ)と逆なので注意。
-  ブラウザが送るのは「どの項目を録るか」だけで、音声はブラウザを通らない。
-- **音声だけで受付を確定させない**。認識結果は受付フォームの入力欄に入るだけで、送信は
-  従来どおり「受付する」を押したとき。失敗してもいつでもタッチ入力に戻れる。
-- **確信度は単一の数値で取れない**。whisper.cpp の JSON(`-ojf`)はトークン確率 `p` は返すが
-  no-speech 確率は返さない。そこで無音率/認識文字数/平均トークン確率/繰り返し/発話時間に
-  対する長さ を組み合わせて自動確定の可否を決める(`voice/quality.py`)。**弾いた結果も画面には
-  出す**(黙って捨てるより、利用者が直すか話し直すかを選べる)。
-- **音声は残さない**。PCM はメモリ上のみ。whisper-cli は WAV のパスを受け取る API なので
-  tmpfs(`/dev/shm`)に一度書くが、成功・失敗・タイムアウトのいずれでも `finally` で必ず消す。
-- **分析ログは「書ける項目を列挙する」方式**(`voice/metrics.py` の `_ALLOWED`)。認識テキスト・
-  氏名・会社名は構造的に書けない。修正の有無は真偽値だけ。セッションIDは使い捨てで
-  `reception_logs` とひも付けない。
-- **モデルは Git LFS でリポジトリに入れた**(`voice_models/` 約290MB + `vendor/whisper.cpp-*.tar.gz`)。
-  `ggml-small-q5_1.bin` が181MBでGitHubの1ファイル100MB上限を超えるため。**clone 後に
-  `git lfs pull` が要る**。名刺のOCRモデル(スクリプト取得)とは方針が違う。
-  whisper-cli のバイナリは aarch64 専用なので入れない(`install_voice.sh` が Pi 上でビルド)。
-- **OTA は `voice/*.py` を配るが `_RESTART_DIRS` には入れない**。別プロセスなので本体を
-  再起動しても入れ替わらない。音声サービスが自分のソースのハッシュ変化を60秒ごとに見て
-  自ら終了し、systemd(`Restart=always`)に起こし直してもらう(`voice/server.py` の `_watch_sources`)。
-- **社員マスターに読み仮名が無い**。`tenants.staff_list` は表示氏名のカンマ区切りだけで、
-  読み仮名・部署・別称の欄が無い。読みを推測して確定するのは禁止なので、端末ローカルの
-  `staff_readings.yaml`(gitignore。実在の社員情報が入る)に読みがある担当者だけを音声照合の
-  対象にし、無ければ「設定不足」として担当者の音声入力そのものを無効にする。
-- しきい値は `voice/defaults.py` が唯一の定義で、`voice_input.yaml`(端末ごと・gitignore)と
-  環境変数 `VOICE_<SECTION>__<KEY>` で上書きする(名刺と同じ作法)。
-- **Windows 開発機でも動作試験できる**。録音は `sounddevice`(arecord が無いので `auto` が自動で選ぶ)、whisper-cli は上流の配布バイナリ(タグ `b4938` = v1.9.3 と同じソース。`whisper.binary_windows` で持ち替え)。`scripts/install_voice_windows.ps1` が SHA-256 照合つきで展開する。`scripts/voice_selftest.py` が録音→認識→整形→判定を1往復させ、`--say` は Windows の音声合成(SAPI)で音源を作るのでマイクが無くても試せる。`audio.backend: file` なら WAV をマイクの代わりに流せる(同じ音で何度でも比較できる)。**処理時間は Pi 5 の目安にならない**(CPU も命令セットも違う)ので、性能の数字は必ず実機の `voice_bench.py` で取る。
-- テストは `kiosk_agent/tests/voice_input/`(158件)。**実マイクも whisper バイナリも使わない**。
-  合成した波形を実時間で流すフェイクマイク(`capture.BufferStream(realtime=True)`)で録音ループを
-  本番と同じ条件で回す。VAD 単体は時計を差し替えて待たずに検証する。
+  (`mokuture-voice.service` / `127.0.0.1:8181`)。①本体は 0.0.0.0 で待つので相乗りすると音声APIがLANから
+  見える ②実験機能のクラッシュで受付本体(GPIO/ロッカー/扉)を巻き込まない。**マイクを握るのはサービス側**
+  (`arecord` / Windows は `sounddevice`)。ブラウザが送るのは「いまの画面の言葉」だけ。
+- **声で起こすのは画面の遷移と選択まで**(利用者の選択)。受付の送信・担当者の呼び出し(配達の「呼び出し」含む)は
+  声では押さない。ロッカーの口は番号で選べるが、**空きの口(選ぶと錠が開く)は声で選んだときだけ確認
+  (`vcConfirm`)を挟む**。**暗証番号の画面ではマイクを開けない**。
+- API は `POST /voice/session/{id}/command`(`vosk_engine.recognize_command`)。画面が渡す語彙だけで Vosk の
+  語彙制限(`Gr.fst`)decode。**認識した言葉は画面にも実験ログにも出さない**(返すのは選択肢 id と信頼度)。
+  前の画面の聞き取り中に新しい語彙が来たら畳んで開け直す。
+- 語彙は kiosk.html の `VOICE_VOCAB`(**JSON として書く**。テストと `scripts/voice_command_eval.py` が読む)。
+  各画面は描画後に `voiceCommands(画面名, [vcItem(キー, 押す要素)], {onActivity: resetIdle})` を呼ぶだけで、
+  当たると**その要素を click() する**(タッチと同じ経路)。要素には「言う言葉」の札が付く。
+  **札は押す前から薄く出す**(声で操作したことの無い人に伝わるように。押す手段がある画面だけ)。
+  札の言葉(`label`)は**読み仮名(ひらがな)**。帯は `#bb-voice-slot`(下部帯の差し込み口。不足幅は
+  flex-shrink:1000 でここだけが縮む)、帯の無い画面・確認の上は上端中央に浮かせる。
+- Vosk の語彙制限の性質(実測): ①句でなく**語**で絞られる(句が続けて現れたかはこちらで照合)
+  ②**同じ読み・近い音の表記を並べると信頼度が割れて両方外れる**(「戻る」と「もどる」、「受け取る」と「受け取り」)
+  ③短い数字は発話頭の雑音に吸われる(語彙を絞ると「にばん」は「番」だけ) → **番号で選ぶロッカーの画面だけ
+  語彙を絞らない認識で聞き直す**(`opts.fallback`。7口の番号で 11/21 → 25/28) ④**雑談に紛れたキーワードは
+  信頼度1.0で当たる** → 後ろに語彙外の発話が 0.25 秒以上続いたら捨てる(`command.trailing_unk_sec`)。
+  合成音声で当たり 218/222・取り違え 0、雑談の誤爆 31→7。**ロビーの実音と Pi 実機での値は未計測**。
+- **OTA は `voice/*.py` を配るが `_RESTART_DIRS` には入れない**。音声サービスが自分のソースのハッシュ変化を
+  60秒ごとに見て自ら終了し、systemd(`Restart=always`)に起こし直してもらう(`voice/server.py` の `_watch_sources`)。
+  配信リストは agent(`updater.MANAGED_FILES`) と backend(`kiosk.py` の `BUNDLE_FILES`)の2か所を並び順まで一致させる。
+- **分析ログは「書ける項目を列挙する」方式**(`voice/metrics.py` の `_ALLOWED`)。画面名・選択肢 id・外れた理由・時間だけ。
+- Vosk モデル(zip)は Git LFS。`install_voice.sh` が SHA-256 固定で自力取得するので git-lfs 無しでも導入できる。
+- **Windows で画面から試すとき**: キオスク本体(`main.py`)は非Linuxでは OTA を止めてあるので起動してよい
+  (以前は master の版で未コミットの kiosk.html/voice/*.py を上書きしていた)。本体なしなら
+  `http.server --directory static` ＋ `?mock=1&voice=1`(MOCK のまま音声サービスだけ本物)。
+- テストは `kiosk_agent/tests/voice_input/`(120件)。実マイクも実モデルも使わない(`voice_fakes.py` の偽 Vosk・
+  `capture.BufferStream` のフェイクマイク)。実モデルがある環境では語彙表が発音辞書で書けるかも確かめる。
 
 ### キオスク画面（device 版 `kiosk_agent/static/kiosk.html`）
 画面遷移フロー（`go(screen, data)` で管理）:

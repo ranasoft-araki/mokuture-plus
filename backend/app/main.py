@@ -37,8 +37,8 @@ _ENSURE_COLUMNS = {
         "department_list": "TEXT",
         # 審査用デモモード。既存行は FALSE。demo1/demo2 は下でバックフィルして有効化。
         "is_demo": "BOOLEAN DEFAULT FALSE",
-        # 受付の音声をクラウド音声認識へ中継してよいか。既存行は FALSE(従来どおり
-        # 端末内だけで完結する)。
+        # 【廃止】受付の音声のクラウド中継。機能は削除済みだが、モデルに列の定義を残して
+        # いるので古い DB にも揃えておく(既存行は FALSE)。
         "voice_cloud_enabled": "BOOLEAN DEFAULT FALSE",
         "voice_cloud_opt_out": "BOOLEAN DEFAULT FALSE",
     },

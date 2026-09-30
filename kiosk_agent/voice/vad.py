@@ -110,6 +110,7 @@ def record_utterance(
     *,
     max_record_sec: float | None = None,
     silence_sec: float | None = None,
+    start_timeout_sec: float | None = None,
     on_level: Callable[[float, float], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     should_stop: Callable[[], bool] | None = None,
@@ -125,7 +126,9 @@ def record_utterance(
     rate = int(settings.get("audio.sample_rate"))
     frame_ms = int(settings.get("vad.frame_ms"))
     frame_bytes = int(rate * frame_ms / 1000) * capture.SAMPLE_WIDTH
-    start_timeout = float(settings.get("vad.start_timeout_sec"))
+    # 画面操作のキーワードは「画面が選択を待っている間」ずっと聞くので、項目入力より長く待つ。
+    start_timeout = float(start_timeout_sec if start_timeout_sec is not None
+                          else settings.get("vad.start_timeout_sec"))
     # 一文をまとめて話すときは文の途中で間が空くので、項目ごとに長さを変えられる。
     silence_sec = float(silence_sec if silence_sec is not None else settings.get("vad.silence_sec"))
     max_sec = float(max_record_sec if max_record_sec is not None else settings.get("vad.max_record_sec"))

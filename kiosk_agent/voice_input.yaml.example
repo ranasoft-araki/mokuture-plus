@@ -1,4 +1,4 @@
-# mokuture+ 音声入力(実験導入)の設定
+# mokuture+ 声で操作する(実験導入)の設定
 #
 #   cp voice_input.yaml.example voice_input.yaml
 #   （編集したら） sudo systemctl restart mokuture-voice
@@ -7,11 +7,10 @@
 # 既定のまま。打ち間違えたキーは無視され、その旨が /voice/status の config_notes に出る。
 #
 # 環境変数でも上書きできる(こちらが最優先):
-#   VOICE_WHISPER__MODEL_PATH=/path/to/ggml-small-q5_1.bin
 #   VOICE_AUDIO__DEVICE=plughw:1,0
-#   VOICE_VAD__SILENCE_SEC=0.6
+#   VOICE_COMMAND__MIN_CONF=0.9
 
-# 音声入力ごと止めるスイッチ。false にすると画面から「音声で入力」が消える。
+# 声で操作するごと止めるスイッチ。false にすると画面から「声で操作する」が消える。
 enabled: true
 
 server:
@@ -23,102 +22,41 @@ server:
     - http://localhost:8080
     - http://127.0.0.1:8080
 
-# クラウド音声認識への中継（自社バックエンド経由。VOICE_INPUT.md 4-9）。
-# **鍵は端末に置かない。** 実際に使えるかはサーバが決める（サーバに鍵があり、かつ
-# テナントが許可しているときだけ）。使えなければローカル認識だけで従来どおり動く。
-cloud:
-  enabled: true            # false にすると、サーバの設定に関係なく問い合わせない
-  api_url: ""              # 空なら本体の .env の REMOTE_API_URL を使う
-  timeout_sec: 6.0
-  # ローカルの認識が終わってからクラウドを待つ上限。超えたらローカルの結果を使う
-  # ので、通信が遅くても待ち時間は増えない。
-  wait_after_local_sec: 1.8
-
 audio:
-  # Raspberry Pi: **ふつうは default のままでよい**。開けなければ、挿さっている
-  # 録音デバイス(USB が先)へ自動で移る。USB マイクのカード番号は挿す位置や起動順
-  # で変わるので、番号を焼き込むほうがかえって壊れやすい。
-  # 名指ししたいときは `arecord -L` の名前を書く。番号(plughw:1,0)より
-  # 名前(plughw:CARD=Device,DEV=0)のほうが挿し位置に左右されない。
+  # Raspberry Pi: `arecord -L` で出てくる名前。USB マイクは plughw:1,0 など。
+  # 開けなければ挿さっているマイクへ自動で移るので、普通は default のままでよい。
   # Windows(動作試験): 装置番号か名前の一部。番号は次で確認する
   #   .venv\Scripts\python scripts\voice_selftest.py --devices
   device: default
-  sample_rate: 16000
-  channels: 1
   # auto = arecord → sounddevice の順に試す(Windows は自動で sounddevice)
   # file = 下の file_path の WAV をマイクの代わりに流す(動作試験用)
   backend: auto
-  # backend: file のときに読む WAV。マイクが無くても経路を通せる。
-  # file_path: samples/company.wav
-  # 受付開始音の回り込みを避けるため、録音の頭を捨てる長さ(ms)
+  # file_path: samples/lobby.wav
+  # 開始音の回り込みを避けるため、録音の頭を捨てる長さ(ms)
   start_guard_ms: 250
-  # マイクの入力が小さすぎるときだけ 1.5〜3.0 に上げる。上げすぎると歪む。
+  # 小さすぎるマイクの救済用。上げすぎると歪む(3.0 くらいまで)
   input_gain: 1.0
 
 vad:
-  # auto = webrtcvad があればそれ、無ければエネルギーVAD
-  engine: auto
-  # 話し始めるのを待つ時間(秒)
-  start_timeout_sec: 5.0
-  # 話し終わったと判断する無音(秒)。0.5〜0.8 の範囲で調整する。
-  # 短くすると反応が速いが、言いよどみで切れやすい。
-  silence_sec: 0.7
-  # 1 項目の最大録音時間(秒)
-  max_record_sec: 10.0
-  # これより短い発話は「短すぎる」として再入力を促す(秒)
-  min_speech_sec: 0.35
-  # ロビーが騒がしいときは speech_margin_db を上げる(拾いにくくなるが誤検出が減る)。
-  # 声が小さい人が多いときは下げる。
+  # 周りの話し声で勝手に聞き始める → 上げる(9 → 12) / 小さい声を拾わない → 下げる
   speech_margin_db: 9.0
-  silence_margin_db: 5.0
 
-whisper:
-  # ── モデルの切り替えはここ ──────────────────────────────────────────────
-  # base  : voice_models/ggml-base-q5_1.bin   (57MB / Pi 5 で 3 秒発話 約 1.2〜2.0 秒)
-  # small : voice_models/ggml-small-q5_1.bin  (181MB / 同 約 3.5〜6 秒・精度は上)
-  # model_name はメトリクスに出る識別子。モデルを変えたら必ず一緒に変える。
-  model_path: voice_models/ggml-base-q5_1.bin
-  model_name: whisper-base-q5
-  # Linux/Pi: install_voice.sh がソースからビルドしたもの
-  binary: vendor/whisper.cpp/build/bin/whisper-cli
-  # Windows(動作試験): install_voice_windows.ps1 が展開した配布バイナリ。
-  # Windows ではこちらが優先される。
-  binary_windows: vendor/whisper.cpp-win-x64/Release/whisper-cli.exe
-  language: ja
-  # Pi 5 は 4 コア。他の処理と食い合うようなら 3 に落とす。
-  threads: 4
-  timeout_sec: 10.0
-  # 音 1 秒あたりに許す認識時間。一文をまとめて話すと最長 15 秒になるので、
-  # 固定の timeout_sec では足りない。長い音ではこちらとの大きい方を使う。
-  # Windows の実測は音 1 秒あたり 0.4〜0.9 秒(base)。Pi はもっと遅いので上げること。
-  timeout_per_audio_sec: 2.0
-  beam_size: 1
-  # 音声と中間 JSON の置き場。tmpfs(RAM)にすること。ディスクに残さない。
-  tmp_dir: /dev/shm
-
-vosk:
-  # 第3・4段階(担当者名・画面操作)。zip を展開すると使えるようになる:
-  #   .venv/bin/python scripts/fetch_voice_models.py --extract
-  model_path: voice_models/vosk-model-small-ja-0.22
-  model_name: vosk-small-ja-0.22
-
-quality:
-  # 自動確定してよいかの判定(§7)。厳しくすると誤入力は減るが再入力が増える。
-  avg_token_prob_min: 0.45
-  no_speech_max: 0.60
-  repeat_ratio_max: 0.55
-  max_chars_per_sec: 12.0
-  min_speech_ratio: 0.20
+command:
+  # 画面を開いたら「声で操作する」を押さなくても聞き取る(待機画面ではマイクを開けない)。
+  # false にすると、押したときだけ聞き取る
+  auto_start: true
+  # 採る信頼度。上げると誤爆が減り、「もう一度お願いします」が増える
+  min_conf: 0.85
+  # ロッカーの番号を通常の認識で聞き直したときに採る信頼度
+  fallback_min_conf: 0.4
+  # キーワードの後ろに語彙外の発話がこの秒数以上続いたら、文の一部として捨てる
+  trailing_unk_sec: 0.25
+  # 話し終わりとみなす無音(秒)
+  silence_sec: 0.7
+  # 1 回の窓の長さ(秒)。過ぎたら黙って開け直す
+  window_sec: 8.0
 
 metrics:
-  # 実証実験の匿名ログ。個人を特定できる値は構造的に書けないようにしてある。
+  # 匿名の実験ログ(認識した言葉は書かない)
   enabled: true
   path: ~/.mokuture-voice/metrics.jsonl
-  max_bytes: 2000000
-  keep_files: 3
-
-staff:
-  # 担当者の読み仮名(第3段階)。社員マスターに読み仮名が無いため、端末ローカルの
-  # このファイルに読みがある担当者だけを音声照合の対象にする。
-  readings_path: staff_readings.yaml
-  max_candidates: 3
