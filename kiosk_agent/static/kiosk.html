@@ -2997,7 +2997,7 @@ function openCardCapture({ onConfirm }) {
 //
 // 使えない端末(マイク未接続・モデル未導入・サービス停止)では status が取れず、
 // 「声で操作する」を描画しない = 従来どおりのタッチ操作だけが残る。
-const VOICE = { status: null, checked: false };
+const VOICE = { status: null, inflight: null, retryTimer: null, retryMs: 0 };
 // 音声サービスは別プロセス・別ポート。voice_input.yaml の server.port を変えたら
 // ここも合わせる(既定 8181)。
 const VOICE_BASE = "http://127.0.0.1:8181";
@@ -3015,7 +3015,12 @@ async function voiceApi(method, path, body) {
   return r.status === 204 ? null : r.json();
 }
 
-// 起動時に一度だけ利用可否を調べる。失敗しても例外は投げない(音声導線を隠すだけ)。
+// 利用可否を調べる。失敗しても例外は投げない(音声導線を隠すだけ)。
+// **使えると分かるまで、間隔を空けて聞き直す**(3 秒から倍々で最大 30 秒)。Pi の起動時は
+// ブラウザと音声サービスが同時に立ち上がり、音声サービスの準備(Python・Vosk の読み込み)が
+// 間に合わないことがある。以前は 1 回きりで諦めていたので、ページを開き直すまで声の操作が
+// 出なかった(再起動のたびに消え、kiosk-service.sh start でも本体が動いていれば戻らなかった)。
+// 音声サービスを入れていない端末では 30 秒に 1 回 127.0.0.1 へ問い合わせて断られるだけ。
 // ?mock=1&voice=1 … MOCK のまま音声サービス(127.0.0.1:8181)だけ本物につなぐ。開発機で
 // 「声で操作する」を試すため(キオスク本体を起動すると OTA が master の版で上書きする)。
 // 明示オプトインで、覚えない(毎回 URL に付ける)。本番は MOCK でないので関係しない。
@@ -3024,16 +3029,28 @@ const MOCK_VOICE = (() => {
 })();
 
 async function ensureVoiceStatus() {
-  if (VOICE.checked) return VOICE.status;
-  VOICE.checked = true;
+  if (VOICE.status) return VOICE.status;
   if (MOCK && !MOCK_VOICE) return null;
-  try {
-    const s = await voiceApi("GET", "/voice/status");
-    VOICE.status = s && s.available ? s : null;
-  } catch { VOICE.status = null; }
-  // 起動直後は画面の登録(voiceCommands)のほうが先に済んでいるので、ここで自動で入る。
-  if (VOICE.status) { try { vcAutoEnter(); vcPaint(); } catch {} }
-  return VOICE.status;
+  if (VOICE.inflight) return VOICE.inflight;
+  VOICE.inflight = (async () => {
+    try {
+      const s = await voiceApi("GET", "/voice/status");
+      VOICE.status = s && s.available ? s : null;
+    } catch { VOICE.status = null; }
+    VOICE.inflight = null;
+    clearTimeout(VOICE.retryTimer);
+    VOICE.retryTimer = null;
+    if (VOICE.status) {
+      VOICE.retryMs = 0;
+      // 画面の登録(voiceCommands)のほうが先に済んでいるので、ここで自動で入る。
+      try { vcAutoEnter(); vcPaint(); } catch {}
+    } else {
+      VOICE.retryMs = Math.min(30000, VOICE.retryMs ? VOICE.retryMs * 2 : 3000);
+      VOICE.retryTimer = setTimeout(() => { ensureVoiceStatus().catch(() => {}); }, VOICE.retryMs);
+    }
+    return VOICE.status;
+  })();
+  return VOICE.inflight;
 }
 
 // 聞き取り開始の合図。鳴り終わるまで待ってから解決する(端末の音をマイクが拾わないように)。
