@@ -31,6 +31,8 @@ frontend/.netlify/
 # フォーマットは device_state.json.example を参照。実体は /register 時に agent が自動生成する。
 kiosk_agent/device_state.json
 kiosk_agent/locker_state.json
+# OTA が最後に適用した版(updater.py が端末ごとに書く)。追跡すると Pi の git pull と食い違う
+kiosk_agent/.bundle_version
 
 # 分析ログの送信待ちスプール(端末ごと・JSONL)。ANALYTICS.md §7。
 # 個人情報は含まないが端末固有の実データなのでコミットしない。
