@@ -257,8 +257,12 @@ def record_utterance(
         float(settings.get("vad.speech_margin_db")),
         float(settings.get("vad.silence_margin_db")),
     )
-    # 話し始めは「直近 onset_window コマのうち onset_frames コマ以上が声」で決める。
-    # 1 コマ(20ms)で決めると、ドア・足音・咳・机を叩く音で録音が始まる。
+    # 話し始めは「直近 onset_window コマのうち onset_frames コマ以上が声らしい大きさ(暗騒音
+    # ＋silence_margin_db)で、そのどこかで声の大きさ(＋speech_margin_db)を越えた」で決める。
+    # 1 コマ(20ms)で決めると、ドア・足音・咳・机を叩く音で録音が始まる。かといって
+    # 「声の大きさが 0.1 秒」を求めると、少し離れて話した声(判定ラインすれすれ)で始まらず、
+    # 実機で「かなりマイクに近づかないと認識しない」になった(合成音声で、空調音の中の
+    # 小さめの声が 12/12 → 6/12。この形で 12/12 に戻る)。
     onset_frames = max(1, int(round(float(settings.get("vad.onset_ms")) / frame_ms)))
     onset_window = onset_frames * 2
     onset_repeat = max(0, int(settings.get("vad.onset_repeat_frames")))
@@ -275,9 +279,14 @@ def record_utterance(
 
     # 話し始めと判定するまでに溜めたコマも残す(判定を待つぶん語頭が欠けないように)。
     pre_roll: deque[bytes] = deque(maxlen=pre_roll_frames + onset_window)
-    recent: deque[bool] = deque(maxlen=onset_window)
+    recent: deque[bool] = deque(maxlen=onset_window)     # 声らしい大きさ(＋silence_margin_db)
+    peaks: deque[bool] = deque(maxlen=onset_window)      # 声の大きさ(＋speech_margin_db)
+    soft_margin = float(settings.get("vad.silence_margin_db"))
     voiced: list[bytes] = []
-    tail: deque[bytes] = deque(maxlen=post_roll_frames or 1)
+    # 話し終わりかもしれない無音を溜めておく。話し終わりの判定(silence_sec)ぶんは全部持つ。
+    # 以前は post_roll ぶんしか持たず、話し終わりに足す「声の直後の 0.25 秒」が実際には
+    # 「無音の最後の 0.25 秒」になって、語尾の直後(0.46 秒ほど)が録音から抜けていた。
+    tail: deque[bytes] = deque(maxlen=max(post_roll_frames, int(silence_sec * 1000 / frame_ms) + 1, 1))
 
     started = now()
     speech_started_at: float | None = None
@@ -359,6 +368,7 @@ def record_utterance(
                 # 測ったコマも語頭の手前として残す(音源がすぐ話し始めると、ここに語頭が入る)。
                 pre_roll.append(frame)
                 recent.append(False)
+                peaks.append(False)
                 if t - started >= start_timeout + guard_ms / 1000.0:
                     stop_reason = "no_speech"
                     break
@@ -378,9 +388,14 @@ def record_utterance(
                 stop_reason = "no_speech"
                 break
             pre_roll.append(frame)
-            recent.append(speaking)
-            floor_track.add(db)
-            if sum(recent) >= onset_frames:
+            soft = speaking or (judge is judge_energy and db > judge_energy.floor + soft_margin)
+            recent.append(soft)
+            peaks.append(speaking)
+            # 声らしいコマは暗騒音に入れない。入れると、話し始めにならなかった小さめの声で
+            # 見積もりが上がり、言い直すほど大きな声が要るようになる。
+            if not soft:
+                floor_track.add(db)
+            if sum(recent) >= onset_frames and any(peaks):
                 floor_track.discard_pending()
                 speech_started_at = t
                 # 頭に残すのは「最初に声と判定したコマ」の pre_roll 前から。判定を待ったぶん
@@ -411,7 +426,11 @@ def record_utterance(
             stop_reason = "manual"
             break
 
-        if speaking:
+        # 話し終わりは低いほうの線(＋silence_margin_db)で見る。始まりは高い線、終わりは低い線
+        # (ヒステリシス)。高い線(＋speech_margin_db)のままだと、小さめの声が続く間を無音と数えて
+        # 途中で「話し終わり」になり、溜めきれない声(tail を越えたぶん)も録音から落ちる。
+        still_voice = speaking or (judge is judge_energy and not judge_energy.is_silence(db))
+        if still_voice:
             if tail:
                 voiced.extend(tail)
                 tail.clear()
@@ -422,7 +441,10 @@ def record_utterance(
             # 語間の短い無音は捨てずに後ろへ溜める(「た・なか」で切らないため)
             tail.append(frame)
             silence_run += frame_ms / 1000.0
-            judge_energy.observe_silence(db)
+            # 話している最中は、本当に静かなコマ(＋silence_margin_db 未満)だけで暗騒音を追う。
+            # 小さめの声まで入れると、話している間に判定ラインが上がっていく。
+            if judge_energy.is_silence(db):
+                judge_energy.observe_silence(db)
             if silence_run >= silence_sec:
                 voiced.extend(list(tail)[:post_roll_frames])
                 stop_reason = "silence"

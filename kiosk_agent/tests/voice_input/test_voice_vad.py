@@ -263,6 +263,51 @@ def test_the_first_voiced_frame_is_repeated_once(clock):
     assert not any(frames[i] == frames[i + 1] for i in range(len(frames) - 1))
 
 
+def test_a_voice_near_the_threshold_still_starts_recording(clock):
+    """少し離れて話した声(暗騒音＋5〜9dB が続き、ときどき＋9dB を越える)でも録音を始める。
+
+    「声の大きさが 0.1 秒」を求めていたとき、実機で「かなりマイクに近づかないと認識しない」になった。
+    """
+    voice = (tone(20, dbfs=-40) + tone(60, dbfs=-44)) * 10          # 4 コマに 1 コマだけ＋9dB を越える
+    seg = record(noise(2000, dbfs=-50) + voice + noise(3000, dbfs=-50), clock)
+    assert seg.stop_reason == "silence"
+    # 話している間に判定ラインが上がって途中で「話し終わり」にならず、声の区間を丸ごと録る
+    assert ms_of(seg.pcm) >= ms_of(voice), "小さめの声の途中で切れている"
+
+
+def test_post_roll_is_the_sound_right_after_the_voice(clock):
+    """話し終わりに足すのは声の直後の pre/post roll ぶん。無音の最後のほうではない。
+
+    以前は溜める入れ物が post_roll ぶんしか無く、声の直後 0.46 秒が抜けて、無音の最後の
+    0.25 秒が足されていた(語尾の余韻が録音から落ちる)。
+    """
+    after = noise(2000, dbfs=-60)                 # 繰り返さない波形で、どこが入ったかを見分ける
+    seg = record(room(1000) + tone(800, dbfs=-20) + after, clock)
+    assert seg.stop_reason == "silence"
+    step = int(settings.get("vad.frame_ms")) * 16 * 2
+    assert after[:step] in seg.pcm, "声の直後の音が録音に入っていない"
+
+
+def test_a_soft_voice_is_not_cut_until_it_falls_quiet(clock):
+    """話し始めのあと小さめの声(＋5〜9dB)が続く間は話し終わりにしない(終わりは低い線で見る)。
+
+    高い線のままだと 0.7 秒で途中終了し、溜めきれない声も録音から落ちる。
+    """
+    soft = tone(1000, dbfs=-44)
+    seg = record(noise(2000, dbfs=-50) + tone(20, dbfs=-40) + soft + noise(3000, dbfs=-50), clock)
+    assert seg.stop_reason == "silence"
+    assert ms_of(seg.pcm) >= 1000 + 20, "小さめの声の途中で切れている"
+
+
+def test_soft_voice_does_not_raise_the_noise_floor(clock):
+    """話し始めにならなかった小さめの声を暗騒音に入れない(言い直すほど大きな声が要るようにならない)。"""
+    almost = tone(60, dbfs=-44) + noise(200, dbfs=-50)                # 声らしいが、＋9dB を越えない
+    record(noise(2000, dbfs=-50) + almost * 8 + silence(8000), clock)
+    seg = record(noise(1000, dbfs=-50) + (tone(20, dbfs=-40) + tone(60, dbfs=-44)) * 10 + noise(3000, dbfs=-50),
+                 FakeClock(int(settings.get("vad.frame_ms"))))
+    assert seg.stop_reason == "silence"
+
+
 def test_a_short_knock_does_not_start_recording(clock):
     """ドア・足音・咳のような一瞬の音では録音を始めない(onset_ms)。"""
     seg = record(noise(1000, dbfs=-55) + tone(60, dbfs=-15) + noise(1000, dbfs=-55) + silence(8000), clock)
