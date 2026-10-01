@@ -11,7 +11,7 @@ import types
 
 import pytest
 
-from voice import capture, session as session_mod, settings, vosk_engine
+from voice import capture, session as session_mod, settings, vad, vosk_engine
 from voice_fakes import LEXICON, FakeRecognizer
 
 
@@ -28,6 +28,8 @@ def _reset_voice(tmp_path):
     capture.set_override(None)
     # 録音デバイスの解決結果はモジュールに覚えるので、テスト間で持ち越さない。
     capture.forget_device()
+    # 暗騒音の見積もりは窓をまたいで引き継ぐので、テスト間で持ち越さない。
+    vad.forget_noise_floor()
     vosk_engine.unload()
     yield
     vosk_engine.unload()

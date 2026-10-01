@@ -11,7 +11,7 @@ from array import array
 import pytest
 
 from voice import capture, settings
-from voice_audio import silence, tone
+from voice_audio import room, silence, tone
 
 
 def write_wav(path, pcm: bytes, *, rate: int = 16000, channels: int = 1, width: int = 2) -> None:
@@ -27,7 +27,7 @@ def write_wav(path, pcm: bytes, *, rate: int = 16000, channels: int = 1, width: 
 def test_wavを流して録音ループを通せる(tmp_path):
     """マイクが無い環境でも、本番と同じ VAD 経路を通せること。"""
     wav = tmp_path / "speech.wav"
-    write_wav(wav, silence(200) + tone(800) + silence(1200))
+    write_wav(wav, room(200) + tone(800) + silence(1200))
 
     cfg = settings.cfg()
     cfg["audio"]["backend"] = "file"

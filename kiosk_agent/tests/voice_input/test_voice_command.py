@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 from voice import metrics, session as session_mod, settings, vosk_engine
 from voice.api import router
 from voice.types import AudioSegment, CommandMatch
-from voice_audio import silence, tone
+from voice_audio import room, silence, tone
 from voice_fakes import FakeRecognizer
 
 AGENT_DIR = Path(__file__).resolve().parents[2]
@@ -75,6 +75,22 @@ def test_信頼度が足りない語を含む句は当たりにしない(fake_vo
     """「いちどもどってください」が「戻る」0.78 で当たっていた(合成音声の実測)。"""
     assert vosk_engine.match_command([("戻る", 0.78)], table(), 0.85)[0] is None
     assert vosk_engine.match_command([("戻る", 0.95)], table(), 0.85)[0] == "back"
+
+
+def test_数字の語は少し低い信頼度でも採る(fake_vosk):
+    """実機で「にばん」だけ反応しなかった。静かな所でも「二」が 0.83 前後に張り付く(合成音声)。"""
+    assert vosk_engine.match_command([("二", 0.83), ("番", 1.0)], table(), 0.85)[0] == "delivery"
+    assert vosk_engine.match_command([("一番", 0.8)], table(), 0.85)[0] == "visit"
+    # 下げるのは数字の語だけ。句のほかの語・数字でない言葉は 0.85 のまま
+    assert vosk_engine.match_command([("二", 0.83), ("番", 0.8)], table(), 0.85)[0] is None
+    assert vosk_engine.match_command([("戻る", 0.83)], table(), 0.85)[0] is None
+    # 数字にも下限はある
+    assert vosk_engine.match_command([("二", 0.7), ("番", 1.0)], table(), 0.85)[0] is None
+
+
+def test_数字の合格ラインは全体の合格ラインより上げない(fake_vosk):
+    """聞き直し(0.4)で数字だけ厳しくなると、聞き直しの意味がなくなる。"""
+    assert vosk_engine.match_command([("二", 0.45), ("番", 0.9)], table(), 0.4)[0] == "delivery"
 
 
 def test_2つの選択肢に当たったら動かさない(fake_vosk):
@@ -145,6 +161,16 @@ def test_選択肢と同じ言葉の言い添えは入れない(fake_vosk):
     grammar = fake_vosk[0].grammar
     assert grammar.count("お 願い します") == 1
     assert "お 願い し ます" not in grammar
+
+
+def test_選択肢の語と同じ音の言い添えは入れない(fake_vosk):
+    """「二 番」と言い添えの「に」を並べると、同じ音で信頼度が割れる。"二" の無い画面では残す。"""
+    FakeRecognizer.words = []
+    vosk_engine.recognize_command(seg(), TOP)
+    assert "二 番" in fake_vosk[0].grammar
+    assert "に" not in fake_vosk[0].grammar
+    vosk_engine.recognize_command(seg(), [("locker", ["ロッカー"]), ("back", ["戻る"])])
+    assert "に" in fake_vosk[-1].grammar
 
 
 def test_辞書の切り方が違っても同じ言葉なら当たる(fake_vosk):
@@ -298,7 +324,7 @@ def test_設定で止められる(client, fake_vosk, feed):
 
 
 def test_言われた選択肢を返し言葉そのものは返さない(client, heard, feed):
-    feed(silence(200) + tone(500) + silence(900))
+    feed(room(200) + tone(500) + silence(900))
     sid = start(client)
     assert client.post(f"/voice/session/{sid}/command", json=body()).status_code == 200
     s = wait_for(client, sid)
@@ -310,7 +336,7 @@ def test_言われた選択肢を返し言葉そのものは返さない(client,
 
 def test_当たらなければ画面を動かさない(client, heard, feed):
     heard["match"] = CommandMatch(None, None, "unmatched", 30)
-    feed(silence(200) + tone(500) + silence(900))
+    feed(room(200) + tone(500) + silence(900))
     sid = start(client)
     client.post(f"/voice/session/{sid}/command", json=body())
     s = wait_for(client, sid)
@@ -319,7 +345,7 @@ def test_当たらなければ画面を動かさない(client, heard, feed):
 
 
 def test_実験ログには画面と選択肢のidだけを残す(client, heard, feed):
-    feed(silence(200) + tone(500) + silence(900))
+    feed(room(200) + tone(500) + silence(900))
     sid = start(client)
     client.post(f"/voice/session/{sid}/command", json=body())
     wait_for(client, sid)

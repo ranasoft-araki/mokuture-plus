@@ -17,6 +17,10 @@ Windows の合成音声で測って分かった性質:
    ロッカー 7 口の番号で 11/21 → 25/28(聞き直しのしきい値 0.4)。
 4. **雑談に紛れたキーワードは信頼度 1.0 で当たる**(「ロッカーの鍵どこだっけ」)。
    しきい値では切れないので、キーワードの後ろに語彙外の発話が続いたら捨てる(embedded)。
+5. **数字の語は信頼度が低めに出る。** 実機で「にばん」だけ反応しなかった。合成音声でも
+   静かな所で「二」だけ 0.85 にわずかに届かないことが多い(0.80〜0.84。「番」は 1.0)。「に」は 1 拍で
+   鼻音から始まる、いちばん弱い数字。数字の語だけ合格ラインを下げる(command.number_min_conf)。
+   下げるほど別の数字との取り違えが増えうるので、増え方を測って決めた(defaults.py)。
 
 実測(scripts/voice_command_eval.py・7 画面の語彙・しきい値 0.85):
   画面への操作 222 発話(札のひらがな・「えーと、〜」「〜でお願いします」込み)
@@ -68,6 +72,12 @@ _cmd_recs: "OrderedDict[tuple[int, str], object]" = OrderedDict()
 _seg_cache: dict[str, tuple[str, ...] | None] = {}
 _seg_warned: set[str] = set()
 _PHRASE_MAX = 16
+
+# 数字の語(上の 5)。合格ラインを command.number_min_conf まで下げる。
+_NUMERAL_WORDS = frozenset("一二三四五六七八九十") | {"一番"}
+# 選択肢の語と同じ音の言い添え。並べると信頼度が割れる(上の 2)ので、その語が選択肢に
+# あるときは言い添えから外す(ロッカーの「二 番」と言い添えの「に」)。
+_SAME_SOUND = {"に": "二"}
 
 
 def model_path() -> Path:
@@ -261,7 +271,9 @@ def _command_grammar(table: list[tuple[str, tuple[str, ...]]]) -> str:
     """
     choice_seqs = {t for _, t in table}
     choice_text = {"".join(t) for t in choice_seqs}
-    extra = [t for t in _filler_seqs() if "".join(t) not in choice_text]
+    choice_words = {w for t in choice_seqs for w in t}
+    extra = [t for t in _filler_seqs() if "".join(t) not in choice_text
+             and not (len(t) == 1 and _SAME_SOUND.get(t[0]) in choice_words)]
     seqs = sorted({" ".join(t) for t in choice_seqs} | {" ".join(t) for t in extra})
     return json.dumps(seqs + ["[unk]"], ensure_ascii=False)
 
@@ -291,17 +303,23 @@ def _command_recognizer(rate: int, grammar: str):
 # ── 照合 ──────────────────────────────────────────────────────────────────────
 
 def _find_phrases(words: list[tuple], table: list[tuple[str, tuple[str, ...]]],
-                  min_conf: float) -> list[tuple[int, int, str, float]]:
+                  min_conf: float, number_min_conf: float | None = None) -> list[tuple[int, int, str, float]]:
     """認識した語の列から、選択肢の言い回しが**続けて**現れた所を拾う。
 
     語で絞られるので、句の一部の語だけが返ることがある(上の 1)。句のすべての語が
-    並び順どおりに続き、どの語もしきい値を越えたときだけ当たりにする。
+    並び順どおりに続き、どの語もしきい値を越えたときだけ当たりにする。数字の語の
+    しきい値は number_min_conf まで下げる(上の 5。min_conf より高くはしない)。
     重なった当たりは長いほうを残す(「ご 訪問」と「訪問」なら「ご 訪問」)。
     words は (語, 信頼度) か (語, 信頼度, 開始秒, 終了秒)。
     """
     # 語の切れ目ではなく**続けた文字列**で比べる。同じ言葉でも辞書の切り方が 2 通りある
     # (「お 願い します」と「お 願い し ます」)ので、切れ目で比べると取りこぼす。
     toks = [w[0] for w in words]
+    num_floor = min_conf if number_min_conf is None else min(min_conf, number_min_conf)
+
+    def passes(w: tuple) -> bool:
+        return w[1] >= (num_floor if w[0] in _NUMERAL_WORDS else min_conf)
+
     hits: list[tuple[int, int, str, float]] = []
     for cid, seq in table:
         target = "".join(seq)
@@ -312,9 +330,8 @@ def _find_phrases(words: list[tuple], table: list[tuple[str, tuple[str, ...]]],
                 if not target.startswith(joined):
                     break
                 if joined == target:
-                    conf = min(w[1] for w in words[i:j + 1])
-                    if conf >= min_conf:
-                        hits.append((i, j + 1, cid, conf))
+                    if all(passes(w) for w in words[i:j + 1]):
+                        hits.append((i, j + 1, cid, min(w[1] for w in words[i:j + 1])))
                     break
     hits.sort(key=lambda h: (-(h[1] - h[0]), h[0]))
     kept: list[tuple[int, int, str, float]] = []
@@ -331,7 +348,8 @@ def _unknown_sec(words: list[tuple], lo: int, hi: int) -> float:
 
 def match_command(words: list[tuple], table: list[tuple[str, tuple[str, ...]]], min_conf: float, *,
                   trailing_unk_sec: float | None = None,
-                  leading_unk_sec: float | None = None) -> tuple[str | None, float | None, str | None]:
+                  leading_unk_sec: float | None = None,
+                  number_min_conf: float | None = None) -> tuple[str | None, float | None, str | None]:
     """(当たった選択肢, 信頼度, 外れた理由)。
 
     **2 つの選択肢が同時に当たったら何もしない**(ambiguous)。どちらか分からないまま
@@ -347,7 +365,9 @@ def match_command(words: list[tuple], table: list[tuple[str, tuple[str, ...]]], 
         trailing_unk_sec = float(settings.get("command.trailing_unk_sec"))
     if leading_unk_sec is None:
         leading_unk_sec = float(settings.get("command.leading_unk_sec"))
-    kept = _find_phrases(words, table, min_conf)
+    if number_min_conf is None:
+        number_min_conf = float(settings.get("command.number_min_conf"))
+    kept = _find_phrases(words, table, min_conf, number_min_conf)
     ids = {cid for _, _, cid, _ in kept}
     if len(ids) > 1:
         # 言い添えと同じ言葉の選択肢(ようこそ画面の「お願いします」)は、ほかの言葉と

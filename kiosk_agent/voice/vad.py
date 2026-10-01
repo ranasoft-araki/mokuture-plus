@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
 from array import array
 from collections import deque
@@ -84,7 +85,7 @@ class _EnergyJudge:
     """暗騒音に追従するエネルギー判定。追加依存なしの既定エンジン。
 
     無音が続く間だけノイズフロアを更新する。発話中に更新すると、長く話すほど
-    しきい値が持ち上がって語尾が切れてしまう。
+    しきい値が持ち上がって語尾が切れてしまう。話し始める前の見積もりは _FloorTracker。
     """
 
     def __init__(self, floor_db: float, adapt: float, speech_margin: float, silence_margin: float) -> None:
@@ -105,6 +106,117 @@ class _EnergyJudge:
             self.floor = self.floor * (1.0 - self._adapt) + db * self._adapt
 
 
+class _NoiseHistory:
+    """話し始める前に聞いた音(dBFS)の履歴。画面が選択を待つ間は数秒おきに窓を開け直すので、
+    窓ごとに測り直さず持ち回る。窓の頭だけで測ると、開けた瞬間にもう話している人の声を
+    暗騒音と取り違える。
+
+    セッションは最大 4 つあり、それぞれのワーカーが録音ループを回しうるので、鍵を掛けて
+    読み書きする(確かめてから読むまでの間に別の窓が消すと、空の履歴を読んで落ちる)。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._dbs: deque[float] = deque()
+        self._updated_at = 0.0
+
+    def begin(self, frames: int, memory_sec: float) -> None:
+        """窓を開けた。長さが変わったか、しばらく聞いていなければ測り直す。"""
+        with self._lock:
+            if self._dbs.maxlen != frames or time.monotonic() - self._updated_at > memory_sec:
+                self._dbs = deque(maxlen=frames)
+
+    def add(self, db: float) -> None:
+        with self._lock:
+            self._dbs.append(db)
+            self._updated_at = time.monotonic()
+
+    def median(self, minimum: int = 3) -> float | None:
+        with self._lock:
+            values = sorted(self._dbs)
+        if len(values) < minimum:
+            return None
+        return values[len(values) // 2]
+
+    def clear(self) -> None:
+        with self._lock:
+            self._dbs.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._dbs)
+
+
+_bg_history = _NoiseHistory()
+# 暗騒音をまだ測れていない(履歴が無い)ときは、この長さの音を測るまで判定しない。
+# 測る前に判定すると、うるさい場所では最初のコマで話し始めになる。**経過時間ではなく、
+# 受け取った本物の音(0 埋めでないコマ)の長さで数える**。録音の立ち上がりが遅れて最初の音が
+# ガードの後に届いたり、マイクが開いた直後に 0 を返したりすると、経過時間やコマ数では
+# 1 コマも測らずに判定を始めてしまう。
+_MIN_MEASURE_MS = 100.0
+# ノイズゲート付きのマイク(無音を 0 で返す)の見分け。**音が鳴ったあとに 0 がこれだけ続いた**
+# のを一度でも見たら覚えておき(_zero_gate_seen)、以後は 0 がこれだけ続いた窓を「静かな部屋」と
+# みなして、測らずに固定の初期値(noise_floor_init_db)以下で判定する。0 を数えないだけだと、
+# 話す前がずっと 0 のマイクでは履歴が育たず、毎回声の頭を暗騒音として測って声を拾えない
+# (合成音声で 176/180 → 15/180)。
+# **窓の頭の 0 だけでは決めない。** マイクが開いた直後だけ 0 を返す機材だと、うるさい部屋でも
+# 「静かな部屋」になって元の打ち切りに戻り、窓ごとに繰り返す。ゲートのマイクでも、起動後に
+# 一度ゲートが閉じるのを見るまで(たいていは最初の発話の後)は測ってから判定する。
+_ZERO_ROOM_MS = 300.0
+_zero_gate_seen = False
+
+
+def forget_noise_floor() -> None:
+    """持ち回っている暗騒音の履歴と、マイクの見分けを捨てる(試験用・マイクを替えたとき)。"""
+    global _zero_gate_seen
+    _bg_history.clear()
+    _zero_gate_seen = False
+
+
+class _FloorTracker:
+    """話し始める前の音から暗騒音を見積もる。
+
+    **固定の初期値(-55 dBFS)から判定を始めてはいけない。** それより 9dB 以上うるさい場所
+    (空調・人の多いロビー)では、窓を開けた最初の 1 コマが「話し始め」になり、
+    話していると判定している間は暗騒音を学ばないので、そのまま 3 秒の上限で切れる。
+    来訪者がいつ話しても、録音は窓を開けた時刻から 3 秒で切れていた(実機で
+    「話している最中に認識が始まる」)。
+
+    見積もりは直近の音(開始音ガードの間も含む)の**中央値**。下のほうの値だと、近くの
+    雑談の息継ぎの静けさを拾って低く出る。**話し始めになったコマは入れない**(入れると
+    話し始めた途端に見積もりが声へ寄り、話し始めにならない)ので、onset の判定が済むまで
+    手前に置いてから足す(pending)。
+    """
+
+    def __init__(self, frames: int, hold: int) -> None:
+        _bg_history.begin(max(3, frames), float(settings.get("vad.noise_floor_memory_sec")))
+        self._hold = hold
+        self._pending: deque[float] = deque()
+
+    def add(self, db: float, *, hold: bool = True) -> None:
+        """聞いた音を足す。hold=True のコマは話し始めの判定が済むまで見積もりに入れない。"""
+        if db <= -95.0:                     # マイク断・取りこぼしの 0 埋めは数えない
+            return
+        if not hold:
+            _bg_history.add(db)
+        else:
+            self._pending.append(db)
+            while len(self._pending) > self._hold:
+                _bg_history.add(self._pending.popleft())
+
+    def discard_pending(self) -> None:
+        """話し始めになった。手前に置いていたコマは声なので捨てる。"""
+        self._pending.clear()
+
+    def estimate(self) -> float | None:
+        return _bg_history.median()
+
+    def forget(self) -> None:
+        """上限まで声が続いた = 暗騒音を低く見積もっていたかもしれない。次の窓は測り直す。"""
+        _bg_history.clear()
+        self._pending.clear()
+
+
 def record_utterance(
     stream: capture.Stream,
     *,
@@ -123,6 +235,7 @@ def record_utterance(
     should_cancel() が真になったら即座に打ち切る(「キャンセル」ボタン)。
     should_stop() が真になったらそこまでを発話として確定する(「入力を終了」ボタン)。
     """
+    global _zero_gate_seen
     rate = int(settings.get("audio.sample_rate"))
     frame_ms = int(settings.get("vad.frame_ms"))
     frame_bytes = int(rate * frame_ms / 1000) * capture.SAMPLE_WIDTH
@@ -137,12 +250,19 @@ def record_utterance(
     guard_ms = float(settings.get("audio.start_guard_ms"))
     gain = float(settings.get("audio.input_gain"))
 
+    init_floor = float(settings.get("vad.noise_floor_init_db"))
     judge_energy = _EnergyJudge(
-        float(settings.get("vad.noise_floor_init_db")),
+        init_floor,
         float(settings.get("vad.noise_floor_adapt")),
         float(settings.get("vad.speech_margin_db")),
         float(settings.get("vad.silence_margin_db")),
     )
+    # 話し始めは「直近 onset_window コマのうち onset_frames コマ以上が声」で決める。
+    # 1 コマ(20ms)で決めると、ドア・足音・咳・机を叩く音で録音が始まる。
+    onset_frames = max(1, int(round(float(settings.get("vad.onset_ms")) / frame_ms)))
+    onset_window = onset_frames * 2
+    onset_repeat = max(0, int(settings.get("vad.onset_repeat_frames")))
+    floor_track = _FloorTracker(int(float(settings.get("vad.noise_floor_window_ms")) / frame_ms), onset_window)
     judge = judge_energy
     engine = str(settings.get("vad.engine") or "auto").lower()
     if engine in ("webrtc", "auto"):
@@ -153,7 +273,9 @@ def record_utterance(
                 log.info("[voice] webrtcvad を使えないのでエネルギーVADにする")
             judge = judge_energy
 
-    pre_roll: deque[bytes] = deque(maxlen=pre_roll_frames or 1)
+    # 話し始めと判定するまでに溜めたコマも残す(判定を待つぶん語頭が欠けないように)。
+    pre_roll: deque[bytes] = deque(maxlen=pre_roll_frames + onset_window)
+    recent: deque[bool] = deque(maxlen=onset_window)
     voiced: list[bytes] = []
     tail: deque[bytes] = deque(maxlen=post_roll_frames or 1)
 
@@ -164,6 +286,13 @@ def record_utterance(
     peak_db = -100.0
     stop_reason: StopReason = "no_speech"
     guard_until = started + guard_ms / 1000.0
+    # 履歴が無ければ、本物の音をこのコマ数だけ測ってから判定する(_MIN_MEASURE_MS)。
+    min_measure_frames = max(1, int(round(_MIN_MEASURE_MS / frame_ms)))
+    measure_left = min_measure_frames if floor_track.estimate() is None else 0
+    zero_room_frames = max(1, int(round(_ZERO_ROOM_MS / frame_ms)))
+    zero_run = 0
+    heard_sound = False      # この窓で 0 でない音を受け取ったか
+    gated = False            # 無音を 0 で返すマイクの静かな部屋(_ZERO_ROOM_MS)。この窓では測らない
 
     # フレームが届かない事態(マイクが刺さっているのに無音のまま)でも、
     # 全体の待ち時間で必ず抜ける。
@@ -191,9 +320,23 @@ def record_utterance(
         db = dbfs(frame)
         if db > peak_db:
             peak_db = db
+        if db > -95.0:
+            zero_run = 0
+            heard_sound = True
+        else:
+            zero_run += 1
+            if zero_run >= zero_room_frames:
+                if heard_sound:
+                    _zero_gate_seen = True       # 音のあとに 0 へ戻った = ノイズゲートのマイク
+                if _zero_gate_seen:
+                    gated = True
 
-        # 受付開始音の回り込み対策(§9)。頭の数百 ms は捨てて判定にも使わない。
+        # 受付開始音の回り込み対策(§9)。頭の数百 ms は発話の判定に使わない。
+        # その間の音も暗騒音の見積もりには入れる(_FloorTracker)。
         if t < guard_until:
+            floor_track.add(db, hold=False)
+            if db > -95.0:
+                measure_left -= 1
             if on_level is not None:
                 on_level(0.0, db)
             continue
@@ -201,6 +344,30 @@ def record_utterance(
         if on_level is not None:
             on_level(meter_level(db), db)
 
+        if speech_started_at is None:
+            est = floor_track.estimate()
+            if est is None and measure_left <= 0 and not gated:
+                measure_left = min_measure_frames      # 別の窓が履歴を消した。測り直す
+            if measure_left > 0 and not gated:
+                # まだ暗騒音を測っている(_MIN_MEASURE_MS)。判定には使わない。
+                if should_stop is not None and should_stop():
+                    stop_reason = "no_speech"
+                    break
+                floor_track.add(db, hold=False)
+                if db > -95.0:
+                    measure_left -= 1
+                # 測ったコマも語頭の手前として残す(音源がすぐ話し始めると、ここに語頭が入る)。
+                pre_roll.append(frame)
+                recent.append(False)
+                if t - started >= start_timeout + guard_ms / 1000.0:
+                    stop_reason = "no_speech"
+                    break
+                continue
+            if gated:
+                # 無音が 0 の部屋。履歴に声の頭を覚えていても、初期値より高くは見積もらない。
+                judge_energy.floor = init_floor if est is None else min(est, init_floor)
+            elif est is not None:
+                judge_energy.floor = est
         speaking = judge.is_speech(frame, db, judge_energy.floor)
 
         if speech_started_at is None:
@@ -211,20 +378,31 @@ def record_utterance(
                 stop_reason = "no_speech"
                 break
             pre_roll.append(frame)
-            if speaking:
+            recent.append(speaking)
+            floor_track.add(db)
+            if sum(recent) >= onset_frames:
+                floor_track.discard_pending()
                 speech_started_at = t
-                voiced.extend(pre_roll)
+                # 頭に残すのは「最初に声と判定したコマ」の pre_roll 前から。判定を待ったぶん
+                # まで残すと頭の無音が長くなり、短い数字(「にばん」の「に」)が頭の雑音に
+                # 吸われて信頼度が落ちる(頭 0.25 秒で 0.81 → 0.45 秒で 0.53)。
+                held = list(pre_roll)
+                first = len(held) - len(recent) + list(recent).index(True)
+                voiced.extend(held[max(0, first - pre_roll_frames):first + 1])
+                # 最初に声と判定したコマを重ねて、語頭を少し引き延ばす(onset_repeat_frames)。
+                # 1 拍の数字は頭の子音が短く、頭の雑音に吸われる。直す前の録音ループは
+                # 書き間違いでこのコマを 2 回入れていて、それで数字が当たっていた(外すと
+                # 「五」0.79 → 0.65)。雑音を重ねたロッカー番号 672 本で 468 → 473・にばん 37 → 44/96。
+                voiced.extend([held[first]] * onset_repeat)
+                voiced.extend(held[first + 1:])
                 pre_roll.clear()
-                voiced.append(frame)
-                speech_ms += frame_ms
+                speech_ms += sum(recent) * frame_ms
                 silence_run = 0.0
                 if on_speech_start is not None:
                     on_speech_start()
-            else:
-                judge_energy.observe_silence(db)
-                if t - started >= start_timeout + guard_ms / 1000.0:
-                    stop_reason = "no_speech"
-                    break
+            elif t - started >= start_timeout + guard_ms / 1000.0:
+                stop_reason = "no_speech"
+                break
             continue
 
         # ── 発話中 ──
@@ -254,6 +432,14 @@ def record_utterance(
             voiced.extend(tail)
             stop_reason = "max_duration"
             break
+
+    if stop_reason == "max_duration":
+        floor_track.forget()
+        if gated:
+            # 0 の部屋とみなした窓が上限まで鳴り続けた = ゲートの見分けが外れていた(ミュートや
+            # USB の瞬断で一度だけ 0 が出た等)。覚えたままだと、開いた直後に 0 を返す機材で
+            # うるさい部屋のとき元の打ち切りに戻るので、見分け直す。
+            _zero_gate_seen = False
 
     pcm = b"".join(voiced)
     total_ms = int((now() - started) * 1000)

@@ -28,6 +28,15 @@ def silence(ms: int, *, rate: int = RATE) -> bytes:
     return b"\x00\x00" * int(rate * ms / 1000)
 
 
+def room(ms: int, *, rate: int = RATE) -> bytes:
+    """話し始める前の静かな部屋(-60 dBFS)。
+
+    実際のマイクは 0 を返さない。録音ループは 0 埋めのコマを暗騒音として数えないので、
+    話す前を silence() にすると、暗騒音を測れないまま声が来る(実機では起きない形)。
+    """
+    return noise(ms, rate=rate, dbfs=-60.0)
+
+
 def noise(ms: int, *, rate: int = RATE, dbfs: float = -60.0) -> bytes:
     """暗騒音。ノイズフロア追従の確認に使う。"""
     amp = max(1, int(32767 * (10 ** (dbfs / 20.0)) * math.sqrt(2)))
