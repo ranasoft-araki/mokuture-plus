@@ -173,6 +173,22 @@ def test_選択肢の語と同じ音の言い添えは入れない(fake_vosk):
     assert "に" in fake_vosk[-1].grammar
 
 
+def test_小さすぎる声は持ち上げてから認識に渡す(fake_vosk):
+    """Vosk は小さすぎる声を言葉として聞き取れない(実機の USB マイクで 46 回中 1 回 → 32 回)。"""
+    from voice import vad
+    quiet = tone(600, dbfs=-45)
+    out = vosk_engine._leveled(quiet)
+    level = vad.dbfs(out)
+    target = float(settings.get("command.level_target_db"))
+    assert target - 2 <= level <= target + 2
+    # 上げすぎない(最大 level_max_gain_db)・大きい声は下げない・無音はそのまま
+    very_quiet = tone(600, dbfs=-80)
+    assert vad.dbfs(vosk_engine._leveled(very_quiet)) <= -80 + float(settings.get("command.level_max_gain_db")) + 1
+    loud = tone(600, dbfs=-12)
+    assert vosk_engine._leveled(loud) == loud
+    assert vosk_engine._leveled(silence(300)) == silence(300)
+
+
 def test_辞書の切り方が違っても同じ言葉なら当たる(fake_vosk):
     """「お願いします」は「お 願い します」とも「お 願い し ます」とも返る。"""
     t = vosk_engine.command_table([("form", ["お願いします"])])[0]

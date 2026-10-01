@@ -100,9 +100,11 @@ class _EnergyJudge:
     def is_silence(self, db: float) -> bool:
         return db < self.floor + self._silence_margin
 
-    def observe_silence(self, db: float) -> None:
-        # 極端に小さい値(マイク断)には引っ張られないようにする
-        if db > -95.0:
+    def observe_silence(self, db: float, zero: bool = False) -> None:
+        # 0 埋め(マイク断・取りこぼし)には引っ張られないようにする。音量の線で切ると、
+        # 入力の小さいマイクの本物の静けさ(-90〜-100 dBFS)まで無視してしまう。
+        if not zero:
+            db = max(db, -100.0)
             self.floor = self.floor * (1.0 - self._adapt) + db * self._adapt
 
 
@@ -193,10 +195,11 @@ class _FloorTracker:
         self._hold = hold
         self._pending: deque[float] = deque()
 
-    def add(self, db: float, *, hold: bool = True) -> None:
+    def add(self, db: float, *, hold: bool = True, zero: bool = False) -> None:
         """聞いた音を足す。hold=True のコマは話し始めの判定が済むまで見積もりに入れない。"""
-        if db <= -95.0:                     # マイク断・取りこぼしの 0 埋めは数えない
+        if zero:                            # マイク断・取りこぼしの 0 埋めは数えない
             return
+        db = max(db, -100.0)
         if not hold:
             _bg_history.add(db)
         else:
@@ -329,7 +332,11 @@ def record_utterance(
         db = dbfs(frame)
         if db > peak_db:
             peak_db = db
-        if db > -95.0:
+        # 0 埋めかどうかは**中身が全部 0 か**で見る。音量(dB)の線で切ると、入力の小さいマイクの
+        # 本物の静けさ(-90〜-100 dBFS)まで 0 埋め扱いになり、暗騒音を測れず声も拾えなかった
+        # (実機の USB マイクの録音で、処理の順番によっては 46 回中 6 回まで拾えなかった)。
+        is_zero = not frame.strip(b"\x00")
+        if not is_zero:
             zero_run = 0
             heard_sound = True
         else:
@@ -343,8 +350,8 @@ def record_utterance(
         # 受付開始音の回り込み対策(§9)。頭の数百 ms は発話の判定に使わない。
         # その間の音も暗騒音の見積もりには入れる(_FloorTracker)。
         if t < guard_until:
-            floor_track.add(db, hold=False)
-            if db > -95.0:
+            floor_track.add(db, hold=False, zero=is_zero)
+            if not is_zero:
                 measure_left -= 1
             if on_level is not None:
                 on_level(0.0, db)
@@ -362,8 +369,8 @@ def record_utterance(
                 if should_stop is not None and should_stop():
                     stop_reason = "no_speech"
                     break
-                floor_track.add(db, hold=False)
-                if db > -95.0:
+                floor_track.add(db, hold=False, zero=is_zero)
+                if not is_zero:
                     measure_left -= 1
                 # 測ったコマも語頭の手前として残す(音源がすぐ話し始めると、ここに語頭が入る)。
                 pre_roll.append(frame)
@@ -394,7 +401,7 @@ def record_utterance(
             # 声らしいコマは暗騒音に入れない。入れると、話し始めにならなかった小さめの声で
             # 見積もりが上がり、言い直すほど大きな声が要るようになる。
             if not soft:
-                floor_track.add(db)
+                floor_track.add(db, zero=is_zero)
             if sum(recent) >= onset_frames and any(peaks):
                 floor_track.discard_pending()
                 speech_started_at = t
@@ -444,7 +451,7 @@ def record_utterance(
             # 話している最中は、本当に静かなコマ(＋silence_margin_db 未満)だけで暗騒音を追う。
             # 小さめの声まで入れると、話している間に判定ラインが上がっていく。
             if judge_energy.is_silence(db):
-                judge_energy.observe_silence(db)
+                judge_energy.observe_silence(db, zero=is_zero)
             if silence_run >= silence_sec:
                 voiced.extend(list(tail)[:post_roll_frames])
                 stop_reason = "silence"

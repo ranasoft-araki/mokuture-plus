@@ -681,6 +681,11 @@ mokuture/
   (**窓の頭の 0 だけでは決めない**: 開いた直後だけ 0 の機材でうるさい部屋だと元の打ち切りに戻る)。
   履歴は Lock 付き(`_NoiseHistory`。セッションは最大 4 つ)。
   **近くの雑談は音の大きさでは区別できない**(残る課題。詳細と実測は VOICE_COMMAND.md §4)。
+  **0 埋めは中身が全部 0 のコマだけ**(音量の線で切ると、入力の小さいマイクの本物の静けさまで 0 扱いになる)。
+- **マイクの入力レベルがいちばん効く**(実地試験・`scripts/voice_fieldtest.py`): 安い USB マイクは声の山でも
+  -52〜-65 dBFS で、Vosk が何も返さなかった(46 回中 1 回)。認識の前に声の大きさをそろえる
+  (`vosk_engine._leveled`・`command.level_target_db` -20・最大 +30dB → 32 回)。それでも語尾が崩れるので、
+  本筋は OS の録音レベル(Pi は alsamixer の録音側)を上げること。
 - **OTA は `voice/*.py` を配るが `_RESTART_DIRS` には入れない**。音声サービスが自分のソースのハッシュ変化を
   60秒ごとに見て自ら終了し、systemd(`Restart=always`)に起こし直してもらう(`voice/server.py` の `_watch_sources`)。
   配信リストは agent(`updater.MANAGED_FILES`) と backend(`kiosk.py` の `BUNDLE_FILES`)の2か所を並び順まで一致させる。
@@ -689,7 +694,7 @@ mokuture/
 - **Windows で画面から試すとき**: キオスク本体(`main.py`)は非Linuxでは OTA を止めてあるので起動してよい
   (以前は master の版で未コミットの kiosk.html/voice/*.py を上書きしていた)。本体なしなら
   `http.server --directory static` ＋ `?mock=1&voice=1`(MOCK のまま音声サービスだけ本物)。
-- テストは `kiosk_agent/tests/voice_input/`(144件)。実マイクも実モデルも使わない(`voice_fakes.py` の偽 Vosk・
+- テストは `kiosk_agent/tests/voice_input/`(146件)。実マイクも実モデルも使わない(`voice_fakes.py` の偽 Vosk・
   `capture.BufferStream` のフェイクマイク)。実モデルがある環境では語彙表が発音辞書で書けるかも確かめる。
 
 ### キオスク画面（device 版 `kiosk_agent/static/kiosk.html`）

@@ -399,8 +399,32 @@ def _as_unknown(words: list[tuple], table: list[tuple[str, tuple[str, ...]]]) ->
     return [w if w[0] in allowed else ("[unk]",) + tuple(w[1:]) for w in words]
 
 
-def _decode(rec, seg: AudioSegment) -> list[tuple]:
-    rec.AcceptWaveform(seg.pcm)
+def _leveled(pcm: bytes) -> bytes:
+    """声の大きさをそろえる(小さいときだけ持ち上げる)。
+
+    **Vosk は小さすぎる声を言葉として聞き取れない。** 実機の USB マイクは声の山でも
+    -52〜-65 dBFS しか無く、語彙を絞っても何の語も返らなかった(46 回中 1 回)。録った声に
+    +18〜30dB 掛けると 29〜32 回になった。音量で区切る VAD は暗騒音との差で見るので影響しない。
+    声の大きい所(上位 5%)が command.level_target_db になるように、最大 level_max_gain_db まで
+    持ち上げる。下げはしない。
+    """
+    from voice.vad import dbfs
+    from voice import capture
+
+    step = 320 * 2
+    dbs = sorted(dbfs(pcm[i:i + step]) for i in range(0, len(pcm) - step + 1, step) if pcm[i:i + step].strip(b"\x00"))
+    if not dbs:
+        return pcm
+    level = dbs[min(len(dbs) - 1, int(len(dbs) * 0.95))]
+    gain_db = float(settings.get("command.level_target_db")) - level
+    gain_db = max(0.0, min(float(settings.get("command.level_max_gain_db")), gain_db))
+    if gain_db < 1.0:
+        return pcm
+    return capture.apply_gain(pcm, 10 ** (gain_db / 20))
+
+
+def _decode(rec, pcm: bytes) -> list[tuple]:
+    rec.AcceptWaveform(pcm)
     payload = json.loads(rec.FinalResult() or "{}")
     return [(str(w.get("word", "")), float(w.get("conf", 0.0)),
              float(w.get("start", 0.0)), float(w.get("end", 0.0)))
@@ -430,11 +454,12 @@ def recognize_command(seg: AudioSegment, choices: list[tuple[str, list[str]]],
                             recognition_ms=0)
     floor = float(min_conf if min_conf is not None else settings.get("command.min_conf"))
     grammar = _command_grammar(table)
+    audio = _leveled(seg.pcm)            # 認識器の鍵を持つ前に済ませる(ほかの窓を待たせない)
     with _rec_lock:
         rec = None
         try:
             rec = _command_recognizer(seg.sample_rate, grammar)
-            words = _decode(rec, seg)
+            words = _decode(rec, audio)
         except Exception as e:
             _cmd_recs.pop((seg.sample_rate, grammar), None)
             raise EngineFailed(f"{type(e).__name__}") from e
@@ -450,7 +475,7 @@ def recognize_command(seg: AudioSegment, choices: list[tuple[str, list[str]]],
         with _rec_lock:
             try:
                 free = _free_recognizer(seg.sample_rate)
-                free_words = _as_unknown(_decode(free, seg), table)
+                free_words = _as_unknown(_decode(free, audio), table)
             except Exception as e:
                 globals()["_free_rec"], globals()["_free_rate"] = None, 0
                 raise EngineFailed(f"{type(e).__name__}") from e

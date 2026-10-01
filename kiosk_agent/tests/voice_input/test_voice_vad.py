@@ -308,6 +308,25 @@ def test_soft_voice_does_not_raise_the_noise_floor(clock):
     assert seg.stop_reason == "silence"
 
 
+def _faint(ms: int) -> bytes:
+    """入力のとても小さいマイクの静けさ: ほとんど 0 で、10 サンプルに 1 つだけ ±1(約 -100 dBFS)。"""
+    from array import array
+    n = int(16 * ms)
+    return array("h", ((1 if (i // 10) % 2 else -1) if i % 10 == 0 else 0 for i in range(n))).tobytes()
+
+
+def test_a_very_quiet_mic_is_not_taken_as_zero_fill(clock):
+    """入力の小さいマイクの静けさ(-90〜-100 dBFS)を 0 埋め扱いしない。
+
+    音量の線(-95 dBFS)で 0 埋めを見ていたとき、実機の USB マイクで暗騒音を測れず、
+    声の頭を暗騒音として測って声を拾えないことがあった(処理の順番によって 46 回中 6 回まで)。
+    0 埋めは中身が全部 0 のコマだけ。
+    """
+    seg = record(_faint(2000) + tone(800, dbfs=-55) + _faint(2000), clock)
+    assert seg.stop_reason == "silence"
+    assert seg.speech_ms >= 600
+
+
 def test_a_short_knock_does_not_start_recording(clock):
     """ドア・足音・咳のような一瞬の音では録音を始めない(onset_ms)。"""
     seg = record(noise(1000, dbfs=-55) + tone(60, dbfs=-15) + noise(1000, dbfs=-55) + silence(8000), clock)
