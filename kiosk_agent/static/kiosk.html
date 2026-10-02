@@ -747,8 +747,12 @@ async function callStaffFromBand() {
   }
   _bandCalling = false;
 }
+// 案内が出ている間は下の画面を声で動かさない(vcBlocked)。「閉じる」が出たら「とじる」で閉じられる。
+let _bandCallVoice = null;
 function showBandCallNotice(title, sub, busy) {
   document.getElementById("band-call-ov")?.remove();
+  _bandCallVoice?.pop();
+  _bandCallVoice = null;
   const el = document.createElement("div");
   el.id = "band-call-ov";
   el.style.cssText = `position:absolute;inset:0;z-index:9700;background:rgba(20,18,14,.55);display:flex;align-items:center;justify-content:center;font-family:'Noto Sans JP',Inter,system-ui,sans-serif`;
@@ -759,7 +763,16 @@ function showBandCallNotice(title, sub, busy) {
     ${busy ? "" : `<button id="band-call-ok" style="margin-top:38px;min-height:96px;padding:0 70px;background:${T.dark};border:none;border-radius:18px;font-size:30px;font-weight:700;color:#fff;cursor:pointer;font-family:inherit">閉じる</button>`}
   </div>`;
   sc.appendChild(el);
-  document.getElementById("band-call-ok")?.addEventListener("click", () => el.remove());
+  // マイクを開けない画面(暗証番号)の上では声にしない。重なりの語彙は下の画面より優先されるので、
+  // ここで登録すると暗証番号の画面でマイクが開いてしまう。タッチの「閉じる」はどの画面でも効かせる。
+  const voice = busy || !(VCMD.base && VCMD.base.items.length) ? null : voiceCommandsLayer("notice", el);
+  _bandCallVoice = voice;
+  document.getElementById("band-call-ok")?.addEventListener("click", () => {
+    el.remove();
+    voice?.pop();
+    if (voice && _bandCallVoice === voice) _bandCallVoice = null;
+  });
+  voice?.set([vcItem("notice.close", "#band-call-ok")]);
 }
 
 // ─── Navigate ─────────────────────────────────────────────────────────────────
@@ -2241,8 +2254,16 @@ function showLocker(mode) {
     // 確認を挟む(vcLockerItems)。**暗証番号の画面ではマイクを開けない**(ロビーで番号を読み上げさせない)。
     if (view === "pinset" || view === "pininput") {
       voiceCommands("lockerPin", [], { common: false, note: "暗証番号は画面で入力してください" });
-    } else if (view === "openwait" || (view === "result" && resultGuide)) {
-      voiceCommands("lockerDoor", [], { common: false });
+    } else if (view === "openwait") {
+      // 「扉を閉めました」は錠をかけて暗証番号の設定へ進むので、声のときだけ確認を挟む。
+      voiceCommands("lockerDoor", [
+        vcDoorClosedItem("#lk-closed", "「はい」で錠をかけて、暗証番号の設定へ進みます", resetIdle),
+        vcItem("common.home", "#lk-home"),
+      ], { common: false, onActivity: resetIdle });
+    } else if (view === "result" && resultGuide) {
+      // 受け取りの解錠ガイド。帯が無いので「やめる」は右上の角のボタン。秒読みで自動で進む。
+      voiceCommands("lockerResult", [vcItem("result.done", "#lk-done"), vcItem("common.home", "#lk-home")],
+                    { common: false });
     } else if (view === "result") {
       voiceCommands("lockerResult", [vcItem("result.done", "#lk-done")], { onActivity: resetIdle });
     } else {
@@ -2365,6 +2386,9 @@ function showDelivery() {
     clearTimeout(idleId); clearInterval(countId);
     idleLeft = ST.kiosk_idle_timeout_sec;
     paintIdle();
+    // 呼び出し後の応答待ちは待機タイマーを止めておく(スタッフの返信前に待機画面へ戻らない)。
+    // 画面のどこを押しても(声の確認の「いいえ」も sc へ伝わる)ここが呼ばれるので、ここで止める。
+    if (view === "wait") return;
     idleId = setTimeout(() => { anEnd("timeout"); cleanup(); go("idle"); }, ST.kiosk_idle_timeout_sec * 1000);
     countId = setInterval(() => {
       idleLeft--; if (idleLeft <= 0) { clearInterval(countId); return; }
@@ -2495,15 +2519,30 @@ function showDelivery() {
       resultTimer = setTimeout(() => { goAfterResult(); }, Math.max(6, ST.kiosk_complete_timeout_sec) * 1000);
     }
     // 「置き配」とロッカーの口(番号)は声で選べる。口は選ぶと錠が開くので確認を挟む。
-    // **「呼び出し」は担当者へ通知が飛ぶので声では押さない。**
+    // 「呼び出し」(担当者へ通知が飛ぶ)と「扉を閉めました」(錠をかけて通知する)も、声のときだけ確認を挟む。
     if (view === "choose") {
-      voiceCommands("delivery", [vcItem("delivery.dropoff", "#dl-locker")],
-                    { onActivity: resetIdle, note: "「呼び出し」は画面を押してください" });
+      voiceCommands("delivery", [
+        vcItem("delivery.dropoff", "#dl-locker"),
+        vcItem("delivery.notify", "#dl-call", () => vcConfirm({
+          title: "担当者を呼び出しますか？",
+          sub: "「はい」で担当者にお知らせします",
+          onOk: () => document.getElementById("dl-call")?.click(),
+          onActivity: resetIdle,
+        })),
+      ], { onActivity: resetIdle });
     } else if (view === "result") {
       voiceCommands("deliveryResult", [vcItem("result.done", "#dl-done")], { onActivity: resetIdle });
     } else if (view === "pick" || view === "error") {
       voiceCommands("delivery", view === "pick" ? vcLockerItems("#dl-doors", lockers, resetIdle) : [],
                     { onActivity: resetIdle, fallback: view === "pick" });
+    } else if (view === "openwait") {
+      voiceCommands("deliveryDoor", [
+        vcDoorClosedItem("#dl-lock", "「はい」で錠をかけて、担当者にお知らせします", resetIdle),
+        vcItem("common.home", "#dl-home"),
+      ], { common: false, onActivity: resetIdle });
+    } else if (view === "wait") {
+      // 応答待ちの間は待機タイマーを止めている。声で延ばす(onActivity)と止めたタイマーが動き出すので渡さない。
+      voiceCommands("deliveryWait", []);
     } else {
       voiceCommands("deliveryBusy", [], { common: false });
     }
@@ -2673,9 +2712,12 @@ function openCardCapture({ onConfirm }) {
       sessionId = null;
     }
     root.remove();
+    voice.pop();
     if (dbg.el) { dbg.el.remove(); dbg.el = null; }
   }
   CLEANUPS.push(close);
+  // 読み取り中は下の受付フォームではなく、この画面の「撮影する」「戻る」を声で押せる。
+  const voice = voiceCommandsLayer("card", root);
 
   // ── デバッグ表示(?carddebug=1) ─────────────────────────────────────────────
   // 画面に出るのは案内文言だけなので、うまく読めないときに何を直せばよいか分からない。
@@ -2987,6 +3029,7 @@ function openCardCapture({ onConfirm }) {
   }
 
   renderScan();
+  voice.set([vcItem("card.shot", "#cd-shot"), vcItem("common.back", "#cd-cancel")]);
   startCamera();
   return { close };
 }
@@ -3103,8 +3146,12 @@ function stopKioskAudio() {
 // 間(待機画面へ戻るまで)は自動では入らない。false なら下部帯の「声で操作する」を押したときだけ。
 // 待機画面(動画)ではマイクを開けない＝前を通る人の会話を聞き続けることはしない。
 //
-// 声で起こしてよいのは**画面の遷移と選択まで**。受付の送信・担当者の呼び出し・ロッカーの
-// 解錠は声では起こさない(タッチのまま)。暗証番号の画面ではマイクを開けない。
+// 画面のボタンは**ほぼすべて声でも押せる**(2026-10-02 利用者の指示で広げた)。ただし
+// 人が動く・物が動くもの(受付の送信・担当者を呼ぶ・配達の呼び出し・ロッカーの口・扉を閉めました)は、
+// 声で選んだときだけ「〜しますか？ はい/いいえ」の確認(vcConfirm)を挟む。雑談の誤爆で通知が
+// 飛んだり錠が動いたりしないように(設計案 §08「復唱→はい」)。タッチで押したときは従来どおりすぐ動く。
+// 声にしないのは 暗証番号(この画面ではマイクを開けない＝ロビーで番号を読み上げさせない)と、
+// 文字を打つキーボード(受付フォームの五十音・変換候補)だけ。
 //
 // 各画面は描画のあとに voiceCommands(画面名, 選択肢) で「いま受け付ける言葉」を登録する。
 // 選択肢の target に要素を渡すと、当たったときにその要素を押したのと同じことが起き、
@@ -3127,6 +3174,7 @@ const VOICE_VOCAB = {
   "common.home":         { "say": ["やめる"], "label": "やめる" },
   "common.wait":         { "say": ["続ける", "待って"], "label": "つづける" },
   "common.restart":      { "say": ["最初から"], "label": "さいしょから" },
+  "common.call":         { "say": ["担当者を呼ぶ", "呼んでください", "助けて"], "label": "たんとうしゃをよぶ" },
   "welcome.form":        { "say": ["受付", "お願いします", "すみません"], "label": "うけつけ" },
   "top.visit":           { "say": ["訪問", "ご訪問", "一番"], "label": "ほうもん" },
   "top.delivery":        { "say": ["配達", "荷物", "二番"], "label": "はいたつ" },
@@ -3134,7 +3182,12 @@ const VOICE_VOCAB = {
   "lockerMode.store":    { "say": ["預ける", "保管", "手荷物"], "label": "あずける" },
   "lockerMode.pickup":   { "say": ["受け取り"], "label": "うけとり" },
   "delivery.dropoff":    { "say": ["置き配"], "label": "おきはい" },
+  "delivery.notify":     { "say": ["呼び出し"], "label": "よびだし" },
+  "door.closed":         { "say": ["閉めました", "扉を閉めました"], "label": "しめました" },
   "reception.card":      { "say": ["名刺"], "label": "めいし" },
+  "reception.send":      { "say": ["受付する", "受付", "送信"], "label": "うけつけする" },
+  "card.shot":           { "say": ["撮影", "撮影する"], "label": "さつえい" },
+  "notice.close":        { "say": ["閉じる", "わかりました"], "label": "とじる" },
   "result.done":         { "say": ["完了", "わかりました"], "label": "わかりました" },
   "locker.n1":           { "say": ["一番", "一番のロッカー"], "label": "いちばん" },
   "locker.n2":           { "say": ["二番", "二番のロッカー"], "label": "にばん" },
@@ -3204,6 +3257,28 @@ function vcEl(target) {
   return el && el.isConnected ? el : null;
 }
 
+// 音声サービスが受ける形に収める。**1 つでもはみ出すと 422 で画面ごと声で操作できなくなる**
+// (言い回しは 16 文字・1 選択肢 8 個まで、選択肢は 24 個まで)。はみ出すのは管理画面で増やせる
+// 選択肢(ご用件・部署・アンケートの文言 = spare)なので、そちらを削って画面の固定の言葉を残す。
+// 同じ言い回しを 2 つの選択肢に持たせない(両方に当たって動かない)。固定の言葉を優先する。
+function vcFit(items) {
+  const used = new Set();
+  const fit = new Map();
+  for (const it of [...items.filter(i => !i.spare), ...items.filter(i => i.spare)]) {
+    const say = (it.say || []).map(s => String(s).trim())
+      .filter(s => s.length >= 1 && s.length <= 16 && !used.has(s)).slice(0, 8);
+    if (!say.length) continue;
+    say.forEach(s => used.add(s));
+    fit.set(it, say.length === it.say.length ? it : { ...it, say });
+  }
+  const out = items.filter(it => fit.has(it)).map(it => fit.get(it));
+  while (out.length > 24) {
+    const i = out.map(it => !!it.spare).lastIndexOf(true);
+    out.splice(i >= 0 ? i : out.length - 1, 1);
+  }
+  return out;
+}
+
 // 画面の選択肢を登録する。opts.onActivity = その画面の待機タイマーを延ばす関数。
 // 話しかけられるたびに呼ぶ(話すほうがタッチより遅いので、黙って待機へ落とさない)。
 // opts.note = 帯に出す一言(「受付する」は画面を押す、など声でできないことの案内)。
@@ -3224,10 +3299,18 @@ function voiceCommands(screen, items, opts = {}) {
       list.push({ ...vcItem("common.wait", "#idle-go", () => { hideIdlePrompt(); opts.onActivity(); }), hint: false });
     }
     if (screen !== "welcome") list.push(vcItem("common.restart", null, () => { cleanup(); go("welcome"); }));
+    // 「担当者を呼ぶ」は人の時間を使うので、声のときだけ確認を挟む(雑談の誤爆で人が出てこないように)。
+    const call = document.getElementById("bb-call");
+    if (call) list.push(vcItem("common.call", call, () => vcConfirm({
+      title: "担当者を呼びますか？",
+      sub: "「はい」で担当者にお知らせします",
+      onOk: () => document.getElementById("bb-call")?.click(),
+      onActivity: opts.onActivity,
+    })));
   }
   // 同じ id を 2 つ送らない(サービス側は id ごとに当たりを数える)。
   const seen = new Set();
-  const uniq = list.filter(it => !seen.has(it.id) && seen.add(it.id));
+  const uniq = vcFit(list.filter(it => !seen.has(it.id) && seen.add(it.id)));
   VCMD.base = { screen, items: uniq, opts };
   if (!VCMD.armed) {
     VCMD.armed = true;
@@ -3237,9 +3320,11 @@ function voiceCommands(screen, items, opts = {}) {
   vcApply();
 }
 
-// 画面の上に重なるもの(ロッカーを開ける前の確認)の語彙。下の画面の語彙より優先する。
-function voiceCommandsLayer(screen) {
-  const layer = { screen, items: [], opts: {} };
+// 画面の上に重なるもの(ロッカーを開ける前の確認・担当者を呼んだ案内・名刺の読み取り)の語彙。
+// 下の画面の語彙より優先する。anchor = 重なりの要素。画面の描き直しで消えたら語彙も外す
+// (外さないと、見えない案内の言葉だけを聞き続けて下の画面が声で動かなくなる)。
+function voiceCommandsLayer(screen, anchor = null) {
+  const layer = { screen, items: [], opts: {}, anchor };
   VCMD.layers.push(layer);
   return {
     set(items, opts = {}) { layer.items = (items || []).filter(Boolean); layer.opts = opts; vcApply(); },
@@ -3654,6 +3739,17 @@ function vcLockerItems(rowsSel, list, onActivity) {
   });
 }
 
+// 解錠ガイドの「扉を閉めました」。押すと錠をかけて次へ進む(物が動く)ので、声のときだけ確認を挟む。
+// 扉がまだ開いているのに雑談の「閉めました」で錠をかけないように。
+function vcDoorClosedItem(target, sub, onActivity) {
+  return vcItem("door.closed", target, () => vcConfirm({
+    title: "扉を閉めましたか？",
+    sub,
+    onOk: () => { const el = vcEl(target); if (el && !el.disabled) el.click(); },
+    onActivity,
+  }));
+}
+
 // 声で選んだ操作のうち、物が動くもの(ロッカーの解錠)の前に出す確認。はい/いいえは声でも押せる。
 // ボタンの文字は札(話す言葉)と同じにする。違うと「やめる」ボタンに「いいえ」の札が付いて迷う。
 function vcConfirm({ title, sub, okLabel = "はい", noLabel = "いいえ", onOk, onActivity }) {
@@ -3672,7 +3768,7 @@ function vcConfirm({ title, sub, okLabel = "はい", noLabel = "いいえ", onOk
     </div>
   </div>`;
   sc.appendChild(el);
-  const layer = voiceCommandsLayer("confirm");
+  const layer = voiceCommandsLayer("confirm", el);
   let closed = false;
   const close = () => { if (closed) return; closed = true; el.remove(); layer.pop(); };
   el.querySelector("#vc-cf-ok").addEventListener("click", () => { close(); onOk(); });
@@ -3682,7 +3778,15 @@ function vcConfirm({ title, sub, okLabel = "はい", noLabel = "いいえ", onOk
 }
 
 // 帯・札は画面の描き直しで消えるので、定期的に描き戻す(描き直し済みなら何もしない)。
-setInterval(() => { if (VCMD.on || VCMD.base || document.getElementById("bb-voice-slot")) vcPaint(); }, 300);
+// 重なりの要素が描き直しで消えていたら、その語彙を外す(voiceCommandsLayer の anchor)。
+setInterval(() => {
+  if (VCMD.layers.some(l => l.anchor && !l.anchor.isConnected)) {
+    VCMD.layers = VCMD.layers.filter(l => !l.anchor || l.anchor.isConnected);
+    vcApply();
+    return;
+  }
+  if (VCMD.on || VCMD.base || document.getElementById("bb-voice-slot")) vcPaint();
+}, 300);
 
 // ─── RECEPTION FORM (画面内蔵の五十音ソフトキーボード) ────────────────────────────
 // 左=入力フォーム / 右=五十音表キーボード。列＝行(あ/か/さ…)の五十音表に、撥音ん・
@@ -4122,9 +4226,33 @@ function showReception(initPurpose, initCard, from) {
 
     // 任意のタップで待機タイマーをリセット（focusedField はここでは触らない）
     onSc("click", resetIdle);
-    // 声で開けるのは入力手段まで。**「受付する」(担当者へ通知が飛ぶ)は声では押さない。**
-    voiceCommands("reception", [vcItem("reception.card", "#rec-card")],
-                  { onActivity: resetIdle, note: "「受付する」は画面を押してください" });
+    // ご用件・部署はボタンの文字をそのまま言えば選べる(札は付けない＝短いボタンの文字を隠さない)。
+    // 管理画面で増やせる選択肢なので spare(サービスの上限を超えたらこちらから外す)。
+    // 部署は押すたびに選択/解除が切り替わるので、声では「選ぶ」だけにする(選択中なら押さない)。
+    const chipVoice = (sel, prefix, isOn) => Array.from(sc.querySelectorAll(sel)).map((b, i) => ({
+      id: `${prefix}${i}`, say: [b.textContent.trim()], label: b.textContent.trim(), badge: false, spare: true, target: b,
+      run: () => { if (b.isConnected && !isOn(b)) b.click(); },
+    }));
+    // 「受付する」は担当者へ通知が飛ぶので、声のときは入力内容を見せて「はい」を待つ(設計案 §08 の復唱)。
+    // お名前が空ならタッチと同じくその場でエラーを出す(確認は出さない)。
+    const pressSend = () => { const b = g("rec-send"); if (b && !submitting) b.click(); };
+    const sendItem = vcItem("reception.send", "#rec-send", () => {
+      if (submitting) return;
+      if (!form.visitor_name.trim()) { pressSend(); return; }
+      vcConfirm({
+        title: "この内容で受付しますか？",
+        sub: [form.visitor_name.trim() + honorificSuffix(form.visitor_name), form.company.trim(), form.staff ? `ご担当：${form.staff}` : ""]
+          .filter(Boolean).join("　"),
+        onOk: pressSend,
+        onActivity: resetIdle,
+      });
+    });
+    voiceCommands("reception", [
+      vcItem("reception.card", "#rec-card"),
+      sendItem,
+      ...chipVoice("#f-purpose-chips [data-purpose]", "purpose", b => b.dataset.purpose === form.purpose),
+      ...chipVoice("#f-dept-chips [data-dept]", "dept", b => b.dataset.dept === form.department),
+    ], { onActivity: resetIdle });
   }
 
   async function handleSubmit() {
@@ -4222,6 +4350,8 @@ function showCalling(data) {
 </div>`;
   rescale();
   bindHomeBtn("cal-home");
+  // 応答待ちの画面で押せるのは右上の「やめる」だけ。帯が無いので共通語は入れない。
+  voiceCommands("calling", [vcItem("common.home", "#cal-home")], { common: false });
   const clk = document.getElementById("cal-clk"); if (clk) clk.textContent = fmtClock();
   every(30000, () => { const c = document.getElementById("cal-clk"); if (c) c.textContent = fmtClock(); });
 
@@ -4557,7 +4687,7 @@ function showFeedback() {
     // (その選択肢だけ声で選べない)。任意回答なので、外しても聞き直さない。
     // 言う言葉がボタンの文字そのものなので札は付けない(札が文字を隠す)。
     voiceCommands("feedback", [
-      ...q.options.map((o, i) => ({ id: `ans${i}`, say: [o.label], label: o.label, badge: false,
+      ...q.options.map((o, i) => ({ id: `ans${i}`, say: [o.label], label: o.label, badge: false, spare: true,
                                     target: sc.querySelector(`[data-ans="${o.code}"]`) })),
       vcItem("feedback.skip", "#fb-skip"),
     ], { common: false, note: "選択肢の言葉をそのままお話しください" });

@@ -46,17 +46,21 @@ if str(AGENT_DIR) not in sys.path:
 from voice import capture, settings, vad, vosk_engine  # noqa: E402
 
 KIOSK_HTML = AGENT_DIR / "static" / "kiosk.html"
-COMMON = ["common.back", "common.home", "common.wait", "common.restart"]
+COMMON = ["common.back", "common.home", "common.wait", "common.restart", "common.call"]
 
 # 画面ごとに登録している語彙(kiosk.html の voiceCommands の呼び出しに合わせる)。
 # 共通語は、その画面の下部帯にある押す先のぶんだけ入る(ようこそは「戻る」が無い等)。
+# 受付フォームのご用件・部署(ボタンの文字そのまま)は管理画面で変わるので、ここでは測らない。
 SCREENS: dict[str, list[str]] = {
-    "welcome": ["welcome.form", "common.home", "common.wait"],
+    "welcome": ["welcome.form", "common.home", "common.wait", "common.call"],
     "top": ["top.visit", "top.delivery", "top.locker", *COMMON],
     "lockerMode": ["lockerMode.store", "lockerMode.pickup", *COMMON],
-    "delivery": ["delivery.dropoff", *COMMON],
-    "reception": ["reception.card", *COMMON],
+    "delivery": ["delivery.dropoff", "delivery.notify", *COMMON],
+    "reception": ["reception.card", "reception.send", *COMMON],
     "locker": [f"locker.n{i}" for i in range(1, 8)] + COMMON,
+    "door": ["door.closed", "common.home"],
+    "card": ["card.shot", "common.back"],
+    "notice": ["notice.close"],
     "confirm": ["confirm.yes", "confirm.no"],
     "result": ["result.done", "common.home"],
 }
