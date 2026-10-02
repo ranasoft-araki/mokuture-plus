@@ -284,7 +284,7 @@ JS 例外は種別を上記語彙にマップし、未知なら `unknown` に丸
 ```
 イベント発生
   → ① ブラウザ IndexedDB(outbox) へ先に保存
-  → ② エージェント(localhost)へ POST /device/analytics/events
+  → ② エージェント(localhost)へ POST /device/oplog
   → ③ エージェントがディスクスプール(JSONL)へ追記して ack
   → ④ ack された event_id だけ IndexedDB から削除
   → ⑤ エージェントがバックエンドへアップロード（指数バックオフ）
@@ -293,6 +293,13 @@ JS 例外は種別を上記語彙にマップし、未知なら `unknown` に丸
 
 - **ブラウザにデバイストークンを持たせない**。ログ送信先は同一オリジンの
   エージェント（`http://localhost:8080`）で、エージェントが `X-Kiosk-Token` を付けて中継する。
+- **ブラウザが叩く URL に analytics / track / telemetry / beacon / collect / pixel を入れない**。
+  Raspberry Pi OS の Chromium には **uBlock Origin Lite が最初から入っていて**、旧名
+  `/device/analytics/events` は EasyPrivacy の `/analytics/event` に当たり、送信がブラウザ内で
+  止められていた（`Failed to fetch`。受付は普通に動くので気づけず、9/16 の導入から 10/2 まで
+  Pi からは行動ログが 1 件も届いていなかった）。送信先は `/device/oplog`、ロガーの URL は
+  `/kiosk-oplog.js`（実体は `static/analytics.js`）。旧名もエージェントに残してある。
+  `kiosk_agent/tests/test_oplog_paths.py` が語を見張る。
 - ②が失敗（エージェント停止・アプリ異常）→ IndexedDB に残し、指数バックオフで再試行。
   IndexedDB は Chromium のプロファイルに永続化されるので **再読込・再起動をまたいで残る**。
 - ⑤が失敗（顧客ネットワーク断）→ スプールに残す。**順番を維持したまま**（FIFO）復旧後に再送。

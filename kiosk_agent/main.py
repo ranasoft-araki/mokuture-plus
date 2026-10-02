@@ -640,10 +640,14 @@ async def serve_jsqr():
     return FileResponse(_JSQR_JS, media_type="application/javascript")
 
 
-@app.get("/analytics.js", include_in_schema=False)
+@app.get("/kiosk-oplog.js", include_in_schema=False)
+@app.get("/analytics.js", include_in_schema=False)  # 旧名。古い kiosk.html のため残す
 async def serve_analytics_js():
     """キオスク画面が読み込む行動ログのロガー（ANALYTICS.md §7）。
 
+    画面が読む URL は /kiosk-oplog.js。名前に analytics を入れないのは、Pi の Chromium に
+    最初から入っている広告ブロッカー(uBlock Origin Lite)の規則に当たらないようにするため
+    （下の /device/oplog と同じ理由）。
     無い端末（OTA 未着など）でも 404 になるだけで、kiosk.html は従来どおり動く
     （ロガーが無ければログを取らないだけ）。"""
     if not _ANALYTICS_JS.exists():
@@ -803,7 +807,8 @@ class AnalyticsBatchBody(BaseModel):
     events: list[dict] = []
 
 
-@app.post("/device/analytics/events")
+@app.post("/device/oplog")
+@app.post("/device/analytics/events")  # 旧名。古い analytics.js のため残す(Pi の Chromium では届かない)
 async def device_analytics_events(body: AnalyticsBatchBody):
     """キオスク画面(ブラウザ)からの行動イベントを受け取る中継。
 
@@ -811,6 +816,11 @@ async def device_analytics_events(body: AnalyticsBatchBody):
     event_id だけを IndexedDB から消せばよい（ANALYTICS.md §7）。デバイストークンは
     エージェントだけが持ち、ブラウザのコードには渡さない。
     バックエンドへの送信はアップローダが指数バックオフで行う（通信断でも失われない）。
+
+    **ブラウザが叩く名前は /device/oplog**。旧名 /device/analytics/events は、Raspberry Pi OS の
+    Chromium に最初から入っている uBlock Origin Lite(EasyPrivacy の `/analytics/event`)に
+    当たり、送信がブラウザ内で止められて 1 件も届いていなかった。名前に analytics / track /
+    telemetry / beacon / collect などを入れないこと（tests/test_oplog_paths.py が見張る）。
     """
     return await device_analytics.submit_browser_events(body.events)
 

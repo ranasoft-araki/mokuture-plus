@@ -516,17 +516,23 @@ mokuture/
   `services/analytics_link.py` の **プロセス内 TTL マップ(既定2時間・永続化しない)** だけ。
   通知の成否(`notification_succeeded`/`failed`/`retried`)を匿名セッションへ書き戻すためだけに使う。
   単一ワーカー前提は SSE pub/sub と同じ（複数ワーカー化するならここも要検討。**永続化はしない**）。
-- **経路**: ブラウザ(`static/analytics.js`) → **IndexedDB に先に保存** → エージェント
-  `POST /device/analytics/events` → **ディスクスプール(JSONL)へ書いてから ack** →
+- **経路**: ブラウザ(`static/analytics.js`。画面は `/kiosk-oplog.js` として読む) → **IndexedDB に先に保存** → エージェント
+  `POST /device/oplog` → **ディスクスプール(JSONL)へ書いてから ack** →
   ブラウザは ack されたものだけ削除 → エージェントが `X-Kiosk-Token` を付けて backend へ
   指数バックオフでアップロード → 200 を受けてスプールから削除。
   **デバイストークンはブラウザのコードに持たせない**（エージェントが中継する）。
+- **ブラウザが叩く URL に analytics / track / telemetry / beacon / collect / pixel を入れない**。
+  Raspberry Pi OS の Chromium には **uBlock Origin Lite が最初から入っている**。旧名
+  `/device/analytics/events` は EasyPrivacy の `/analytics/event` に当たって送信がブラウザ内で止められ、
+  **2026-09-16 の導入から 10-02 の修正まで Pi からは行動ログが 1 件も届いていなかった**（匿名セッションは
+  全部開発機の Chrome から。受付は普通に動くので気づけない）。旧名もエージェントに残してある。
+  `kiosk_agent/tests/test_oplog_paths.py` が語を見張る。
 - **通信断でも失われない**: IndexedDB は再読込・端末再起動をまたいで残り、スプールは
   順番(FIFO)を維持したまま復旧後に再送する。`event_id` が主キーなので二重登録されない。
 - **稼働率の分母は「ラズパイの電源が入っていた時間」**（メトリクス行が存在する時間）。
   電源OFF中は行が無いので夜間・休日・計画停止は自動的に分母から外れる。通信断中は
   ローカルに溜まって後から届くので **分母に入り分子(app_healthy)から外れる**＝通信障害時間になる。
-- **失敗しても受付を止めない**: ブラウザ側は全公開APIを try/catch で包み、`/analytics.js` が
+- **失敗しても受付を止めない**: ブラウザ側は全公開APIを try/catch で包み、`/kiosk-oplog.js` が
   404（OTA 未着）でも `AN` が no-op に落ちて通常どおり動く。エージェント/バックエンドが
   落ちていてもキオスク操作には影響しない。
 - **`?mock=1` のプレビューでは送信しない**（本番データを汚さない）。

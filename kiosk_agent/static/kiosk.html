@@ -54,8 +54,10 @@ button{font-family:inherit}
 }
 </style>
 <script src="/jsqr.min.js"></script>
-<!-- 行動ログ(匿名)。OTA 未着などで 404 でも kiosk 本体は従来どおり動く(AN が no-op に落ちる)。 -->
-<script src="/analytics.js"></script>
+<!-- 行動ログ(匿名)。OTA 未着などで 404 でも kiosk 本体は従来どおり動く(AN が no-op に落ちる)。
+     URL に analytics を入れない: Pi の Chromium に最初から入っている広告ブロッカー(uBlock Origin Lite)が
+     名前で止めるため(実体は static/analytics.js。送信先 /device/oplog も同じ理由)。 -->
+<script src="/kiosk-oplog.js"></script>
 </head>
 <body>
 <div id="sw"><div id="sc"></div></div>
@@ -90,7 +92,7 @@ let CLEANUPS = [];
 let CURRENT_SCREEN = "idle";
 
 // ─── 分析ログ(匿名・ANALYTICS.md) ────────────────────────────────────────────
-// 実体は /analytics.js。読み込めなかった端末では全メソッドを no-op に落とし、
+// 実体は /kiosk-oplog.js(static/analytics.js)。読み込めなかった端末では全メソッドを no-op に落とし、
 // 受付は従来どおり動かす(ログが取れないだけ)。**個人情報は一切渡さない**
 // (氏名・会社名・担当者・入力値・QRトークン・名刺/カメラ画像は AN に渡さない)。
 const AN = (() => {
@@ -5974,7 +5976,7 @@ async function bootMock() {
 }
 
 // 分析ログ(匿名)の起動。?mock=1 のプレビューでは送らない(本番データを汚さないため)。
-// 送信先は同一オリジンのエージェント(/device/analytics/events)で、デバイストークンは
+// 送信先は同一オリジンのエージェント(/device/oplog)で、デバイストークンは
 // ブラウザのコードに持たせない(ANALYTICS.md §7)。二重起動しないよう1回だけ実行する。
 let _anStarted = false;
 function startAnalytics() {

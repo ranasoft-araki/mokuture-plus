@@ -69,6 +69,7 @@
   var MAX_QUEUE = 5000;
   var BACKOFF_BASE_MS = 2000;
   var BACKOFF_MAX_MS = 300000;
+  var BEACON_MAX_BYTES = 60000; // sendBeacon の本文上限(64KiB)に余裕を持たせる
 
   function has(list, value) {
     return list.indexOf(value) !== -1;
@@ -108,7 +109,11 @@
 
     var cfg = {
       enabled: false,
-      endpoint: "/device/analytics/events",
+      // 送信先の名前に analytics / track / telemetry / beacon / collect などを入れない。
+      // Raspberry Pi OS の Chromium には uBlock Origin Lite が最初から入っていて、
+      // EasyPrivacy の規則「/analytics/event」が旧名 /device/analytics/events に当たり、
+      // 送信がブラウザ内で黙って止められていた（Failed to fetch。受付は普通に動くので気づけない）。
+      endpoint: "/device/oplog",
       appVersion: null,
       uiVersion: "default",
       flowVersion: "visitor-v1",
@@ -228,11 +233,13 @@
             backoffMs = 0;
             return false;
           }
+          // keepalive は付けない。keepalive の送信は本文 64KB までで、溜まったぶん(1件≒0.6KB・
+          // 最大200件≒115KB)をまとめて送ると上限を超え、同じまとまりで永久に失敗し続ける
+          // （通信断のあとに溜まった端末ほど二度と送れなくなる）。離脱時は onPageHide の sendBeacon が担う。
           return fetchFn(cfg.endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ events: batch }),
-            keepalive: true,
           })
             .then(function (res) {
               if (!res || !res.ok) throw new Error("http");
@@ -499,7 +506,14 @@
 
       flush: guard(function () { return flush(); }),
 
-      /** ページ離脱時。**session_abandoned は出さない**（リロードと区別できないため）。 */
+      /**
+       * ページ離脱時。**session_abandoned は出さない**（リロードと区別できないため）。
+       *
+       * sendBeacon が true を返すのは「送信を予約した」だけで、届いたかは分からない
+       * （エージェントの再起動中・OTA で名前が変わった直後の 404・広告ブロッカー等）。
+       * なので**ここでは消さない**。届いていれば次回起動時の再送が重複になるが、
+       * event_id が主キーなのでサーバ側で二重登録されない。消すのはエージェントが ack した分だけ。
+       */
       onPageHide: guard(function () {
         exitScreen();
         persistSession();
@@ -508,13 +522,16 @@
           if (!batch.length) return;
           try {
             if (global.navigator && global.navigator.sendBeacon) {
-              var blob = new Blob([JSON.stringify({ events: batch })], { type: "application/json" });
-              if (global.navigator.sendBeacon(cfg.endpoint, blob)) {
-                queue.remove(batch.map(function (e) { return e.event_id; }));
-                return;
+              // sendBeacon も本文 64KB まで。超えるぶんは次回起動時の通常送信に任せる。
+              var body = JSON.stringify({ events: batch });
+              while (batch.length > 1 && body.length > BEACON_MAX_BYTES) {
+                batch = batch.slice(0, Math.floor(batch.length / 2));
+                body = JSON.stringify({ events: batch });
               }
+              var blob = new Blob([body], { type: "application/json" });
+              if (global.navigator.sendBeacon(cfg.endpoint, blob)) return;
             }
-          } catch (e) { /* 失敗したらローカルに残す＝次回起動で再送される */ }
+          } catch (e) { /* 失敗してもローカルに残っている＝次回起動で再送される */ }
           flush();
         });
       }),

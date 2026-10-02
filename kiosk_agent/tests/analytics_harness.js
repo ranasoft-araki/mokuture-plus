@@ -238,6 +238,51 @@ async function main() {
   off.action("top-reception");
   eq("無効時はキューに積まない", (await off._queue.take(10)).length, 0);
 
+  // ── 12. 溜まったぶんを送れること・離脱時に取りこぼさないこと ──────────────
+  // keepalive の送信は本文 64KB まで。通常の送信に付けると、溜まったぶん(最大200件)が
+  // 上限を超えて同じまとまりで永久に失敗する。sendBeacon は「予約しただけ」なので、
+  // それを理由にキューから消すと、エージェント再起動中などに黙って失われる。
+  const seen = [];
+  const t12 = { state: { mode: "fail" } };
+  t12.fetchFn = (url, opts) => {
+    if (t12.state.mode === "fail") return Promise.reject(new Error("offline"));
+    seen.push({ url, keepalive: !!opts.keepalive, bytes: opts.body.length });
+    const body = JSON.parse(opts.body);
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ accepted: body.events.map((e) => e.event_id) }) });
+  };
+  const beacons = [];
+  const prevNav = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true, writable: true,
+    value: { sendBeacon: (url, blob) => { beacons.push({ url, bytes: blob.size }); return true; } },
+  });
+  const clock12 = { t: 1_900_000_000_000 };
+  const a12 = makeLogger(t12, { session: memStore(), local: memStore() }, clock12);
+  a12.init({ enabled: true, idleTimeoutSec: 600, flushMs: 600000 });
+  a12.startSession("touch");
+  for (let i = 0; i < 199; i++) { clock12.t += 10; a12.action(`btn-${i}`); }
+  for (let i = 0; i < 5; i++) await settle();
+  const backlog = (await a12._queue.take(500)).length;
+  check("通信できない間に 200 件溜まる", backlog === 200, `${backlog} 件`);
+
+  a12.onPageHide();
+  for (let i = 0; i < 5; i++) await settle();
+  check("離脱時に sendBeacon を使う", beacons.length === 1, `${beacons.length} 回`);
+  check("sendBeacon の本文は 64KB 未満に収める", beacons.length === 1 && beacons[0].bytes < 64 * 1024,
+    beacons.length ? `${beacons[0].bytes} bytes` : "");
+  eq("sendBeacon が予約できてもキューから消さない", (await a12._queue.take(500)).length, 200);
+
+  t12.state.mode = "ok";
+  for (let i = 0; i < 5; i++) await settle();
+  await a12.flush();
+  for (let i = 0; i < 5; i++) await settle();
+  check("溜まった 200 件を 1 回で送れる(64KB 超)", seen.length >= 1 && seen[0].bytes > 64 * 1024,
+    seen.length ? `${seen[0].bytes} bytes` : "送信なし");
+  check("通常の送信に keepalive を付けない", seen.every((s) => !s.keepalive));
+  eq("ack されたら消える", (await a12._queue.take(500)).length, 0);
+  eq("送信先は /device/oplog", seen.length ? seen[0].url : null, "/device/oplog");
+  if (prevNav) Object.defineProperty(globalThis, "navigator", prevNav); else delete globalThis.navigator;
+
   console.log(failures === 0 ? "\nall ok" : `\n${failures} failure(s)`);
   process.exit(failures === 0 ? 0 : 1);
 }

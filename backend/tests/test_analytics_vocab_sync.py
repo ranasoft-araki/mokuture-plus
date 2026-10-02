@@ -91,4 +91,4 @@ def test_survey_questions_and_answers_match():
 def test_kiosk_html_loads_the_logger():
     """kiosk.html がロガーを読み込んでいること（OTA で配る前提）。"""
     html = (REPO_ROOT / "kiosk_agent" / "static" / "kiosk.html").read_text(encoding="utf-8")
-    assert 'src="/analytics.js"' in html
+    assert 'src="/kiosk-oplog.js"' in html

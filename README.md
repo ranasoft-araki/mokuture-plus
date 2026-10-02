@@ -304,9 +304,12 @@ curl -X POST http://<RPiのIPアドレス>:8080/register
 | `POST` | `/card/frame` | 検出用フレームの送信（案内文言・四隅を返す） |
 | `POST` | `/card/capture` | 撮影フレームの送信（OCR・項目抽出） |
 | `POST` | `/card/session/{id}/confirm` | 確認済みの値を確定しセッションを破棄 |
-| `POST` | `/device/analytics/events` | キオスク画面からの行動ログ（匿名）を受け取りディスクへ保存 |
+| `POST` | `/device/oplog` | キオスク画面からの行動ログ（匿名）を受け取りディスクへ保存（旧名 `/device/analytics/events` も受ける） |
 | `GET` | `/device/analytics/status` | 未送信件数・オンライン状態（分析ログの動作確認用） |
-| `GET` | `/analytics.js` | キオスク画面が読み込む行動ロガー |
+| `GET` | `/kiosk-oplog.js` | キオスク画面が読み込む行動ロガー（旧名 `/analytics.js` も返す） |
+
+> ブラウザが叩く URL に `analytics` などの語を入れないのは、Raspberry Pi OS の Chromium に最初から入っている
+> uBlock Origin Lite が名前で止めるため（旧名の送信先は止められ、行動ログが届いていなかった）。
 
 声で操作するは**別プロセス**（`http://127.0.0.1:8181` のみ。外部からは接続不可）:
 
