@@ -1,20 +1,29 @@
 """OTA bundle updater for mokuture+ kiosk agent.
 
 Flow:
-  1. On startup (after 15 s) and every NORMAL_INTERVAL seconds, fetch bundle manifest.
-  2. If remote version differs from local, download changed files to STAGING_DIR.
+  1. On startup (after 15 s) and every NORMAL_INTERVAL seconds, fetch bundle manifest
+     (also on demand: POST /update-check from the device-check screen).
+  2. Hash the files on disk against the manifest; download the ones that differ to
+     STAGING_DIR. (Compared by content, not by the recorded version, so a device whose
+     files were reverted behind OTA's back is detected and repaired.)
   3. Set self.pending so /update-status reports ready=True.
   4. kiosk.html polls /update-status; when screen is idle (or force=True), calls
      POST /apply-update which triggers this module's apply().
   5. If any Python source files changed, apply() schedules a service restart via
      os._exit(0) so systemd (Restart=always) brings the agent back up cleanly.
+
+The installed version is recorded in .bundle_version (content hash, also reported to
+the backend) and .bundle_info.json (the commit it came from and when it was applied,
+shown on the device-check screen). Both are per-device and gitignored.
 """
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -27,6 +36,7 @@ log = logging.getLogger(__name__)
 _APP_DIR    = Path(__file__).parent
 STAGING_DIR = Path("/tmp/mokuture-staging")
 _VERSION_FILE = _APP_DIR / ".bundle_version"
+_INFO_FILE    = _APP_DIR / ".bundle_info.json"
 
 # Files managed by OTA (relative to kiosk_agent root).
 MANAGED_FILES = [
@@ -119,6 +129,8 @@ NORMAL_INTERVAL = 1800   # 30 min between normal checks
 FORCE_INTERVAL  = 60     # 1 min when a force-flagged update is pending
 
 
+
+
 def _local_hash(rel: str) -> str:
     p = _APP_DIR / rel
     return hashlib.sha256(p.read_bytes()).hexdigest()[:16] if p.exists() else ""
@@ -132,10 +144,74 @@ def _save_version(v: str) -> None:
     _VERSION_FILE.write_text(v)
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _mtime_iso(p: Path) -> str | None:
+    try:
+        return datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except OSError:
+        return None
+
+
+def _read_info() -> dict:
+    try:
+        info = json.loads(_INFO_FILE.read_text(encoding="utf-8"))
+        return info if isinstance(info, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _note_installed(version: str, source: dict | None, *, just_applied: bool) -> None:
+    """いま手元にある版を記録する。版の記録(.bundle_version)と、画面に出す名前・日時。
+
+    source はサーバーが付けた版の名前(コミット)。付いていなくても、同じ版について前に
+    記録した名前があればそれを残す(中身が同じなら名前も同じ)。"""
+    prev = _read_info()
+    same = prev.get("version") == version
+    if just_applied or read_version() != version:
+        applied_at = _now_iso()
+    elif same and prev.get("applied_at"):
+        applied_at = prev["applied_at"]
+    else:
+        # この記録を始める前に入った版。版の記録を書いた時刻を「この版になった時刻」とみなす
+        applied_at = _mtime_iso(_VERSION_FILE)
+    if read_version() != version:
+        _save_version(version)
+    info = {
+        "version": version,
+        "source": source or (prev.get("source") if same else None),
+        "applied_at": applied_at,
+    }
+    if info != prev:
+        _INFO_FILE.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+
+
+def _diff(files: list[dict]) -> list[str]:
+    """サーバーの一覧と中身が違う(または無い)ファイル。"""
+    return [f["path"] for f in files if _local_hash(f["path"]) != f["hash"]]
+
+
+def ota_enabled() -> bool:
+    # 端末は Raspberry Pi(Linux)だけ。Windows などの開発機で本体を起動すると、master の版と
+    # 違う手元のファイル(未コミットの kiosk.html や voice/*.py)を取り寄せ、待機画面へ戻った
+    # ときに上書きしてしまう。開発機では自動更新しない(試す必要があるときは Pi で)。
+    return os.name == "posix" and os.environ.get("KIOSK_OTA_DISABLE") != "1"
+
+
 class BundleUpdater:
     def __init__(self) -> None:
         self._pending: dict | None = None
         self._lock = asyncio.Lock()
+        self.enabled = ota_enabled()
+        # 確認の結果(デバイスチェック画面の「ソフトウェア更新」に出す)。
+        self._check_lock = asyncio.Lock()      # 定期確認と「今すぐ確認」を同時に走らせない
+        self._checking = False
+        self._checked_at: str | None = None    # 最後に確認した時刻(UTC)
+        self._error: str | None = None         # 最後の確認が失敗した理由(画面にそのまま出す)
+        self._remote: dict | None = None       # 最後に見たサーバーの版 {version, source, files}
+        self._mismatch: list[str] | None = None  # サーバーと中身が違うファイル。None=未確認
 
     # ── Public state ──────────────────────────────────────────────────────────
 
@@ -145,29 +221,70 @@ class BundleUpdater:
     def is_force(self) -> bool:
         return self._pending is not None and bool(self._pending.get("force"))
 
+    def status(self) -> dict:
+        """デバイスチェック画面向けの更新状況。"""
+        local_ver = read_version()
+        info = _read_info()
+        known = bool(local_ver) and info.get("version") == local_ver
+        pending = None
+        if self._pending is not None:
+            pending = {
+                "version": self._pending.get("version"),
+                "source": self._pending.get("source"),
+                "files": len(self._pending.get("_changed", [])),
+                "force": bool(self._pending.get("force")),
+            }
+        return {
+            "enabled": self.enabled,
+            "checking": self._checking,
+            "checked_at": self._checked_at,
+            "error": self._error,
+            "local": {
+                "version": local_ver or None,
+                "source": info.get("source") if known else None,
+                "applied_at": info.get("applied_at") if known else _mtime_iso(_VERSION_FILE),
+            },
+            "remote": self._remote,
+            "mismatch": self._mismatch,
+            "pending": pending,
+        }
+
     # ── Background loop ───────────────────────────────────────────────────────
 
     async def run(self) -> None:
-        # 端末は Raspberry Pi(Linux)だけ。Windows などの開発機で本体を起動すると、master の版と
-        # 違う手元のファイル(未コミットの kiosk.html や voice/*.py)を取り寄せ、待機画面へ戻った
-        # ときに上書きしてしまう。開発機では自動更新しない(試す必要があるときは Pi で)。
-        if os.name != "posix" or os.environ.get("KIOSK_OTA_DISABLE") == "1":
+        if not self.enabled:
             log.info("[updater] 開発機(非Linux)または KIOSK_OTA_DISABLE=1 のため自動更新しません")
             return
         await asyncio.sleep(15)  # let the server fully start first
         while True:
+            await self.check()
+            wait = FORCE_INTERVAL if (self._pending and self._pending.get("force")) else NORMAL_INTERVAL
+            await asyncio.sleep(wait)
+
+    async def check(self) -> None:
+        """配信サーバーと突き合わせ、自動更新が有効なら違うファイルを取り寄せて適用待ちにする。
+        定期確認と、デバイスチェック画面の「今すぐ確認」の両方から呼ばれる。
+        自動更新が無効(開発機)なら突き合わせるだけで、何も書き換えない。"""
+        if self._check_lock.locked():
+            async with self._check_lock:  # 確認中なら、それが終わるのを待って同じ結果を使う
+                return
+        async with self._check_lock:
+            self._checking = True
             try:
                 await self._check_and_stage()
             except Exception:
                 log.exception("[updater] check failed")
-            wait = FORCE_INTERVAL if (self._pending and self._pending.get("force")) else NORMAL_INTERVAL
-            await asyncio.sleep(wait)
+                self._error = "確認中にエラーが起きました"
+            finally:
+                self._checking = False
+                self._checked_at = _now_iso()
 
     # ── Core logic ────────────────────────────────────────────────────────────
 
     async def _check_and_stage(self) -> None:
         token = get_device_token()
         if not token:
+            self._error = "端末が未登録です"
             return
 
         async with httpx.AsyncClient() as client:
@@ -180,34 +297,54 @@ class BundleUpdater:
                 resp.raise_for_status()
             except Exception as e:
                 log.warning(f"[updater] manifest fetch failed: {e}")
+                self._error = "配信サーバーに接続できません"
                 return
 
         manifest = resp.json()
         remote_ver = manifest["version"]
         force = manifest.get("force", False)
-
-        if remote_ver == read_version():
-            # Same version — only update the force flag in an already-staged pending.
-            async with self._lock:
-                if self._pending is not None:
-                    self._pending = {**self._pending, "force": force}
+        files = manifest.get("files") or []
+        self._remote = {"version": remote_ver, "source": manifest.get("source"), "files": len(files)}
+        if not files:
+            # 配信元が空。実際に起きた(Render のイメージに kiosk_agent が無く、全端末が長期間
+            # 更新されていなかった)。何も配られていないのに「最新」と見せないよう異常として出す。
+            self._error = "配信元にファイルがありません"
+            self._mismatch = None
             return
 
-        log.info(f"[updater] new version {remote_ver} (current: {read_version()})")
-        await self._download(manifest, token)
+        # 記録した版ではなく、ディスク上の中身で比べる。git で巻き戻された等で記録と中身が
+        # 食い違っていても、届いていないものは届いていないと分かり、取り寄せ直せる。
+        mismatch = await asyncio.to_thread(_diff, files)
+        self._mismatch = mismatch
+        self._error = None
 
-    async def _download(self, manifest: dict, token: str) -> None:
+        if not mismatch:
+            # 中身はもうサーバーと同じ(適用済み・同じ中身の別の版)。版の記録だけ揃える。
+            _note_installed(remote_ver, manifest.get("source"), just_applied=False)
+            async with self._lock:
+                if self._pending is not None:
+                    self._pending = None
+                    shutil.rmtree(STAGING_DIR, ignore_errors=True)
+            return
+
+        async with self._lock:
+            if self._pending is not None and self._pending.get("version") == remote_ver:
+                # 取り寄せ済みで適用待ち。force の切り替わりだけ反映する。
+                self._pending = {**self._pending, "force": force}
+                return
+
+        if not self.enabled:
+            return
+
+        log.info(f"[updater] new version {remote_ver} (current: {read_version()}, {len(mismatch)} file(s) differ)")
+        await self._download(manifest, token, mismatch)
+
+    async def _download(self, manifest: dict, token: str, rels: list[str]) -> None:
         STAGING_DIR.mkdir(parents=True, exist_ok=True)
         changed: list[str] = []
 
         async with httpx.AsyncClient() as client:
-            for f in manifest.get("files", []):
-                rel         = f["path"]
-                remote_hash = f["hash"]
-
-                if _local_hash(rel) == remote_hash:
-                    continue  # unchanged — skip download
-
+            for rel in rels:
                 log.info(f"[updater] downloading {rel}")
                 try:
                     r = await client.get(
@@ -219,17 +356,13 @@ class BundleUpdater:
                 except Exception as e:
                     log.error(f"[updater] download failed {rel}: {e}")
                     shutil.rmtree(STAGING_DIR, ignore_errors=True)
+                    self._error = f"取り寄せに失敗しました（{rel}）"
                     return  # abort staging; retry next cycle
 
                 dest = STAGING_DIR / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(r.content)
                 changed.append(rel)
-
-        if not changed:
-            # All hashes matched — just advance version without touching files.
-            _save_version(manifest["version"])
-            return
 
         log.info(f"[updater] staged {len(changed)} file(s): {changed}")
         async with self._lock:
@@ -245,6 +378,7 @@ class BundleUpdater:
 
             changed      = self._pending.get("_changed", [])
             version      = self._pending["version"]
+            files        = self._pending.get("files", [])
             needs_restart = False
 
             for rel in changed:
@@ -258,10 +392,12 @@ class BundleUpdater:
                 if Path(rel).name in RESTART_FILES or Path(rel).parts[0] in _RESTART_DIRS:
                     needs_restart = True
 
-            _save_version(version)
+            _note_installed(version, self._pending.get("source"), just_applied=True)
             self._pending = None
             shutil.rmtree(STAGING_DIR, ignore_errors=True)
 
+        # 書き込めたかを中身で確かめ直す(画面の「最新です」を記録ではなく実物で出すため)。
+        self._mismatch = await asyncio.to_thread(_diff, files)
         return needs_restart
 
 

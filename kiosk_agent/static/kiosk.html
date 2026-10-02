@@ -4616,6 +4616,7 @@ function showKioskSettings() {
     mic: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>`,
     motion: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3 8 4-16 3 8h4"/></svg>`,
     door: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v18"/><path d="M2 22h18"/><circle cx="14" cy="12" r="1"/></svg>`,
+    upd: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/></svg>`,
   };
 
   let vol = getStoredVolumePercent();
@@ -4638,6 +4639,7 @@ function showKioskSettings() {
   let camStream = null, micStream = null;  // getUserMedia ストリーム
   let camError = null, micError = null;
   let audioCtx = null, analyser = null, micData = null, micRAF = null, micSegs = null;
+  let upd = null, updBusy = "", updPoll = null;  // ソフトウェア更新: agent /update-status の結果・操作中("check"|"apply")・ポーリング
 
   const devName = escHtml(localStorage.getItem(NAME_KEY) ?? "—");
 
@@ -4693,10 +4695,119 @@ function showKioskSettings() {
     return `<div id="dc-mic-meter" style="display:flex;gap:4px;height:46px;align-items:stretch;margin:2px 0 8px">${s}</div>`;
   }
 
+  // ── ソフトウェア更新(OTA) ── OTA で配った更新がこの端末に届いているかを見せる。
+  // 「最新です」は記録した版ではなく、ディスク上の中身を配信中の一覧と突き合わせた結果(agent updater.py)。
+  // 版の名前はサーバーが付けたコミット(短縮 SHA・日時・件名)。名前が無いときは中身のハッシュを出す。
+  function updId(v) {
+    const s = v && v.source;
+    if (s && s.commit) return s.commit.slice(0, 7);
+    return v && v.version ? v.version.slice(0, 8) : "";
+  }
+  function updVerLabel() {
+    const id = upd && upd.local ? updId(upd.local) : ((CFG && CFG.app_version) || "").slice(0, 8);
+    return `版 ${id || "—"}`;
+  }
+  function updWhen(iso) {
+    const d = iso ? new Date(iso) : null;
+    if (!d || isNaN(d)) return "";
+    const p = n => String(n).padStart(2, "0");
+    const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
+    return d.toDateString() === new Date().toDateString() ? `今日 ${hm}` : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+  }
+  function updBadge(tone, text) {
+    const t = { green: [C.mossSoft, C.mossDk, C.moss], amber: [C.amberSoft, C.amber, C.amber],
+                red: [C.redSoft, C.redDk, C.red], gray: [C.paper, C.graphite, C.ash] }[tone];
+    return `<span style="display:inline-flex;align-items:center;gap:9px;padding:8px 18px;border-radius:999px;font-size:16px;font-weight:600;background:${t[0]};color:${t[1]};white-space:nowrap">
+      <span style="width:10px;height:10px;border-radius:50%;background:${t[2]}"></span>${text}
+    </span>`;
+  }
+  function updState(u) {
+    if (updBusy === "apply") return { tone: "gray", text: "更新しています…" };
+    if (updBusy === "check" || (u && u.checking)) return { tone: "gray", text: "確認中…" };
+    if (!u) return { tone: "red", text: "確認できません", note: "この端末のエージェントに接続できません" };
+    if (!u.local) return { tone: "gray", text: "未対応", note: "エージェントの再起動後に表示されます" };
+    if (u.error) return { tone: "red", text: "確認できません", note: u.error };
+    if (u.pending) return { tone: "amber", text: "更新あり", action: "apply",
+      note: `${u.pending.files}件のファイルを受け取り済みです。待機画面に戻ると自動で更新します` };
+    if (u.mismatch == null) return { tone: "gray", text: "未確認" };
+    if (u.mismatch.length) {
+      const n = u.mismatch.length;
+      const list = u.mismatch.slice(0, 3).join("、") + (n > 3 ? ` ほか${n - 3}件` : "");
+      return u.enabled
+        ? { tone: "amber", text: `未反映 ${n}件`, note: `配信中と違うファイル: ${list}` }
+        : { tone: "gray", text: "自動更新オフ", note: `開発機のため自動更新しません。配信中と違うファイル: ${list}` };
+    }
+    // 中身は届いているのに、表示中の画面が更新前に読み込んだもの(版が変わってから再読み込みしていない)
+    if (CFG && CFG.app_version && u.local.version && CFG.app_version !== u.local.version)
+      return { tone: "amber", text: "再読み込みが必要", action: "reload", note: "更新は届いていますが、表示中の画面が更新前のままです" };
+    return { tone: "green", text: "最新です", note: "配信中の版と、この端末の中身が一致しています" };
+  }
+  function updRowHTML(label, v) {
+    const s = (v && v.source) || {};
+    const id = updId(v);
+    return `<div style="display:flex;align-items:baseline;gap:14px;padding:8px 0;border-top:1px solid ${C.chalk};min-width:0">
+      <div style="width:76px;flex-shrink:0;font-size:14px;color:${C.stone}">${label}</div>
+      <div style="font-family:ui-monospace,monospace;font-size:18px;font-weight:600;color:${id ? C.ink : C.stone};flex-shrink:0">${escHtml(id || "—")}</div>
+      ${s.date ? `<div style="font-size:14px;color:${C.graphite};flex-shrink:0">${updWhen(s.date)}</div>` : ""}
+      <div style="flex:1;min-width:0;font-size:15px;color:${C.graphite};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(s.subject || "")}</div>
+    </div>`;
+  }
+  function updBtnHTML(action, label, primary) {
+    const dis = !!updBusy;
+    return `<button data-upd-action="${action}" ${dis ? "disabled" : ""} style="padding:11px 20px;border-radius:11px;border:2px solid ${primary ? C.moss : C.ash};background:${primary ? C.moss : C.canvas};color:${primary ? C.canvas : C.graphite};font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;flex-shrink:0;opacity:${dis ? .5 : 1}">${label}</button>`;
+  }
+  function updCardHTML() {
+    const u = upd, st = updState(u);
+    const when = u && u.local ? [
+      u.checked_at ? `${updWhen(u.checked_at)} に確認` : "",
+      u.local.applied_at ? `この版になったのは ${updWhen(u.local.applied_at)}` : "",
+    ].filter(Boolean).join("　・　") : "";
+    const line = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
+    return dcHead(SVG.upd, 'ソフトウェア更新', 'SOFTWARE UPDATE', 'dc-upd-badge', updBadge(st.tone, st.text)) +
+      (u && u.local ? updRowHTML('この端末', u.local) + updRowHTML('配信中', u.remote) : '') +
+      `<div style="display:flex;align-items:center;gap:12px;margin-top:8px">
+        <div style="flex:1;min-width:0;line-height:1.55">
+          <div style="font-size:14px;color:${st.tone === 'red' ? C.redDk : C.graphite};${line}">${escHtml(st.note || "")}</div>
+          <div style="font-size:13px;color:${C.stone};${line}">${when}</div>
+        </div>
+        ${st.action === "apply" ? updBtnHTML("apply", "今すぐ更新", true) : ""}
+        ${st.action === "reload" ? updBtnHTML("reload", "画面を再読み込み", true) : ""}
+        ${updBtnHTML("check", "今すぐ確認", false)}
+      </div>`;
+  }
+  function renderUpd() {
+    const el = document.getElementById("dc-upd");
+    if (el) {
+      const html = updCardHTML();
+      if (el._h !== html) { el.innerHTML = html; el._h = html; }  // 変化が無ければ作り直さない(押下中のボタンを消さない)
+    }
+    const v = document.getElementById("ks-ver");
+    if (v) v.textContent = updVerLabel();
+  }
+  async function getUpdStatus() {
+    try { const r = await fetch("/update-status"); return r.ok ? await r.json() : null; }
+    catch (e) { return null; }
+  }
+  async function runUpdCheck() {
+    updBusy = "check"; renderUpd();
+    let data = null;
+    try {
+      const r = await fetch("/update-check", { method: "POST" });
+      data = r.ok ? await r.json() : await getUpdStatus();  // 確認の口が無い旧エージェントは状態だけ
+    } catch (e) { data = null; }
+    upd = data; updBusy = ""; renderUpd();
+  }
+  async function applyUpdNow() {
+    updBusy = "apply"; renderUpd();
+    try { await fetch("/apply-update", { method: "POST" }); } catch (e) {}
+    setTimeout(() => location.reload(), 500);  // 待機画面の自動適用と同じ手順(Python の更新ならこの後 agent が再起動)
+  }
+
   function devicesBodyHTML() {
     return `<div style="flex:1;padding:22px 80px 0;display:grid;grid-template-columns:1.08fr 0.92fr;gap:24px;min-height:0">
 
-      <div style="position:relative;border-radius:22px;overflow:hidden;background:#100f0d;border:1px solid ${C.chalk};box-shadow:0 4px 24px rgba(29,26,21,.10);min-height:0">
+      <div style="display:flex;flex-direction:column;gap:14px;min-height:0">
+      <div style="position:relative;flex:1;border-radius:22px;overflow:hidden;background:#100f0d;border:1px solid ${C.chalk};box-shadow:0 4px 24px rgba(29,26,21,.10);min-height:0">
         <div style="position:absolute;top:0;left:0;right:0;z-index:2;padding:20px 24px;display:flex;align-items:center;gap:14px;background:linear-gradient(180deg,rgba(0,0,0,.6),transparent)">
           <div style="width:46px;height:46px;border-radius:12px;background:rgba(255,255,255,.14);color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0">${SVG.cam}</div>
           <div style="flex:1"><div style="font-size:23px;font-weight:600;color:#fff">カメラ</div><div style="font-size:11px;color:rgba(255,255,255,.6);letter-spacing:2.5px;margin-top:2px;font-family:ui-monospace,monospace">CAMERA / PREVIEW</div></div>
@@ -4704,6 +4815,8 @@ function showKioskSettings() {
         </div>
         <video id="dc-cam" autoplay muted playsinline style="width:100%;height:100%;object-fit:cover;background:#100f0d"></video>
         <div id="dc-cam-msg" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.72);font-size:20px;line-height:1.6;text-align:center;padding:40px">カメラを起動しています…</div>
+      </div>
+      ${dcCard(`<div id="dc-upd">${updCardHTML()}</div>`)}
       </div>
 
       <div style="display:flex;flex-direction:column;gap:14px;min-height:0;overflow-y:auto">
@@ -4884,11 +4997,19 @@ function showKioskSettings() {
     startMic(gen);
     pollDeviceStatus();
     dcPoll = setInterval(pollDeviceStatus, 1200);
+    // 開くたびに配信サーバーと突き合わせる。以降は定期確認(30分毎)の結果を拾うだけ。
+    runUpdCheck();
+    updPoll = setInterval(async () => {
+      if (updBusy) return;
+      const d = await getUpdStatus();
+      if (!updBusy) { upd = d; renderUpd(); }
+    }, 10000);
   }
 
   function stopDeviceCheck() {
     dcGen++;  // 進行中の getUserMedia を無効化(back/再登録で activeTab が残っても確実に解放)
     if (dcPoll) { clearInterval(dcPoll); dcPoll = null; }
+    if (updPoll) { clearInterval(updPoll); updPoll = null; }
     if (micRAF) { cancelAnimationFrame(micRAF); micRAF = null; }
     if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; }
     analyser = null; micData = null; micSegs = null;
@@ -4902,6 +5023,14 @@ function showKioskSettings() {
     const el = e.target.closest("[data-relay-action]");
     if (!el || activeTab !== "devices") return;
     handleRelay(el.getAttribute("data-relay-id"), el.getAttribute("data-relay-action"));
+  });
+  onSc("click", (e) => {
+    const el = e.target.closest("[data-upd-action]");
+    if (!el || activeTab !== "devices" || updBusy) return;
+    const a = el.getAttribute("data-upd-action");
+    if (a === "check") runUpdCheck();
+    else if (a === "apply") applyUpdNow();
+    else if (a === "reload") location.reload();
   });
 
   // 端末の紐づけ解除の実体: agent の device_state.json を削除(サーバ側トークン) + ブラウザの
@@ -5000,7 +5129,7 @@ function showKioskSettings() {
     ${isDev ? 'ハードウェアの接続状態をこの画面で確認できます' : '設定の変更はスタッフのみ操作できます'}
     <span style="flex:1"></span>
     ${isDev ? '' : `<button id="ks-unbind" style="margin-right:24px;padding:11px 22px;border-radius:11px;border:1.5px solid ${C.red};background:transparent;color:${C.redDk};font-size:15px;font-weight:600;cursor:pointer;font-family:inherit">端末の紐づけを解除</button>`}
-    <span id="ks-dev" style="font-family:ui-monospace,monospace;cursor:default" title="">${devName} · FW v2.4.1</span>
+    <span id="ks-dev" style="font-family:ui-monospace,monospace;cursor:default" title="">${devName} · <span id="ks-ver">${updVerLabel()}</span></span>
   </div>
 </div>`;
     rescale();
@@ -5596,6 +5725,8 @@ function showKioskSettings() {
   }
 
   init();
+  // フッターの版表示(デバイスチェックタブの「ソフトウェア更新」と同じ名前で出す)
+  getUpdStatus().then(d => { if (d && !upd) { upd = d; renderUpd(); } });
 }
 
 // ─── Corner gesture: simultaneous top-left + top-right touch → kiosk settings ─

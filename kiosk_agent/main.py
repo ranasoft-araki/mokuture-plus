@@ -1388,7 +1388,18 @@ async def device_convert(kana: str = "", limit: int = 60):
 
 @app.get("/update-status")
 async def update_status():
-    return {"ready": updater.is_ready(), "force": updater.is_force(), "version": read_version()}
+    # ready/force/version は待機画面の自動適用が使う。残りはデバイスチェック画面の
+    # 「ソフトウェア更新」用(この端末の版・配信中の版・最後の確認・適用待ち)。
+    return {"ready": updater.is_ready(), "force": updater.is_force(), "version": read_version(),
+            **updater.status()}
+
+
+@app.post("/update-check")
+async def update_check():
+    """今すぐ配信サーバーと突き合わせる(デバイスチェック画面の「今すぐ確認」)。
+    自動更新が有効な端末では、違うファイルの取り寄せまで済ませてから返す。"""
+    await updater.check()
+    return await update_status()
 
 
 @app.post("/apply-update")

@@ -139,7 +139,8 @@ _ALLOWED_METHODS = {"form", "qr", "appointment"}
 # Bundle files are served from the local kiosk_agent dir when it exists (local dev
 # and any deploy that ships it). On the Render image the backend build context is
 # backend/ only, so kiosk_agent/ is NOT in the image — there we transparently fall
-# back to fetching each file from the public GitHub repo (always `master`). This
+# back to fetching each file from the public GitHub repo (the deployed commit, see
+# _BUNDLE_REF; `master` where that is unknown). This
 # keeps OTA working for deployed kiosks without vendoring copies into backend/ or
 # reworking the Docker build/context. Both sources hash bytes with sha256[:16],
 # identical to kiosk_agent/updater._local_hash, so the device never re-downloads
@@ -148,10 +149,26 @@ _ALLOWED_METHODS = {"form", "qr", "appointment"}
 _KIOSK_AGENT_DIR = Path(
     os.environ.get("KIOSK_BUNDLE_DIR", str(Path(__file__).parents[3] / "kiosk_agent"))
 )
+_BUNDLE_GITHUB_REPO = os.environ.get("KIOSK_BUNDLE_GITHUB_REPO", "ranasoft-araki/mokuture-plus")
+# 配る中身の git ref。Render は自分がデプロイしたコミットを RENDER_GIT_COMMIT に入れるので、
+# そのコミットに固定する。こうすると
+#   - バックエンドとキオスクのコードが同じコミットで揃う(新 API を使う画面だけ先に届かない)
+#   - 中身が変わらないので取り寄せた分をずっと使い回せる
+#   - 「どのコミットの中身か」を端末に名乗れる(デバイスチェック画面の版表示)
+# RENDER_GIT_COMMIT の無い環境では従来どおり master を追う(版の名前は付かない)。
+_BUNDLE_REF = (
+    os.environ.get("KIOSK_BUNDLE_REF") or os.environ.get("RENDER_GIT_COMMIT") or "master"
+).strip()
 _BUNDLE_GITHUB_RAW = os.environ.get(
     "KIOSK_BUNDLE_GITHUB_RAW",
-    "https://raw.githubusercontent.com/ranasoft-araki/mokuture-plus/master/kiosk_agent",
+    f"https://raw.githubusercontent.com/{_BUNDLE_GITHUB_REPO}/{_BUNDLE_REF}/kiosk_agent",
 ).rstrip("/")
+# コミットに固定して取り寄せているか(=中身が変わらない)。取り寄せ元を直接指定されたときは
+# 何を指しているか分からないので、従来どおり短い取り置きにする。
+_BUNDLE_PINNED = (
+    re.fullmatch(r"[0-9a-f]{40}", _BUNDLE_REF) is not None
+    and "KIOSK_BUNDLE_GITHUB_RAW" not in os.environ
+)
 
 # Files distributed via OTA (relative to kiosk_agent root); order is stable for hashing.
 BUNDLE_FILES = [
@@ -249,7 +266,7 @@ async def _read_bundle_bytes(rel: str) -> bytes | None:
         pass
     now = time.monotonic()
     cached = _bundle_bytes_cache.get(rel)
-    if cached is not None and now - cached[0] < _BUNDLE_CACHE_TTL:
+    if cached is not None and (_BUNDLE_PINNED or now - cached[0] < _BUNDLE_CACHE_TTL):
         return cached[1]
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -285,6 +302,50 @@ async def _collect_bundle() -> tuple[str, list[dict]]:
         files.append({"path": rel, "hash": sha, "size": len(data)})
     version = hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
     return version, files
+
+
+# 配信中の版の「人が読める名前」= kiosk_agent に触れた最後のコミット(短縮 SHA・日時・件名)。
+# 端末のデバイスチェック画面で「どのコミットの中身が届いているか」を見せるために使う。
+# コミットに固定して配っているときだけ付ける(master 追従やローカル配信では中身とコミットが
+# 一対一にならない)。中身が変わらないので一度引けば足り、未認証 API の回数制限にも掛からない。
+# 引けなかったときはデプロイしたコミットの SHA だけを名乗り、しばらくしてから引き直す。
+_bundle_source_cache: dict | None = None
+_bundle_source_tried_at: float | None = None
+_BUNDLE_SOURCE_RETRY_SEC = 600.0
+
+
+async def _bundle_source() -> dict | None:
+    global _bundle_source_cache, _bundle_source_tried_at
+    if not _BUNDLE_PINNED:
+        return None
+    if _bundle_source_cache is not None and _bundle_source_cache.get("subject") is not None:
+        return _bundle_source_cache
+    now = time.monotonic()
+    if _bundle_source_tried_at is not None and now - _bundle_source_tried_at < _BUNDLE_SOURCE_RETRY_SEC:
+        return _bundle_source_cache
+    _bundle_source_tried_at = now
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"https://api.github.com/repos/{_BUNDLE_GITHUB_REPO}/commits",
+                params={"sha": _BUNDLE_REF, "path": "kiosk_agent", "per_page": 1},
+                headers={"Accept": "application/vnd.github+json"},
+            )
+        commits = resp.json() if resp.status_code == 200 else None
+        if commits:
+            c = commits[0]
+            message = c["commit"].get("message") or ""
+            _bundle_source_cache = {
+                "commit": c["sha"],
+                "date": c["commit"]["committer"]["date"],
+                "subject": (message.splitlines() or [""])[0][:120],
+            }
+            return _bundle_source_cache
+        logger.warning("[ota] github commit lookup -> HTTP %s", resp.status_code)
+    except Exception:
+        logger.warning("[ota] github commit lookup failed")
+    _bundle_source_cache = {"commit": _BUNDLE_REF, "date": None, "subject": None}
+    return _bundle_source_cache
 
 
 class RegisterRequest(BaseModel):
@@ -1445,8 +1506,9 @@ async def kiosk_bundle_manifest(
         diff = (now - fat).total_seconds()
         force = 0 <= diff <= _FORCE_WINDOW_SEC
 
-    version, files = await _collect_bundle()
-    return {"version": version, "files": files, "force": force}
+    (version, files), source = await asyncio.gather(_collect_bundle(), _bundle_source())
+    # source は旧エージェントには無視される(追加のキーのみ)。
+    return {"version": version, "files": files, "force": force, "source": source}
 
 
 @router.get("/bundle/file/{file_path:path}")

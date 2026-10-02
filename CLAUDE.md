@@ -539,7 +539,9 @@ mokuture/
 **`main.py` が import する Python は必ず同じリストに入れること**（main.py だけ新しくなると import 失敗でエージェントが起動しなくなる）。デバイス側 `_local_hash` と backend の hash は同一算法(`sha256(bytes)[:16]`)＝一致すれば再DLしない。
 
 - **配信元は「ローカルの kiosk_agent が有ればそれ、無ければ GitHub public raw(master)」**(`backend/app/api/kiosk.py` の `_read_bundle_bytes`/`_collect_bundle`)。**本番 Render のイメージはビルドコンテキストが `backend/` のみで `kiosk_agent/` を含まないため**、以前は配信元パスが存在せず manifest が空(`files:[]`)＝**全キオスクにOTAが一切届いていなかった**。対策として、ローカルに無い場合は公開リポジトリ `raw.githubusercontent.com/ranasoft-araki/mokuture-plus/master/kiosk_agent/<rel>` から取得(120s バイトキャッシュ)。これで **Dockerfile/コンテキストを触らず**、push→backend再デプロイ→GitHub master の最新 kiosk.html を配信、で更新が実機に届く。env `KIOSK_BUNDLE_DIR`/`KIOSK_BUNDLE_GITHUB_RAW` で上書き可。
-- **注意**: 配信は GitHub **master** ソース＝**push していない変更は実機に届かない**。kiosk.html を直したら commit＋push すること。Windows開発機のローカル配信は CRLF、GitHub/Linux は LF で hash が変わるが、実機(Linux Pi)は常に LF なので manifest と一致し再DLループにならない。
+- **GitHub からの取り寄せは「Render がデプロイしたコミット」に固定**(`_BUNDLE_REF` = env `RENDER_GIT_COMMIT`、`KIOSK_BUNDLE_REF` で上書き、どちらも無ければ従来どおり master)。バックエンドとキオスクのコードが同じコミットで揃い、中身が不変なのでバイトはプロセス存続中ずっと再利用する。manifest には **`source`(kiosk_agent に触れた最後のコミットの SHA・日時・件名。GitHub API をデプロイごとに1回だけ引く。失敗時はデプロイ SHA のみで10分後に引き直し)** を載せる＝端末が「どのコミットの中身か」を名乗れる。master 追従/ローカル配信では `source: null`。
+- **端末側の届いたかどうかの確認**: updater は**記録した版(`.bundle_version`)ではなくディスク上の中身を manifest と突き合わせる**(`_diff`)。git で巻き戻された Pi も「未反映」と分かり取り寄せ直す。いまの版の名前と適用時刻は `.bundle_info.json`(gitignore)。agent の `GET /update-status` が状態一式(enabled/checked_at/error/local/remote/mismatch/pending)を返し、`POST /update-check` で即時確認。キオスク設定の**デバイスチェックタブ「ソフトウェア更新」**に表示(最新です/更新あり[今すぐ更新]/未反映/再読み込みが必要/確認できません[理由]/自動更新オフ=開発機)。フッターの版表示も同じ名前。テスト: `kiosk_agent/tests/test_ota_status.py`・`backend/tests/test_kiosk_bundle.py`。
+- **注意**: 配信は GitHub のデプロイ済みコミット(=master)＝**push していない変更は実機に届かない**(Render のデプロイ完了後に届く)。kiosk.html を直したら commit＋push すること。Windows開発機のローカル配信は CRLF、GitHub/Linux は LF で hash が変わるが、実機(Linux Pi)は常に LF なので manifest と一致し再DLループにならない。
 
 ### 名刺読み取り（QR無し来訪者の受付フォーム自動入力）
 
@@ -749,7 +751,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - **complete（歓迎画面「お待ちしておりました」）**: 氏名と「様」を同サイズでインライン表示。予約情報を拡大表示。QR受付で行き先（会議室）が確定し、かつその会議室に `map_image_url` が登録されている場合のみ館内マップを表示（`go("calling"/"complete", { name, staff, room, scheduledAt, method })` でデータを伝搬）。
 - **キオスク設定（スタッフ専用・`showKioskSettings`）**: 画面**左上＋右上の同時タッチ**（または `Ctrl+Shift+M`）で開く。上部の**タブで「設定」/「デバイスチェック」を切替**（統合済み）。
   - **設定タブ**: 音量スライダー＋サウンドON/OFF（タップ音, `/device/volume`）、Wi-Fi（`/device/wifi/networks|connect|toggle`）、**ロッカーの口数(3口/7口)選択**（`/device/locker-config`。増設時に設置者がタッチで切替＝JSON編集不要）、ロッカーの鍵 全解除（`/proxy/lockers/open-all`）、フッター端末名の**5連タップで再登録**。
-  - **デバイスチェックタブ**: `getUserMedia` による**カメラ・ライブプレビュー**、Web Audio(AnalyserNode) の**マイク音量レベルメーター**、`GET /device/status`（1.2s ポーリング）に基づく **PIR/ドア/電子錠を緑(ON/正常)・赤(OFF/異常)のトグル表示**（電子錠トグルは `POST /device/locker/{id}/state`、開錠テストは `/pulse`。委譲クリックで捕捉）。旧 device-control の「DEVICE」情報パネルは非表示。カメラ/マイクのストリーム・AudioContext・rAF・ポーリングは画面離脱/タブ切替で確実に停止（**世代トークン `dcGen`** で teardown 後に解決した in-flight `getUserMedia` も解放）。
+  - **デバイスチェックタブ**: `getUserMedia` による**カメラ・ライブプレビュー**、Web Audio(AnalyserNode) の**マイク音量レベルメーター**、`GET /device/status`（1.2s ポーリング）に基づく **PIR/ドア/電子錠を緑(ON/正常)・赤(OFF/異常)のトグル表示**（電子錠トグルは `POST /device/locker/{id}/state`、開錠テストは `/pulse`。委譲クリックで捕捉）。旧 device-control の「DEVICE」情報パネルは非表示。カメラ/マイクのストリーム・AudioContext・rAF・ポーリングは画面離脱/タブ切替で確実に停止（**世代トークン `dcGen`** で teardown 後に解決した in-flight `getUserMedia` も解放）。カメラの下に **「ソフトウェア更新」カード**(OTA の届き具合。開くたびに `POST /update-check`、以降 10s ごとに `/update-status`。→「キオスク OTA 配信」節)。
   - 旧・独立ページ `static/device-control.html`（`GET /device-control`）はメンテ用に残存（統合により通常運用では不要）。
 - `KioskScaler` 相当の `rescale()` が 1920×1080 固定を `transform: scale()` でフィット。`PublicTenantSettings` は `/proxy/settings` 経由で取得。
 - Web 版キオスク `frontend/app/[tenant]/kiosk/KioskFlow.tsx` は別実装（簡易フォーム）。本仕様変更は device 版 `kiosk.html` を対象とする。
