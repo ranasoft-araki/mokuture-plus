@@ -189,3 +189,20 @@ def test_版の名前を記録する前に入った版は記録時刻を適用�
 
     asyncio.run(u.check())  # 次の確認で名前が付く
     assert u.status()["local"]["source"] == SOURCE
+
+
+def test_同じ中身でも配信側の名前が変われば記録し直す(env):
+    """版番号(label)は後から付いた。中身が同じ端末も、次の確認で新しい名前を表示する。"""
+    app, server, write = env
+    for rel, data in server["files"].items():
+        write(rel, data)
+    u = _updater()
+    asyncio.run(u.check())
+    applied_at = u.status()["local"]["applied_at"]
+
+    server["source"] = {**SOURCE, "label": "261001-003"}
+    asyncio.run(u.check())
+    st = u.status()
+    assert st["local"]["source"]["label"] == "261001-003"
+    assert st["local"]["applied_at"] == applied_at  # 中身は変わっていないので適用時刻はそのまま
+    assert not [p for p in server["requests"] if "/bundle/file/" in p]

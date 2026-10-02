@@ -20,6 +20,19 @@ KIOSK_COMMIT = {
 }
 
 
+def _older(sha: str, date: str) -> dict:
+    return {"sha": sha * 40, "commit": {"message": "前の更新", "committer": {"date": date}}}
+
+
+# GitHub API の並び(新しい順)。先頭が配信中の版(日本時間 10/1 21:14)。
+KIOSK_COMMITS = [
+    KIOSK_COMMIT,
+    _older("b", "2026-10-01T01:00:00Z"),   # 日本時間 10/1 10:00
+    _older("c", "2026-09-30T16:30:00Z"),   # 日本時間 10/1 01:30(UTC では前日だが日本時間で数える)
+    _older("d", "2026-09-30T14:00:00Z"),   # 日本時間 9/30 23:00 → 数えない
+]
+
+
 @pytest.fixture
 def github(monkeypatch, tmp_path):
     """kiosk_agent の無い Render のイメージで、GitHub の raw / API をモックする。"""
@@ -31,7 +44,7 @@ def github(monkeypatch, tmp_path):
             state["api"].append(url)
             if state["api_status"] != 200:
                 return httpx.Response(state["api_status"], json={"message": "rate limited"})
-            return httpx.Response(200, json=[KIOSK_COMMIT])
+            return httpx.Response(200, json=KIOSK_COMMITS)
         state["raw"].append(url)
         return httpx.Response(200, content=b"file:" + request.url.path.encode())
 
@@ -63,7 +76,8 @@ async def test_コミットに固定した配信はその名前を名乗り取�
     m = r1.json()
     assert len(m["files"]) == len(kiosk.BUNDLE_FILES)
     assert all(f"/{SHA}/kiosk_agent/" in u for u in github["raw"])
-    assert m["source"] == {"commit": KIOSK_COMMIT["sha"], "date": "2026-10-01T12:14:00Z", "subject": "声の操作: 直す"}
+    assert m["source"] == {"commit": KIOSK_COMMIT["sha"], "date": "2026-10-01T12:14:00Z",
+                           "subject": "声の操作: 直す", "label": "261001-003"}
     # kiosk_agent に触れた最後のコミットを、デプロイしたコミットから辿って引く
     assert "path=kiosk_agent" in github["api"][0] and f"sha={SHA}" in github["api"][0]
 
@@ -95,3 +109,10 @@ async def test_コミット名を引けないときはデプロイのSHAだけ�
     monkeypatch.setattr(kiosk, "_bundle_source_tried_at", kiosk._bundle_source_tried_at - kiosk._BUNDLE_SOURCE_RETRY_SEC)
     m = (await client.get("/api/kiosk/bundle/manifest", headers=kiosk_headers)).json()
     assert m["source"]["subject"] == "声の操作: 直す"
+    assert m["source"]["label"] == "261001-003"
+
+
+def test_版番号は日本時間の日付とその日の何番目か():
+    assert kiosk._bundle_label(KIOSK_COMMITS) == "261001-003"
+    assert kiosk._bundle_label(KIOSK_COMMITS[1:]) == "261001-002"  # 1つ前の版の番号は変わらない
+    assert kiosk._bundle_label(KIOSK_COMMITS[3:]) == "260930-001"

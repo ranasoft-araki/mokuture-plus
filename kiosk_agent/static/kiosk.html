@@ -4697,9 +4697,11 @@ function showKioskSettings() {
 
   // ── ソフトウェア更新(OTA) ── OTA で配った更新がこの端末に届いているかを見せる。
   // 「最新です」は記録した版ではなく、ディスク上の中身を配信中の一覧と突き合わせた結果(agent updater.py)。
-  // 版の名前はサーバーが付けたコミット(短縮 SHA・日時・件名)。名前が無いときは中身のハッシュを出す。
+  // 版の名前はサーバーが付けた版番号 label(YYMMDD-NNN = 日本時間の日付＋その日の何番目の更新か)と
+  // コミットの件名。版番号が無い(GitHub を引けなかった等)ときは短縮 SHA、それも無ければ中身のハッシュ。
   function updId(v) {
     const s = v && v.source;
+    if (s && s.label) return s.label;
     if (s && s.commit) return s.commit.slice(0, 7);
     return v && v.version ? v.version.slice(0, 8) : "";
   }
@@ -4748,7 +4750,7 @@ function showKioskSettings() {
     return `<div style="display:flex;align-items:baseline;gap:14px;padding:8px 0;border-top:1px solid ${C.chalk};min-width:0">
       <div style="width:76px;flex-shrink:0;font-size:14px;color:${C.stone}">${label}</div>
       <div style="font-family:ui-monospace,monospace;font-size:18px;font-weight:600;color:${id ? C.ink : C.stone};flex-shrink:0">${escHtml(id || "—")}</div>
-      ${s.date ? `<div style="font-size:14px;color:${C.graphite};flex-shrink:0">${updWhen(s.date)}</div>` : ""}
+      ${s.date && !s.label ? `<div style="font-size:14px;color:${C.graphite};flex-shrink:0">${updWhen(s.date)}</div>` : ""}
       <div style="flex:1;min-width:0;font-size:15px;color:${C.graphite};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(s.subject || "")}</div>
     </div>`;
   }

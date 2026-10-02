@@ -304,7 +304,8 @@ async def _collect_bundle() -> tuple[str, list[dict]]:
     return version, files
 
 
-# 配信中の版の「人が読める名前」= kiosk_agent に触れた最後のコミット(短縮 SHA・日時・件名)。
+# 配信中の版の「人が読める名前」= kiosk_agent に触れた最後のコミット(SHA・日時・件名)と、
+# そこから作る版番号 label(YYMMDD-NNN)。
 # 端末のデバイスチェック画面で「どのコミットの中身が届いているか」を見せるために使う。
 # コミットに固定して配っているときだけ付ける(master 追従やローカル配信では中身とコミットが
 # 一対一にならない)。中身が変わらないので一度引けば足り、未認証 API の回数制限にも掛からない。
@@ -312,6 +313,21 @@ async def _collect_bundle() -> tuple[str, list[dict]]:
 _bundle_source_cache: dict | None = None
 _bundle_source_tried_at: float | None = None
 _BUNDLE_SOURCE_RETRY_SEC = 600.0
+_BUNDLE_LABEL_SCAN = 100  # 版番号の通し番号を数えるために遡るコミット数(1日にこれ以上は無い前提)
+
+
+def _bundle_label(commits: list[dict]) -> str:
+    """人が読む版番号 YYMMDD-NNN(例 261002-001)。
+
+    日付は日本時間、NNN はその日の kiosk_agent のコミットの何番目か。commits は新しい順
+    (GitHub API の並び)で、先頭が配信中の版。数えるのは先頭の祖先だけなので、後から
+    コミットが増えても既に付いた番号は変わらない。"""
+    def day(c: dict) -> str:
+        dt = datetime.fromisoformat(c["commit"]["committer"]["date"].replace("Z", "+00:00"))
+        return dt.astimezone(_JST).strftime("%y%m%d")
+
+    head = day(commits[0])
+    return f"{head}-{sum(1 for c in commits if day(c) == head):03d}"
 
 
 async def _bundle_source() -> dict | None:
@@ -328,7 +344,7 @@ async def _bundle_source() -> dict | None:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"https://api.github.com/repos/{_BUNDLE_GITHUB_REPO}/commits",
-                params={"sha": _BUNDLE_REF, "path": "kiosk_agent", "per_page": 1},
+                params={"sha": _BUNDLE_REF, "path": "kiosk_agent", "per_page": _BUNDLE_LABEL_SCAN},
                 headers={"Accept": "application/vnd.github+json"},
             )
         commits = resp.json() if resp.status_code == 200 else None
@@ -339,6 +355,7 @@ async def _bundle_source() -> dict | None:
                 "commit": c["sha"],
                 "date": c["commit"]["committer"]["date"],
                 "subject": (message.splitlines() or [""])[0][:120],
+                "label": _bundle_label(commits),
             }
             return _bundle_source_cache
         logger.warning("[ota] github commit lookup -> HTTP %s", resp.status_code)
