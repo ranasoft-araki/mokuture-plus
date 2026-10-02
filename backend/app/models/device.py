@@ -46,6 +46,18 @@ class Device(Base):
     tenant = relationship("Tenant", back_populates="devices")
 
 
+class KioskBundleRelease(Base):
+    """OTA で配ったキオスクの中身(バンドル)ごとの版番号。全テナント共通。
+
+    backend の kiosk._bundle_label が、その中身を初めて配るときに振る。端末のデバイス
+    チェック画面に出す「261002-001」(日本時間の日付＋その日に配り始めた何番目の中身か)。"""
+    __tablename__ = "kiosk_bundle_releases"
+
+    version: Mapped[str] = mapped_column(String(32), primary_key=True)          # manifest の version(中身のハッシュ)
+    label: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)  # YYMMDD-NNN
+    first_served_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)  # UTC naive
+
+
 class Locker(Base):
     __tablename__ = "lockers"
 

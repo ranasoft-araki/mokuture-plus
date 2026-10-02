@@ -1,17 +1,19 @@
 """OTA の配信一覧(GET /kiosk/bundle/manifest)。
 
-Render ではデプロイしたコミットに固定して GitHub から取り寄せ、そのコミットの名前
-(短縮 SHA・日時・件名)を端末に名乗る。端末のデバイスチェック画面はこれを
-「配信中」の版として表示する。GitHub へは出さず、モックで確かめる。
+Render ではデプロイしたコミットに固定して GitHub から取り寄せ、版番号(YYMMDD-NNN)と
+コミットの名前を端末に名乗る。端末のデバイスチェック画面はこれを「配信中」の版として
+表示する。GitHub へは出さず、モックで確かめる。
 """
 from __future__ import annotations
 
 import types
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
 
 from app.api import kiosk
+from app.database import AsyncSessionLocal
 
 SHA = "585655b" + "1" * 33
 KIOSK_COMMIT = {
@@ -20,23 +22,14 @@ KIOSK_COMMIT = {
 }
 
 
-def _older(sha: str, date: str) -> dict:
-    return {"sha": sha * 40, "commit": {"message": "前の更新", "committer": {"date": date}}}
-
-
-# GitHub API の並び(新しい順)。先頭が配信中の版(日本時間 10/1 21:14)。
-KIOSK_COMMITS = [
-    KIOSK_COMMIT,
-    _older("b", "2026-10-01T01:00:00Z"),   # 日本時間 10/1 10:00
-    _older("c", "2026-09-30T16:30:00Z"),   # 日本時間 10/1 01:30(UTC では前日だが日本時間で数える)
-    _older("d", "2026-09-30T14:00:00Z"),   # 日本時間 9/30 23:00 → 数えない
-]
+def _today_label(n: int) -> str:
+    return datetime.now(kiosk._JST).strftime("%y%m%d") + f"-{n:03d}"
 
 
 @pytest.fixture
 def github(monkeypatch, tmp_path):
     """kiosk_agent の無い Render のイメージで、GitHub の raw / API をモックする。"""
-    state = {"raw": [], "api": [], "api_status": 200}
+    state = {"raw": [], "api": [], "api_status": 200, "salt": b""}
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -44,9 +37,9 @@ def github(monkeypatch, tmp_path):
             state["api"].append(url)
             if state["api_status"] != 200:
                 return httpx.Response(state["api_status"], json={"message": "rate limited"})
-            return httpx.Response(200, json=KIOSK_COMMITS)
+            return httpx.Response(200, json=[KIOSK_COMMIT])
         state["raw"].append(url)
-        return httpx.Response(200, content=b"file:" + request.url.path.encode())
+        return httpx.Response(200, content=b"file:" + request.url.path.encode() + state["salt"])
 
     real_client = httpx.AsyncClient
     fake = types.SimpleNamespace(
@@ -57,6 +50,7 @@ def github(monkeypatch, tmp_path):
     monkeypatch.setattr(kiosk, "_bundle_bytes_cache", {})
     monkeypatch.setattr(kiosk, "_bundle_source_cache", None)
     monkeypatch.setattr(kiosk, "_bundle_source_tried_at", None)
+    monkeypatch.setattr(kiosk, "_bundle_labels", {})
     return state
 
 
@@ -69,7 +63,7 @@ def _pin(monkeypatch, ref: str, pinned: bool):
     )
 
 
-async def test_コミットに固定した配信はその名前を名乗り取り寄せは一度だけ(client, kiosk_headers, github, monkeypatch):
+async def test_コミットに固定した配信は版番号とコミット名を名乗り取り寄せは一度だけ(client, kiosk_headers, github, monkeypatch):
     _pin(monkeypatch, SHA, True)
     r1 = await client.get("/api/kiosk/bundle/manifest", headers=kiosk_headers)
     assert r1.status_code == 200
@@ -77,7 +71,7 @@ async def test_コミットに固定した配信はその名前を名乗り取�
     assert len(m["files"]) == len(kiosk.BUNDLE_FILES)
     assert all(f"/{SHA}/kiosk_agent/" in u for u in github["raw"])
     assert m["source"] == {"commit": KIOSK_COMMIT["sha"], "date": "2026-10-01T12:14:00Z",
-                           "subject": "声の操作: 直す", "label": "261001-003"}
+                           "subject": "声の操作: 直す", "label": _today_label(1)}
     # kiosk_agent に触れた最後のコミットを、デプロイしたコミットから辿って引く
     assert "path=kiosk_agent" in github["api"][0] and f"sha={SHA}" in github["api"][0]
 
@@ -88,19 +82,12 @@ async def test_コミットに固定した配信はその名前を名乗り取�
     assert len(github["api"]) == 1
 
 
-async def test_master追従のときは名前を付けない(client, kiosk_headers, github, monkeypatch):
-    _pin(monkeypatch, "master", False)
-    m = (await client.get("/api/kiosk/bundle/manifest", headers=kiosk_headers)).json()
-    assert m["files"]
-    assert m["source"] is None
-    assert github["api"] == []
-
-
-async def test_コミット名を引けないときはデプロイのSHAだけ名乗りあとで引き直す(client, kiosk_headers, github, monkeypatch):
+async def test_GitHubのAPIが通らなくても版番号は出る(client, kiosk_headers, github, monkeypatch):
+    """Render の共有 IP では未認証 API が回数制限で通らないことがある(2026-10-02 本番で発生)。"""
     _pin(monkeypatch, SHA, True)
     github["api_status"] = 403
     m = (await client.get("/api/kiosk/bundle/manifest", headers=kiosk_headers)).json()
-    assert m["source"] == {"commit": SHA, "date": None, "subject": None}
+    assert m["source"] == {"commit": SHA, "date": None, "subject": None, "label": _today_label(1)}
 
     await client.get("/api/kiosk/bundle/manifest", headers=kiosk_headers)
     assert len(github["api"]) == 1  # すぐには叩き直さない(回数制限)
@@ -109,10 +96,37 @@ async def test_コミット名を引けないときはデプロイのSHAだけ�
     monkeypatch.setattr(kiosk, "_bundle_source_tried_at", kiosk._bundle_source_tried_at - kiosk._BUNDLE_SOURCE_RETRY_SEC)
     m = (await client.get("/api/kiosk/bundle/manifest", headers=kiosk_headers)).json()
     assert m["source"]["subject"] == "声の操作: 直す"
-    assert m["source"]["label"] == "261001-003"
+    assert m["source"]["label"] == _today_label(1)
 
 
-def test_版番号は日本時間の日付とその日の何番目か():
-    assert kiosk._bundle_label(KIOSK_COMMITS) == "261001-003"
-    assert kiosk._bundle_label(KIOSK_COMMITS[1:]) == "261001-002"  # 1つ前の版の番号は変わらない
-    assert kiosk._bundle_label(KIOSK_COMMITS[3:]) == "260930-001"
+async def test_master追従でも中身が変わるたびに番号が進む(client, kiosk_headers, github, monkeypatch):
+    _pin(monkeypatch, "master", False)
+    m1 = (await client.get("/api/kiosk/bundle/manifest", headers=kiosk_headers)).json()
+    assert m1["source"] == {"commit": None, "date": None, "subject": None, "label": _today_label(1)}
+    assert github["api"] == []  # コミットとは一対一にならないので名前は引かない
+
+    github["salt"] = b"v2"
+    kiosk._bundle_bytes_cache.clear()
+    m2 = (await client.get("/api/kiosk/bundle/manifest", headers=kiosk_headers)).json()
+    assert m2["version"] != m1["version"]
+    assert m2["source"]["label"] == _today_label(2)
+
+
+def _at(iso: str) -> datetime:
+    return datetime.fromisoformat(iso).replace(tzinfo=timezone.utc)
+
+
+async def test_版番号は日本時間の日付とその日に配り始めた順(monkeypatch):
+    monkeypatch.setattr(kiosk, "_bundle_labels", {})
+    async with AsyncSessionLocal() as db:
+        assert await kiosk._bundle_label(db, "aaaa", _at("2026-10-01T23:00:00")) == "261002-001"  # 日本時間 10/2 8:00
+        assert await kiosk._bundle_label(db, "bbbb", _at("2026-10-02T03:00:00")) == "261002-002"
+        # 前の中身に戻しても番号は前のまま
+        assert await kiosk._bundle_label(db, "aaaa", _at("2026-10-02T05:00:00")) == "261002-001"
+        assert await kiosk._bundle_label(db, "cccc", _at("2026-10-02T16:00:00")) == "261003-001"  # 日本時間 10/3 1:00
+
+    # 再起動(手元の写しが空)しても DB の記録から同じ番号になる
+    monkeypatch.setattr(kiosk, "_bundle_labels", {})
+    async with AsyncSessionLocal() as db:
+        assert await kiosk._bundle_label(db, "bbbb", _at("2026-10-05T00:00:00")) == "261002-002"
+        assert await kiosk._bundle_label(db, "dddd", _at("2026-10-02T16:30:00")) == "261003-002"

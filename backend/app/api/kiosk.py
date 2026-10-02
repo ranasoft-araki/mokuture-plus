@@ -26,11 +26,11 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.database import AsyncSessionLocal, get_db
-from app.models.device import Device, Locker
+from app.models.device import Device, KioskBundleRelease, Locker
 from app.models.tenant import Tenant
 from app.models.content import Media, Playlist, PlaylistItem, Schedule
 from app.models.reception import ReceptionLog
@@ -304,30 +304,55 @@ async def _collect_bundle() -> tuple[str, list[dict]]:
     return version, files
 
 
-# 配信中の版の「人が読める名前」= kiosk_agent に触れた最後のコミット(SHA・日時・件名)と、
-# そこから作る版番号 label(YYMMDD-NNN)。
-# 端末のデバイスチェック画面で「どのコミットの中身が届いているか」を見せるために使う。
-# コミットに固定して配っているときだけ付ける(master 追従やローカル配信では中身とコミットが
-# 一対一にならない)。中身が変わらないので一度引けば足り、未認証 API の回数制限にも掛からない。
-# 引けなかったときはデプロイしたコミットの SHA だけを名乗り、しばらくしてから引き直す。
+# 配信中の版の「人が読める名前」。
+#  - label: 版番号 YYMMDD-NNN(画面に大きく出すもの)。DB で振るので GitHub に頼らない(_bundle_label)。
+#  - commit/date/subject: kiosk_agent に触れた最後のコミット。GitHub API で引く。コミットに固定して
+#    配っているときだけ付け(master 追従やローカル配信では中身とコミットが一対一にならない)、
+#    一度引けば足りる。**Render の外向き IP は共有で、未認証 API(1時間60回/IP)は他の利用者に
+#    使い切られて通らないことがある**(2026-10-02 実測)。引けなかったときはデプロイしたコミットの
+#    SHA だけを名乗り、しばらくしてから引き直す。件名が無くても版番号は出る。
 _bundle_source_cache: dict | None = None
 _bundle_source_tried_at: float | None = None
 _BUNDLE_SOURCE_RETRY_SEC = 600.0
-_BUNDLE_LABEL_SCAN = 100  # 版番号の通し番号を数えるために遡るコミット数(1日にこれ以上は無い前提)
+
+_bundle_labels: dict[str, str] = {}   # version -> label(DB の写し。版番号は一度振ったら変わらない)
+_bundle_label_lock = asyncio.Lock()
 
 
-def _bundle_label(commits: list[dict]) -> str:
+async def _bundle_label(db: AsyncSession, version: str, now: datetime | None = None) -> str | None:
     """人が読む版番号 YYMMDD-NNN(例 261002-001)。
 
-    日付は日本時間、NNN はその日の kiosk_agent のコミットの何番目か。commits は新しい順
-    (GitHub API の並び)で、先頭が配信中の版。数えるのは先頭の祖先だけなので、後から
-    コミットが増えても既に付いた番号は変わらない。"""
-    def day(c: dict) -> str:
-        dt = datetime.fromisoformat(c["commit"]["committer"]["date"].replace("Z", "+00:00"))
-        return dt.astimezone(_JST).strftime("%y%m%d")
-
-    head = day(commits[0])
-    return f"{head}-{sum(1 for c in commits if day(c) == head):03d}"
+    この配信サーバーがその中身(version)を初めて配った日(日本時間)と、その日に配り始めた
+    何番目の中身か。kiosk_bundle_releases に記録するので、再起動・再デプロイしても番号は
+    変わらず、前の中身に戻せば前の番号に戻る。記録できなかったときは None(次の問い合わせで
+    やり直す)。"""
+    cached = _bundle_labels.get(version)
+    if cached:
+        return cached
+    async with _bundle_label_lock:
+        try:
+            row = await db.get(KioskBundleRelease, version)
+            if row is None:
+                now = now or datetime.now(timezone.utc)
+                day = now.astimezone(_JST).strftime("%y%m%d")
+                n = await db.scalar(
+                    select(func.count()).select_from(KioskBundleRelease)
+                    .where(KioskBundleRelease.label.like(f"{day}-%"))
+                )
+                row = KioskBundleRelease(
+                    version=version,
+                    label=f"{day}-{(n or 0) + 1:03d}",
+                    first_served_at=now.astimezone(timezone.utc).replace(tzinfo=None),
+                )
+                db.add(row)
+                await db.commit()
+                logger.info("[ota] new bundle %s -> %s", version, row.label)
+            _bundle_labels[version] = row.label
+            return row.label
+        except Exception:
+            logger.warning("[ota] bundle label failed for %s", version, exc_info=True)
+            await db.rollback()
+            return None
 
 
 async def _bundle_source() -> dict | None:
@@ -344,7 +369,7 @@ async def _bundle_source() -> dict | None:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"https://api.github.com/repos/{_BUNDLE_GITHUB_REPO}/commits",
-                params={"sha": _BUNDLE_REF, "path": "kiosk_agent", "per_page": _BUNDLE_LABEL_SCAN},
+                params={"sha": _BUNDLE_REF, "path": "kiosk_agent", "per_page": 1},
                 headers={"Accept": "application/vnd.github+json"},
             )
         commits = resp.json() if resp.status_code == 200 else None
@@ -355,7 +380,6 @@ async def _bundle_source() -> dict | None:
                 "commit": c["sha"],
                 "date": c["commit"]["committer"]["date"],
                 "subject": (message.splitlines() or [""])[0][:120],
-                "label": _bundle_label(commits),
             }
             return _bundle_source_cache
         logger.warning("[ota] github commit lookup -> HTTP %s", resp.status_code)
@@ -1512,6 +1536,7 @@ async def _record_delivery_analytics(
 @router.get("/bundle/manifest")
 async def kiosk_bundle_manifest(
     ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
 ):
     """Return current bundle version + per-file hashes. Device uses this to detect changes."""
     tenant, _ = ctx
@@ -1524,6 +1549,9 @@ async def kiosk_bundle_manifest(
         force = 0 <= diff <= _FORCE_WINDOW_SEC
 
     (version, files), source = await asyncio.gather(_collect_bundle(), _bundle_source())
+    label = await _bundle_label(db, version) if files else None
+    if label:
+        source = {**(source or {"commit": None, "date": None, "subject": None}), "label": label}
     # source は旧エージェントには無視される(追加のキーのみ)。
     return {"version": version, "files": files, "force": force, "source": source}
 
