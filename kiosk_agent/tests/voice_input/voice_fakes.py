@@ -17,6 +17,11 @@ LEXICON = ["<eps>", "[unk]", "受付", "ご", "訪問", "一番", "二", "番", 
            "ます", "います", "お", "願い", "します", "し", "えー", "えっと", "あの", "で", "です",
            "を", "に", "の", "線", "電車"]
 
+# 英語版(vosk_en のふり)。英語モデルの辞書は小文字。
+LEXICON_EN = ["<eps>", "[unk]", "visit", "delivery", "package", "locker", "one", "two", "three",
+              "back", "cancel", "wait", "continue", "start", "over", "yes", "no", "open",
+              "um", "uh", "please", "check", "in", "submit"]
+
 
 class FakeRecognizer:
     """語ごとの信頼度と時刻を返す Vosk の認識器のふり。"""

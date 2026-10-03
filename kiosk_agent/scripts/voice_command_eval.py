@@ -80,6 +80,19 @@ LOBBY = [
 # 言い添え。実際には単語だけでなく「えーと、〜」「〜でお願いします」と言われる。
 VARIANTS = ["{p}", "えーと、{p}", "{p}でお願いします"]
 
+# 英語版(--lang en)。日本語の LOBBY/VARIANTS と同じ役割(雑談・言い添え)の英訳。
+LOBBY_EN = [
+    "what a nice day today isn't it", "how was the meeting earlier", "um", "thank you so much",
+    "is tanaka there", "I'm here to drop off a package", "excuse me where is the restroom",
+    "the meeting is at three", "could you go back for a second", "what's for dinner",
+    "here you go", "hello can you hear me", "please wait a moment", "thanks for your hard work",
+    "a hexagonal desk", "is this the right place to check in", "the delivery person is already here",
+    "where did I put the locker key", "I said that already", "let's keep going",
+    "yes that's right", "the keyboard is broken", "I'm out of business cards", "say that again please",
+    "okay all done", "just a second", "someone said to cancel it", "could you hold this for me",
+]
+VARIANTS_EN = ["{p}", "um, {p}", "{p} please"]
+
 
 def load_vocab() -> dict:
     text = KIOSK_HTML.read_text(encoding="utf-8")
@@ -93,17 +106,19 @@ def wire_id(key: str) -> str:
     return key.split(".")[-1].lower()
 
 
-def choices_for(screen: str, vocab: dict) -> list[tuple[str, list[str]]]:
-    return [(wire_id(k), list(vocab[k]["say"])) for k in SCREENS[screen] if k in vocab]
+def choices_for(screen: str, vocab: dict, lang: str = "ja") -> list[tuple[str, list[str]]]:
+    key = "sayEn" if lang == "en" else "say"
+    return [(wire_id(k), list(vocab[k].get(key) or vocab[k]["say"])) for k in SCREENS[screen] if k in vocab]
 
 
 # ── 音源 ──────────────────────────────────────────────────────────────────────
 
-def synth_many(texts: list[str], rate: int) -> dict[str, Path]:
+def synth_many(texts: list[str], rate: int, lang: str = "ja") -> dict[str, Path]:
     """Windows の音声合成でまとめて WAV を作る(1 つずつ PowerShell を起こすと遅い)。"""
     if platform.system() != "Windows":
         sys.exit("--say は Windows 専用です。--no-say --wav-dir で音源を渡してください")
-    cache = Path(tempfile.gettempdir()) / "mokuture-voice-cmd-eval"
+    culture = "en-US" if lang == "en" else "ja-JP"
+    cache = Path(tempfile.gettempdir()) / f"mokuture-voice-cmd-eval-{lang}"
     cache.mkdir(exist_ok=True)
     out: dict[str, Path] = {}
     todo: list[tuple[str, Path]] = []
@@ -117,7 +132,7 @@ def synth_many(texts: list[str], rate: int) -> dict[str, Path]:
         script = f'''
 Add-Type -AssemblyName System.Speech
 $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$jp = $s.GetInstalledVoices() | Where-Object {{ $_.VoiceInfo.Culture.Name -eq 'ja-JP' }} | Select-Object -First 1
+$jp = $s.GetInstalledVoices() | Where-Object {{ $_.VoiceInfo.Culture.Name -eq '{culture}' }} | Select-Object -First 1
 if ($jp) {{ $s.SelectVoice($jp.VoiceInfo.Name) }}
 $s.Rate = {rate}
 $fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)
@@ -160,21 +175,21 @@ def utterances(path: Path, rate: int) -> list:
 
 # ── 採点 ──────────────────────────────────────────────────────────────────────
 
-def decode(seg, choices, fallback: bool) -> tuple[list, int, str | None]:
+def decode(seg, choices, fallback: bool, lang: str = "ja") -> tuple[list, int, str | None]:
     """語の並びと認識時間。しきい値は後で振るので、ここでは 0 で当てる。
 
     番号の画面は聞き直しを含めた本番どおりの判定を 3 つ目に返す(しきい値は振らない)。
     """
     if fallback:
-        m = vosk_engine.recognize_command(seg, choices, fallback=True)
+        m = vosk_engine.recognize_command(seg, choices, lang=lang, fallback=True)
         return m.words, m.recognition_ms, m.matched
-    m = vosk_engine.recognize_command(seg, choices, min_conf=0.0)
+    m = vosk_engine.recognize_command(seg, choices, min_conf=0.0, lang=lang)
     return m.words, m.recognition_ms, None
 
 
-def judge(words, choices, floor: float) -> str | None:
-    table, _ = vosk_engine.command_table(choices)
-    matched, _, _ = vosk_engine.match_command(words, table, floor)
+def judge(words, choices, floor: float, lang: str = "ja") -> str | None:
+    table, _ = vosk_engine.command_table(choices, lang)
+    matched, _, _ = vosk_engine.match_command(words, table, floor, lang=lang)
     return matched
 
 
@@ -193,34 +208,43 @@ def main() -> int:
     ap.add_argument("--rate", type=int, default=0, help="合成音声の話速(-10〜10)")
     ap.add_argument("--wav-dir", type=Path, help="実際の声・ロビーの録音(ファイル名の規則は冒頭)")
     ap.add_argument("--show", action="store_true", help="外れた回に聞こえた語を出す(画面に出すだけ)")
+    ap.add_argument("--lang", default="ja", choices=["ja", "en"], help="測る言語(既定 ja)")
     args = ap.parse_args()
+    lang = args.lang
 
-    ok, detail = vosk_engine.available()
-    if not ok or not vosk_engine.grammar_supported():
-        print("Vosk を使えません:", detail or "語彙を絞れないモデル")
+    ok, detail = vosk_engine.available(lang)
+    if not ok or not vosk_engine.grammar_supported(lang):
+        print(f"Vosk(lang={lang}) を使えません:", detail or "語彙を絞れないモデル")
         return 1
     vocab = load_vocab()
     screens = [s for s in (args.screens.split(",") if args.screens else SCREENS) if s in SCREENS]
     floors = [float(x) for x in args.min_conf.split(",") if x] or [float(settings.get("command.min_conf"))]
     rate = int(settings.get("audio.sample_rate"))
+    lobby = LOBBY_EN if lang == "en" else LOBBY
+    variants = VARIANTS_EN if lang == "en" else VARIANTS
+    say_key = "sayEn" if lang == "en" else "say"
+    label_key = "labelEn" if lang == "en" else "label"
 
     # (画面, 正解 id or None, 名前, 音源)
     cases: list[tuple[str, str | None, str, Path]] = []
     if not args.no_say:
         # 言う言葉 = 語彙の言い回し＋ボタンの札に書いた読み(札どおりに言って当たらないと困る)。
+        # 英語語彙が無い項目(sayEn 未設定)は測れないので画面から静かに外す。
         def spoken(k):
             v = vocab.get(k, {})
-            return list(dict.fromkeys(list(v.get("say", [])) + ([v["label"]] if v.get("label") else [])))
+            say = v.get(say_key) or (v.get("say") if lang == "ja" else [])
+            label = v.get(label_key) or (v.get("label") if lang == "ja" else None)
+            return list(dict.fromkeys(list(say or []) + ([label] if label else [])))
         pos_texts = {v.format(p=p) for s in screens for k in SCREENS[s] if k in vocab
-                     for p in spoken(k) for v in VARIANTS}
-        wavs = synth_many(sorted(pos_texts | set(LOBBY)), args.rate)
+                     for p in spoken(k) for v in variants}
+        wavs = synth_many(sorted(pos_texts | set(lobby)), args.rate, lang)
         for s in screens:
             for k in SCREENS[s]:
                 for p in spoken(k):
-                    for v in VARIANTS:
+                    for v in variants:
                         t = v.format(p=p)
                         cases.append((s, wire_id(k), t, wavs[t]))
-            for t in LOBBY:
+            for t in lobby:
                 cases.append((s, None, t, wavs[t]))
     if args.wav_dir:
         for f in sorted(Path(args.wav_dir).expanduser().glob("*.wav")):
@@ -230,8 +254,8 @@ def main() -> int:
             elif len(parts) >= 2 and parts[0] in screens:
                 cases.append((parts[0], wire_id(parts[1]), f.name, f))
 
-    print(f"モデル {vosk_engine.model_name()} / 画面 {len(screens)} / 音源 {len(cases)} 件")
-    vosk_engine.load()
+    print(f"モデル {vosk_engine.model_name(lang)} / 画面 {len(screens)} / 音源 {len(cases)} 件")
+    vosk_engine.load(lang)
     started = time.monotonic()
     results = []       # (screen, want, name, [(words, ms)])
     first_ms: dict[str, int] = {}
@@ -239,10 +263,10 @@ def main() -> int:
     for screen, want, name, path in cases:
         if path not in seg_cache:
             seg_cache[path] = utterances(path, rate)
-        choices = choices_for(screen, vocab)
+        choices = choices_for(screen, vocab, lang)
         decoded = []
         for seg in seg_cache[path]:
-            words, ms, fixed = decode(seg, choices, screen in FALLBACK_SCREENS)
+            words, ms, fixed = decode(seg, choices, screen in FALLBACK_SCREENS, lang)
             first_ms.setdefault(screen, ms)
             decoded.append((words, ms, fixed))
         results.append((screen, want, name, choices, decoded))
@@ -259,7 +283,7 @@ def main() -> int:
             for screen, want, name, choices, decoded in results:
                 if screen != s:
                     continue
-                got = [fixed if screen in FALLBACK_SCREENS else judge(w, choices, floor) for w, _, fixed in decoded]
+                got = [fixed if screen in FALLBACK_SCREENS else judge(w, choices, floor, lang) for w, _, fixed in decoded]
                 got = [g for g in got if g]
                 if want is None:
                     c["neg"] += 1

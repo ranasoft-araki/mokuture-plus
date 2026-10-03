@@ -16,6 +16,10 @@
     .venv/Scripts/python scripts/voice_selftest.py --say "ロッカー" --screen top
     .venv/Scripts/python scripts/voice_selftest.py --wav sample.wav --screen lockerMode
 
+    # 英語語彙で試す(表示言語を英語に切り替えたときと同じ経路)
+    .venv/Scripts/python scripts/voice_selftest.py --say "locker" --screen top --lang en
+    .venv/Scripts/python scripts/voice_selftest.py --mic --screen top --lang en
+
 聞こえた語は画面に出すだけで、どこにも保存しない。多数の発話でまとめて当たり方を
 測るのは scripts/voice_command_eval.py。
 """
@@ -44,9 +48,14 @@ def show_status() -> bool:
     mic_ok, mic_detail = capture.available()
     print(f"  マイク        : {'OK' if mic_ok else 'NG'}  {mic_detail}")
     ok, detail = vosk_engine.available()
-    print(f"  Vosk          : {'OK' if ok else 'NG'}  {detail}")
+    print(f"  Vosk(ja)      : {'OK' if ok else 'NG'}  {detail}")
     cmd_ok, cmd_detail = command_available()
-    print(f"  語彙を絞れるか: {'OK' if cmd_ok else 'NG'}  {cmd_detail}")
+    print(f"  語彙を絞れるか(ja): {'OK' if cmd_ok else 'NG'}  {cmd_detail}")
+    ok_en, detail_en = vosk_engine.available("en")
+    print(f"  Vosk(en)      : {'OK' if ok_en else 'NG'}  {detail_en}")
+    if ok_en:
+        cmd_ok_en, cmd_detail_en = command_available("en")
+        print(f"  語彙を絞れるか(en): {'OK' if cmd_ok_en else 'NG'}  {cmd_detail_en}")
     notes = settings.notes()
     if notes:
         print(f"  設定          : {' / '.join(notes)}")
@@ -59,14 +68,14 @@ def show_devices() -> None:
         print(f"   {d}")
 
 
-def run_once(screen: str, source: str, wav: Path | None) -> int:
+def run_once(screen: str, source: str, wav: Path | None, lang: str = "ja") -> int:
     vocab = ev.load_vocab()
     if screen not in ev.SCREENS:
         print(f"画面 {screen} の語彙はありません。使える画面: {', '.join(ev.SCREENS)}")
         return 2
-    choices = ev.choices_for(screen, vocab)
+    choices = ev.choices_for(screen, vocab, lang)
     words = " / ".join(f"{cid}: {'・'.join(ps)}" for cid, ps in choices)
-    print(f"== 画面 {screen} の語彙 ==\n  {words}")
+    print(f"== 画面 {screen} の語彙(lang={lang}) ==\n  {words}")
 
     cfg = settings.cfg()
     if source == "file":
@@ -77,7 +86,7 @@ def run_once(screen: str, source: str, wav: Path | None) -> int:
     if not ok:
         print(f"マイク/音源を使えません: {detail}")
         return 1
-    vosk_engine.load()
+    vosk_engine.load(lang)
     ccfg = settings.get("command")
     print("\nお話しください…" if source == "mic" else "\n音源を流しています…", flush=True)
     stream = capture.open_stream()
@@ -91,7 +100,7 @@ def run_once(screen: str, source: str, wav: Path | None) -> int:
         print("  お声を聞き取れませんでした（窓のあいだに話し始めていない）")
         return 1
     started = time.monotonic()
-    m = vosk_engine.recognize_command(seg, choices, fallback=screen.startswith("locker"))
+    m = vosk_engine.recognize_command(seg, choices, lang=lang, fallback=screen.startswith("locker"))
     print(f"  音声 {seg.total_ms}ms / うち発話 {seg.speech_ms}ms / 終了理由 {seg.stop_reason}")
     print(f"  認識 {int((time.monotonic() - started) * 1000)}ms")
     print(f"  聞こえた語 : {[(w[0], round(w[1], 2)) for w in m.words]}")
@@ -108,6 +117,7 @@ def main() -> int:
     ap.add_argument("--say", help="Windows の合成音声で読ませる言葉")
     ap.add_argument("--wav", type=Path, help="この WAV を流す")
     ap.add_argument("--screen", default="top", help="語彙を使う画面（既定 top）")
+    ap.add_argument("--lang", default="ja", choices=["ja", "en"], help="聞く言語(既定 ja)")
     args = ap.parse_args()
 
     if args.devices:
@@ -116,11 +126,11 @@ def main() -> int:
     if args.status or not (args.mic or args.say or args.wav):
         return 0 if show_status() else 1
     if args.mic:
-        return run_once(args.screen, "mic", None)
+        return run_once(args.screen, "mic", None, args.lang)
     if args.say:
-        wavs = ev.synth_many([args.say], 0)
-        return run_once(args.screen, "file", wavs[args.say])
-    return run_once(args.screen, "file", args.wav)
+        wavs = ev.synth_many([args.say], 0, args.lang)
+        return run_once(args.screen, "file", wavs[args.say], args.lang)
+    return run_once(args.screen, "file", args.wav, args.lang)
 
 
 if __name__ == "__main__":

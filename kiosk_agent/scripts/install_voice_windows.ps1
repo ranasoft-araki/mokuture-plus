@@ -19,7 +19,8 @@
 
 param(
     [switch]$NoMic,      # マイクを使わない(WAV での試験だけ行う)
-    [switch]$Force       # 取得済みでも入れ直す
+    [switch]$Force,      # 取得済みでも入れ直す
+    [switch]$English     # 日本語に加えて英語モデル(130MB・任意)も用意する
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,14 +55,21 @@ if (-not (Test-Path $Python)) {
 # ── 1. モデルの確認 ───────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "--- モデルの確認 ---"
-Invoke-Native { & $Python (Join-Path $AgentDir "scripts\fetch_voice_models.py") --check }
+$FetchArgs = @()
+if ($English) { $FetchArgs += "--all" }
+# -English のときは fetch_voice_models.py 側に --all を渡すので、英語モデルが任意でも
+# 「要ると言われたので無ければ失敗」になる(fetch_voice_models.py 参照)。
+Invoke-Native { & $Python (Join-Path $AgentDir "scripts\fetch_voice_models.py") --check @FetchArgs }
 if ($LASTEXITCODE -ne 0) {
-    Write-Host ""
-    Write-Host "モデルが揃っていません。まず次を試してください:" -ForegroundColor Yellow
-    Write-Host "    git lfs pull"
-    Write-Host "それでも駄目なら取得し直します:"
-    Write-Host "    $Python scripts\fetch_voice_models.py"
-    exit 1
+    Invoke-Native { & $Python (Join-Path $AgentDir "scripts\fetch_voice_models.py") @FetchArgs }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ""
+        Write-Host "モデルが揃っていません。まず次を試してください:" -ForegroundColor Yellow
+        Write-Host "    git lfs pull"
+        Write-Host "それでも駄目なら取得し直します:"
+        Write-Host "    $Python scripts\fetch_voice_models.py $($FetchArgs -join ' ')"
+        exit 1
+    }
 }
 
 # ── 2. マイク(sounddevice) ────────────────────────────────────────────────────
@@ -108,11 +116,23 @@ if (($LASTEXITCODE -eq 0) -and (-not $Force)) {
 
 $VoskModel = Join-Path $AgentDir "voice_models\vosk-model-small-ja-0.22"
 if (Test-Path $VoskModel) {
-    Write-Host "モデルは展開済み"
+    Write-Host "モデルは展開済み(日本語)"
 } else {
     Invoke-Native { & $Python (Join-Path $AgentDir "scripts\fetch_voice_models.py") --extract }
     if ($LASTEXITCODE -ne 0) {
         Write-Host "モデルを展開できませんでした。" -ForegroundColor Yellow
+    }
+}
+
+if ($English) {
+    $VoskModelEn = Join-Path $AgentDir "voice_models\vosk-model-en-us-0.22-lgraph"
+    if (Test-Path $VoskModelEn) {
+        Write-Host "モデルは展開済み(英語)"
+    } else {
+        Invoke-Native { & $Python (Join-Path $AgentDir "scripts\fetch_voice_models.py") --extract --only vosk-model-en-us-0.22-lgraph.zip }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "英語モデルを展開できませんでした。英語表示では声で操作するが使えません。" -ForegroundColor Yellow
+        }
     }
 }
 

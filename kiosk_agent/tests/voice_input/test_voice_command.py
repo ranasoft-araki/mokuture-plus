@@ -326,7 +326,7 @@ def test_statusに声で操作できるかが出る(client, fake_vosk, feed):
 
 def test_voskが無ければ声で操作できない(client, feed, monkeypatch):
     feed(silence(100))
-    monkeypatch.setattr(vosk_engine, "available", lambda: (False, "無い"))
+    monkeypatch.setattr(vosk_engine, "available", lambda lang="ja": (False, "無い"))
     s = client.get("/voice/status").json()
     assert s["features"]["command"] is False
 

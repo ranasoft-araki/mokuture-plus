@@ -43,6 +43,54 @@ def test_status_shape(client, fake_vosk, feed):
     assert s["timing"]["poll_interval_ms"] > 0
 
 
+def test_statusは言語ごとの可否も返す(client, fake_vosk, feed, tmp_path):
+    """英語モデル未導入でも落ちない。古いキオスク画面が読む既存キー(ja の可否)は変わらない。"""
+    settings.cfg()["vosk_en"]["model_path"] = str(tmp_path / "ない")
+    feed(silence(100))
+    s = client.get("/voice/status").json()
+    assert s["available"] is True            # 既存キー(日本語)は変わらない
+    assert set(s["languages"]) == {"ja", "en"}
+    assert s["languages"]["ja"]["available"] is True
+    assert s["languages"]["en"]["available"] is False   # 英語モデルは未導入
+
+
+def test_英語モデルが揃っていれば言語ごとの可否がtrueになる(client, fake_vosk_en, feed):
+    feed(silence(100))
+    s = client.get("/voice/status").json()
+    assert s["languages"]["ja"]["available"] is True
+    assert s["languages"]["en"]["available"] is True
+
+
+def test_commandに英語を指定すると英語モデルで聞く(client, fake_vosk_en, feed):
+    feed(silence(100))
+    sid = start(client)
+    from voice_fakes import FakeRecognizer
+    FakeRecognizer.words = [("locker", 1.0)]
+    r = client.post(f"/voice/session/{sid}/command", json={
+        "screen": "top", "choices": [{"id": "locker", "phrases": ["locker"]}], "lang": "en",
+    })
+    assert r.status_code == 200
+
+
+def test_commandのlangは既定で日本語(client, fake_vosk, feed):
+    """省略時は日本語(旧バージョンのキオスク画面との互換)。"""
+    feed(silence(100))
+    sid = start(client)
+    r = client.post(f"/voice/session/{sid}/command", json={
+        "screen": "top", "choices": [{"id": "back", "phrases": ["戻る"]}],
+    })
+    assert r.status_code == 200
+
+
+def test_不正なlangは422(client, fake_vosk, feed):
+    feed(silence(100))
+    sid = start(client)
+    r = client.post(f"/voice/session/{sid}/command", json={
+        "screen": "top", "choices": [{"id": "back", "phrases": ["戻る"]}], "lang": "fr",
+    })
+    assert r.status_code == 422
+
+
 def test_status_tells_the_screen_to_start_by_itself(client, fake_vosk, feed):
     """既定では画面を開いたら押さなくても聞き取る。設定で押したときだけに戻せる。"""
     feed(silence(100))
@@ -60,7 +108,7 @@ def test_status_without_microphone_is_unavailable(client, fake_vosk, monkeypatch
 
 def test_status_without_vosk_is_unavailable(client, feed, monkeypatch):
     feed(silence(100))
-    monkeypatch.setattr(vosk_engine, "available", lambda: (False, "vosk が入っていません"))
+    monkeypatch.setattr(vosk_engine, "available", lambda lang="ja": (False, "vosk が入っていません"))
     s = client.get("/voice/status").json()
     assert s["available"] is False and s["command"]["detail"] == "vosk が入っていません"
 

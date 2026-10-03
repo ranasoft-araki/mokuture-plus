@@ -57,9 +57,26 @@ ASSETS: tuple[Asset, ...] = (
         required=True,
         note="Vosk 日本語軽量。声で操作する(語彙を絞れる Gr.fst を持つ)",
     ),
+    # 英語(表示言語を英語に切り替えた来訪者向け・任意)。小型の英語モデル
+    # (vosk-model-small-en-us-0.15 / -zamia-0.5)は語彙外(OOV)を表す `[unk]` を
+    # words.txt に持たず、語彙を絞ると周りの雑談まで信頼度1.0で選択肢に誤爆した
+    # (実測)。`[unk]` を持つこの 0.22-lgraph(130MB)だけが正しく働く。
+    # Raspberry Pi 4(4GB)以上なら容量・メモリともに問題ない大きさ。
+    # **このファイルは OTA でも配る**(backend の BUNDLE_FILES / agent の MANAGED_FILES。
+    # Git LFS 管理)。このスクリプトは (1) 取得元と SHA-256 の唯一の定義、(2) 導入直後に
+    # すぐ使いたいときの手動取得、(3) OTA が届く前の端末での動作確認、のために残す。
+    Asset(
+        path=MODEL_DIR / "vosk-model-en-us-0.22-lgraph.zip",
+        url=f"{VOSK}/vosk-model-en-us-0.22-lgraph.zip",
+        sha256="d9838b4aaa82a75c4a17f5aca300eaca129aaab2a7cbf951bafbb500eb9c4334",
+        size=130_557_655,
+        required=False,
+        note="Vosk 英語(lgraph)。声で操作する英語対応。OTA配信対象(手元で今すぐ試すなら --lang en)",
+    ),
 )
 
 VOSK_DIR = MODEL_DIR / "vosk-model-small-ja-0.22"
+VOSK_EN_DIR = MODEL_DIR / "vosk-model-en-us-0.22-lgraph"
 
 
 def sha256_of(path: Path) -> str:
@@ -143,18 +160,16 @@ def download(asset: Asset) -> bool:
     return True
 
 
-def extract_vosk() -> bool:
-    """Vosk のモデルを zip から展開する(第3・4段階で使う)。"""
-    zip_path = MODEL_DIR / "vosk-model-small-ja-0.22.zip"
+def _extract_one(zip_path: Path, out_dir: Path) -> bool:
     if not zip_path.exists() or is_lfs_pointer(zip_path):
-        print("Vosk の zip がありません(先に取得してください)")
+        print(f"{zip_path.name} がありません(先に取得してください)")
         return False
-    if VOSK_DIR.exists():
-        print(f"展開済み: {VOSK_DIR.name}")
+    if out_dir.exists():
+        print(f"展開済み: {out_dir.name}")
         return True
     print(f"展開中: {zip_path.name}")
     with zipfile.ZipFile(zip_path) as z:
-        # zip の中身は vosk-model-small-ja-0.22/ で始まる。そのまま展開する。
+        # zip の中身はモデル名のディレクトリで始まる。そのまま展開する。
         for name in z.namelist():
             if name.startswith("/") or ".." in Path(name).parts:
                 print(f"  → 危険なパスを含む zip です: {name}")
@@ -162,6 +177,13 @@ def extract_vosk() -> bool:
         z.extractall(MODEL_DIR)
     print("  → OK")
     return True
+
+
+def extract_vosk(lang: str = "ja") -> bool:
+    """Vosk のモデルを zip から展開する(第3・4段階で使う)。lang="en" なら英語版。"""
+    if lang == "en":
+        return _extract_one(MODEL_DIR / "vosk-model-en-us-0.22-lgraph.zip", VOSK_EN_DIR)
+    return _extract_one(MODEL_DIR / "vosk-model-small-ja-0.22.zip", VOSK_DIR)
 
 
 def main() -> int:
@@ -196,10 +218,12 @@ def main() -> int:
         if state != "ok" and (asset.required or args.all or args.only):
             bad.append(asset)
 
+    # --only/--all で「任意」のモデルも名指しで要ると言われているときは、それも
+    # 揃っていなければ失敗とする(「任意」の印が付いていても)。
+    explicitly_wanted = bool(args.only or args.all)
+
     if args.check:
-        # --only で絞ったときは、指定したものが揃っていなければ失敗とする
-        # (「任意」の印が付いていても、名指しで要ると言われているため)。
-        stop = bad if args.only else [a for a in bad if a.required]
+        stop = bad if explicitly_wanted else [a for a in bad if a.required]
         # ポインタのままなら、取り出し方を出さないと利用者がここで詰まる。
         if any(state_of(a)[0] == "pointer" for a in stop):
             print("")
@@ -210,13 +234,16 @@ def main() -> int:
     failed = False
     for asset in bad:
         if not download(asset):
-            failed = failed or asset.required
+            failed = failed or asset.required or explicitly_wanted
 
     if args.extract:
-        extract_vosk()
+        for asset in assets:
+            lang = "en" if "en-us" in asset.path.name else "ja"
+            if state_of(asset)[0] == "ok":
+                extract_vosk(lang)
 
     if failed:
-        print("\n必須のモデルが揃いませんでした。声で操作するは無効のまま起動します。")
+        print("\nモデルが揃いませんでした。声で操作するは無効のまま起動します。")
         for line in lfs_advice():
             print(line)
         return 1

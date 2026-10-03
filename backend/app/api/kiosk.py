@@ -163,6 +163,22 @@ _BUNDLE_GITHUB_RAW = os.environ.get(
     "KIOSK_BUNDLE_GITHUB_RAW",
     f"https://raw.githubusercontent.com/{_BUNDLE_GITHUB_REPO}/{_BUNDLE_REF}/kiosk_agent",
 ).rstrip("/")
+# raw.githubusercontent.com は Git LFS 管理ファイルだと実体ではなくポインタ文字列
+# (下の _LFS_POINTER_MAGIC で始まる約130バイトのテキスト)を返す。実体は
+# media.githubusercontent.com/media/<owner>/<repo>/<ref>/<path> から取れる(公開リポジトリ)。
+# .gitattributes で `kiosk_agent/voice_models/*.zip` が LFS 指定なので、その配下のパスだけ
+# ここを使う。
+_BUNDLE_GITHUB_MEDIA = os.environ.get(
+    "KIOSK_BUNDLE_GITHUB_MEDIA",
+    f"https://media.githubusercontent.com/media/{_BUNDLE_GITHUB_REPO}/{_BUNDLE_REF}/kiosk_agent",
+).rstrip("/")
+_LFS_BUNDLE_PATHS = {"voice_models/vosk-model-en-us-0.22-lgraph.zip"}
+_LFS_POINTER_MAGIC = b"version https://git-lfs.github.com/spec/v1"
+
+
+def _is_lfs_pointer(data: bytes) -> bool:
+    """scripts/fetch_voice_models.py の is_lfs_pointer と同じ判定(先頭バイトの一致)。"""
+    return data[: len(_LFS_POINTER_MAGIC)] == _LFS_POINTER_MAGIC
 # コミットに固定して取り寄せているか(=中身が変わらない)。取り寄せ元を直接指定されたときは
 # 何を指しているか分からないので、従来どおり短い取り置きにする。
 _BUNDLE_PINNED = (
@@ -227,8 +243,6 @@ BUNDLE_FILES = [
     # 名刺と違って端末では**別プロセス**(mokuture-voice.service / 127.0.0.1:8181)で動く。
     # エージェント本体を再起動しても入れ替わらないので、音声サービスが自分のソースの
     # ハッシュ変化を検知して自ら終了し、systemd に起こし直してもらう。
-    # Vosk モデルは OTA では配らない
-    # (scripts/install_voice.sh の担当)。
     "voice/__init__.py",
     "voice/api.py",
     "voice/capture.py",
@@ -240,6 +254,12 @@ BUNDLE_FILES = [
     "voice/types.py",
     "voice/vad.py",
     "voice/vosk_engine.py",
+    # 英語の Vosk モデル(130MB)。唯一 OTA で配るモデルファイル(日本語(50MB)は従来どおり
+    # install_voice.sh の担当)。Git LFS 管理(.gitattributes の voice_models/*.zip)なので
+    # _read_bundle_bytes は LFS ポインタ検知(_is_lfs_pointer)と media.githubusercontent.com
+    # 経由の取得(_LFS_BUNDLE_PATHS)が必要——raw.githubusercontent.com は LFS ファイルの
+    # 実体ではなくポインタ文字列(約130バイト)を返すため。
+    "voice_models/vosk-model-en-us-0.22-lgraph.zip",
 ]
 _FORCE_WINDOW_SEC = 7200  # force flag stays active for 2 hours after trigger
 
@@ -255,27 +275,44 @@ async def _read_bundle_bytes(rel: str) -> bytes | None:
     Prefers the local kiosk_agent copy; if it is missing (Render backend/-only
     image) fetches from the public GitHub raw mirror and caches briefly. On a
     fetch error the last cached copy (if any) is returned so a transient GitHub
-    blip does not blank the manifest."""
+    blip does not blank the manifest.
+
+    `rel` in `_LFS_BUNDLE_PATHS` is Git-LFS-tracked (.gitattributes), so both the
+    local checkout (if `git lfs pull` was never run there) and the plain GitHub
+    raw mirror can return the ~130-byte LFS *pointer* text instead of the real
+    object. `_is_lfs_pointer` catches that on every path so we never hash/cache/
+    serve a pointer as if it were the real file(見かけ200・無言で中身だけ壊れる、を防ぐ)。
+    """
     if rel not in BUNDLE_FILES:
         return None
     local = _KIOSK_AGENT_DIR / rel
     try:
         if local.exists():
-            return local.read_bytes()
+            data = local.read_bytes()
+            if not _is_lfs_pointer(data):
+                return data
+            logger.warning("[ota] local %s is an LFS pointer (run `git lfs pull`); falling back to GitHub", rel)
     except OSError:
         pass
     now = time.monotonic()
     cached = _bundle_bytes_cache.get(rel)
     if cached is not None and (_BUNDLE_PINNED or now - cached[0] < _BUNDLE_CACHE_TTL):
         return cached[1]
+    is_lfs = rel in _LFS_BUNDLE_PATHS
+    host = _BUNDLE_GITHUB_MEDIA if is_lfs else _BUNDLE_GITHUB_RAW
+    timeout = 120.0 if is_lfs else 15.0
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(f"{_BUNDLE_GITHUB_RAW}/{rel}")
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.get(f"{host}/{rel}")
         if resp.status_code == 200:
             data = resp.content
-            _bundle_bytes_cache[rel] = (now, data)
-            return data
-        logger.warning("[ota] github bundle fetch %s -> HTTP %s", rel, resp.status_code)
+            if _is_lfs_pointer(data):
+                logger.warning("[ota] github fetch for %s returned an LFS pointer, not content", rel)
+            else:
+                _bundle_bytes_cache[rel] = (now, data)
+                return data
+        else:
+            logger.warning("[ota] github bundle fetch %s -> HTTP %s", rel, resp.status_code)
     except Exception:
         logger.warning("[ota] github bundle fetch failed for %s", rel)
     return cached[1] if cached is not None else None

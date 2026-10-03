@@ -33,6 +33,8 @@ _ENSURE_COLUMNS = {
         "kiosk_menu_title": "VARCHAR(255) DEFAULT 'ご用件をお選びください'",
         "kiosk_welcome_qr_guide": "VARCHAR(255) DEFAULT 'ご予約QRをお持ちの方はカメラへかざしてください'",
         "kiosk_welcome_form_label": "VARCHAR(255) DEFAULT 'QRをお持ちでない方はこちら'",
+        # キオスクの既定表示言語("ja"/"en")。来訪者がタッチで切り替えるまでの既定。
+        "kiosk_default_lang": "VARCHAR(8) DEFAULT 'ja'",
         # 来訪者が受付フォームで選べる訪問先部署のリスト(カンマ区切り)。
         "department_list": "TEXT",
         # 審査用デモモード。既存行は FALSE。demo1/demo2 は下でバックフィルして有効化。

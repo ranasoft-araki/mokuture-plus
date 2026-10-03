@@ -62,6 +62,21 @@ async def _purge_loop() -> None:
             log.exception("[voice] purge failed")
 
 
+async def _watch_models() -> None:
+    """OTA は英語モデルを zip のまま配る。zip が届いたら展開する(初回だけ・以後は
+    model_path の存在チェックだけなので軽い)。voice_models/ は _watch_sources の対象外
+    (ソースではないので再起動のトリガーにしない)なので、別の定期チェックで拾う。"""
+    interval = int(settings.get("server.watch_sources_sec")) or 60
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            await asyncio.to_thread(vosk_engine.ensure_models_extracted)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("[voice] model extract check failed")
+
+
 async def _watch_sources() -> None:
     """OTA でソースが変わったら自分で終了する(systemd が起こし直す)。"""
     interval = int(settings.get("server.watch_sources_sec"))
@@ -86,16 +101,25 @@ async def _watch_sources() -> None:
 async def lifespan(app: FastAPI):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+    # OTA は英語モデルを zip のまま配る。起動時にまず展開を試す(届いていればすぐ使える
+    # ようにする。以後は _watch_models が定期的に拾う)。
+    await asyncio.to_thread(vosk_engine.ensure_models_extracted)
+
     ok, detail = vosk_engine.available()
     log.info("[voice] vosk: %s (%s)", "ready" if ok else "unavailable", detail)
+    ok_en, detail_en = vosk_engine.available("en")
+    log.info("[voice] vosk(en): %s (%s)", "ready" if ok_en else "unavailable", detail_en)
     mic_ok, mic_detail = _mic_status()
     log.info("[voice] microphone: %s (%s)", "ready" if mic_ok else "unavailable", mic_detail)
 
     tasks = [
         asyncio.create_task(_purge_loop()),
         asyncio.create_task(_watch_sources()),
+        asyncio.create_task(_watch_models()),
         # モデルの読み込みは数秒かかる。先に温めておき、最初に話しかけた人を待たせない。
-        *([asyncio.create_task(asyncio.to_thread(vosk_engine.warmup))] if ok else []),
+        # 英語モデルは未導入の端末もある(OTAでは配らない・手動導入)ので、無ければ黙って温めない。
+        *([asyncio.create_task(asyncio.to_thread(vosk_engine.warmup, "ja"))] if ok else []),
+        *([asyncio.create_task(asyncio.to_thread(vosk_engine.warmup, "en"))] if ok_en else []),
     ]
     try:
         yield

@@ -103,6 +103,18 @@ DEFAULTS: dict[str, Any] = {
         "model_path": "voice_models/vosk-model-small-ja-0.22",
         "model_name": "vosk-small-ja-0.22",
     },
+    # 英語(表示言語を英語に切り替えた来訪者向け)。既存の `vosk.*`(日本語)とは別の
+    # キーに分ける(`vosk.ja.*` のようにネストしない)。既存の voice_input.yaml / 環境変数
+    # `VOICE_VOSK__MODEL_PATH` 等が日本語モデルを指し続けられるようにするため
+    # (ネストすると `_deep_merge`/`_apply_env` が未知のキーを静かに落とし、現場の上書きが
+    # 消える)。**小型モデル(vosk-model-small-en-us-0.15 / zamia-0.5)は `graph/words.txt` に
+    # 語彙外(OOV)を表す `[unk]` が無く、語彙を絞ると周りの雑談まで高い信頼度で選択肢に
+    # 誤爆する(実測: 無関係な発話が信頼度1.0で選択肢に化けた)。`[unk]` を持つ
+    # vosk-model-en-us-0.22-lgraph(130MB)を既定にする。
+    "vosk_en": {
+        "model_path": "voice_models/vosk-model-en-us-0.22-lgraph",
+        "model_name": "vosk-en-us-0.22-lgraph",
+    },
 
     # ── 画面操作のキーワード(Doc/kiosk-voice-touchless.html 段階2) ─────────
     # 画面が「いま受け付ける言葉」を渡し、その語彙だけで decode する。
@@ -148,6 +160,15 @@ DEFAULTS: dict[str, Any] = {
         # 選択肢になりうる言葉(「ロッカー」)は入れない。言い添えと同じ言葉の選択肢は
         # ほかの言葉に譲るので、「配達…ロッカー」が 2 つに当たっても止まらなくなる。
         "fillers": ["えー", "えっと", "あの", "お 願い し ます", "で", "です", "を", "に"],
+        # 英語の言い添え(上の fillers の英語版)。日本語と同じ理由で要る。
+        # **"the"/"a"/"it"/"to" のような極めてよく使う語は入れない**。実測で
+        # 「what a nice day today isn't it」(無関係な雑談)が「to visit it」と
+        # 誤認識され、to/it が言い添えとして語彙に入っていたせいで前後が [unk] に
+        # ならず embedded 判定(文の一部を捨てる)を素通りして「visit」に誤爆した
+        # (confidence 0.904)。言い添えは「えー/えっと/あの」の英語版にあたる
+        # 間投詞と please だけに絞る。しきい値(min_conf 等)はひとまず日本語と
+        # 同じ既定値を使う。実機・実際の声での実測が済んでいないため(VOICE_COMMAND.md)。
+        "fillers_en": ["um", "uh", "please"],
         # 語彙ごとの認識器をいくつ持っておくか。画面を行き来するたびに作り直さない。
         # キオスクの語彙は十数通り(画面・画面内の段階・アンケートの設問ごと)。
         "cache_size": 16,

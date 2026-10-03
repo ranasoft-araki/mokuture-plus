@@ -25,6 +25,7 @@ ALLOWED_FONTS = {
     "BIZ UDPGothic / System",
 }
 ALLOWED_KIOSK_STYLES = {"default"}
+ALLOWED_KIOSK_LANGS = {"ja", "en"}
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _PHONE_RE = re.compile(r"^[0-9+\-() ]{1,32}$")
 
@@ -69,6 +70,7 @@ class TenantSettingsOut(BaseModel):
     logo_pos_y: float
     logo_width_pct: float
     kiosk_style: str
+    kiosk_default_lang: str
     staff_list: str | None
     purpose_list: str | None
     department_list: str | None
@@ -94,6 +96,7 @@ class PublicTenantSettingsOut(BaseModel):
     logo_pos_y: float
     logo_width_pct: float
     kiosk_style: str
+    kiosk_default_lang: str
     is_suspended: bool
     staff_list: list[str]
     purpose_list: list[str]
@@ -124,6 +127,7 @@ class TenantSettingsPatch(BaseModel):
     logo_pos_y: float | None = None
     logo_width_pct: float | None = None
     kiosk_style: str | None = None
+    kiosk_default_lang: str | None = None
     staff_list: str | None = None
     purpose_list: str | None = None
     department_list: str | None = None
@@ -182,6 +186,7 @@ def _out(tenant: Tenant) -> TenantSettingsOut:
         logo_pos_y=getattr(tenant, "logo_pos_y", 0.04),
         logo_width_pct=getattr(tenant, "logo_width_pct", 8.0),
         kiosk_style=getattr(tenant, "kiosk_style", "default"),
+        kiosk_default_lang=getattr(tenant, "kiosk_default_lang", None) or "ja",
         staff_list=getattr(tenant, "staff_list", None),
         purpose_list=getattr(tenant, "purpose_list", None),
         department_list=getattr(tenant, "department_list", None),
@@ -217,6 +222,7 @@ def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
         logo_pos_y=getattr(tenant, "logo_pos_y", 0.04),
         logo_width_pct=getattr(tenant, "logo_width_pct", 8.0),
         kiosk_style=getattr(tenant, "kiosk_style", "default"),
+        kiosk_default_lang=getattr(tenant, "kiosk_default_lang", None) or "ja",
         is_suspended=getattr(tenant, "is_suspended", False),
         staff_list=staff_list,
         purpose_list=purpose_list,
@@ -352,6 +358,10 @@ async def patch_settings(
         if body.kiosk_style not in ALLOWED_KIOSK_STYLES:
             raise HTTPException(status_code=422, detail=f"kiosk_style not allowed: {body.kiosk_style}")
         tenant.kiosk_style = body.kiosk_style
+    if body.kiosk_default_lang is not None:
+        if body.kiosk_default_lang not in ALLOWED_KIOSK_LANGS:
+            raise HTTPException(status_code=422, detail=f"kiosk_default_lang not allowed: {body.kiosk_default_lang}")
+        tenant.kiosk_default_lang = body.kiosk_default_lang
     # staff_list はここでは書かない。担当者リストの編集は「通知設定」
     # (`PUT /notifications/staff-routes/staff` ほか)に集約した。あちらは削除時に
     # 通知先設定や代理通知先の参照まで片付けるが、この素通し経路はそれをしない。

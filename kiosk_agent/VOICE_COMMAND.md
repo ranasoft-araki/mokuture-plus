@@ -15,6 +15,9 @@
   「〜しますか？ はい／いいえ」の確認を挟む**。**暗証番号の画面ではマイクを開けない**。文字を打つキーボードも声の対象外
 - 使えない端末（マイク未接続・モデル未取得・サービス停止）では「声で操作する」が
   **表示されない**。受付は従来のタッチ操作だけで完了できる
+- **表示言語（日本語／English・下部帯のタッチ切替）に声の言語も追従する**（§12）。
+  発話で言語を自動判定する仕組みは無い。英語の声は**英語の Vosk モデルを端末へ手動導入した
+  ときだけ**使える（OTA では配らない）。未導入の端末は英語表示でも声は使えない（タッチは使える）
 
 > 以前あった「音声で入力」（受付フォームを声で埋める・一文の名乗り）は 2026-09-29 に削除した。
 > whisper.cpp・クラウド中継（AmiVoice）・担当者の読み仮名（staff_readings.yaml）もあわせて削除。
@@ -433,5 +436,104 @@ uv run uvicorn main:app --host 0.0.0.0 --port 8080
 sudo systemctl disable --now mokuture-voice
 sudo rm -f /etc/systemd/system/mokuture-voice.service && sudo systemctl daemon-reload
 ```
+
+---
+
+## 12. 英語対応（表示言語の切替えに声も追従）
+
+キオスク画面の下部帯に「EN／日本語」のタッチ切替えがある（キオスク画面の該当節を参照）。
+**声で「English」「にほんご」と言わせて自動判定する方式は採用していない**
+（相手の言語が分からない来訪者の発話を、どちらの言語のモデルで聞けばいいか決められない
+鶏卵問題になる）。タッチ切替えを正とし、音声はその時点の表示言語に追従するだけ。
+
+### モデル選びで分かったこと
+
+英語の小型 Vosk モデル（`vosk-model-small-en-us-0.15` / `-zamia-0.5`、ともに 40〜50MB）は
+**`graph/words.txt` に語彙外（OOV）を表す `[unk]` が無い**。日本語のモデルはこの `[unk]` を
+持っているので、語彙を絞っても周りの雑談は `[unk]` として捨てられる（§4）。英語の小型モデルには
+その逃げ場が無く、**周りの雑談まで高い信頼度（1.0）で選択肢に化けた**（実測:
+「where did I put the locker key」が全語 conf 1.0 で「locker delivery locker cancel」に）。
+
+`[unk]` を持つ `vosk-model-en-us-0.22-lgraph`（130MB）だけが日本語と同じ動きをした
+（同じ発話が「[unk] locker [unk]」に正しく分かれ、embedded 判定で捨てられた）。
+Raspberry Pi 4（4GB）以上なら容量・メモリともに問題ない大きさなので、これを既定にした
+（`kiosk_agent/scripts/fetch_voice_models.py` の `ASSETS`）。
+
+### 導入（OTA で自動配布・手動も可）
+
+**日本語モデル(50MB)とは違って、英語モデルは OTA でも配る。** Git LFS 管理
+（`.gitattributes` の `voice_models/*.zip`）で `backend/app/api/kiosk.py` の
+`BUNDLE_FILES`・`kiosk_agent/updater.py` の `MANAGED_FILES` に載っている。何もしなくても
+端末の定期チェック（既定60秒おき。`voice/server.py` の `_watch_models`）で zip が届き次第
+自動で展開される。導入直後の端末が英語で使えるようになるまでの流れ:
+
+1. OTA が `voice_models/vosk-model-en-us-0.22-lgraph.zip` を他のファイルと同じ経路で配る
+   （`updater.py` がハッシュ差分を見て取り寄せ、`apply()` で `voice_models/` へ上書き配置）。
+   130MB あるので弱い回線では取り寄せに数分かかることがある(ファイルサイズに応じて
+   タイムアウトを伸ばしてある)。
+2. `voice/vosk_engine.ensure_models_extracted()` が起動時・定期チェック(同じく既定60秒おき)
+   の両方で zip の有無を見て、初回だけ展開する（展開済みなら何もしない・軽い）。
+3. 展開が終われば `vosk_engine.available("en")` が true になり、`GET /voice/status` の
+   `languages.en.available` も true になる。キオスク画面は自前でこれをポーリングしている
+   ので、来訪者が操作しなくても自然に使えるようになる。
+
+**待たずに今すぐ使いたいとき**や、OTA が届く前に動作確認したいときは手動導入もできる:
+
+```bash
+cd ~/mokuture/kiosk_agent
+bash scripts/install_voice.sh --english    # 日本語に加えて英語モデル(130MB)も取得・展開
+sudo systemctl restart mokuture-voice
+curl -s http://127.0.0.1:8181/voice/status | python3 -m json.tool   # languages.en.available を確認
+```
+
+Windows 開発機では `scripts\install_voice_windows.ps1 -English`。
+
+**Git LFS の実体配信の注意**: 本番(Render)は `kiosk_agent/` をビルドコンテキストに含まないため
+GitHub の public raw から取り寄せる(「キオスクOTAが壊れていた」節参照)。ただし
+**LFS 管理ファイルは `raw.githubusercontent.com` だとポインタ文字列(約130バイト)しか返らない**。
+`backend/app/api/kiosk.py` の `_read_bundle_bytes` は `voice_models/*.zip` だけ
+`media.githubusercontent.com`（公開リポジトリの LFS 実体を返す別ホスト）を使い、
+念のためポインタ文字列を検知したら(ローカル・GitHub どちらでも)キャッシュ・配信しない
+ようにしてある(`_is_lfs_pointer`)。新しい LFS 管理ファイルを OTA 対象に追加するときは
+`_LFS_BUNDLE_PATHS` にも追記すること。
+
+### 設定・実装
+
+- 設定は `vosk.*`（日本語・既存のまま）とは別の節 `vosk_en.*`（`voice/defaults.py`）。
+  ネストしていない＝既存の `voice_input.yaml`/`VOICE_VOSK__MODEL_PATH` は変わらず日本語を指す。
+- `vosk_engine.py` の関数はすべて `lang: str = "ja"` を取る（既定は今までどおり日本語）。
+  モデル・認識器・辞書キャッシュは言語ごとに分けて持つ。
+- 数字の語（`command.number_min_conf` が効く語）・同音の言い添え（`_SAME_SOUND`）・フィラー
+  （`command.fillers_en`）は英語専用に用意した。**フィラーに "the"/"a"/"it"/"to" のような
+  極めてよく使う語を入れてはいけない**——実測で、無関係な雑談「what a nice day today
+  isn't it」が「to/it」をフィラーとして認識したせいで前後が `[unk]` にならず、embedded 判定
+  （文の一部を捨てる）を素通りして「visit」に誤爆した（confidence 0.904）。日本語の
+  「えー／えっと／あの」に当たる間投詞と please だけに絞ってある。
+- `POST /voice/session/{id}/command` の body に `lang`（省略時 `ja`）を追加。**セッションには
+  言語を持たせず、1 回の聞き取りごとに渡す**——表示言語の切替えは受付の途中でも起こるので、
+  セッションを張り直さずに言語だけ切り替えられるようにしてある。
+- `GET /voice/status` に `languages: {ja: {...}, en: {...}}` を追加（既存のキーは変えていない）。
+  英語モデル未導入の端末では `languages.en.available` が `false` になり、英語表示でも
+  「声で操作する」の帯を出さない（タッチは使える）。
+- `kiosk.html` の `VOICE_VOCAB` は各項目に `sayEn`/`labelEn` を持つ。表示言語を切り替えると
+  `vcRelang()` が聞き取り中の語彙をその場で英語/日本語へ差し替える（画面は再描画しない
+  =かざす面のカメラ・呼び出し中のポーリング・受付フォームの入力中の値を壊さない）。
+
+### 実測（合成音声・Windows の en-US ボイス）
+
+`scripts/voice_command_eval.py --lang en` で全画面を測った結果（しきい値 0.85）:
+
+| | 当たり | 取りこぼし | 取り違え | 誤爆 |
+|---|---|---|---|---|
+| 計(258件・11画面) | 258/258 | 0 | 0 | 14/308 |
+
+誤爆 14 件はすべて「雑談の文に語彙の単語がそのまま入っている」もの（例:
+「someone said to cancel it」→ やめる、「the meeting is at three」→ 三番）。これは日本語の
+実測（§4）でも同じ種類の誤爆が許容されている（「ちょっと待って」→ つづける 等、
+意味としては通っている）のと同じ扱いでよいと判断した。
+
+**合成音声は人の声でもロビーの音でもない。** 英語のしきい値（`min_conf` 等）は
+ひとまず日本語の既定値を流用している。実機・実際の声での実測はまだ済んでいない
+（日本語と同じく、§7 の手順で測って `command.fillers_en`/`number_min_conf` 等を調整すること）。
 
 画面からは「声で操作する」が消え、従来のタッチ操作だけになる。

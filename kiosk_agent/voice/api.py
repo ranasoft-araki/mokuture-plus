@@ -80,16 +80,19 @@ class CommandBody(BaseModel):
     window_sec: float | None = Field(default=None, ge=1.0, le=30.0)
     # 番号で選ぶ画面(ロッカー)。語彙を絞って外れたら通常の認識で聞き直す。
     fallback: bool = False
+    # この1回の聞き取りの言語。表示言語(タッチ切替)に追従するだけで、発話での
+    # 自動判定はしない。省略時は日本語(旧バージョンのキオスク画面との互換)。
+    lang: str = Field(default="ja", pattern=r"^(ja|en)$")
 
 
-def command_available() -> tuple[bool, str]:
+def command_available(lang: str = "ja") -> tuple[bool, str]:
     """声で操作できるか。語彙を絞れる Vosk のモデルが要る。"""
     if not bool(settings.get("command.enabled")):
         return False, "command.enabled が false"
-    ok, detail = vosk_engine.available()
+    ok, detail = vosk_engine.available(lang)
     if not ok:
         return False, detail
-    if not vosk_engine.grammar_supported():
+    if not vosk_engine.grammar_supported(lang):
         return False, "このモデルは語彙を絞れません(graph/Gr.fst が無い)"
     return True, ""
 
@@ -105,12 +108,24 @@ async def voice_status(request: Request):
     _require_local(request)
     enabled = bool(settings.get("enabled"))
     mic_ok, mic_detail = capture.available()
-    command_ok, command_detail = command_available()
+    command_ok, command_detail = command_available("ja")
+    # 言語ごとの可否(新しいキー)。英語モデルが未導入の端末でも落ちない
+    # (vosk_engine.available が「無い」を返すだけ)。古いキオスク画面はこのキーを
+    # 読まないので、下の既存キー(日本語の可否)は変えずそのまま返す。
+    languages = {}
+    for lang in vosk_engine.LANGS:
+        lang_ok, lang_detail = command_available(lang)
+        languages[lang] = {
+            "available": enabled and mic_ok and lang_ok,
+            "detail": lang_detail,
+            "engine": vosk_engine.describe(lang),
+        }
     return {
         "available": enabled and mic_ok and command_ok,
         "enabled": enabled,
         "microphone": {"available": mic_ok, "detail": mic_detail},
-        "engine": vosk_engine.describe(),
+        "engine": vosk_engine.describe("ja"),
+        "languages": languages,
         "features": {
             # false の端末では画面に「声で操作する」を出さない。
             "command": enabled and mic_ok and command_ok,
@@ -161,14 +176,14 @@ async def voice_command(sid: str, body: CommandBody, request: Request):
     _require_local(request)
     _require_enabled()
     session = _require_session(sid)
-    ok, detail = command_available()
+    ok, detail = command_available(body.lang)
     if not ok:
         raise HTTPException(status_code=409, detail=f"command unavailable: {detail}")
     choices = [(c.id, list(c.phrases)) for c in body.choices]
     try:
         # 前の聞き取りを畳むのを待つことがある(最大 2 秒)ので、イベントループを塞がない。
         await run_in_threadpool(session.listen_command, choices, screen=body.screen,
-                                window_sec=body.window_sec, fallback=body.fallback)
+                                window_sec=body.window_sec, fallback=body.fallback, lang=body.lang)
     except session_mod.Busy:
         raise HTTPException(status_code=409, detail="already listening")
     return session.state()

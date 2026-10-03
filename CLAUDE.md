@@ -318,6 +318,7 @@ mokuture/
 | logo_pos_y | FLOAT | ロゴ Y 位置 (0.0–0.9、画面高比) |
 | logo_width_pct | FLOAT | ロゴ幅 (2.0–30.0、画面幅に対する %) |
 | kiosk_style | VARCHAR(32) | （廃止予定・常に `default`）旧・業種別テーマID。テーマ機能廃止により UI からは選択不可。`ALLOWED_KIOSK_STYLES = {"default"}` |
+| kiosk_default_lang | VARCHAR(8) | キオスクの既定表示言語(`ja`/`en`)。来訪者がタッチで切り替えるまでの既定。`ALLOWED_KIOSK_LANGS = {"ja","en"}`。管理画面「受付設定」で切替 |
 | is_suspended | BOOLEAN | テナント停止フラグ |
 | operator_notes | TEXT | 運営用内部メモ (nullable) |
 | kiosk_phone_number | VARCHAR(32) | 受付応答「電話(対応不可)」時にキオスクへ表示する電話番号 (nullable) |
@@ -491,6 +492,27 @@ mokuture/
 - `kiosk_style` カラムは DB に残存するが UI からは選択不可（`ALLOWED_KIOSK_STYLES = {"default"}`）。
 - `kioskStyles.ts` は `default`（和モダン）1エントリのみ。
 
+### キオスク 日英バイリンガル表示（2026-10-03）
+
+**常に日本語・英語の両方を表示し、タッチでどちらを大きく見せるかを入れ替えるだけ**（非表示にはしない）。
+画面の再描画はしない（かざす面のカメラ・呼び出し中のポーリング・受付フォームの入力中の値を壊すため）。
+
+- `kiosk.html` に `LANG`（既定 `"ja"`）と、常に両言語を描画するヘルパー `bi(ja, en, opts)` がある。
+  生成した `<span class="bi-ja">`/`<span class="bi-en">` の大小・順序は CSS の `html[data-lang]` だけで
+  切り替える(`document.documentElement.dataset.lang`)。`biDefault(value, key, opts)`/`biPurpose(ja, opts)`は
+  管理画面の自由入力文言(待機メッセージ・来訪目的リスト等)用——**既定値のままなら組み込みの英訳を添え、
+  テナントが文言を変えていたら英語行を出さず日本語のみ**にする(完全一致判定。`BI_DEFAULTS`/`BI_PURPOSE_EN`)。
+  部署リストは既定が無い(テナント固有の組織名)ので常に日本語のみ。
+- 下部帯(`bottomBandHtml`)に「EN⇄日本語」トグルを常設。下部帯を出す画面(受付フォーム・
+  ロッカー暗証番号含む)なら出る。下部帯を使わない画面(待機・呼び出し中・結果・完了・
+  アンケート・キオスク設定。角の「やめる」だけの画面)には元から出ない。
+  押すと `LANG` を反転するだけで、`vcRelang()`(後述)が聞き取り中の音声語彙も合わせて差し替える
+  (切り替えた先の言語で声が使えない端末では、聞き取り中でもそこで声を抜ける)。
+  来訪者ごとに `go("idle")` でテナント既定(`ST.kiosk_default_lang`)へリセットする。
+- 既定言語は管理画面「受付設定」で設定(`tenants.kiosk_default_lang`・`backend/app/api/settings.py`の
+  `ALLOWED_KIOSK_LANGS = {"ja","en"}`)。`GET /settings/public/{slug}`経由でキオスクへ渡る。
+- 対象は主要な来客導線一式(待機〜アンケートの全画面・共通の帯)。音声認識の英語対応は次節。
+
 ### 端末セットアップ（承認フロー・PIN 廃止）
 
 **PIN は廃止。** キオスク端末は接続時に自己登録し、管理画面での承認で起動する。
@@ -544,6 +566,8 @@ mokuture/
 
 キオスク端末(agent)は `updater.py` で backend の `GET /kiosk/bundle/manifest`(version＋各ファイル `sha256(bytes)[:16]`)を定期ポーリングし、version が変われば変更ファイルだけを `GET /kiosk/bundle/file/{path}` からDL→idle時に適用する。対象は `BUNDLE_FILES`(kiosk.html/**analytics.js**/tap.mp3/main.py/updater.py/gpio.py/sync.py/state.py/config.py/locker_store.py/**analytics.py**/**sysinfo.py**/**watchdog.py**＋`card/**.py` 17ファイル)。
 **`main.py` が import する Python は必ず同じリストに入れること**（main.py だけ新しくなると import 失敗でエージェントが起動しなくなる）。デバイス側 `_local_hash` と backend の hash は同一算法(`sha256(bytes)[:16]`)＝一致すれば再DLしない。
+
+**バイナリ・大きいファイルも配れる**（声の英語モデル、130MB・`voice_models/vosk-model-en-us-0.22-lgraph.zip`、Git LFS 管理の唯一の例）。ファイルサイズに応じて端末側のDLタイムアウトを伸ばし(`updater._download`)、適用(`apply()`)は一時ファイル経由 + `os.replace`(同じディレクトリ内なら atomic)にしてある——直接上書きだと、適用中に電源が落ちる・プロセスが落ちると壊れたファイルが残る。大きいファイルほど適用にかかる時間が延びて途中で切れる確率も上がるため。**Git LFS 管理ファイルは `raw.githubusercontent.com` だとポインタ文字列(約130バイト)しか返らない**ので、`_read_bundle_bytes` は該当パス(`_LFS_BUNDLE_PATHS`)だけ `media.githubusercontent.com` 経由にし、ポインタ文字列を検知したら(ローカル・GitHubどちらでも)配信・キャッシュしない(`_is_lfs_pointer`)。新しい LFS 管理ファイルを OTA 対象に追加するときは、`BUNDLE_FILES`/`MANAGED_FILES` に足すのと同時に `_LFS_BUNDLE_PATHS` にも追記すること。
 
 - **配信元は「ローカルの kiosk_agent が有ればそれ、無ければ GitHub public raw(master)」**(`backend/app/api/kiosk.py` の `_read_bundle_bytes`/`_collect_bundle`)。**本番 Render のイメージはビルドコンテキストが `backend/` のみで `kiosk_agent/` を含まないため**、以前は配信元パスが存在せず manifest が空(`files:[]`)＝**全キオスクにOTAが一切届いていなかった**。対策として、ローカルに無い場合は公開リポジトリ `raw.githubusercontent.com/ranasoft-araki/mokuture-plus/master/kiosk_agent/<rel>` から取得(120s バイトキャッシュ)。これで **Dockerfile/コンテキストを触らず**、push→backend再デプロイ→GitHub master の最新 kiosk.html を配信、で更新が実機に届く。env `KIOSK_BUNDLE_DIR`/`KIOSK_BUNDLE_GITHUB_RAW` で上書き可。
 - **GitHub からの取り寄せは「Render がデプロイしたコミット」に固定**(`_BUNDLE_REF` = env `RENDER_GIT_COMMIT`、`KIOSK_BUNDLE_REF` で上書き、どちらも無ければ従来どおり master)。バックエンドとキオスクのコードが同じコミットで揃い、中身が不変なのでバイトはプロセス存続中ずっと再利用する。manifest には **`source`** を載せる:
@@ -650,6 +674,18 @@ mokuture/
 自動で入ったときは開始音を鳴らさず、分析セッションは最初に声で操作した時点(`vcFire`)で始める。
 **端末内で完結**し、クラウド音声認識API・Web Speech API・外部生成AIは使わない。詳細は
 [`kiosk_agent/VOICE_COMMAND.md`](kiosk_agent/VOICE_COMMAND.md)。
+
+**英語対応(2026-10-03)**: 表示言語の切替え(上の「キオスク 日英バイリンガル表示」節)に声も追従する。
+発話での言語自動判定はしない(タッチが正)。`vosk_engine.py` の関数は全部 `lang="ja"` 既定の引数を取り、
+英語は別設定節 `vosk_en.*`(既存の `vosk.*` はネストせず触らない)。**英語の小型 Vosk モデルは
+語彙外(OOV)を表す `[unk]` が無く、語彙を絞ると周りの雑談まで信頼度1.0で誤爆する**実測があり、
+`[unk]` を持つ `vosk-model-en-us-0.22-lgraph`(130MB)を既定にした。**日本語モデルとは違いこの
+英語モデルは OTA 配信対象**(Git LFS 管理・`backend`の`BUNDLE_FILES`/`updater.py`の`MANAGED_FILES`)。
+zip のまま配り、`voice/server.py` の `_watch_models` が端末側で初回だけ展開する(手動導入も
+`scripts/install_voice.sh --english` / Windows は `install_voice_windows.ps1 -English` で可能)。
+LFS 管理ファイルは `raw.githubusercontent.com` だとポインタ文字列しか返らないため、
+`_read_bundle_bytes` は該当パスだけ `media.githubusercontent.com` 経由にし、ポインタ検知
+(`_is_lfs_pointer`)で誤って配信・キャッシュしないようにしてある。詳細・実測は VOICE_COMMAND.md §12。
 **以前の「音声で入力」(受付フォームを声で埋める・一文の名乗り・whisper.cpp・AmiVoice 中継・staff_readings.yaml)
 は 2026-09-29 に利用者の指示で削除した。** テナントの `voice_cloud_enabled/opt_out` 列だけは DB 互換のため
 モデルに定義を残してある(読み書きするコードは無い)。

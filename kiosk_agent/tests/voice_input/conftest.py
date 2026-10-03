@@ -12,7 +12,7 @@ import types
 import pytest
 
 from voice import capture, session as session_mod, settings, vad, vosk_engine
-from voice_fakes import LEXICON, FakeRecognizer
+from voice_fakes import LEXICON, LEXICON_EN, FakeRecognizer
 
 
 @pytest.fixture(autouse=True)
@@ -81,3 +81,20 @@ def fake_vosk(monkeypatch, tmp_path):
     FakeRecognizer.words = []
     FakeRecognizer.free_words = []
     return made
+
+
+@pytest.fixture
+def fake_vosk_en(fake_vosk, tmp_path):
+    """英語版(`vosk_en.*`)のモデルも用意する。fake_vosk が差し替えた vosk モジュールを使い回す。
+
+    語彙は英語の LEXICON_EN(小文字)。fake_vosk と同じ認識器一覧(made)を共有するので、
+    `fake_vosk` を使った既存のアサーションはそのまま効く。
+    """
+    model_dir = tmp_path / "vosk-model-en"
+    graph = model_dir / "graph"
+    graph.mkdir(parents=True)
+    (graph / "words.txt").write_text("\n".join(f"{w} {i}" for i, w in enumerate(LEXICON_EN)), encoding="utf-8")
+    (graph / "Gr.fst").write_bytes(b"")
+    (graph / "HCLr.fst").write_bytes(b"")
+    settings.cfg()["vosk_en"]["model_path"] = str(model_dir)
+    return fake_vosk

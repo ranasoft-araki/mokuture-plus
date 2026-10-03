@@ -100,8 +100,6 @@ MANAGED_FILES = [
     # 音声サービスは新しいコードにならないため、音声サービス側が自分のソースの
     # ハッシュ変化を検知して自ら終了し、systemd に起こし直してもらう
     # (voice/server.py の _watch_sources)。
-    # Vosk モデルは OTA では配れない(サイズの
-    # 都合)。それは scripts/install_voice.sh の担当。
     "voice/__init__.py",
     "voice/api.py",
     "voice/capture.py",
@@ -113,6 +111,13 @@ MANAGED_FILES = [
     "voice/types.py",
     "voice/vad.py",
     "voice/vosk_engine.py",
+    # 英語の Vosk モデル(130MB・声で操作するの英語対応)。**唯一 OTA で配るモデルファイル**
+    # (日本語モデル(50MB)は従来どおり install_voice.sh の担当=サイズと、現場で既に
+    # 入っている版を無言で上書きしたくないため)。英語は新規機能で未導入の端末が大半な
+    # ので、OTA で自動的に届けて手作業のインストールを不要にする。Git LFS 管理
+    # (.gitattributes の voice_models/*.zip)。backend 側は zip のまま配り、展開は
+    # 端末の voice/server.py 起動時(fetch_voice_models.extract_vosk)に任せる。
+    "voice_models/vosk-model-en-us-0.22-lgraph.zip",
     # 端末ごとに現場で調整する設定(voice_input.yaml / staff_readings.yaml)は
     # 上書きしたくないので配信対象に入れない。
 ]
@@ -342,15 +347,20 @@ class BundleUpdater:
     async def _download(self, manifest: dict, token: str, rels: list[str]) -> None:
         STAGING_DIR.mkdir(parents=True, exist_ok=True)
         changed: list[str] = []
+        # ファイルごとの既定 60 秒は声の英語モデル(130MB)には短すぎる(弱い回線だと
+        # 間に合わない)。manifest の size からおおよその下限を見積もる(1Mbps 想定=
+        # 1秒あたり約125KB。実際の回線はもっと速いことが多いので、これは余裕を持った下限)。
+        sizes = {f["path"]: f.get("size", 0) for f in (manifest.get("files") or [])}
 
         async with httpx.AsyncClient() as client:
             for rel in rels:
                 log.info(f"[updater] downloading {rel}")
+                timeout = max(60, int(sizes.get(rel, 0) / 125_000) + 30)
                 try:
                     r = await client.get(
                         f"{settings.remote_api_url}/kiosk/bundle/file/{rel}",
                         headers={"X-Kiosk-Token": token},
-                        timeout=60,
+                        timeout=timeout,
                     )
                     r.raise_for_status()
                 except Exception as e:
@@ -387,7 +397,13 @@ class BundleUpdater:
                 if not src.exists():
                     continue
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst)
+                # 一時ファイル経由 + os.replace (同じディレクトリ内なら atomic)。
+                # 直接 copy2 で上書きしていると、適用中に電源が落ちる・プロセスが
+                # 落ちると壊れた(不完全な)ファイルが残る。英語の声モデル(130MB)は
+                # コピーにかかる時間がそれだけ長く、途中で切れる確率も上がる。
+                tmp = dst.with_name(dst.name + ".part")
+                shutil.copy2(src, tmp)
+                os.replace(tmp, dst)
                 log.info(f"[updater] applied {rel}")
                 if Path(rel).name in RESTART_FILES or Path(rel).parts[0] in _RESTART_DIRS:
                     needs_restart = True

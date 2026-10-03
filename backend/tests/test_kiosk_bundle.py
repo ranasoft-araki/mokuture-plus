@@ -61,6 +61,12 @@ def _pin(monkeypatch, ref: str, pinned: bool):
         kiosk, "_BUNDLE_GITHUB_RAW",
         f"https://raw.githubusercontent.com/ranasoft-araki/mokuture-plus/{ref}/kiosk_agent",
     )
+    # LFS 管理ファイル(英語の声モデル)はここ経由で取る。raw と同じ ref に揃えないと
+    # テストの「取り寄せ先は全部 SHA を含む」判定とズレる。
+    monkeypatch.setattr(
+        kiosk, "_BUNDLE_GITHUB_MEDIA",
+        f"https://media.githubusercontent.com/media/ranasoft-araki/mokuture-plus/{ref}/kiosk_agent",
+    )
 
 
 async def test_コミットに固定した配信は版番号とコミット名を名乗り取り寄せは一度だけ(client, kiosk_headers, github, monkeypatch):
@@ -97,6 +103,62 @@ async def test_GitHubのAPIが通らなくても版番号は出る(client, kiosk
     m = (await client.get("/api/kiosk/bundle/manifest", headers=kiosk_headers)).json()
     assert m["source"]["subject"] == "声の操作: 直す"
     assert m["source"]["label"] == _today_label(1)
+
+
+async def test_LFS管理ファイルはmediaホストから取り英語モデル以外はrawを使う(monkeypatch, tmp_path):
+    """.gitattributes で LFS 指定した voice_models/*.zip は raw.githubusercontent.com だと
+    ポインタ文字列しか返らない。media.githubusercontent.com 経由にして、実体だけを採用する。"""
+    _pin(monkeypatch, SHA, True)
+    monkeypatch.setattr(kiosk, "_KIOSK_AGENT_DIR", tmp_path / "no-kiosk-agent")
+    monkeypatch.setattr(kiosk, "_bundle_bytes_cache", {})
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.host == "raw.githubusercontent.com":
+            # LFS ファイルだけ raw がポインタを返す(実機で起きる症状の再現)。
+            if "voice_models" in request.url.path:
+                return httpx.Response(200, content=kiosk._LFS_POINTER_MAGIC + b" ...")
+            return httpx.Response(200, content=b"code:" + request.url.path.encode())
+        if request.url.host == "media.githubusercontent.com":
+            return httpx.Response(200, content=b"MODEL-ZIP-BYTES")
+        return httpx.Response(404)
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(kiosk, "httpx", types.SimpleNamespace(
+        AsyncClient=lambda *a, **k: real_client(transport=httpx.MockTransport(handler)),
+    ))
+
+    code_bytes = await kiosk._read_bundle_bytes("main.py")
+    model_bytes = await kiosk._read_bundle_bytes("voice_models/vosk-model-en-us-0.22-lgraph.zip")
+
+    assert code_bytes == b"code:/ranasoft-araki/mokuture-plus/" + SHA.encode() + b"/kiosk_agent/main.py"
+    assert model_bytes == b"MODEL-ZIP-BYTES"  # raw のポインタ(約130バイト)ではなく media の実体
+    assert any(u.startswith("https://media.githubusercontent.com/") for u in seen)
+    assert not any(kiosk._LFS_POINTER_MAGIC in u.encode() for u in seen)  # ポインタを別の場所で混同していない
+
+
+async def test_ローカルのLFSポインタも実体として採用しない(monkeypatch, tmp_path):
+    """git lfs pull を忘れたチェックアウト(ローカルにポインタのまま置かれている)でも、
+    その場でキャッシュせずフォールバックする。"""
+    _pin(monkeypatch, SHA, True)
+    agent_dir = tmp_path / "kiosk_agent"
+    model_rel = "voice_models/vosk-model-en-us-0.22-lgraph.zip"
+    (agent_dir / "voice_models").mkdir(parents=True)
+    (agent_dir / model_rel).write_bytes(kiosk._LFS_POINTER_MAGIC + b" oid sha256:abc\nsize 130557655\n")
+    monkeypatch.setattr(kiosk, "_KIOSK_AGENT_DIR", agent_dir)
+    monkeypatch.setattr(kiosk, "_bundle_bytes_cache", {})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"REAL-MODEL-BYTES")
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(kiosk, "httpx", types.SimpleNamespace(
+        AsyncClient=lambda *a, **k: real_client(transport=httpx.MockTransport(handler)),
+    ))
+
+    data = await kiosk._read_bundle_bytes(model_rel)
+    assert data == b"REAL-MODEL-BYTES"  # ローカルのポインタではなく GitHub の実体を使う
 
 
 async def test_master追従でも中身が変わるたびに番号が進む(client, kiosk_headers, github, monkeypatch):

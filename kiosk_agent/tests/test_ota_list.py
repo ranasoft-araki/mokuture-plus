@@ -111,10 +111,14 @@ def test_音声モジュールが配信対象に入っている():
     assert not missing, f"OTA に入っていない音声モジュール: {sorted(missing)}"
 
 
-def test_音声のモデルと端末ごとの設定は配信対象に入れない():
-    """モデルは大きすぎる。設定は現場で調整したものを上書きしたくない。"""
+def test_日本語モデルと端末ごとの設定は配信対象に入れない():
+    """日本語モデルは導入時にだけ置く(install_voice.sh の担当・50MB)。設定は現場で
+    調整したものを上書きしたくない。英語モデル(1件だけ・130MB)は例外的に OTA 配信する
+    (下の test で許可リストに入っているものだけに絞っている)。"""
+    allowed_voice_models = {"voice_models/vosk-model-en-us-0.22-lgraph.zip"}
     for rel in _managed():
-        assert not rel.startswith("voice_models/"), rel
+        if rel.startswith("voice_models/"):
+            assert rel in allowed_voice_models, rel
         assert not rel.startswith("vendor/"), rel
         assert rel != "voice_input.yaml", rel
         assert rel != "staff_readings.yaml", rel

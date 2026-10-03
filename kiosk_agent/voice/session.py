@@ -67,12 +67,16 @@ class Session:
 
     # ── 操作 ──────────────────────────────────────────────────────────────
     def listen_command(self, choices: list[tuple[str, list[str]]], *, screen: str,
-                       window_sec: float | None = None, fallback: bool = False) -> None:
+                       window_sec: float | None = None, fallback: bool = False,
+                       lang: str = "ja") -> None:
         """画面の選択肢のどれが言われたかを 1 回だけ聞く。すぐ返り、進行は state() で見る。
 
         画面が切り替わったら、前の画面の語彙で聞いている途中でも**畳んでから**開け直す
         (前の語彙のまま当たると、いま見えていない画面の操作が走る)。
         fallback=True は番号で選ぶ画面(ロッカー)。vosk_engine.recognize_command を参照。
+        lang は**この1回の聞き取りだけ**の言語(表示言語の切替えに追従するだけで、セッション
+        自体は言語を持たない。タッチで言語を切り替えた直後でもセッションを張り直さずに
+        済む)。
         """
         with self._lock:
             worker = self._worker if self.busy() else None
@@ -94,7 +98,7 @@ class Session:
             self.command = None
             self.touch()
             self._worker = threading.Thread(
-                target=self._run_command, args=(list(choices), screen, window_sec, fallback),
+                target=self._run_command, args=(list(choices), screen, window_sec, fallback, lang),
                 name="voice-command", daemon=True,
             )
             self._worker.start()
@@ -112,14 +116,14 @@ class Session:
 
     # ── 本体 ──────────────────────────────────────────────────────────────
     def _run_command(self, choices: list[tuple[str, list[str]]], screen: str,
-                     window_sec: float | None, fallback: bool) -> None:
+                     window_sec: float | None, fallback: bool, lang: str = "ja") -> None:
         """キーワード 1 回ぶん。録って、画面の語彙だけで decode し、選択肢を決める。
 
         **話しかけられなかった窓は記録しない。** 画面が選択を待っている間は窓を開け
         直し続けるので、no_speech を数えると実験ログが「誰も話していない」で埋まる。
         """
         ccfg = settings.get("command") or {}
-        model = vosk_engine.model_name()
+        model = vosk_engine.model_name(lang)
         screen_id = f"command-{screen}"
         seg = None
         try:
@@ -166,7 +170,7 @@ class Session:
                     self.phase = "cancelled"
                     return
                 try:
-                    match = vosk_engine.recognize_command(seg, choices, fallback=fallback)
+                    match = vosk_engine.recognize_command(seg, choices, lang=lang, fallback=fallback)
                 except vosk_engine.EngineUnavailable as e:
                     self._fail("engine_unavailable", screen_id, model, str(e))
                     return

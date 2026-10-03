@@ -375,7 +375,7 @@ export const api = {
     kiosk_menu_title?: string; kiosk_welcome_qr_guide?: string; kiosk_welcome_form_label?: string;
     kiosk_idle_timeout_sec?: number; kiosk_complete_timeout_sec?: number;
     logo_pos_x?: number; logo_pos_y?: number; logo_width_pct?: number;
-    kiosk_style?: string; staff_list?: string | null; purpose_list?: string | null;
+    kiosk_style?: string; kiosk_default_lang?: string; staff_list?: string | null; purpose_list?: string | null;
     department_list?: string | null;
     kiosk_phone_number?: string | null; inquiry_form_url?: string | null;
   }) =>
@@ -1053,6 +1053,7 @@ export interface TenantSettings {
   logo_pos_y: number;
   logo_width_pct: number;
   kiosk_style: string;
+  kiosk_default_lang: string;
   staff_list?: string | null;
   purpose_list?: string | null;
   department_list?: string | null;
@@ -1089,6 +1090,7 @@ export interface PublicTenantSettings {
   logo_pos_y: number;
   logo_width_pct: number;
   kiosk_style: string;
+  kiosk_default_lang: string;
   is_suspended: boolean;
   staff_list?: string[];
   purpose_list?: string[];

@@ -63,6 +63,7 @@ kiosk_agent/voice_input.yaml
 # Vosk モデルの展開先(zip を fetch_voice_models.py --extract で開いたもの)。
 # リポジトリに入っているのは zip のほう。
 kiosk_agent/voice_models/vosk-model-small-ja-0.22/
+kiosk_agent/voice_models/vosk-model-en-us-0.22-lgraph/
 
 # 声で操作するの匿名メトリクス(端末内にだけ置く。既定は ~/.mokuture-voice/)
 kiosk_agent/**/metrics.jsonl*

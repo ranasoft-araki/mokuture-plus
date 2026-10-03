@@ -54,6 +54,7 @@ export default function KioskSettingsPage() {
   const [staffListText, setStaffListText] = useState("");
   const [purposeListText, setPurposeListText] = useState("");
   const [departmentListText, setDepartmentListText] = useState("");
+  const [kioskDefaultLang, setKioskDefaultLang] = useState("ja");
 
   // ── ロゴ ──
   const [brandColor, setBrandColor] = useState("#4a7c4e");
@@ -84,6 +85,7 @@ export default function KioskSettingsPage() {
     setKioskCompleteTimeout(String(s.kiosk_complete_timeout_sec));
     setKioskPhone(s.kiosk_phone_number ?? "");
     setInquiryFormUrl(s.inquiry_form_url ?? "");
+    setKioskDefaultLang(s.kiosk_default_lang || "ja");
     setBrandColor(s.brand_color || "#4a7c4e");
     setLogoPosX(s.logo_pos_x);
     setLogoPosY(s.logo_pos_y);
@@ -122,6 +124,7 @@ export default function KioskSettingsPage() {
         kiosk_complete_timeout_sec: Number(kioskCompleteTimeout) || 10,
         kiosk_phone_number: kioskPhone.trim() || null,
         inquiry_form_url: inquiryFormUrl.trim() || null,
+        kiosk_default_lang: kioskDefaultLang,
         logo_pos_x: logoPosX,
         logo_pos_y: logoPosY,
         logo_width_pct: logoWidthPct,
@@ -322,6 +325,30 @@ export default function KioskSettingsPage() {
           <MkSectionTitle title="部署リスト" subtitle="受付フォームで訪問先の部署をドロップダウンから選択できるようにします" />
           <Field label="部署名" hint="1行ずつ入力。空の場合は受付フォームに部署欄を表示しません">
             <Textarea value={departmentListText} onChange={setDepartmentListText} rows={5} placeholder={"営業部\n総務部\n開発部\n製造部"} />
+          </Field>
+        </MkCard>
+
+        <MkCard>
+          <MkSectionTitle title="既定の表示言語" subtitle="来訪者がタッチで切り替えるまで、キオスクで大きく表示する言語です（日本語・英語は常にどちらも併記され、選んだ言語が大きく表示されます）" />
+          <Field label="既定言語">
+            <div style={{ display: "flex", gap: 8 }}>
+              {([["ja", "日本語"], ["en", "English"]] as const).map(([v, label]) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setKioskDefaultLang(v)}
+                  style={{
+                    flex: 1, padding: "10px 14px", borderRadius: 7, cursor: "pointer",
+                    border: "1px solid", fontSize: 13, fontWeight: kioskDefaultLang === v ? 600 : 400,
+                    background: kioskDefaultLang === v ? "#1d1a15" : "#fffefb",
+                    color: kioskDefaultLang === v ? "#fffefb" : "#6b6559",
+                    borderColor: kioskDefaultLang === v ? "#1d1a15" : "#d8d3c7",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </Field>
         </MkCard>
       </div>

@@ -41,6 +41,9 @@ class Tenant(Base):
     # Kiosk design pattern selection
     kiosk_style: Mapped[str] = mapped_column(String(32), default="default")
 
+    # Kiosk default display language ("ja"/"en"). 来訪者がタッチで切り替えるまでの既定言語。
+    kiosk_default_lang: Mapped[str] = mapped_column(String(8), default="ja")
+
     # Suspension flag — set by operator to block kiosk access
     is_suspended: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
