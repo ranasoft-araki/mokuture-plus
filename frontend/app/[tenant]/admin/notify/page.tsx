@@ -385,6 +385,97 @@ function testBtnStyle(busy: boolean): React.CSSProperties {
   };
 }
 
+/** Chatwork のルーム選択。手入力（数字ID）とAPIから取った一覧からの選択を両方許す
+ * （一覧取得が失敗してもIDが分かっていれば手入力で設定できるようにする）。
+ * `apiTokenDraft` は今入力中の(まだ保存していない)トークン。空なら保存済みの共通
+ * トークンで取得する（issue #1 追記分：「ルーム一覧を取得して選択する形式」）。 */
+function ChatworkRoomPicker({
+  authToken, apiTokenDraft = "", connected, disabled = false, value, onChange, placeholder,
+}: {
+  authToken: string;
+  apiTokenDraft?: string;
+  connected: boolean;
+  disabled?: boolean;
+  value: string;
+  onChange: (roomId: string, roomName: string) => void;
+  placeholder?: string;
+}) {
+  const [rooms, setRooms] = useState<{ room_id: string; name: string; type: string }[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const canFetch = connected || apiTokenDraft.trim() !== "";
+
+  const load = async () => {
+    if (!canFetch) return;
+    setLoading(true);
+    setError("");
+    try {
+      const res = await api.getChatworkRooms(authToken, apiTokenDraft.trim());
+      setRooms(res.rooms);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "ルーム一覧の取得に失敗しました");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (rooms === null) {
+    return (
+      <div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <TextInput
+              placeholder={disabled ? "Chatwork未連携" : placeholder}
+              mono
+              value={value}
+              onChange={(v) => onChange(v.replace(/[^0-9]/g, ""), "")}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={load}
+            disabled={disabled || !canFetch || loading}
+            style={testBtnStyle(loading || disabled || !canFetch)}
+          >
+            {loading ? "取得中…" : "ルームを選択"}
+          </button>
+        </div>
+        {error && <div style={{ fontSize: 11, color: "#a84238", marginTop: 4 }}>{error}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(e) => {
+          const r = rooms.find((x) => x.room_id === e.target.value);
+          onChange(e.target.value, r?.name ?? "");
+        }}
+        style={selectStyle}
+      >
+        <option value="">指定しない</option>
+        {value && !rooms.some((r) => r.room_id === value) && (
+          <option value={value}>{value}</option>
+        )}
+        {rooms.map((r) => (
+          <option key={r.room_id} value={r.room_id}>{r.type === "direct" ? "DM・" : ""}{r.name}</option>
+        ))}
+      </select>
+      <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
+        <button type="button" onClick={load} disabled={loading} style={{ fontSize: 11, border: "none", background: "transparent", color: "#6b6559", cursor: "pointer", padding: 0 }}>
+          {loading ? "更新中…" : "再読み込み"}
+        </button>
+        <button type="button" onClick={() => setRooms(null)} style={{ fontSize: 11, border: "none", background: "transparent", color: "#6b6559", cursor: "pointer", padding: 0 }}>
+          数字で入力する
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function channelLabel(channel: string): string {
   return channel === "slack" ? "Slack" : channel === "email" ? "メール" : "Webhook";
 }
@@ -395,8 +486,12 @@ function formatEscalate(sec: number): string {
 
 type RouteDraft = {
   slack_channel_id: string;
+  /** DM先のSlackユーザーID（channel_idと排他。指定時はchannel_idを無視する）。 */
+  slack_user_id: string;
+  slack_display_name: string;
   /** Chatwork のルーム ID。APIトークンはテナント共通のものを使い回す。 */
   chatwork_room_id: string;
+  chatwork_room_name: string;
   /** プッシュを届ける管理ユーザー（""=共通の購読へ）。 */
   push_user_id: string;
   email: string;
@@ -410,7 +505,10 @@ type RouteDraft = {
 function draftFrom(route: StaffNotificationRoute | undefined, defaultSec: number): RouteDraft {
   return {
     slack_channel_id: route?.slack_channel_id ?? "",
+    slack_user_id: "",
+    slack_display_name: "",
     chatwork_room_id: route?.chatwork_room_id ?? "",
+    chatwork_room_name: route?.chatwork_room_name ?? "",
     push_user_id: route?.push_user_id ?? "",
     email: route?.email ?? "",
     webhook_url: null,
@@ -429,7 +527,7 @@ function routeSummary(
   if (route.slack_channel_name || route.slack_channel_id) {
     parts.push(`Slack ${route.slack_channel_name || route.slack_channel_id}`);
   }
-  if (route.chatwork_room_id) parts.push(`Chatwork ルーム${route.chatwork_room_id}`);
+  if (route.chatwork_room_id) parts.push(`Chatwork ${route.chatwork_room_name || `ルーム${route.chatwork_room_id}`}`);
   if (route.email) parts.push(`メール ${route.email}`);
   if (route.webhook_configured) parts.push("Webhook");
   if (route.push_user_id) {
@@ -581,7 +679,7 @@ function StaffMasterEditor({
   );
 }
 
-function StaffRoutesPanel({ authToken }: { authToken: string }) {
+function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; refreshSignal: number }) {
   const [data, setData] = useState<StaffNotificationRoutesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -591,6 +689,7 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
   const [testing, setTesting] = useState("");
   const [testResult, setTestResult] = useState<{ staff: string; result: StaffRouteTestResult } | null>(null);
   const [channels, setChannels] = useState<{ id: string; name: string; is_private: boolean }[] | null>(null);
+  const [slackUsers, setSlackUsers] = useState<{ id: string; name: string }[] | null>(null);
   // 解除は取り消せないので2段階にする（Slack連携解除と同じ方式。JSダイアログは使わない）。
   const [confirmClear, setConfirmClear] = useState<string | null>(null);
 
@@ -610,7 +709,17 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
 
   useEffect(() => { reload(); }, [reload]);
 
-  // チャンネル一覧は編集を開いた時にだけ取りに行く（Slack API の往復を無駄に増やさない）。
+  // 上の「Chatwork」でトークンを保存したり「Slackに追加」の連携を解除したりしても、
+  // ここは初回読み込み時のデータを持ったまま変わらない（別コンポーネント・別フェッチ）。
+  // 「連携したのに未連携のまま」に見える食い違いを防ぐため、親から合図を受けて読み直す
+  // （refreshSignal は親が持つ単調増加カウンタ。0=初回マウントなので無視する）。
+  useEffect(() => {
+    if (refreshSignal === 0) return;
+    reload(true);
+  }, [refreshSignal, reload]);
+
+  // チャンネル一覧・メンバー一覧は編集を開いた時にだけ取りに行く（Slack API の往復を
+  // 無駄に増やさない）。メンバー一覧はDM先の選択肢(issue #1追記分)。
   const openEditor = async (staff: string) => {
     const route = data?.routes.find((r) => r.staff_name === staff);
     setDraft(draftFrom(route, data?.default_escalate_sec ?? 60));
@@ -618,12 +727,20 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
     setTestResult(null);
     setConfirmClear(null);
     setError("");
-    if (channels === null && data?.slack.bot_connected) {
-      try {
-        const res = await api.getSlackChannels(authToken);
-        setChannels(res.channels);
-      } catch {
-        setChannels([]); // 取得できなくても既存の選択は保持したまま編集を続けられる
+    if (data?.slack.bot_connected) {
+      if (channels === null) {
+        try {
+          setChannels((await api.getSlackChannels(authToken)).channels);
+        } catch {
+          setChannels([]); // 取得できなくても既存の選択は保持したまま編集を続けられる
+        }
+      }
+      if (slackUsers === null) {
+        try {
+          setSlackUsers((await api.getSlackUsers(authToken)).users);
+        } catch {
+          setSlackUsers([]); // 旧スコープのトークンは失敗する。DM以外の編集は続けられる
+        }
       }
     }
   };
@@ -745,35 +862,58 @@ function StaffRoutesPanel({ authToken }: { authToken: string }) {
               {isEditing && draft && (
                 <div style={{ borderTop: "1px solid #efece5", padding: "16px 14px", background: "#fdfcf9" }}>
                   <div className="adm-cols-2">
-                    <Field label="Slackチャンネル" hint={data.slack.bot_connected ? "この担当者宛の受付をこのチャンネルへ送ります" : "Slack連携後に選択できます"}>
+                    <Field label="Slackチャンネル / DM" hint={data.slack.bot_connected ? "この担当者宛の受付をこのチャンネル、または個人あてのDMへ送ります" : "Slack連携後に選択できます"}>
                       <select
-                        value={draft.slack_channel_id}
+                        value={draft.slack_user_id ? `user:${draft.slack_user_id}` : draft.slack_channel_id}
                         disabled={!data.slack.bot_connected}
-                        onChange={(e) => setDraft({ ...draft, slack_channel_id: e.target.value })}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v.startsWith("user:")) {
+                            const id = v.slice(5);
+                            const u = (slackUsers ?? []).find((x) => x.id === id);
+                            setDraft({ ...draft, slack_channel_id: "", slack_user_id: id, slack_display_name: u?.name ?? "" });
+                          } else {
+                            setDraft({ ...draft, slack_channel_id: v, slack_user_id: "", slack_display_name: "" });
+                          }
+                        }}
                         style={selectStyle}
                       >
                         <option value="">送らない</option>
-                        {draft.slack_channel_id && !(channels ?? []).some((c) => c.id === draft.slack_channel_id) && (
+                        {draft.slack_channel_id && !draft.slack_user_id && !(channels ?? []).some((c) => c.id === draft.slack_channel_id) && (
                           <option value={draft.slack_channel_id}>{route?.slack_channel_name || draft.slack_channel_id}</option>
                         )}
-                        {(channels ?? []).map((c) => (
-                          <option key={c.id} value={c.id}>{c.is_private ? "🔒 " : "# "}{c.name}</option>
-                        ))}
+                        <optgroup label="チャンネル">
+                          {(channels ?? []).map((c) => (
+                            <option key={c.id} value={c.id}>{c.is_private ? "🔒 " : "# "}{c.name}</option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="ダイレクトメッセージ（個人）">
+                          {(slackUsers ?? []).map((u) => (
+                            <option key={u.id} value={`user:${u.id}`}>@ {u.name}</option>
+                          ))}
+                        </optgroup>
                       </select>
+                      {slackUsers !== null && slackUsers.length === 0 && (
+                        <div style={{ fontSize: 11, color: "#a8a198", marginTop: 5 }}>
+                          DM先の取得に失敗しました。権限が足りない場合は「Slackに追加」で再連携してください。
+                        </div>
+                      )}
                     </Field>
                     <Field
-                      label="Chatworkルーム"
+                      label="Chatworkルーム / DM"
                       hint={
                         data.chatwork.connected
-                          ? "この担当者宛の受付をこのルームへ送ります（ルームIDは数字）。受付通知がChatworkへ届くのは、ここにルームを設定した担当者だけです"
+                          ? "この担当者宛の受付をこのルームへ送ります。受付通知がChatworkへ届くのは、ここにルームを設定した担当者だけです（Chatworkは1:1の会話もルームとして選べます）"
                           : "上の「Chatwork」でAPIトークンを登録すると使えます"
                       }
                     >
-                      <TextInput
-                        placeholder={data.chatwork.connected ? "123456789" : "Chatwork未連携"}
-                        mono
+                      <ChatworkRoomPicker
+                        authToken={authToken}
+                        connected={data.chatwork.connected}
+                        disabled={!data.chatwork.connected}
                         value={draft.chatwork_room_id}
-                        onChange={(v) => setDraft({ ...draft, chatwork_room_id: v.replace(/[^0-9]/g, "") })}
+                        onChange={(id, name) => setDraft({ ...draft, chatwork_room_id: id, chatwork_room_name: name })}
+                        placeholder="例: 312648719"
                       />
                     </Field>
                     <Field
@@ -959,6 +1099,9 @@ export default function AdminNotifyPage() {
   const [slackChannelsLoading, setSlackChannelsLoading] = useState(false);
   const [slackSavingChannel, setSlackSavingChannel] = useState(false);
   const [slackShowPicker, setSlackShowPicker] = useState(false);
+  // DM先(issue #1追記分)。チャンネルと同じ<select>に「ダイレクトメッセージ」optgroupで出す。
+  const [slackUsers, setSlackUsers] = useState<{ id: string; name: string }[] | null>(null);
+  const [slackUsersError, setSlackUsersError] = useState("");
 
   const [cwApiToken, setCwApiToken] = useState("");
   const [cwRoomId, setCwRoomId] = useState("");
@@ -967,6 +1110,11 @@ export default function AdminNotifyPage() {
   const [cwTesting, setCwTesting] = useState(false);
   const [cwError, setCwError] = useState("");
   const [cwTested, setCwTested] = useState(false);
+
+  // 「担当者ごとの通知先」パネルは別フェッチなので、ここでの連携/解除/保存を伝えて
+  // 読み直させる合図（単調増加カウンタ。0=初回マウント扱いで無視される）。
+  const [staffRoutesRefresh, setStaffRoutesRefresh] = useState(0);
+  const bumpStaffRoutesRefresh = () => setStaffRoutesRefresh((n) => n + 1);
 
   const [customWebhookUrl, setCustomWebhookUrl] = useState("");
   const [customWebhookConfigured, setCustomWebhookConfigured] = useState(false);
@@ -1034,12 +1182,27 @@ export default function AdminNotifyPage() {
     }
   }, [authToken]);
 
-  // Auto-load the channel list once when connected but no channel is chosen yet.
+  // DM先一覧(issue #1追記分)。users:read スコープが無い旧トークンは失敗する —
+  // チャンネル選択自体は続けられるよう、エラーはこの欄だけに留める。
+  const loadSlackUsers = useCallback(async () => {
+    if (!authToken) return;
+    setSlackUsersError("");
+    try {
+      const res = await api.getSlackUsers(authToken);
+      setSlackUsers(res.users);
+    } catch (e: unknown) {
+      setSlackUsers([]);
+      setSlackUsersError(e instanceof Error ? e.message : "DM先の取得に失敗しました");
+    }
+  }, [authToken]);
+
+  // Auto-load the channel/user list once when connected but no channel is chosen yet.
   useEffect(() => {
     if (slackStatus?.connected && !slackStatus?.channel_configured && slackChannels === null) {
       loadSlackChannels();
+      loadSlackUsers();
     }
-  }, [slackStatus?.connected, slackStatus?.channel_configured, slackChannels, loadSlackChannels]);
+  }, [slackStatus?.connected, slackStatus?.channel_configured, slackChannels, loadSlackChannels, loadSlackUsers]);
 
   // Read the ?slack=connected|denied|error flag set by the OAuth callback redirect,
   // then strip it from the URL so a refresh doesn't re-show the banner.
@@ -1101,7 +1264,9 @@ export default function AdminNotifyPage() {
       setSlackNotice("");
       setSlackShowPicker(false);
       setSlackChannels(null);
+      setSlackUsers(null);
       await loadSlack();
+      bumpStaffRoutesRefresh();
     } catch (e: unknown) {
       setSlackError(e instanceof Error ? e.message : "連携解除に失敗しました");
     } finally {
@@ -1114,10 +1279,17 @@ export default function AdminNotifyPage() {
     setSlackSavingChannel(true);
     setSlackError("");
     try {
-      await api.setSlackChannel(authToken, slackChannelId);
+      if (slackChannelId.startsWith("user:")) {
+        const id = slackChannelId.slice(5);
+        const u = (slackUsers ?? []).find((x) => x.id === id);
+        await api.setSlackChannel(authToken, { user_id: id, display_name: u?.name });
+      } else {
+        await api.setSlackChannel(authToken, { channel_id: slackChannelId });
+      }
       setSlackShowPicker(false);
       setSlackChannelId("");
       await loadSlack();
+      bumpStaffRoutesRefresh();
     } catch (e: unknown) {
       setSlackError(e instanceof Error ? e.message : "チャンネルの保存に失敗しました");
     } finally {
@@ -1130,6 +1302,7 @@ export default function AdminNotifyPage() {
     setSlackChannelId(slackStatus?.channel_id ?? "");
     setSlackShowPicker(true);
     loadSlackChannels();
+    loadSlackUsers();
   };
 
   const handleSaveChatwork = async () => {
@@ -1140,6 +1313,7 @@ export default function AdminNotifyPage() {
       setCwConfigured(true);
       setCwApiToken("");
       setCwRoomId("");
+      bumpStaffRoutesRefresh();
     } catch (e: unknown) {
       setCwError(e instanceof Error ? e.message : "保存に失敗しました");
     } finally {
@@ -1466,14 +1640,26 @@ export default function AdminNotifyPage() {
                     onChange={(e) => setSlackChannelId(e.target.value)}
                     style={{ width: "100%", padding: "9px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, background: "#fffefb", color: "#2d2a24" }}
                   >
-                    <option value="">チャンネルを選択…</option>
-                    {(slackChannels ?? []).map((c) => (
-                      <option key={c.id} value={c.id}>{c.is_private ? "🔒 " : "# "}{c.name}</option>
-                    ))}
+                    <option value="">チャンネル・DM先を選択…</option>
+                    <optgroup label="チャンネル">
+                      {(slackChannels ?? []).map((c) => (
+                        <option key={c.id} value={c.id}>{c.is_private ? "🔒 " : "# "}{c.name}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="ダイレクトメッセージ（個人）">
+                      {(slackUsers ?? []).map((u) => (
+                        <option key={u.id} value={`user:${u.id}`}>@ {u.name}</option>
+                      ))}
+                    </optgroup>
                   </select>
                   <div style={{ fontSize: 11, color: "#a8a198", marginTop: 6, lineHeight: 1.55 }}>
                     🔒 非公開チャンネルは、事前に Slack でこの App（Bot）をチャンネルに招待してください。
                   </div>
+                  {slackUsersError && (
+                    <div style={{ fontSize: 11, color: "#a84238", marginTop: 4, lineHeight: 1.55 }}>
+                      DM先の取得に失敗しました（{slackUsersError}）。チャンネルへの通知は続けて設定できます。
+                    </div>
+                  )}
                 </>
               )}
               {slackError && (
@@ -1537,15 +1723,15 @@ export default function AdminNotifyPage() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>Chatwork</div>
-              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>API トークン + ルーム ID で通知</div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>API トークンで連携。担当者ごとの受付通知・配達の呼び出しで使う</div>
             </div>
-            <MkPill tone={cwConfigured ? "live" : "off"}>{cwConfigured ? "設定済" : "未設定"}</MkPill>
+            <MkPill tone={cwConfigured ? "live" : "off"}>{cwConfigured ? "連携済" : "未連携"}</MkPill>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Field
               label="API トークン"
               required={!cwConfigured}
-              hint={cwConfigured ? "設定済み。安全のため表示しません（変更するときだけ入力）" : undefined}
+              hint={cwConfigured ? "設定済み。安全のため表示しません（変更するときだけ入力）" : "連携するとテスト送信と「担当者ごとの通知先」のルーム指定が使えます"}
             >
               <TextInput
                 placeholder={cwConfigured ? "設定済み（変更するときだけ入力）" : "Chatwork API トークン"}
@@ -1555,26 +1741,20 @@ export default function AdminNotifyPage() {
               />
             </Field>
             <Field
-              label="通知先ルーム ID"
-              required={!cwConfigured}
-              hint={cwConfigured ? "変更するときだけ入力（空欄なら現在の設定のまま）" : undefined}
+              label="配達の呼び出しの通知先ルーム"
+              hint={
+                "ここで選んだルームへは「配達の呼び出し」だけが届きます（受付の通知先は、下の「担当者ごとの通知先」で担当者ごとに設定します）。" +
+                (cwConfigured ? "空欄のままにすると現在の設定を維持します。" : "未設定でも連携・テスト送信はできます。")
+              }
             >
-              <TextInput
-                placeholder={cwConfigured ? "設定済み（変更するときだけ入力）" : "例: 312648719"}
-                mono
+              <ChatworkRoomPicker
+                authToken={authToken}
+                apiTokenDraft={cwApiToken}
+                connected={cwConfigured}
                 value={cwRoomId}
-                onChange={setCwRoomId}
+                onChange={(id) => setCwRoomId(id)}
+                placeholder={cwConfigured ? "設定済み（変更するときだけ入力）" : "例: 312648719"}
               />
-            </Field>
-            <Field label="通知対象">
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {["受付完了", "呼び出し中", "タイムアウト"].map((l, i) => (
-                  <label key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "1px solid #d8d3c7", background: "#fffefb", borderRadius: 5, fontSize: 11.5, color: "#6b6559", cursor: "pointer" }}>
-                    <span style={{ width: 14, height: 14, borderRadius: 3, border: "1.5px solid #d8d3c7", background: "#fffefb", display: "flex", alignItems: "center", justifyContent: "center" }} />
-                    {l}
-                  </label>
-                ))}
-              </div>
             </Field>
           </div>
           {cwError && (
@@ -1621,7 +1801,7 @@ export default function AdminNotifyPage() {
             subtitle="訪問先担当者ごとに届け先を分け、応答が無いときは代理担当者へ転送する"
           />
           {authToken ? (
-            <StaffRoutesPanel authToken={authToken} />
+            <StaffRoutesPanel authToken={authToken} refreshSignal={staffRoutesRefresh} />
           ) : (
             <div style={{ padding: "20px 0", color: "#a8a198", fontSize: 13 }}>認証が必要です。ページを再読み込みしてください。</div>
           )}
@@ -1778,12 +1958,14 @@ export default function AdminNotifyPage() {
                     onChange={setDlCwApiToken}
                   />
                 </Field>
-                <Field label="通知先ルーム ID">
-                  <TextInput
-                    placeholder="例: 312648719"
-                    mono
+                <Field label="通知先ルーム ID" hint="配達の呼び出し・置き配の通知先">
+                  <ChatworkRoomPicker
+                    authToken={authToken}
+                    apiTokenDraft={dlCwApiToken}
+                    connected={dlCwConfigured}
                     value={dlCwRoomId}
-                    onChange={setDlCwRoomId}
+                    onChange={(id) => setDlCwRoomId(id)}
+                    placeholder="例: 312648719"
                   />
                 </Field>
               </div>

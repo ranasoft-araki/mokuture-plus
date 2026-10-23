@@ -30,6 +30,10 @@ API_BASE = "https://api.chatwork.com/v2"
 _TIMEOUT = 10.0
 
 
+class ChatworkApiError(Exception):
+    """Chatwork API 呼び出しの失敗（トークン無効・通信エラー等）。"""
+
+
 async def _read_setting(db: AsyncSession, tenant_id: str, type_: str) -> dict | None:
     """1 種類ぶんの設定を復号して返す。行が無い/壊れているなら None。"""
     result = await db.execute(
@@ -97,6 +101,58 @@ async def send_message(api_token: str, room_id: str, text: str) -> bool:
     except Exception:
         logger.warning("chatwork post failed (room=%s)", room)
         return False
+
+
+async def verify_token(api_token: str) -> dict | None:
+    """トークンが有効か確認する(`GET /v2/me`)。有効なら `{name, account_id}` を返す。
+
+    ルーム未設定のテナントの「テスト送信」・連携状態の表示に使う（受付通知の送信経路
+    では使わない）。"""
+    token = (api_token or "").strip()
+    if not token:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            res = await client.get(f"{API_BASE}/me", headers={"X-ChatWorkToken": token})
+        if res.status_code != 200:
+            return None
+        data = res.json()
+        return {"name": data.get("name", ""), "account_id": data.get("account_id", "")}
+    except Exception:
+        logger.warning("chatwork token verify failed")
+        return None
+
+
+async def list_rooms(api_token: str) -> list[dict]:
+    """トークンが参加しているルーム一覧(`GET /v2/rooms`)。管理画面のルーム選択に使う。
+
+    `[{room_id, name, type}]`(name 昇順)。トークンが無効/通信エラーなら
+    `ChatworkApiError`（呼び出し側で 400/502 に変換する）。"""
+    token = (api_token or "").strip()
+    if not token:
+        raise ChatworkApiError("api_token is required")
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            res = await client.get(f"{API_BASE}/rooms", headers={"X-ChatWorkToken": token})
+    except Exception as e:
+        raise ChatworkApiError("rooms request failed") from e
+    if res.status_code != 200:
+        raise ChatworkApiError(f"rooms request failed (status={res.status_code})")
+    try:
+        rooms = res.json()
+    except Exception as e:
+        raise ChatworkApiError("rooms response invalid") from e
+    out = [
+        {
+            "room_id": str(r.get("room_id", "")),
+            "name": r.get("name") or "",
+            "type": r.get("type") or "",
+        }
+        for r in rooms
+        if r.get("room_id")
+    ]
+    out.sort(key=lambda r: r["name"])
+    return out
 
 
 def escape_tags(value: str | None) -> str:

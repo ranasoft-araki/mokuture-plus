@@ -34,7 +34,10 @@ _API_BASE = "https://slack.com/api"
 
 # Bot Token Scopes. chat:write=送信, channels:read/groups:read=公開/非公開chの列挙,
 # channels:join=公開chへのBot自動参加(conversations.join)。
-_SCOPE = "chat:write,channels:read,groups:read,channels:join"
+# im:write=DM開始(conversations.open)、users:read=DM相手の選択肢(users.list)用(issue #1追記分)。
+# **スコープを追加しても既存の連携には後から付与されない**: Slack App側(Bot Token Scopes)
+# にも追加し、各テナントは「Slackに追加」を再度押して連携し直す必要がある(CLAUDE.md参照)。
+_SCOPE = "chat:write,channels:read,groups:read,channels:join,im:write,users:read"
 
 _HTTP_TIMEOUT = 10.0
 
@@ -195,6 +198,49 @@ class SlackNotifier:
             logger.warning("Slack conversations.list truncated at %d channels (page cap reached)", len(out))
         out.sort(key=lambda c: c["name"])
         return out
+
+    @staticmethod
+    async def list_users(token: str) -> list[dict]:
+        """List workspace members the bot can DM (`users.list`, scope `users:read`).
+
+        Excludes bots, deleted accounts, and Slackbot — they aren't valid 1:1 DM targets
+        for a notification destination. Returns `[{id, name}]` sorted by name. Raises
+        `SlackApiError` (e.g. `missing_scope` on bot tokens connected before this scope
+        was added) so the caller can surface a clear "reconnect" message."""
+        _MAX_PAGES = 10
+        out: list[dict] = []
+        cursor = ""
+        for page in range(_MAX_PAGES):
+            params: dict = {"limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            data = await _slack_get(token, "users.list", params)
+            if not data.get("ok"):
+                raise SlackApiError(str(data.get("error") or "users_list_failed"))
+            for m in data.get("members", []):
+                if m.get("deleted") or m.get("is_bot") or m.get("id") == "USLACKBOT":
+                    continue
+                profile = m.get("profile") or {}
+                name = (profile.get("real_name") or profile.get("display_name")
+                        or m.get("real_name") or m.get("name") or m.get("id") or "")
+                out.append({"id": m.get("id") or "", "name": name})
+            cursor = ((data.get("response_metadata") or {}).get("next_cursor") or "").strip()
+            if not cursor:
+                break
+        out.sort(key=lambda u: u["name"])
+        return out
+
+    @staticmethod
+    async def open_dm(token: str, user_id: str) -> str:
+        """Open (or resume) a 1:1 DM with `user_id` (`conversations.open`, scope
+        `im:write`). Returns the DM channel id (`D...`). Raises `SlackApiError`."""
+        data = await _slack_post(token, "conversations.open", {"users": user_id})
+        if not data.get("ok"):
+            raise SlackApiError(str(data.get("error") or "conversations_open_failed"))
+        channel_id = ((data.get("channel") or {}).get("id") or "").strip()
+        if not channel_id:
+            raise SlackApiError("conversations_open_no_channel")
+        return channel_id
 
     @staticmethod
     async def get_channel_info(token: str, channel_id: str) -> dict:

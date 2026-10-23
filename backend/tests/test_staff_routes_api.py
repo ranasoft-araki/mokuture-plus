@@ -191,6 +191,82 @@ async def test_ルームIDが数字でなければ弾く(staff_client, tenant, r
     assert r.status_code == 422
 
 
+async def test_Chatworkのルーム名も保存できる(staff_client, tenant):
+    await set_staff_list(tenant.id, ["田中太郎"])
+    await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": "111"})
+
+    r = staff_client.put(API, json={"staff_name": "田中太郎", "chatwork_room_id": "222", "chatwork_room_name": "開発部屋"})
+
+    assert r.status_code == 200
+    assert r.json()["route"]["chatwork_room_name"] == "開発部屋"
+
+
+async def test_SlackのDM先を保存できる(staff_client, tenant, monkeypatch):
+    """issue #1 追記分: チャンネルだけでなく個人へのDMも宛先にできる。"""
+    from app.api import staff_routes as staff_routes_api
+
+    await set_staff_list(tenant.id, ["田中太郎"])
+    await set_notification_setting(tenant.id, "slack", {"bot_access_token": "xoxb-tok"})
+
+    async def fake_open_dm(token, user_id):
+        assert token == "xoxb-tok"
+        assert user_id == "U999"
+        return "D123456"
+
+    monkeypatch.setattr(staff_routes_api.SlackNotifier, "open_dm", fake_open_dm)
+
+    r = staff_client.put(API, json={"staff_name": "田中太郎", "slack_user_id": "U999", "slack_display_name": "鈴木一郎"})
+
+    assert r.status_code == 200
+    body = r.json()["route"]
+    assert body["slack_channel_id"] == "D123456"
+    assert body["slack_channel_name"] == "DM: 鈴木一郎"
+
+
+async def test_SlackのDMは未連携だと400(staff_client, tenant):
+    await set_staff_list(tenant.id, ["田中太郎"])
+    r = staff_client.put(API, json={"staff_name": "田中太郎", "slack_user_id": "U999"})
+    assert r.status_code == 400
+
+
+async def test_SlackのDMで権限不足なら専用メッセージ(staff_client, tenant, monkeypatch):
+    from app.api import staff_routes as staff_routes_api
+    from app.services.slack import SlackApiError
+
+    await set_staff_list(tenant.id, ["田中太郎"])
+    await set_notification_setting(tenant.id, "slack", {"bot_access_token": "xoxb-old"})
+
+    async def fake_open_dm(token, user_id):
+        raise SlackApiError("missing_scope")
+
+    monkeypatch.setattr(staff_routes_api.SlackNotifier, "open_dm", fake_open_dm)
+
+    r = staff_client.put(API, json={"staff_name": "田中太郎", "slack_user_id": "U999"})
+
+    assert r.status_code == 400
+    assert "再度連携" in r.json()["detail"] or "連携してください" in r.json()["detail"]
+
+
+async def test_Slackチャンネル未変更ならAPIを呼ばない(staff_client, tenant, monkeypatch):
+    """既存のDM/チャンネル指定を変えずに他の項目だけ保存しても、Slack API(conversations.info)
+    を呼び直さない（呼ぶと im:read 未許可で DM の表示名が生のIDに戻ってしまう）。"""
+    from app.api import staff_routes as staff_routes_api
+
+    await set_staff_list(tenant.id, ["田中太郎"])
+    await set_notification_setting(tenant.id, "slack", {"bot_access_token": "xoxb-tok"})
+    await add_route(tenant.id, "田中太郎", config={"slack_channel_id": "D123456", "slack_channel_name": "DM: 鈴木一郎"})
+
+    async def boom(*a, **kw):
+        raise AssertionError("conversations.info should not be called when channel is unchanged")
+
+    monkeypatch.setattr(staff_routes_api.SlackNotifier, "get_channel_info", boom)
+
+    r = staff_client.put(API, json={"staff_name": "田中太郎", "slack_channel_id": "D123456", "email": "a@example.co.jp"})
+
+    assert r.status_code == 200
+    assert r.json()["route"]["slack_channel_name"] == "DM: 鈴木一郎"
+
+
 async def test_プッシュ先ユーザーを保存できる(staff_client, tenant):
     await set_staff_list(tenant.id, ["田中太郎"])
     u = await add_user(tenant.id, "田中太郎")

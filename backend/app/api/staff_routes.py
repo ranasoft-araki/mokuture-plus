@@ -57,9 +57,16 @@ _MAX_WEBHOOK_URL = 512
 class StaffRouteBody(BaseModel):
     staff_name: str
     slack_channel_id: str = ""
+    # DM先のSlackユーザーID(issue #1追記分)。指定時は slack_channel_id を無視し、
+    # conversations.open で解決したDMチャンネルIDを保存する。display_name は
+    # users.list で得た表示名をそのまま渡す(無くても動く)。
+    slack_user_id: str = ""
+    slack_display_name: str = ""
     # Chatwork のルーム ID。API トークンはテナント共通のものを使い回し、担当者ごとに
     # 差し替えるのはルームだけ(Slack と同じ考え方)。"" で解除。
     chatwork_room_id: str = ""
+    # ルームの表示名(一覧取得で得たものをそのまま渡す。無くてもIDで表示できる)。
+    chatwork_room_name: str = ""
     email: str = ""
     # Web Push を届ける管理ユーザー。購読はユーザーのブラウザに紐づくため、担当者
     # (ただの名前)とユーザーをここで結びつける。"" で解除＝共通の購読へ。
@@ -159,6 +166,7 @@ def _route_out(route: StaffNotificationRoute, known_staff: set[str]) -> dict:
         "slack_channel_id": config.get("slack_channel_id", ""),
         "slack_channel_name": config.get("slack_channel_name", ""),
         "chatwork_room_id": config.get("chatwork_room_id", ""),
+        "chatwork_room_name": config.get("chatwork_room_name", ""),
         "push_user_id": getattr(route, "push_user_id", None) or "",
         "email": config.get("email", ""),
         # Webhook URL 自体は返さない（設定の有無だけ）。CLAUDE.md「秘密情報」方針。
@@ -278,9 +286,38 @@ async def upsert_staff_route(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
+    existing_route = await staff_routing.get_route(db, user.tenant_id, body.staff_name)
+    existing_config = route_config(existing_route)
+
+    slack_user_id = (body.slack_user_id or "").strip()
     channel_id = (body.slack_channel_id or "").strip()
     channel_name = ""
-    if channel_id:
+    if channel_id and not slack_user_id and channel_id == existing_config.get("slack_channel_id"):
+        # 変更無し: Slack側の名称解決(conversations.info)をやり直さない。これは単なる
+        # 節約ではなく正しさのため — DM先のチャンネルID(D...)は conversations.info に
+        # 追加スコープ(im:read)が要るため失敗し、チャンネル名が生のID文字列へ戻ってしまう
+        # (下の except と同じフォールバック)。他のフィールドだけを編集した保存で、Slackの
+        # 設定を意図せず壊さないようにする。
+        channel_name = existing_config.get("slack_channel_name") or channel_id
+    elif slack_user_id:
+        # DM先指定(issue #1追記分)。チャンネルIDは無視し、conversations.open で解決する。
+        slack_config = await staff_routing.load_default_slack_config(db, user.tenant_id)
+        token = slack_config.get("bot_access_token") or ""
+        if not token:
+            raise HTTPException(
+                status_code=400,
+                detail="Slackが未連携です。先に「Slackに追加」で連携してください。",
+            )
+        try:
+            channel_id = await SlackNotifier.open_dm(token, slack_user_id)
+        except SlackApiError as e:
+            detail = (
+                "DM機能を使うには権限が足りません。「Slackに追加」でもう一度連携してください。"
+                if "missing_scope" in str(e) else "DMの作成に失敗しました。"
+            )
+            raise HTTPException(status_code=400, detail=detail)
+        channel_name = f"DM: {(body.slack_display_name or '').strip() or slack_user_id}"
+    elif channel_id:
         slack_config = await staff_routing.load_default_slack_config(db, user.tenant_id)
         token = slack_config.get("bot_access_token") or ""
         if not token:
@@ -301,6 +338,9 @@ async def upsert_staff_route(
     # Chatwork はテナント共通のトークンを使い回す。未連携のままルームだけ指定しても
     # 届かないので、保存の時点で気付けるようにする（Slack と同じ扱い）。
     chatwork_room = (body.chatwork_room_id or "").strip()
+    chatwork_room_name = (body.chatwork_room_name or "").strip() if chatwork_room else ""
+    if chatwork_room and not chatwork_room_name and chatwork_room == existing_config.get("chatwork_room_id"):
+        chatwork_room_name = existing_config.get("chatwork_room_name") or ""
     if chatwork_room:
         if not await chatwork_service.load_api_token(db, user.tenant_id):
             raise HTTPException(
@@ -319,12 +359,12 @@ async def upsert_staff_route(
 
     def apply(target: StaffNotificationRoute) -> None:
         """body の内容を行へ反映する。webhook_url 未指定はその行の現在値を維持する。"""
-        current = route_config(target)
-        webhook = current.get("webhook_url", "") if body.webhook_url is None else body.webhook_url
+        webhook = existing_config.get("webhook_url", "") if body.webhook_url is None else body.webhook_url
         target.config_json = encrypt_dict({
             "slack_channel_id": channel_id,
             "slack_channel_name": channel_name,
             "chatwork_room_id": chatwork_room,
+            "chatwork_room_name": chatwork_room_name,
             "email": ",".join(emails),
             "webhook_url": webhook,
         })
@@ -334,7 +374,7 @@ async def upsert_staff_route(
         target.escalate_after_sec = body.escalate_after_sec
         target.updated_at = utcnow_naive()
 
-    route = await staff_routing.get_route(db, user.tenant_id, body.staff_name)
+    route = existing_route
     if route is None:
         route = StaffNotificationRoute(
             id=str(uuid.uuid4()),

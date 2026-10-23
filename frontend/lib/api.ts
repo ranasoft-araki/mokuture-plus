@@ -550,8 +550,13 @@ export const api = {
   getSlackChannels: (token: string) =>
     request<{ channels: { id: string; name: string; is_private: boolean; is_member: boolean }[] }>(
       "/notifications/slack/channels", {}, token),
-  setSlackChannel: (token: string, channel_id: string) =>
-    request<{ ok: boolean; channel_name: string }>("/notifications/slack/channel", { method: "POST", body: JSON.stringify({ channel_id }) }, token),
+  /** DM先の選択肢（issue #1追記分）。`users:read` スコープが無い旧トークンは 400 を返す。 */
+  getSlackUsers: (token: string) =>
+    request<{ users: { id: string; name: string }[] }>(
+      "/notifications/slack/users", {}, token),
+  /** チャンネルへ送るか、個人へDMするか（どちらか一方）。 */
+  setSlackChannel: (token: string, dest: { channel_id: string } | { user_id: string; display_name?: string }) =>
+    request<{ ok: boolean; channel_name: string }>("/notifications/slack/channel", { method: "POST", body: JSON.stringify(dest) }, token),
   disconnectSlack: (token: string) =>
     request<{ ok: boolean }>("/notifications/slack/disconnect", { method: "POST" }, token),
 
@@ -578,11 +583,17 @@ export const api = {
     request<StaffRouteTestResult>(
       "/notifications/staff-routes/test",
       { method: "POST", body: JSON.stringify({ staff_name, stage }) }, token),
-  /** 空欄の項目は現在値を維持する（トークンはマスクして返しているため）。 */
+  /** 空欄の項目は現在値を維持する（トークンはマスクして返しているため）。room_id は任意
+   * （トークンだけで連携済にできる。配達通知の宛先として使うときだけ必要）。 */
   updateChatworkSettings: (token: string, api_token: string, room_id: string) =>
     request("/notifications/settings/chatwork", { method: "PUT", body: JSON.stringify({ api_token, room_id }) }, token),
   testChatworkNotification: (token: string) =>
     request<{ ok: boolean }>("/notifications/test/chatwork", { method: "POST" }, token),
+  /** ルーム選択の一覧。api_token を渡すと(未保存でも)そのトークンで取得する。省略時は保存済みの
+   * 共通トークンを使う。 */
+  getChatworkRooms: (token: string, api_token: string = "") =>
+    request<{ rooms: { room_id: string; name: string; type: string }[] }>(
+      "/notifications/chatwork/rooms", { method: "POST", body: JSON.stringify({ api_token }) }, token),
   testNotification: (token: string, type: string): Promise<{ ok: boolean; error?: string; sent?: number }> => {
     if (type === "push") {
       return request<{ sent: number; total: number }>("/notifications/push/test", { method: "POST" }, token)
@@ -882,6 +893,8 @@ export interface StaffNotificationRoute {
   slack_channel_name: string;
   /** Chatwork のルーム ID。API トークンはテナント共通のものを使い回す。 */
   chatwork_room_id: string;
+  /** ルームの表示名（ルーム選択で取得したもの。無ければ空）。 */
+  chatwork_room_name: string;
   /** Web Push を届ける管理ユーザーの id（""=共通の購読へ）。購読はユーザーのブラウザに紐づく。 */
   push_user_id: string;
   email: string;
@@ -914,7 +927,7 @@ export interface StaffNotificationRoutesResponse {
   staff_list_version: string;
   routes: StaffNotificationRoute[];
   slack: { bot_connected: boolean; default_channel_name: string };
-  chatwork: { connected: boolean; default_room_id: string };
+  chatwork: { connected: boolean };
   users: StaffPushUser[];
   smtp_enabled: boolean;
   default_escalate_sec: number;
@@ -930,7 +943,11 @@ export interface StaffRouteTestResult {
 export interface StaffRouteInput {
   staff_name: string;
   slack_channel_id?: string;
+  /** DM先のSlackユーザーID。指定時は slack_channel_id を無視してDMチャンネルを解決する。 */
+  slack_user_id?: string;
+  slack_display_name?: string;
   chatwork_room_id?: string;
+  chatwork_room_name?: string;
   push_user_id?: string;
   email?: string;
   /** null/未指定=変更しない（既存を維持）、""=解除、URL=差し替え。 */
