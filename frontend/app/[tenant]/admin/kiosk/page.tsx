@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api, type Device } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
@@ -28,16 +28,24 @@ export default function AdminKioskPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [modal, setModal] = useState<{ msg: string; confirmLabel?: string; action: () => Promise<void> } | null>(null);
 
+  // 一覧の取得失敗で出したエラー。15秒ごとの取り直しで取れたら、それだけ消す(操作のエラーは残す)
+  const loadErrorRef = useRef("");
   const loadDevices = useCallback(async (token: string) => {
     try {
       setDevices(await api.listDevices(token));
+      if (loadErrorRef.current) {
+        const prev = loadErrorRef.current;
+        loadErrorRef.current = "";
+        setError((cur) => (cur === prev ? "" : cur));
+      }
     } catch (e) {
       // セッション切れは api.ts がログイン画面へ移す。ここに来るのは通信断などの一時的な失敗なのでログアウトさせない
-      setError(e instanceof Error ? e.message : "取得に失敗しました");
+      const msg = `端末一覧を取得できませんでした（${e instanceof Error ? e.message : "不明なエラー"}）`;
+      loadErrorRef.current = msg;
+      setError(msg);
     } finally {
       setLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

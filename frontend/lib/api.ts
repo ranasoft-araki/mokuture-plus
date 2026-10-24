@@ -45,6 +45,15 @@ async function _doRefresh(): Promise<_RefreshResult> {
 // ダッシュボードはこの語を見てログアウトさせるため、入れると一時的な失敗でもログアウトになる。
 const _TEMP_FAILURE = "サーバーに接続できません。時間をおいて再度お試しください。";
 
+// 通信そのものが失敗したとき(オフライン等)、ブラウザの英語メッセージ(Failed to fetch)を画面に出さない
+async function _fetchOrTempFailure(path: string, init?: RequestInit, token?: string): Promise<Response> {
+  try {
+    return await _fetch(path, init, token);
+  } catch {
+    throw new Error(_TEMP_FAILURE);
+  }
+}
+
 // 多重リダイレクト防止用フラグ
 let _redirecting = false;
 
@@ -154,7 +163,7 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
     }
   }
 
-  let res = await _fetch(path, init, token);
+  let res = await _fetchOrTempFailure(path, init, token);
 
   if (res.status === 401 && token) {
     // 保険: 先読みで漏れた失効(端末/サーバ時刻ずれ等)にも従来どおり対応。
@@ -170,7 +179,7 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
       }
       throw new Error(_TEMP_FAILURE);
     }
-    res = await _fetch(path, init, result.token);
+    res = await _fetchOrTempFailure(path, init, result.token);
   }
 
   if (!res.ok) {

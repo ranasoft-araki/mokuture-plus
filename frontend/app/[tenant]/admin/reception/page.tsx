@@ -460,6 +460,8 @@ export default function ReceptionLogsPage() {
   const [token, setToken] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  // 一覧の取得に失敗したとき(通信断・デプロイ中)の表示。取れたら消す
+  const [loadError, setLoadError] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [modal, setModal] = useState<{ msg: string; confirmLabel?: string; action: () => Promise<void> } | null>(null);
@@ -473,9 +475,9 @@ export default function ReceptionLogsPage() {
     if (!t) { router.push("/login"); return; }
     setToken(t);
     api.listReception(t)
-      .then((data) => { setLogs(data); setLastRefreshed(new Date()); })
-      // セッション切れは api.ts がログイン画面へ移す。通信断などの一時的な失敗ではログアウトさせない(自動更新で取り直す)
-      .catch(() => {})
+      .then((data) => { setLogs(data); setLastRefreshed(new Date()); setLoadError(""); })
+      // セッション切れは api.ts がログイン画面へ移す。通信断などの一時的な失敗ではログアウトさせず、理由を出す
+      .catch((e) => setLoadError(e instanceof Error ? e.message : "受付ログを取得できませんでした"))
       .finally(() => setLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -520,7 +522,7 @@ export default function ReceptionLogsPage() {
     if (!autoRefresh || !token) return;
     const refetch = () => {
       api.listReception(token)
-        .then((data) => { setLogs(data); setLastRefreshed(new Date()); })
+        .then((data) => { setLogs(data); setLastRefreshed(new Date()); setLoadError(""); })
         .catch(() => {});
     };
     // 連続イベント(通知直後の状態変化が続く等)を300msでまとめて1回だけ取得する。
@@ -833,6 +835,11 @@ export default function ReceptionLogsPage() {
         </div>
       </div>
 
+      {loadError && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#f6e0dc", border: "1px solid #a84238", color: "#a84238", fontSize: 13 }}>
+          受付ログを取得できませんでした（{loadError}）。下の一覧は最新ではない可能性があります。
+        </div>
+      )}
       <MkCard padding="0">
         {loading ? (
           <div style={{ padding: "48px 20px", textAlign: "center", color: "#a8a198" }}>読み込み中…</div>
