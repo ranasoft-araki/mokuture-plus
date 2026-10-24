@@ -1124,20 +1124,18 @@ export default function AdminNotifyPage() {
   const [customWebhookTested, setCustomWebhookTested] = useState(false);
 
   // ── Delivery (荷物の配達/呼び出し) destinations ──────────────────────────
-  const [dlSlackUrl, setDlSlackUrl] = useState("");
-  const [dlSlackConfigured, setDlSlackConfigured] = useState(false);
+  // Slack: 共通の連携(Bot Token)を使い回し、ここではチャンネルだけ上書きできる
+  // （2026-10-24: 配達専用に別のSlack連携を結ばせていたのを廃止。無駄な二重連携の解消）。
+  const [dlSlackOverrideChannelId, setDlSlackOverrideChannelId] = useState("");
+  const [dlSlackOverrideChannelName, setDlSlackOverrideChannelName] = useState("");
+  const [dlSlackLegacyWebhook, setDlSlackLegacyWebhook] = useState(false);
+  const [dlSlackShowPicker, setDlSlackShowPicker] = useState(false);
+  const [dlSlackChannelId, setDlSlackChannelId] = useState(""); // ピッカーでの選択中の値
   const [dlSlackSaving, setDlSlackSaving] = useState(false);
+  const [dlSlackResetting, setDlSlackResetting] = useState(false);
   const [dlSlackTesting, setDlSlackTesting] = useState(false);
   const [dlSlackError, setDlSlackError] = useState("");
   const [dlSlackTested, setDlSlackTested] = useState(false);
-
-  const [dlCwApiToken, setDlCwApiToken] = useState("");
-  const [dlCwRoomId, setDlCwRoomId] = useState("");
-  const [dlCwConfigured, setDlCwConfigured] = useState(false);
-  const [dlCwSaving, setDlCwSaving] = useState(false);
-  const [dlCwTesting, setDlCwTesting] = useState(false);
-  const [dlCwError, setDlCwError] = useState("");
-  const [dlCwTested, setDlCwTested] = useState(false);
 
   const [dlWebhookUrl, setDlWebhookUrl] = useState("");
   const [dlWebhookConfigured, setDlWebhookConfigured] = useState(false);
@@ -1216,26 +1214,31 @@ export default function AdminNotifyPage() {
     }
   }, []);
 
-  useEffect(() => {
+  const reloadNotificationSettings = useCallback(async () => {
     if (!authToken) return;
-    api.getNotificationSettings(authToken).then((settings) => {
+    try {
+      const settings = await api.getNotificationSettings(authToken);
       const cw = settings["chatwork"] ?? {};
       const wh = settings["webhook"] ?? {};
       if (cw["api_token"]) setCwConfigured(true);
       if (wh["webhook_url"]) setCustomWebhookConfigured(true);
 
       const dlSlack = settings["slack_delivery"] ?? {};
-      const dlCw = settings["chatwork_delivery"] ?? {};
       const dlWh = settings["webhook_delivery"] ?? {};
-      if (dlSlack["webhook_url"]) setDlSlackConfigured(true);
-      if (dlCw["api_token"]) setDlCwConfigured(true);
+      setDlSlackLegacyWebhook(Boolean(dlSlack["webhook_url"]));
+      setDlSlackOverrideChannelId(typeof dlSlack["channel_id"] === "string" ? dlSlack["channel_id"] : "");
+      setDlSlackOverrideChannelName(typeof dlSlack["channel_name"] === "string" ? dlSlack["channel_name"] : "");
       if (dlWh["webhook_url"]) setDlWebhookConfigured(true);
 
       // push_delivery stores { enabled: bool }; default ON when unset
       const dlPush = (settings["push_delivery"] ?? {}) as Record<string, unknown>;
       setDlPushEnabled(dlPush["enabled"] !== false);
-    }).catch(() => {});
+    } catch {
+      /* leave previous state */
+    }
   }, [authToken]);
+
+  useEffect(() => { reloadNotificationSettings(); }, [reloadNotificationSettings]);
 
   const handleConnectSlack = async () => {
     setSlackConnecting(true);
@@ -1390,17 +1393,48 @@ export default function AdminNotifyPage() {
   };
 
   // ── Delivery destination handlers ──────────────────────────────────────
-  const handleSaveDlSlack = async () => {
+  // Slack(配達): 共通の連携(Bot Token)を使い回し、チャンネルだけ上書きする
+  // （setSlackChannel の target="slack_delivery"。2026-10-24: 専用のWebhook URL入力は廃止）。
+  const openDlSlackPicker = () => {
+    setDlSlackError("");
+    setDlSlackChannelId(dlSlackOverrideChannelId);
+    setDlSlackShowPicker(true);
+    if (slackChannels === null) loadSlackChannels();
+    if (slackUsers === null) loadSlackUsers();
+  };
+
+  const handleSaveDlSlackChannel = async () => {
+    if (!dlSlackChannelId) return;
     setDlSlackSaving(true);
     setDlSlackError("");
     try {
-      await api.updateSlackDelivery(authToken, dlSlackUrl);
-      setDlSlackConfigured(true);
-      setDlSlackUrl("");
+      if (dlSlackChannelId.startsWith("user:")) {
+        const id = dlSlackChannelId.slice(5);
+        const u = (slackUsers ?? []).find((x) => x.id === id);
+        await api.setSlackChannel(authToken, { user_id: id, display_name: u?.name }, "slack_delivery");
+      } else {
+        await api.setSlackChannel(authToken, { channel_id: dlSlackChannelId }, "slack_delivery");
+      }
+      await reloadNotificationSettings();
+      setDlSlackShowPicker(false);
     } catch (e: unknown) {
       setDlSlackError(e instanceof Error ? e.message : "保存に失敗しました");
     } finally {
       setDlSlackSaving(false);
+    }
+  };
+
+  const handleResetDlSlackChannel = async () => {
+    setDlSlackResetting(true);
+    setDlSlackError("");
+    try {
+      await api.setSlackChannel(authToken, {}, "slack_delivery");
+      await reloadNotificationSettings();
+      setDlSlackShowPicker(false);
+    } catch (e: unknown) {
+      setDlSlackError(e instanceof Error ? e.message : "解除に失敗しました");
+    } finally {
+      setDlSlackResetting(false);
     }
   };
 
@@ -1419,39 +1453,6 @@ export default function AdminNotifyPage() {
       setDlSlackError(e instanceof Error ? e.message : "送信に失敗しました");
     } finally {
       setDlSlackTesting(false);
-    }
-  };
-
-  const handleSaveDlChatwork = async () => {
-    setDlCwSaving(true);
-    setDlCwError("");
-    try {
-      await api.updateChatworkDelivery(authToken, dlCwApiToken, dlCwRoomId);
-      setDlCwConfigured(true);
-      setDlCwApiToken("");
-      setDlCwRoomId("");
-    } catch (e: unknown) {
-      setDlCwError(e instanceof Error ? e.message : "保存に失敗しました");
-    } finally {
-      setDlCwSaving(false);
-    }
-  };
-
-  const handleTestDlChatwork = async () => {
-    setDlCwTesting(true);
-    setDlCwError("");
-    try {
-      const res = await api.testNotification(authToken, "chatwork_delivery");
-      if (res.ok) {
-        setDlCwTested(true);
-        setTimeout(() => setDlCwTested(false), 3000);
-      } else {
-        setDlCwError(res.error ?? "送信に失敗しました");
-      }
-    } catch (e: unknown) {
-      setDlCwError(e instanceof Error ? e.message : "送信に失敗しました");
-    } finally {
-      setDlCwTesting(false);
     }
   };
 
@@ -1897,97 +1898,89 @@ export default function AdminNotifyPage() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>荷物の配達（呼び出し）通知先</div>
-              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>キオスクの「配達の呼び出し」専用の通知先。受付通知とは別に設定できます。</div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>キオスクの「配達の呼び出し」専用の通知先。Slack・Webhookは受付通知と別のチャンネル／URLに切り替えられます。</div>
             </div>
           </div>
           <div style={{ marginBottom: 18, padding: "10px 14px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.25)", borderRadius: 8, fontSize: 12, color: "#7a5c00", lineHeight: 1.55 }}>
-            未設定の場合は通常の受付通知先に送信されます
+            未設定の場合は通常の受付通知先に送信されます（Chatworkは上の「Chatwork」カードで設定したルームがそのまま配達の宛先です）
           </div>
 
-          <div className="adm-grid-2" style={{ gap: 20 }}>
-            {/* Delivery Slack */}
+          <div className="adm-autofit-lg">
+            {/* Delivery Slack — 共通のSlack連携(Bot Token)を使い回し、チャンネルだけ上書きできる */}
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15", flex: 1 }}>Slack（配達）</div>
-                <MkPill tone={dlSlackConfigured ? "live" : "off"}>{dlSlackConfigured ? "設定済" : "未設定"}</MkPill>
+                <MkPill tone={dlSlackOverrideChannelId || dlSlackLegacyWebhook ? "live" : "off"}>
+                  {dlSlackOverrideChannelId || dlSlackLegacyWebhook ? "専用チャンネル" : "受付と共通"}
+                </MkPill>
               </div>
-              <Field label="Webhook URL">
-                <TextInput
-                  placeholder="https://hooks.slack.com/services/..."
-                  mono
-                  value={dlSlackUrl}
-                  onChange={setDlSlackUrl}
-                />
-              </Field>
+
+              {!slackStatus?.connected ? (
+                <div style={{ fontSize: 12, color: "#a8a198", lineHeight: 1.6 }}>
+                  上の「Slack」で連携すると、配達の呼び出し専用のチャンネルを選べます（省略時は受付と同じチャンネルに届きます）。
+                </div>
+              ) : dlSlackShowPicker ? (
+                <>
+                  <select
+                    value={dlSlackChannelId}
+                    onChange={(e) => setDlSlackChannelId(e.target.value)}
+                    style={selectStyle}
+                  >
+                    <option value="">チャンネル・DM先を選択…</option>
+                    <optgroup label="チャンネル">
+                      {(slackChannels ?? []).map((c) => (
+                        <option key={c.id} value={c.id}>{c.is_private ? "🔒 " : "# "}{c.name}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="ダイレクトメッセージ（個人）">
+                      {(slackUsers ?? []).map((u) => (
+                        <option key={u.id} value={`user:${u.id}`}>@ {u.name}</option>
+                      ))}
+                    </optgroup>
+                  </select>
+                  <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <MkBtn variant="primary" size="sm" onClick={handleSaveDlSlackChannel} disabled={!dlSlackChannelId || dlSlackSaving}>
+                      {dlSlackSaving ? "保存中…" : "このチャンネルに設定"}
+                    </MkBtn>
+                    <MkBtn size="sm" onClick={() => setDlSlackShowPicker(false)}>キャンセル</MkBtn>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: 12.5, color: "#2d2a24", lineHeight: 1.6 }}>
+                    {dlSlackLegacyWebhook
+                      ? "旧設定（Webhook URL）で送信中です。"
+                      : dlSlackOverrideChannelId
+                        ? <>専用チャンネル：<strong>{dlSlackOverrideChannelName || dlSlackOverrideChannelId}</strong></>
+                        : <>受付と同じチャンネル（{slackStatus.channel_name || "未設定"}）に届きます。</>}
+                  </div>
+                  <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <button onClick={openDlSlackPicker} style={testBtnStyle(false)}>
+                      {dlSlackOverrideChannelId || dlSlackLegacyWebhook ? "チャンネルを変更" : "別のチャンネルにする"}
+                    </button>
+                    {(dlSlackOverrideChannelId || dlSlackLegacyWebhook) && (
+                      <button onClick={handleResetDlSlackChannel} disabled={dlSlackResetting} style={testBtnStyle(dlSlackResetting)}>
+                        {dlSlackResetting ? "解除中…" : "受付と共通に戻す"}
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+
               {dlSlackError && (
                 <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
                   {dlSlackError}
                 </div>
               )}
               <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <MkBtn variant="primary" size="sm" onClick={handleSaveDlSlack}>
-                  {dlSlackSaving ? "保存中…" : "保存"}
-                </MkBtn>
-                {dlSlackConfigured && (
-                  <button
-                    onClick={handleTestDlSlack}
-                    disabled={dlSlackTesting}
-                    style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: dlSlackTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: dlSlackTesting ? 0.6 : 1 }}
-                  >
-                    {dlSlackTesting ? "送信中..." : "テスト送信"}
-                  </button>
-                )}
+                <button
+                  onClick={handleTestDlSlack}
+                  disabled={dlSlackTesting || (!slackStatus?.connected && !dlSlackLegacyWebhook)}
+                  style={testBtnStyle(dlSlackTesting || (!slackStatus?.connected && !dlSlackLegacyWebhook))}
+                >
+                  {dlSlackTesting ? "送信中..." : "テスト送信"}
+                </button>
                 {dlSlackTested && (
-                  <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
-                )}
-              </div>
-            </div>
-
-            {/* Delivery Chatwork */}
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15", flex: 1 }}>Chatwork（配達）</div>
-                <MkPill tone={dlCwConfigured ? "live" : "off"}>{dlCwConfigured ? "設定済" : "未設定"}</MkPill>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                <Field label="API トークン">
-                  <TextInput
-                    placeholder="Chatwork API トークン"
-                    mono
-                    value={dlCwApiToken}
-                    onChange={setDlCwApiToken}
-                  />
-                </Field>
-                <Field label="通知先ルーム ID" hint="配達の呼び出し・置き配の通知先">
-                  <ChatworkRoomPicker
-                    authToken={authToken}
-                    apiTokenDraft={dlCwApiToken}
-                    connected={dlCwConfigured}
-                    value={dlCwRoomId}
-                    onChange={(id) => setDlCwRoomId(id)}
-                    placeholder="例: 312648719"
-                  />
-                </Field>
-              </div>
-              {dlCwError && (
-                <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
-                  {dlCwError}
-                </div>
-              )}
-              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <MkBtn variant="primary" size="sm" onClick={handleSaveDlChatwork}>
-                  {dlCwSaving ? "保存中…" : "保存"}
-                </MkBtn>
-                {dlCwConfigured && (
-                  <button
-                    onClick={handleTestDlChatwork}
-                    disabled={dlCwTesting}
-                    style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: dlCwTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: dlCwTesting ? 0.6 : 1 }}
-                  >
-                    {dlCwTesting ? "送信中..." : "テスト送信"}
-                  </button>
-                )}
-                {dlCwTested && (
                   <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
                 )}
               </div>

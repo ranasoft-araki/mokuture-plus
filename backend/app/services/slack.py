@@ -333,6 +333,24 @@ class SlackNotifier:
         ]
 
     @staticmethod
+    def resolve_delivery_config(base: dict | None, override: dict | None) -> dict:
+        """配達（荷物の配達の呼び出し）用の送信設定を解決する。
+
+        チャンネルは `override`(配達専用の上書き。あれば) → `base`(共通の Slack 連携) の順。
+        Bot Token は常に共通の連携を使い回す（担当者ごとのチャンネル指定と同じ考え方で、
+        配達用に別の Bot 連携を結ばせない）。**旧形式**（`override` が自前の `webhook_url`
+        を持つ = 2026-10 以前の「配達だけ生のWebhook URLを入力する」仕様で保存された行）は
+        そのまま自己完結した設定として使う（後方互換）。
+        """
+        if override and override.get("webhook_url"):
+            return override
+        result = dict(base or {})
+        if override and override.get("channel_id"):
+            result["channel_id"] = override["channel_id"]
+            result["channel_name"] = override.get("channel_name", "")
+        return result
+
+    @staticmethod
     def public_config(config: dict) -> dict:
         """Non-secret view of a stored Slack config for the admin UI.
 

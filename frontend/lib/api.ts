@@ -554,9 +554,16 @@ export const api = {
   getSlackUsers: (token: string) =>
     request<{ users: { id: string; name: string }[] }>(
       "/notifications/slack/users", {}, token),
-  /** チャンネルへ送るか、個人へDMするか（どちらか一方）。 */
-  setSlackChannel: (token: string, dest: { channel_id: string } | { user_id: string; display_name?: string }) =>
-    request<{ ok: boolean; channel_name: string }>("/notifications/slack/channel", { method: "POST", body: JSON.stringify(dest) }, token),
+  /** チャンネルへ送るか、個人へDMするか（どちらか一方）。`target="slack_delivery"` は配達の
+   * 呼び出し専用のチャンネル上書き（共通のBot Tokenを使い回す。空のdestで上書きを解除し、
+   * 受付と同じ共通チャンネルに戻す）。 */
+  setSlackChannel: (
+    token: string,
+    dest: { channel_id: string } | { user_id: string; display_name?: string } | Record<string, never>,
+    target: "slack" | "slack_delivery" = "slack",
+  ) =>
+    request<{ ok: boolean; channel_name: string }>(
+      "/notifications/slack/channel", { method: "POST", body: JSON.stringify({ ...dest, target }) }, token),
   disconnectSlack: (token: string) =>
     request<{ ok: boolean }>("/notifications/slack/disconnect", { method: "POST" }, token),
 
@@ -609,18 +616,14 @@ export const api = {
     request<{ ok: boolean }>("/notifications/test/webhook", { method: "POST" }, token),
 
   // Delivery-specific notification destinations (荷物の配達 / 呼び出し)
-  updateSlackDelivery: (token: string, webhook_url: string) =>
-    request("/notifications/settings/slack_delivery", { method: "PUT", body: JSON.stringify({ webhook_url }) }, token),
-  updateChatworkDelivery: (token: string, api_token: string, room_id: string) =>
-    request("/notifications/settings/chatwork_delivery", { method: "PUT", body: JSON.stringify({ api_token, room_id }) }, token),
+  // Slack/Chatwork はここで新たに連携させず、共通の連携(上の Slack/Chatwork カード)を
+  // 使い回す。Slack のチャンネル上書きは setSlackChannel(…, "slack_delivery") で行う。
   updateWebhookDelivery: (token: string, webhook_url: string) =>
     request("/notifications/settings/webhook_delivery", { method: "PUT", body: JSON.stringify({ webhook_url }) }, token),
   updatePushDelivery: (token: string, enabled: boolean) =>
     request("/notifications/settings/push_delivery", { method: "PUT", body: JSON.stringify({ enabled }) }, token),
   testSlackDelivery: (token: string) =>
     request<{ ok: boolean }>("/notifications/test/slack_delivery", { method: "POST" }, token),
-  testChatworkDelivery: (token: string) =>
-    request<{ ok: boolean }>("/notifications/test/chatwork_delivery", { method: "POST" }, token),
   testWebhookDelivery: (token: string) =>
     request<{ ok: boolean }>("/notifications/test/webhook_delivery", { method: "POST" }, token),
 

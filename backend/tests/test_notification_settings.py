@@ -90,20 +90,16 @@ async def test_共通も新規登録にトークンは必須(settings_client, te
     assert await stored(tenant.id) == {}
 
 
-async def test_配達用は新規登録でルームも必須(settings_client, tenant):
-    """配達用は行はあるがルーム空、を許すとフォールバックせず黙って止まる
-    （`chatwork.load_config` 参照）。共通とは扱いを変える。"""
-    r = settings_client.put(f"{API}/settings/chatwork_delivery", json={"api_token": "tok", "room_id": ""})
-    assert r.status_code == 422
-    assert await stored(tenant.id, "chatwork_delivery") == {}
-
-
-async def test_配達用も同じ扱い(settings_client, tenant):
-    await set_notification_setting(tenant.id, "chatwork_delivery", {"api_token": "dl-token", "room_id": "999"})
-
-    settings_client.put(f"{API}/settings/chatwork_delivery", json={"api_token": "", "room_id": "888"})
-
-    assert await stored(tenant.id, "chatwork_delivery") == {"api_token": "dl-token", "room_id": "888"}
+async def test_配達の呼び出しの宛先は共通のChatworkルーム専用endpointは廃止(settings_client, tenant):
+    """2026-10-24: 配達専用に別のChatwork連携を結ばせていたのを廃止した。共通カードの
+    ルームが最初から「配達の呼び出し」専用の宛先であり、二重に設定させるのは無駄
+    だったため（CLAUDE.md「Chatwork の接続設定」参照）。PUT/POST の delivery 専用
+    endpoint は無くなったが、既に本番にある旧形式の行は `chatwork.load_config` の
+    フォールバック(chatwork_delivery → chatwork)でそのまま動き続ける。"""
+    r = settings_client.put(f"{API}/settings/chatwork_delivery", json={"api_token": "tok", "room_id": "999"})
+    assert r.status_code == 404
+    r = settings_client.post(f"{API}/test/chatwork_delivery")
+    assert r.status_code == 404
 
 
 async def test_ルーム一覧_未連携かつ未入力なら400(settings_client):
@@ -276,3 +272,117 @@ async def test_Slackチャンネル_channel_idもuser_idも無ければ422(setti
     await set_notification_setting(tenant.id, "slack", {"bot_access_token": "xoxb-tok"})
     r = settings_client.post(f"{API}/slack/channel", json={})
     assert r.status_code == 422
+
+
+# ── 配達(荷物の配達の呼び出し)専用のSlackチャンネル上書き ──────────────────────────
+# 2026-10-24: 配達専用に別のSlack連携(Webhook URL手入力)を結ばせていたのを廃止し、
+# 共通のBot Tokenを使い回してチャンネルだけ上書きする方式にした（無駄な二重連携の解消）。
+
+async def test_配達用チャンネルはBotTokenを複製せず保存する(settings_client, tenant, monkeypatch):
+    from app.api import notifications as notifications_api
+    _enable_slack(monkeypatch, notifications_api)
+
+    await set_notification_setting(tenant.id, "slack", {"bot_access_token": "xoxb-tok", "channel_id": "C1", "channel_name": "# general"})
+
+    async def fake_channel_info(token, channel_id):
+        assert token == "xoxb-tok"
+        return {"id": channel_id, "name": "warehouse", "is_private": False, "is_member": True}
+
+    monkeypatch.setattr(notifications_api.SlackNotifier, "get_channel_info", fake_channel_info)
+
+    r = settings_client.post(f"{API}/slack/channel", json={"channel_id": "C2", "target": "slack_delivery"})
+    assert r.status_code == 200
+    assert r.json()["channel_name"] == "#warehouse"
+
+    # slack_delivery には channel だけ。bot_access_token は複製しない。
+    dl = await stored(tenant.id, "slack_delivery")
+    assert dl["channel_id"] == "C2"
+    assert dl["channel_name"] == "#warehouse"
+    assert "bot_access_token" not in dl
+
+    # 共通の slack 行はそのまま(C1)。
+    base = await stored(tenant.id, "slack")
+    assert base["channel_id"] == "C1"
+
+
+async def test_配達用チャンネルの上書きを解除すると受付と共通になる(settings_client, tenant, monkeypatch):
+    from app.api import notifications as notifications_api
+    _enable_slack(monkeypatch, notifications_api)
+
+    await set_notification_setting(tenant.id, "slack", {"bot_access_token": "xoxb-tok", "channel_id": "C1", "channel_name": "# general"})
+    await set_notification_setting(tenant.id, "slack_delivery", {"channel_id": "C2", "channel_name": "#warehouse"})
+
+    r = settings_client.post(f"{API}/slack/channel", json={"target": "slack_delivery"})
+    assert r.status_code == 200
+    assert r.json()["channel_name"] == ""
+    assert await stored(tenant.id, "slack_delivery") == {}
+
+
+async def test_Slack連携解除で新形式の配達上書きは消えるが旧WebhookのSlackは残る(settings_client, tenant, monkeypatch):
+    from app.api import notifications as notifications_api
+    _enable_slack(monkeypatch, notifications_api)
+
+    await set_notification_setting(tenant.id, "slack", {"bot_access_token": "xoxb-tok", "channel_id": "C1"})
+    await set_notification_setting(tenant.id, "slack_delivery", {"channel_id": "C2", "channel_name": "#warehouse"})
+
+    settings_client.post(f"{API}/slack/disconnect")
+
+    assert await stored(tenant.id, "slack") == {}
+    assert await stored(tenant.id, "slack_delivery") == {}
+
+    # 旧形式(自前のwebhook_url)は共通連携と無関係なので解除しても残る。
+    await set_notification_setting(tenant.id, "slack_delivery", {"webhook_url": "https://hooks.slack.com/x"})
+    settings_client.post(f"{API}/slack/disconnect")
+    assert await stored(tenant.id, "slack_delivery") == {"webhook_url": "https://hooks.slack.com/x"}
+
+
+def test_配達送信設定の解決_上書きが優先される():
+    from app.services.slack import SlackNotifier
+
+    base = {"bot_access_token": "xoxb-tok", "channel_id": "C1", "channel_name": "# general"}
+    override = {"channel_id": "C2", "channel_name": "#warehouse"}
+    resolved = SlackNotifier.resolve_delivery_config(base, override)
+    assert resolved["bot_access_token"] == "xoxb-tok"
+    assert resolved["channel_id"] == "C2"
+    assert resolved["channel_name"] == "#warehouse"
+
+
+def test_配達送信設定の解決_上書きが無ければ共通にフォールバック():
+    from app.services.slack import SlackNotifier
+
+    base = {"bot_access_token": "xoxb-tok", "channel_id": "C1", "channel_name": "# general"}
+    resolved = SlackNotifier.resolve_delivery_config(base, None)
+    assert resolved == base
+
+
+def test_配達送信設定の解決_旧形式のwebhookはそのまま使う():
+    from app.services.slack import SlackNotifier
+
+    base = {"bot_access_token": "xoxb-tok", "channel_id": "C1"}
+    override = {"webhook_url": "https://hooks.slack.com/legacy"}
+    resolved = SlackNotifier.resolve_delivery_config(base, override)
+    assert resolved == override
+
+
+async def test_配達テスト送信_未連携は400(settings_client, tenant):
+    r = settings_client.post(f"{API}/test/slack_delivery")
+    assert r.status_code == 400
+
+
+async def test_配達テスト送信_共通チャンネルへ送る(settings_client, tenant, monkeypatch):
+    from app.api import notifications as notifications_api
+
+    await set_notification_setting(tenant.id, "slack", {"bot_access_token": "xoxb-tok", "channel_id": "C1", "channel_name": "# general"})
+
+    seen = {}
+
+    async def fake_send_to_config(config, text, blocks=None):
+        seen["channel_id"] = config.get("channel_id")
+        return True
+
+    monkeypatch.setattr(notifications_api.SlackNotifier, "send_to_config", fake_send_to_config)
+
+    r = settings_client.post(f"{API}/test/slack_delivery")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert seen["channel_id"] == "C1"

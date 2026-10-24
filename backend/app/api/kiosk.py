@@ -1293,22 +1293,30 @@ async def _first_configured_setting(
 
 
 async def _notify_slack_text(
-    tenant_id: str, text: str, db: AsyncSession, types: tuple[str, ...] = ("slack",),
+    tenant_id: str, text: str, db: AsyncSession,
     decision: tuple[list[dict], str] | None = None,
 ) -> bool | None:
-    """Send a plain text message to the first configured Slack webhook among ``types``.
+    """配達（荷物の配達の呼び出し・置き配）専用のSlack送信。
+
+    チャンネルは配達専用の上書き(`slack_delivery`。あれば) → 共通の Slack 連携(`slack`) の順。
+    Bot Token は常に共通の連携を使い回す(`SlackNotifier.resolve_delivery_config`。担当者ごとの
+    チャンネル指定と同じ考え方で、配達用に別の連携を結ばせない)。**旧形式**(`slack_delivery`
+    が自前の `webhook_url` を持つ)はそのまま使う(後方互換)。
 
     戻り値は分析ログ用: True=送信成功 / False=失敗 / None=未設定(送らなかった)。
-
-    Best-effort. ``types`` is an ordered preference (e.g. delivery-specific first,
-    then the normal reception destination as fallback). ``decision`` = (actions, token)
-    を渡すと、署名シークレット設定済み & Bot Token 経路のときだけ 受付/電話 の対応ボタン
-    (Block Kit)を付ける。押下は受付通知と同じ interactions エンドポイントで処理される。"""
-    setting = await _first_configured_setting(tenant_id, types, db)
-    if setting is None:
+    ``decision`` = (actions, token) を渡すと、署名シークレット設定済み & Bot Token 経路の
+    ときだけ 受付/電話 の対応ボタン(Block Kit)を付ける。押下は受付通知と同じ interactions
+    エンドポイントで処理される。"""
+    base_setting = await _first_configured_setting(tenant_id, ("slack",), db)
+    override_setting = await _first_configured_setting(tenant_id, ("slack_delivery",), db)
+    if base_setting is None and override_setting is None:
         return None
     try:
-        config = decrypt_dict(setting.config_json)
+        base = decrypt_dict(base_setting.config_json) if base_setting is not None else None
+        override = decrypt_dict(override_setting.config_json) if override_setting is not None else None
+        config = SlackNotifier.resolve_delivery_config(base, override)
+        if not config.get("bot_access_token") and not config.get("webhook_url"):
+            return None
         blocks = None
         if (decision is not None and settings.slack_signing_secret
                 and config.get("bot_access_token") and config.get("channel_id")):
@@ -1519,7 +1527,7 @@ async def _fire_delivery_notifications(
     try:
         async with AsyncSessionLocal() as db:
             tasks = [
-                _notify_slack_text(tenant_id, text, db, types=("slack_delivery", "slack"), decision=slack_decision),
+                _notify_slack_text(tenant_id, text, db, decision=slack_decision),
                 _notify_webhook_event(tenant_id, webhook_payload, db, types=("webhook_delivery", "webhook")),
                 _notify_chatwork_text(tenant_id, text, db, types=("chatwork_delivery", "chatwork")),
             ]
