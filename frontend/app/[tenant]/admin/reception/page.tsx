@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, type ReceptionLog } from "@/lib/api";
 import { subscribeRealtime } from "@/lib/realtime";
-import { getAccessToken, clearTokens } from "@/lib/auth";
+import { getAccessToken } from "@/lib/auth";
 import { hasHonorific } from "@/lib/honorific";
 import { AdminShell, MkCard } from "@/components/AdminShell";
 import { ConfirmModal } from "@/components/ConfirmModal";
@@ -474,7 +474,8 @@ export default function ReceptionLogsPage() {
     setToken(t);
     api.listReception(t)
       .then((data) => { setLogs(data); setLastRefreshed(new Date()); })
-      .catch(() => { clearTokens(); router.push("/login"); })
+      // セッション切れは api.ts がログイン画面へ移す。通信断などの一時的な失敗ではログアウトさせない(自動更新で取り直す)
+      .catch(() => {})
       .finally(() => setLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

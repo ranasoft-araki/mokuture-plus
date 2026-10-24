@@ -159,8 +159,7 @@ export default function AdminLockerPage() {
       setDevices(data.devices);
       setError(null);
     } catch (err: unknown) {
-      // 認証切れは初回のみログインへ。自動更新中のネットワーク一時失敗では画面を保持。
-      if (!silent) { clearTokens(); router.push("/login"); return; }
+      // セッション切れは api.ts がログイン画面へ移す。ここに来るのは通信断などの一時的な失敗なので画面を保持。
       setError(err instanceof Error ? err.message : "取得に失敗しました");
     } finally {
       if (!silent) setLoading(false);

@@ -7,23 +7,56 @@ async function _fetch(path: string, init?: RequestInit, token?: string): Promise
 }
 
 // Singleton: prevents race condition when multiple requests expire simultaneously
-let _pendingRefresh: Promise<string | null> | null = null;
+type _RefreshResult = { token: string | null; sessionDead: boolean; role: string | null };
+let _pendingRefresh: Promise<_RefreshResult> | null = null;
 
-async function _doRefresh(): Promise<string | null> {
-  const { getRefreshToken, refreshSaveTokens, clearTokens } = await import("@/lib/auth");
+async function _doRefresh(): Promise<_RefreshResult> {
+  const { getRefreshToken, getRole, refreshSaveTokens, clearTokens } = await import("@/lib/auth");
   const rt = getRefreshToken();
-  if (!rt) return null;
-  const res = await _fetch("/auth/refresh", {
-    method: "POST",
-    body: JSON.stringify({ refresh_token: rt }),
-  });
+  const role = getRole();
+  if (!rt) return { token: null, sessionDead: true, role };
+
+  let res: Response;
+  try {
+    res = await _fetch("/auth/refresh", {
+      method: "POST",
+      body: JSON.stringify({ refresh_token: rt }),
+    });
+  } catch {
+    // ネットワーク断等: セッションが死んだとは限らないので強制ログアウトしない
+    return { token: null, sessionDead: false, role };
+  }
+
   if (res.ok) {
     const { access_token, refresh_token } = await res.json();
     refreshSaveTokens(access_token, refresh_token);
-    return access_token;
+    return { token: access_token, sessionDead: false, role };
   }
-  clearTokens();
-  return null;
+
+  // リフレッシュトークン自体が無効/失効 → セッション死亡が確定（デプロイ中の5xx等は対象外）
+  if (res.status === 401 || res.status === 403) {
+    clearTokens();
+    return { token: null, sessionDead: true, role };
+  }
+  return { token: null, sessionDead: false, role };
+}
+
+// サーバー側の一時的な失敗(通信断・デプロイ中の5xx)。「セッション」の語を入れないこと:
+// ダッシュボードはこの語を見てログアウトさせるため、入れると一時的な失敗でもログアウトになる。
+const _TEMP_FAILURE = "サーバーに接続できません。時間をおいて再度お試しください。";
+
+// 多重リダイレクト防止用フラグ
+let _redirecting = false;
+
+/** セッション死亡確定時、役割に応じたログイン画面へ強制的に飛ばす。 */
+function _forceLoginRedirect(role: string | null) {
+  if (typeof window === "undefined" || _redirecting) return;
+  _redirecting = true;
+  const dest = role === "operator" ? "/ops-console" : role === "reseller" ? "/partner-portal" : "/login";
+  if (window.location.pathname !== dest) {
+    // replace: 戻るで死んだページへ戻れないようにする(戻ると _redirecting が立ったままで以後リダイレクトしない)
+    window.location.replace(dest);
+  }
 }
 
 // アクセストークン(JWT)の exp をローカルで確認し、失効(間近)なら true を返す。
@@ -80,8 +113,9 @@ export async function ensureFreshToken(): Promise<string | null> {
     if (!_pendingRefresh) {
       _pendingRefresh = _doRefresh().finally(() => { _pendingRefresh = null; });
     }
-    const fresh = await _pendingRefresh;
-    if (fresh) token = fresh;
+    const result = await _pendingRefresh;
+    if (result.token) token = result.token;
+    else if (result.sessionDead) { _forceLoginRedirect(result.role); return null; }
   }
   return token;
 }
@@ -109,7 +143,15 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
       _pendingRefresh = _doRefresh().finally(() => { _pendingRefresh = null; });
     }
     const proactive = await _pendingRefresh;
-    if (proactive) token = proactive;
+    if (proactive.token) {
+      token = proactive.token;
+    } else if (proactive.sessionDead) {
+      _forceLoginRedirect(proactive.role);
+      return new Promise<T>(() => {}); // リダイレクト中: 誤ったエラー表示が一瞬でも出ないよう解決させない
+    } else {
+      // 一時的な失敗: 失効済みトークンで叩いても401→再refreshになるだけなので、ここで止める
+      throw new Error(_TEMP_FAILURE);
+    }
   }
 
   let res = await _fetch(path, init, token);
@@ -120,9 +162,15 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
     if (!_pendingRefresh) {
       _pendingRefresh = _doRefresh().finally(() => { _pendingRefresh = null; });
     }
-    const newToken = await _pendingRefresh;
-    if (!newToken) throw new Error("セッションが切れました。再ログインしてください。");
-    res = await _fetch(path, init, newToken);
+    const result = await _pendingRefresh;
+    if (!result.token) {
+      if (result.sessionDead) {
+        _forceLoginRedirect(result.role);
+        return new Promise<T>(() => {}); // リダイレクト中: 誤ったエラー表示が一瞬でも出ないよう解決させない
+      }
+      throw new Error(_TEMP_FAILURE);
+    }
+    res = await _fetch(path, init, result.token);
   }
 
   if (!res.ok) {

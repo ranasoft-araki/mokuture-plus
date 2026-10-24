@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api, type Device } from "@/lib/api";
-import { clearTokens, getAccessToken } from "@/lib/auth";
+import { getAccessToken } from "@/lib/auth";
 import { AdminShell, MkBtn, MkCard, MkPill } from "@/components/AdminShell";
 import { ConfirmModal } from "@/components/ConfirmModal";
 
@@ -31,9 +31,9 @@ export default function AdminKioskPage() {
   const loadDevices = useCallback(async (token: string) => {
     try {
       setDevices(await api.listDevices(token));
-    } catch {
-      clearTokens();
-      router.push("/login");
+    } catch (e) {
+      // セッション切れは api.ts がログイン画面へ移す。ここに来るのは通信断などの一時的な失敗なのでログアウトさせない
+      setError(e instanceof Error ? e.message : "取得に失敗しました");
     } finally {
       setLoading(false);
     }
