@@ -82,19 +82,6 @@ function PushPanel({ authToken }: { authToken: string }) {
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => { setPushStatus(getPushStatus()); }, []);
 
-  const handleSetupVapid = async () => {
-    setWorking(true);
-    setError("");
-    try {
-      const res = await api.setupPushVapid(authToken);
-      setVapidKey(res.public_key);
-    } catch {
-      setError("VAPID鍵の生成に失敗しました");
-    } finally {
-      setWorking(false);
-    }
-  };
-
   const handleSubscribe = async () => {
     if (!vapidKey) return;
     setWorking(true);
@@ -175,24 +162,6 @@ function PushPanel({ authToken }: { authToken: string }) {
     }
   };
 
-  const handleRegenerateVapid = async () => {
-    setWorking(true);
-    setError("");
-    try {
-      if ("serviceWorker" in navigator) {
-        const reg = await navigator.serviceWorker.ready;
-        const sub = await reg.pushManager.getSubscription();
-        if (sub) await sub.unsubscribe();
-      }
-      await api.regenerateVapid(authToken);
-      await reload();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "再生成に失敗しました");
-    } finally {
-      setWorking(false);
-    }
-  };
-
   const handleDeleteSub = async (endpoint: string) => {
     await api.deletePushSubscription(authToken, endpoint);
     await reload();
@@ -226,28 +195,13 @@ function PushPanel({ authToken }: { authToken: string }) {
 
       {activeTab === "settings" && (
         <div className="adm-grid-2" style={{ gap: 20 }}>
-          {/* Left: VAPID setup + subscribe */}
+          {/* Left: subscribe this device */}
           <div>
-            {!vapidKey ? (
+            {!vapidKey && (
               <div style={{ padding: "20px", background: "#f4f1ea", borderRadius: 10, marginBottom: 16, border: "1px solid #efece5" }}>
-                <div style={{ fontSize: 13, color: "#6b6559", marginBottom: 12, lineHeight: 1.55 }}>
-                  プッシュ通知を有効にするには、まず VAPID 鍵を生成してください。
+                <div style={{ fontSize: 13, color: "#6b6559", lineHeight: 1.55 }}>
+                  プッシュ通知が使えない状態です。運営にお問い合わせください。
                 </div>
-                <MkBtn variant="primary" size="sm" onClick={handleSetupVapid}>
-                  {working ? "生成中…" : "VAPID 鍵を生成"}
-                </MkBtn>
-              </div>
-            ) : (
-              <div style={{ marginBottom: 16, padding: "12px 14px", background: "#eaf0e8", borderRadius: 8, border: "1px solid rgba(74,124,78,0.2)", display: "flex", gap: 10, alignItems: "center" }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4a7c4e" strokeWidth="2" strokeLinecap="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                <span style={{ fontSize: 12, color: "#3a6240", fontWeight: 500, flex: 1 }}>VAPID 鍵が設定されています</span>
-                <button
-                  onClick={handleRegenerateVapid}
-                  disabled={working}
-                  style={{ fontSize: 10.5, color: "#a8a198", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", padding: 0 }}
-                >
-                  再生成
-                </button>
               </div>
             )}
 
@@ -1786,7 +1740,7 @@ export default function AdminNotifyPage() {
         <MkCard style={{ gridColumn: "span 2" }}>
           <MkSectionTitle
             title="プッシュ通知"
-            subtitle="担当者スマホに Web Push API (VAPID) で通知を配信"
+            subtitle="担当者のスマホに、アプリの通知として届けます"
           />
           {authToken ? (
             <PushPanel authToken={authToken} />

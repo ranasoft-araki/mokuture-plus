@@ -579,8 +579,6 @@ export const api = {
   // Push notifications (admin)
   getPushVapidKey: (token: string) =>
     request<{ public_key: string | null }>("/notifications/push/vapid-public-key", {}, token),
-  setupPushVapid: (token: string) =>
-    request<{ public_key: string }>("/notifications/push/setup", { method: "POST" }, token),
   subscribePush: (token: string, body: { endpoint: string; p256dh: string; auth: string }) =>
     request("/notifications/push/subscribe", { method: "POST", body: JSON.stringify(body) }, token),
   listPushSubscriptions: (token: string) =>
@@ -589,8 +587,6 @@ export const api = {
     request("/notifications/push/unsubscribe", { method: "DELETE", body: JSON.stringify({ endpoint }) }, token),
   testPushNotification: (token: string) =>
     request<{ sent: number; total: number }>("/notifications/push/test", { method: "POST" }, token),
-  regenerateVapid: (token: string) =>
-    request<{ public_key: string; regenerated: boolean }>("/notifications/push/regenerate", { method: "POST" }, token),
 
   // Notification settings
   getNotificationSettings: (token: string) =>

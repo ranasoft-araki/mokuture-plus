@@ -58,6 +58,10 @@ async def get_settings(user: User = Depends(require_roles("admin", "superadmin")
     settings_list = result.scalars().all()
     out = {}
     for s in settings_list:
+        # VAPID key rows ("webpush" is a dead legacy name) hold private keys and
+        # nothing in the admin panel reads them — never send them out.
+        if s.type in ("vapid", "webpush"):
+            continue
         try:
             config = decrypt_dict(s.config_json) if s.config_json and s.config_json != "{}" else {}
         except Exception:
@@ -272,7 +276,7 @@ async def _run_test_push_delivery(tenant_id: str, db: AsyncSession) -> dict:
     if not private_key:
         private_key = settings.vapid_private_key
     if not private_key:
-        raise HTTPException(status_code=400, detail="プッシュ通知が未設定です。「プッシュ通知」で VAPID 鍵を生成してください。")
+        raise HTTPException(status_code=400, detail="プッシュ通知が使えない状態です。運営にお問い合わせください。")
 
     subs_result = await db.execute(
         select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
