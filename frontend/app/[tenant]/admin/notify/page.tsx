@@ -522,7 +522,7 @@ function routeSummary(
   route: StaffNotificationRoute | undefined,
   users: StaffPushUser[] = [],
 ): string {
-  if (!route) return "未設定（全体の通知先のみ）";
+  if (!route) return "未設定（「Slack」「カスタムWebhook」「プッシュ通知」カードの宛先のみ）";
   const parts: string[] = [];
   if (route.slack_channel_name || route.slack_channel_id) {
     parts.push(`Slack ${route.slack_channel_name || route.slack_channel_id}`);
@@ -535,7 +535,7 @@ function routeSummary(
     parts.push(`プッシュ ${u ? u.name : "指定ユーザー"}`);
   }
   if (parts.length === 0) parts.push("個別の宛先なし");
-  if (route.include_default) parts.push("全体にも送る");
+  if (route.include_default) parts.push("「Slack」「カスタムWebhook」「プッシュ通知」カードにも送る");
   return parts.join(" ・ ");
 }
 
@@ -805,7 +805,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
     <div>
       <div style={{ padding: "12px 14px", background: "#f4f1ea", border: "1px solid #efece5", borderRadius: 8, fontSize: 11.5, color: "#6b6559", lineHeight: 1.8, marginBottom: 16 }}>
         担当者の登録と、担当者ごとの通知の届け先をここで管理します。ここで登録した担当者が、そのままキオスクの訪問先リストになります。
-        設定していない担当者は全体の通知先だけに届きます。応答が無いときは、指定した代理担当者の通知先へ自動で転送します。
+        設定していない担当者あての受付は、「Slack」「カスタムWebhook」「プッシュ通知」の各カードの宛先だけに届きます。応答が無いときは、指定した代理担当者の通知先へ自動で転送します。
       </div>
 
       <StaffMasterEditor
@@ -824,7 +824,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
 
       {!data.slack.bot_connected && (
         <div style={{ padding: "10px 14px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.25)", borderRadius: 8, color: "#7a5c00", fontSize: 12, marginBottom: 14 }}>
-          Slackが未連携のため、担当者ごとのチャンネル指定は使えません。上の「Slackに追加」で連携してください。
+          Slackが未連携のため、担当者ごとのチャンネル指定は使えません。上の「Slack」カードの「Slackに追加」で連携してください。
         </div>
       )}
       {!data.smtp_enabled && (
@@ -918,14 +918,14 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
                     </Field>
                     <Field
                       label="プッシュ通知の宛先"
-                      hint="プッシュはブラウザ（ログインした人）に届きます。指定すると、この担当者あてはその人の端末だけに送ります（下の「全体の通知先にも送る」に関わらず）"
+                      hint="プッシュはブラウザ（ログインした人）に届きます。指定すると、この担当者あてはその人の端末だけに送ります。その人がまだプッシュを許可していないときは、下のチェック『上の「Slack」・下の「カスタムWebhook」・上の「プッシュ通知」にも送る』がONなら、上の「プッシュ通知」で登録した全端末へ送ります"
                     >
                       <select
                         value={draft.push_user_id}
                         onChange={(e) => setDraft({ ...draft, push_user_id: e.target.value })}
                         style={selectStyle}
                       >
-                        <option value="">指定しない（全体の通知先に従う）</option>
+                        <option value="">指定しない（下のチェックがONなら、上の「プッシュ通知」で登録した全端末へ）</option>
                         {data.users.map((u) => (
                           <option key={u.id} value={u.id}>
                             {u.name}{u.has_push ? "" : "（未許可）"}
@@ -1003,9 +1003,9 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
                       style={{ marginTop: 2 }}
                     />
                     <span style={{ fontSize: 12.5, color: "#2d2a24", lineHeight: 1.7 }}>
-                      全体（テナント共通）の通知先にも送る
+                      上の「Slack」・下の「カスタムWebhook」・上の「プッシュ通知」にも送る
                       <span style={{ display: "block", fontSize: 11, color: "#a8a198" }}>
-                        OFF にすると、この担当者宛の受付では共通のSlack・Webhook・プッシュ通知を送りません
+                        OFF にすると、この担当者宛の受付の最初の通知は、ここで指定した宛先にだけ届きます（上の「Slack」カードのチャンネル・下の「カスタムWebhook」カードのURL・上の「プッシュ通知」で登録した全端末へは送りません）。応答が無く代理担当者へ転送するときは、誰にも届かないことを防ぐため、これらへ送ることがあります
                       </span>
                     </span>
                   </label>
@@ -1035,7 +1035,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
                         {confirmClear === route.id ? (
                           <>
                             <span style={{ fontSize: 12, color: "#a84238" }}>
-                              この担当者の個別設定を解除します（以後は全体の通知先だけに届きます）
+                              この担当者の個別設定を解除します（以後この担当者あての受付は、「Slack」「カスタムWebhook」「プッシュ通知」の各カードの宛先だけに届きます）
                             </span>
                             <MkBtn variant="danger" size="sm" onClick={() => clearRoute(route.id)} disabled={saving}>
                               {saving ? "解除中…" : "解除する"}
@@ -1461,7 +1461,7 @@ export default function AdminNotifyPage() {
     setDlWebhookError("");
     try {
       await api.updateWebhookDelivery(authToken, dlWebhookUrl);
-      setDlWebhookConfigured(true);
+      setDlWebhookConfigured(Boolean(dlWebhookUrl));
       setDlWebhookUrl("");
     } catch (e: unknown) {
       setDlWebhookError(e instanceof Error ? e.message : "保存に失敗しました");
@@ -1536,7 +1536,7 @@ export default function AdminNotifyPage() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>Slack</div>
-              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>来客通知をSlackチャンネルに送信</div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>来客の受付通知を送るチャンネル。下の「荷物の配達（呼び出し）通知先」で別のチャンネルを選ばなければ、配達の呼び出しもここへ届きます</div>
             </div>
             <MkPill tone={slackStatus?.connected ? "live" : "off"}>{slackStatus?.connected ? "連携済" : "未連携"}</MkPill>
           </div>
@@ -1571,7 +1571,7 @@ export default function AdminNotifyPage() {
                   <div style={{ fontSize: 13, color: "#1d1a15", fontWeight: 500 }}>{slackStatus.team_name || "—"}</div>
                 </div>
                 <div style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
-                  <div style={{ fontSize: 11, color: "#a8a198", width: 82, flexShrink: 0 }}>通知先</div>
+                  <div style={{ fontSize: 11, color: "#a8a198", width: 82, flexShrink: 0 }}>受付通知の送信先</div>
                   <div style={{ fontSize: 13, color: "#1d1a15", fontWeight: 500 }}>{slackStatus.channel_name || "—"}</div>
                 </div>
               </div>
@@ -1630,7 +1630,7 @@ export default function AdminNotifyPage() {
             <>
               {/* Connected via OAuth — pick the notification channel */}
               <div style={{ marginBottom: 12, padding: "10px 14px", background: "#eaf0e8", border: "1px solid rgba(74,124,78,0.2)", borderRadius: 8, fontSize: 12, color: "#3a6240", lineHeight: 1.55 }}>
-                {slackStatus.team_name ? `「${slackStatus.team_name}」と連携しました。` : "Slackと連携しました。"}通知を送るチャンネルを選択してください。
+                {slackStatus.team_name ? `「${slackStatus.team_name}」と連携しました。` : "Slackと連携しました。"}来客の受付通知を送るチャンネルを選択してください。
               </div>
               {slackChannelsLoading ? (
                 <div style={{ padding: "10px 0", fontSize: 12.5, color: "#a8a198" }}>チャンネルを読み込み中…</div>
@@ -1819,7 +1819,7 @@ export default function AdminNotifyPage() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>カスタムWebhook</div>
-              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>受付があった際に指定URLへPOSTリクエストを送信します</div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>来客の受付があった際に指定URLへPOSTリクエストを送信します。下の「荷物の配達（呼び出し）通知先」で別のURLを設定しなければ、配達の呼び出しもここへ届きます</div>
             </div>
             <MkPill tone={customWebhookConfigured ? "live" : "off"}>{customWebhookConfigured ? "設定済" : "未設定"}</MkPill>
           </div>
@@ -1898,11 +1898,11 @@ export default function AdminNotifyPage() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>荷物の配達（呼び出し）通知先</div>
-              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>キオスクの「配達の呼び出し」専用の通知先。Slack・Webhookは受付通知と別のチャンネル／URLに切り替えられます。</div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>キオスクの「配達の呼び出し」専用の通知先。Slack・Webhookは、上の「Slack」「カスタムWebhook」カードとは別のチャンネル／URLに切り替えられます。</div>
             </div>
           </div>
           <div style={{ marginBottom: 18, padding: "10px 14px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.25)", borderRadius: 8, fontSize: 12, color: "#7a5c00", lineHeight: 1.55 }}>
-            未設定の場合は通常の受付通知先に送信されます（Chatworkは上の「Chatwork」カードで設定したルームがそのまま配達の宛先です）
+            ここで別の送信先を設定しない場合、Slackは上の「Slack」カード、Webhookは上の「カスタムWebhook」カードの送信先へ届きます（Chatworkは上の「Chatwork」カードで設定したルームがそのまま配達の宛先です）
           </div>
 
           <div className="adm-autofit-lg">
@@ -1911,13 +1911,13 @@ export default function AdminNotifyPage() {
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15", flex: 1 }}>Slack（配達）</div>
                 <MkPill tone={dlSlackOverrideChannelId || dlSlackLegacyWebhook ? "live" : "off"}>
-                  {dlSlackOverrideChannelId || dlSlackLegacyWebhook ? "専用チャンネル" : "受付と共通"}
+                  {dlSlackOverrideChannelId || dlSlackLegacyWebhook ? "専用チャンネル" : "「Slack」カードと同じ"}
                 </MkPill>
               </div>
 
               {!slackStatus?.connected ? (
                 <div style={{ fontSize: 12, color: "#a8a198", lineHeight: 1.6 }}>
-                  上の「Slack」で連携すると、配達の呼び出し専用のチャンネルを選べます（省略時は受付と同じチャンネルに届きます）。
+                  上の「Slack」で連携すると、配達の呼び出し専用のチャンネルを選べます（選ばなければ、上の「Slack」カードで選んだチャンネルに届きます）。
                 </div>
               ) : dlSlackShowPicker ? (
                 <>
@@ -1952,7 +1952,7 @@ export default function AdminNotifyPage() {
                       ? "旧設定（Webhook URL）で送信中です。"
                       : dlSlackOverrideChannelId
                         ? <>専用チャンネル：<strong>{dlSlackOverrideChannelName || dlSlackOverrideChannelId}</strong></>
-                        : <>受付と同じチャンネル（{slackStatus.channel_name || "未設定"}）に届きます。</>}
+                        : <>上の「Slack」カードで選んだチャンネル（{slackStatus.channel_name || "未設定"}）に届きます。</>}
                   </div>
                   <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <button onClick={openDlSlackPicker} style={testBtnStyle(false)}>
@@ -1960,7 +1960,7 @@ export default function AdminNotifyPage() {
                     </button>
                     {(dlSlackOverrideChannelId || dlSlackLegacyWebhook) && (
                       <button onClick={handleResetDlSlackChannel} disabled={dlSlackResetting} style={testBtnStyle(dlSlackResetting)}>
-                        {dlSlackResetting ? "解除中…" : "受付と共通に戻す"}
+                        {dlSlackResetting ? "解除中…" : "「Slack」カードと同じに戻す"}
                       </button>
                     )}
                   </div>
@@ -1992,7 +1992,12 @@ export default function AdminNotifyPage() {
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15", flex: 1 }}>カスタムWebhook（配達）</div>
                 <MkPill tone={dlWebhookConfigured ? "live" : "off"}>{dlWebhookConfigured ? "設定済" : "未設定"}</MkPill>
               </div>
-              <Field label="Webhook URL">
+              <Field
+                label="Webhook URL"
+                hint={dlWebhookConfigured
+                  ? "配達専用のURLを設定済みです（URLは表示しません）。空欄のまま保存すると解除され、上の「カスタムWebhook」カードのURLへ届くようになります"
+                  : "未設定のあいだは、上の「カスタムWebhook」カードのURLへ届きます"}
+              >
                 <TextInput
                   placeholder="https://hooks.example.com/..."
                   mono

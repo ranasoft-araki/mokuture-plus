@@ -1418,16 +1418,18 @@ async def _notify_webhook_event(
     """POST an arbitrary event payload to the first configured webhook among ``types``.
 
     Best-effort. ``types`` is an ordered preference (delivery-specific first, then
-    the normal reception destination as fallback)."""
-    setting = await _first_configured_setting(tenant_id, types, db)
-    if setting is None:
-        return None
+    the normal reception destination as fallback). URL が空の行は未設定として次へ進む
+    (配達用の URL を空欄で保存し直すと {"webhook_url": ""} の行が残るため。そこで止めると
+    画面の「空欄なら上の「カスタムWebhook」カードのURLへ届きます」が嘘になる)。"""
     try:
-        config = decrypt_dict(setting.config_json)
-        webhook_url = config.get("webhook_url", "")
-        if not webhook_url:
-            return None
-        return await _send_webhook(webhook_url, payload)
+        for type_ in types:
+            setting = await _first_configured_setting(tenant_id, (type_,), db)
+            if setting is None:
+                continue
+            webhook_url = decrypt_dict(setting.config_json).get("webhook_url", "")
+            if webhook_url:
+                return await _send_webhook(webhook_url, payload)
+        return None
     except Exception:
         return False
 

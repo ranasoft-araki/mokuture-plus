@@ -386,3 +386,27 @@ async def test_配達テスト送信_共通チャンネルへ送る(settings_cli
     assert r.status_code == 200
     assert r.json()["ok"] is True
     assert seen["channel_id"] == "C1"
+
+
+async def test_配達Webhookを空欄で保存し直すと受付のWebhookへ戻る(tenant, monkeypatch):
+    """画面は「未設定のあいだは、上の「カスタムWebhook」カードのURLへ届きます」と書いている。
+    空欄で保存し直すと {"webhook_url": ""} の行が残るので、そこで止めずに次の候補へ進むこと。"""
+    from app.api import kiosk
+
+    sent: list[str] = []
+
+    async def fake_send(url, payload):
+        sent.append(url)
+        return True
+
+    monkeypatch.setattr(kiosk, "_send_webhook", fake_send)
+    await set_notification_setting(tenant.id, "webhook", {"webhook_url": "https://example.com/reception"})
+    await set_notification_setting(tenant.id, "webhook_delivery", {"webhook_url": ""})
+
+    async with AsyncSessionLocal() as db:
+        ok = await kiosk._notify_webhook_event(
+            tenant.id, {"event": "t"}, db, types=("webhook_delivery", "webhook"),
+        )
+
+    assert ok is True
+    assert sent == ["https://example.com/reception"]
