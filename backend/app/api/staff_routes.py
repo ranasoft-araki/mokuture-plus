@@ -680,11 +680,11 @@ async def test_staff_route(
     # Web Push は実運用と同じ絞り込み（担当者→ユーザー→その人の端末）で送る。
     push_subs = await reception_notify.push_targets(db, user.tenant_id, dest, escalated_from)
     if dest.push_user_ids or push_subs:
-        private_key = await reception_notify.vapid_private_key(db, user.tenant_id)
+        private_key = settings.vapid_private_key
         if not private_key:
             results.append({
                 "channel": "push", "target": "プッシュ通知", "ok": False,
-                "error": "プッシュ通知が未設定です（通知設定で有効化してください）",
+                "error": "プッシュ通知が使えない状態です。運営にお問い合わせください。",
             })
         elif not push_subs:
             results.append({

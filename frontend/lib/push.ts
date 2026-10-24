@@ -33,6 +33,18 @@ function urlBase64ToArrayBuffer(base64String: string): ArrayBuffer {
   return buf;
 }
 
+/** True when the subscription was made with this VAPID public key. One made with an
+ *  older key no longer receives pushes and has to be replaced. Browsers that don't
+ *  expose `options` are given the benefit of the doubt. */
+export function matchesVapidKey(sub: PushSubscription, vapidPublicKey: string): boolean {
+  if (!sub.options) return true;
+  const key = sub.options.applicationServerKey;
+  if (!key) return false;
+  const a = new Uint8Array(key);
+  const b = new Uint8Array(urlBase64ToArrayBuffer(vapidPublicKey));
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
 /** Fetch VAPID public key from the backend (returns null if not configured). */
 export async function fetchVapidPublicKey(authToken: string): Promise<string | null> {
   try {
@@ -57,7 +69,9 @@ export async function requestAndSubscribe(vapidPublicKey: string): Promise<PushS
   try {
     const registration = await navigator.serviceWorker.ready;
     const existing = await registration.pushManager.getSubscription();
-    if (existing) return existing;
+    // Reuse only when the key is confirmed; otherwise replace it (an old-key one never receives).
+    if (existing && existing.options && matchesVapidKey(existing, vapidPublicKey)) return existing;
+    if (existing) await existing.unsubscribe();
 
     return await registration.pushManager.subscribe({
       userVisibleOnly: true,

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
 import { api, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffPushUser, type StaffRouteTestResult } from "@/lib/api";
-import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, type PushStatus } from "@/lib/push";
+import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, matchesVapidKey, type PushStatus } from "@/lib/push";
 import { getAccessToken } from "@/lib/auth";
 
 function Field({ label, hint, children, required }: { label: string; hint?: string; children: React.ReactNode; required?: boolean }) {
@@ -71,7 +71,12 @@ function PushPanel({ authToken }: { authToken: string }) {
       ]);
       setVapidKey(keyRes.public_key);
       setSubscriptions(subs);
-      setIsSubscribed(!!sub);
+      // Only "receiving" if this browser's subscription uses the current key and the
+      // server still has it — otherwise offer to register again.
+      setIsSubscribed(
+        !!sub && !!keyRes.public_key && matchesVapidKey(sub, keyRes.public_key)
+        && subs.some((s) => s.endpoint === sub.endpoint),
+      );
     } catch {
       setError("設定の読み込みに失敗しました");
     } finally {

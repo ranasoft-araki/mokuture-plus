@@ -58,10 +58,6 @@ async def get_settings(user: User = Depends(require_roles("admin", "superadmin")
     settings_list = result.scalars().all()
     out = {}
     for s in settings_list:
-        # VAPID key rows ("webpush" is a dead legacy name) hold private keys and
-        # nothing in the admin panel reads them — never send them out.
-        if s.type in ("vapid", "webpush"):
-            continue
         try:
             config = decrypt_dict(s.config_json) if s.config_json and s.config_json != "{}" else {}
         except Exception:
@@ -260,21 +256,7 @@ async def _run_test_push_delivery(tenant_id: str, db: AsyncSession) -> dict:
 
     Push shares the tenant's device subscriptions with reception, so there is no
     separate destination — this simply confirms the 配達の呼び出し push works."""
-    vapid_result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "vapid",
-        )
-    )
-    vapid_setting = vapid_result.scalar_one_or_none()
-    private_key = ""
-    if vapid_setting and vapid_setting.config_json and vapid_setting.config_json != "{}":
-        try:
-            private_key = decrypt_dict(vapid_setting.config_json).get("private_key", "")
-        except Exception:
-            private_key = ""
-    if not private_key:
-        private_key = settings.vapid_private_key
+    private_key = settings.vapid_private_key
     if not private_key:
         raise HTTPException(status_code=400, detail="プッシュ通知が使えない状態です。運営にお問い合わせください。")
 

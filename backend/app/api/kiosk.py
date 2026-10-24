@@ -1362,22 +1362,7 @@ async def _notify_push_text(
     (配達の呼び出し用。受付通知と同じ仕組み)。"""
     target_url = url or f"/{url_tenant_id}/admin/reception"
     try:
-        vapid_result = await db.execute(
-            select(NotificationSetting).where(
-                NotificationSetting.tenant_id == tenant_id,
-                NotificationSetting.type == "vapid",
-            )
-        )
-        vapid_setting = vapid_result.scalar_one_or_none()
-        private_key = ""
-        if vapid_setting and vapid_setting.config_json and vapid_setting.config_json != "{}":
-            try:
-                vapid_config = decrypt_dict(vapid_setting.config_json)
-                private_key = vapid_config.get("private_key", "")
-            except Exception:
-                pass
-        if not private_key:
-            private_key = settings.vapid_private_key
+        private_key = settings.vapid_private_key
         if not private_key:
             return None
 

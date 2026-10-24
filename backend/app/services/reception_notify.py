@@ -175,24 +175,6 @@ async def _notify_slack(
 
 # ── Web Push ───────────────────────────────────────────────────────────────────
 
-async def vapid_private_key(db: AsyncSession, tenant_id: str) -> str:
-    result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "vapid",
-        )
-    )
-    setting = result.scalar_one_or_none()
-    if setting is not None and setting.config_json and setting.config_json != "{}":
-        try:
-            key = decrypt_dict(setting.config_json).get("private_key", "")
-            if key:
-                return key
-        except Exception:
-            pass
-    return settings.vapid_private_key
-
-
 async def push_targets(
     db: AsyncSession, tenant_id: str, dest: Destinations, escalated_from: str
 ) -> list[PushSubscription]:
@@ -283,7 +265,7 @@ async def _notify_push(
     """
     # 「送る/送らない」の判定は push_targets() に集約してある（担当者ごとの絞り込みと
     # 共通購読へのフォールバックが絡むため、ここで先に弾くと両立しない）。
-    private_key = await vapid_private_key(db, tenant_id)
+    private_key = settings.vapid_private_key
     if not private_key:
         return None
 
