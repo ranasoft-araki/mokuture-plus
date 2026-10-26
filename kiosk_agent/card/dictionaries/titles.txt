@@ -1,0 +1,119 @@
+# 役職。長い語を優先して照合するので、複合語（代表取締役社長など）も入れてよい。
+# 追加・修正はこのファイルだけで完結する（再起動不要）。
+代表取締役社長
+代表取締役会長
+代表取締役副社長
+代表取締役専務
+代表取締役
+取締役副社長
+取締役専務
+取締役常務
+取締役会長
+取締役社長
+取締役
+執行役員
+常務執行役員
+専務執行役員
+監査役
+相談役
+顧問
+会長
+社長
+副社長
+専務
+常務
+理事長
+副理事長
+理事
+監事
+統括部長
+本部長
+副本部長
+事業部長
+部長代理
+副部長
+部長
+次長
+担当部長
+課長代理
+副課長
+課長
+担当課長
+係長
+主幹
+主査
+主任
+主席
+室長
+局長
+所長
+支社長
+支店長
+営業所長
+店長
+工場長
+センター長
+グループ長
+チームリーダー
+リーダー
+チーフ
+マネージャー
+マネジャー
+シニアマネージャー
+ゼネラルマネージャー
+プロジェクトマネージャー
+プロダクトマネージャー
+アカウントマネージャー
+ディレクター
+プロデューサー
+スーパーバイザー
+コンサルタント
+アドバイザー
+スペシャリスト
+エンジニア
+デザイナー
+研究員
+主任研究員
+技師
+技師長
+薬剤師
+看護師長
+園長
+校長
+教授
+准教授
+講師
+社員
+代表
+共同代表
+創業者
+CEO
+COO
+CFO
+CTO
+CIO
+CMO
+CHRO
+President
+Vice President
+Executive Officer
+Managing Director
+General Manager
+Senior Manager
+Manager
+Director
+Head of Sales
+Chief Executive Officer
+Chief Operating Officer
+Chief Financial Officer
+Chief Technology Officer
+Team Leader
+Supervisor
+Engineer
+Designer
+Consultant
+Analyst
+Specialist
+Founder
+Partner
+Associate

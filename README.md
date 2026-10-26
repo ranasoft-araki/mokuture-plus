@@ -147,14 +147,72 @@ Raspberry Pi 上で動き、コンテンツ同期・メディア配信・GPIO �
 kiosk_agent/
 ├── main.py               FastAPI 本体 (メディア配信・GPIO API・静的ファイル配信)
 ├── sync.py               コンテンツ同期デーモン (差分ダウンロード・定期実行)
+├── analytics.py          分析ログ (行動ログの中継・端末稼働イベント/メトリクス・再送)
+├── sysinfo.py            CPU/温度/メモリ/ストレージ/タッチ の取得 (標準ライブラリのみ)
+├── watchdog.py           systemd watchdog + ブラウザ生存確認
 ├── gpio.py               GPIO 制御 (ロッカーリレー・PIR センサー)
 ├── state.py              デバイス登録状態の永続管理
 ├── config.py             設定読み込み (.env)
 ├── pyproject.toml        依存パッケージ
 ├── install.sh            RPi 向けセットアップスクリプト
 ├── mokuture-kiosk.service  systemd ユニットファイル
-└── .env.example          環境変数サンプル
+├── .env.example          環境変数サンプル
+├── card/                 名刺読み取り (QR無し来訪者の受付フォーム自動入力)
+├── card_reader.yaml.example  名刺読み取りの設定例 (しきい値・OCR エンジン)
+├── voice/                声で操作する (実験導入。別プロセス・127.0.0.1:8181 で動く)
+├── voice_input.yaml.example  声で操作するの設定例 (マイク・しきい値)
+├── mokuture-voice.service  音声サービスの systemd ユニットファイル
+├── voice_models/         音声認識モデル (Git LFS。Vosk 日本語軽量)
+├── scripts/              OCR/音声モデル取得・処理時間の計測・開発用の確認スクリプト
+└── tests/                テスト (架空名刺をその場で生成して使う / 音声は合成波形)
 ```
+
+### 名刺読み取り
+
+受付フォームで「名刺で入力」を押すと、カメラにかざした名刺から会社名・氏名・部署を
+読み取ってフォームに入力します。**読み取りは端末の中だけで完結し**、外部の OCR API も
+生成 AI も使いません。名刺の画像も抽出結果も保存しません。
+
+任意機能です。依存パッケージ (opencv / onnxruntime) と OCR モデルが入っていない端末
+では、受付画面に導線が出ないだけでキオスク本体は従来どおり動きます。
+
+→ セットアップ・API 仕様・しきい値調整・トラブルシューティングは
+[kiosk_agent/CARD_READER.md](kiosk_agent/CARD_READER.md)
+
+### 声で操作する（実験導入）
+
+待機画面から進むと**押さなくても**聞き取りを始め、「ほうもん」「ロッカー」「もどる」のような短い
+言葉で画面を操作できます（来訪者が「声の操作をやめる」を押したらその人の間は止まる。
+`voice_input.yaml` の `command.auto_start: false` で「声で操作する」を押したときだけにできる）。
+待機画面（動画）ではマイクを開けません。声で選べるボタンには言う言葉の札が付きます。**認識は端末の
+中だけで完結し**、クラウドの音声認識 API も Web Speech API も生成 AI も使いません。
+インターネットが切れていても動きます。音声も認識した言葉も保存しません。
+
+声で起こすのは画面の遷移と選択までです。**受付の送信・担当者の呼び出しは声では押せません。**
+ロッカーの空きの口は声で選べますが、開ける前に確認を挟みます。暗証番号の画面では
+マイクを開けません。
+
+キオスク本体とは**別プロセス**（`mokuture-voice.service` / `127.0.0.1:8181` のみ待ち受け）
+で動きます。未セットアップ・マイク未接続・サービス停止の端末では「声で操作する」が
+出ないだけで、キオスク本体は従来どおり動きます。
+
+```bash
+bash kiosk_agent/scripts/install_voice.sh     # USB マイクを挿してから
+curl -s http://127.0.0.1:8181/voice/status    # available:true なら使える
+```
+
+**Windows でも動作試験できます**。
+
+```powershell
+cd kiosk_agent
+powershell -ExecutionPolicy Bypass -File scripts\install_voice_windows.ps1
+.venv\Scripts\python scripts\voice_selftest.py --say "ロッカー" --screen top
+```
+
+→ インストール・画面ごとの言葉・マイク調整・ロビーでの測り方・チェックリストは
+[kiosk_agent/VOICE_COMMAND.md](kiosk_agent/VOICE_COMMAND.md)
+
+> 以前あった「音声で入力」（受付フォームを声で埋める）は 2026-09-29 に削除しました。
 
 ### 起動コマンド
 
@@ -241,6 +299,30 @@ curl -X POST http://<RPiのIPアドレス>:8080/register
 | `GET` | `/media/{media_id}` | ローカルキャッシュからメディア配信 |
 | `POST` | `/device/locker/{id}/open` | ロッカー解錠 (GPIO) |
 | `GET` | `/device/pir` | PIR センサー状態取得 |
+| `GET` | `/card/status` | 名刺読み取りの利用可否・しきい値（未導入なら 404） |
+| `POST` | `/card/session` | 名刺読み取りセッションの開始 |
+| `POST` | `/card/frame` | 検出用フレームの送信（案内文言・四隅を返す） |
+| `POST` | `/card/capture` | 撮影フレームの送信（OCR・項目抽出） |
+| `POST` | `/card/session/{id}/confirm` | 確認済みの値を確定しセッションを破棄 |
+| `POST` | `/device/oplog` | キオスク画面からの行動ログ（匿名）を受け取りディスクへ保存（旧名 `/device/analytics/events` も受ける） |
+| `GET` | `/device/analytics/status` | 未送信件数・オンライン状態（分析ログの動作確認用） |
+| `GET` | `/kiosk-oplog.js` | キオスク画面が読み込む行動ロガー（旧名 `/analytics.js` も返す） |
+
+> ブラウザが叩く URL に `analytics` などの語を入れないのは、Raspberry Pi OS の Chromium に最初から入っている
+> uBlock Origin Lite が名前で止めるため（旧名の送信先は止められ、行動ログが届いていなかった）。
+
+声で操作するは**別プロセス**（`http://127.0.0.1:8181` のみ。外部からは接続不可）:
+
+| メソッド | パス | 説明 |
+|---|---|---|
+| `GET` | `/voice/status` | 使えるか（マイク・Vosk・語彙を絞れるモデルか） |
+| `POST` | `/voice/session` | 音声モードの開始 |
+| `POST` | `/voice/session/{id}/command` | 画面の選択肢のどれが言われたかを 1 回聞く（すぐ返る） |
+| `GET` | `/voice/session/{id}/state` | 進行状態（phase・音量・判定）のポーリング。認識した言葉は返さない |
+| `POST` | `/voice/session/{id}/cancel` | 聞き取りの取り消し |
+| `DELETE` | `/voice/session/{id}` | セッション破棄（音声と判定を捨てる） |
+| `GET` | `/voice/metrics` | 実証実験の集計（件数・割合・時間のみ） |
+| `GET` | `/voice/devices` | マイク一覧（設定手順用） |
 
 ### 環境変数 (.env)
 
@@ -253,6 +335,12 @@ curl -X POST http://<RPiのIPアドレス>:8080/register
 | `MOCK_GPIO` | `false` | `true` にすると GPIO をモック動作 |
 | `PIR_PIN` | `4` | PIR センサーの GPIO ピン番号 (BCM) |
 | `LOCKER_PINS_JSON` | `{}` | ロッカーID → GPIO ピンの対応 例: `{"1": 17, "2": 18}` |
+| `ANALYTICS_HEARTBEAT_SEC` | `60` | 端末ハートビート（稼働率の元データ）の間隔 |
+| `ANALYTICS_METRICS_SEC` | `300` | CPU・温度・メモリ等を取得する間隔 |
+| `ANALYTICS_FLUSH_SEC` | `15` | 分析ログのアップロード間隔（失敗時は指数バックオフ） |
+
+> 分析ログの詳細（取得する項目・個人情報を保存しないための設計・稼働率の定義）は
+> [`ANALYTICS.md`](ANALYTICS.md) を参照。
 
 ### Chromium 自動起動設定（RPi）
 
@@ -260,6 +348,38 @@ curl -X POST http://<RPiのIPアドレス>:8080/register
 # /etc/xdg/lxsession/LXDE-pi/autostart に追記
 @chromium-browser --kiosk --noerrdialogs --disable-infobars http://localhost:8080
 ```
+
+ユーザーの systemd ユニット（`mokuture-browser.service`）から起動している端末もある。
+`mokuture-kiosk.service` の `ExecStartPost` が起動のたびにこのユニットを起こすので、
+**本体を起動すればブラウザも全画面で戻る**。
+
+### 現地でのサービス停止／再開（画面を空ける）
+
+保守で画面を空けたいときは `scripts/kiosk-service.sh` を使う。**止める順番と止め方が
+決まっている**ので、`systemctl stop mokuture-kiosk` だけ・ブラウザを閉じるだけでは
+数秒でブラウザが全画面に戻ってくる（理由はスクリプト冒頭のコメント）。
+
+```bash
+bash scripts/kiosk-service.sh stop             # 受付サービス＋ブラウザを止める（画面が空く）
+bash scripts/kiosk-service.sh start            # 受付画面へ戻す
+bash scripts/kiosk-service.sh status           # いま何が動いているか
+bash scripts/kiosk-service.sh diagnose         # 止めても戻ってくるとき、誰が起こしているか調べる
+bash scripts/kiosk-service.sh install-desktop  # デスクトップに「停止」「再開」アイコンを置く
+```
+
+- ブラウザの起動元（ユーザーユニット／システムユニット／セッションの autostart）は
+  スクリプトが名前で探して systemd に止めさせる
+  （`Restart=always` の相手は `kill` では止まらず、`systemctl stop` なら止まる）。
+- **それだけでは足りないので、停止中は見張りを残す。** `~/.mokuture-browser-paused`
+  がある間だけ動き、復活してきたブラウザを落とし続ける（`while true` のラッパーや
+  `@` 付き autostart など、起こし直す仕組みが端末ごとに違うため）。`start` で解除。
+- それでも戻ってくるときは `diagnose`。プロセスの親・cgroup・ユニット・autostart を
+  一度に出すので、どの経路が起こしているか分かる。
+- **`start` は停止の逆順（音声 → 本体 → ブラウザ）。** 受付画面は起動時に一度だけ
+  `/voice/status` を見て、届かなければそのページでは「音声で入力」を出さない
+  （`ensureVoiceStatus` が `VOICE.checked` で latch する）。本体を先に上げると
+  ブラウザが数秒で開き、起動中の音声サービスに間に合わずボタンが消える。
+- 停止は再起動をまたがない。電源を入れ直せば通常どおり受付画面で立ち上がる。
 
 ---
 
@@ -298,8 +418,23 @@ curl -X POST http://<RPiのIPアドレス>:8080/register
 | `GET` | `/kiosk/schedule` | 現在のプレイリスト取得（承認待ちは `pending:true`） |
 | `GET` | `/kiosk/content-manifest` | 全スケジュールメディア一覧（ローカルキャッシュ用） |
 | `POST` | `/kiosk/reception` | 受付登録 |
+| `POST` | `/analytics/events` | 行動ログ（匿名）の投入 |
+| `POST` | `/analytics/device-events` | 端末稼働イベントの投入 |
+| `POST` | `/analytics/device-metrics` | 端末メトリクス（ハートビート）の投入 |
 
 キオスク API は `X-Kiosk-Token: {device_token}` ヘッダーを使用します。
+
+### 分析 API（運営のみ・JWT）
+
+| メソッド | パス | 説明 |
+|---|---|---|
+| `GET` | `/analytics/sessions` | 匿名セッション一覧（日付・拠点・端末・完了状態で絞り込み） |
+| `GET` | `/analytics/sessions/{id}` | 1セッションの時系列イベント |
+| `GET` | `/analytics/summary` | 主要指標（完了率・離脱率・エラー率・回復率・所要時間） |
+| `GET` | `/analytics/uptime` | 端末稼働率・通信障害時間・再起動回数 |
+| `GET` | `/analytics/export` | CSV / JSON 出力 |
+
+運営画面 `/operator/analytics` から参照できます。**個人情報は保存していません**（→ [`ANALYTICS.md`](ANALYTICS.md)）。
 
 ---
 

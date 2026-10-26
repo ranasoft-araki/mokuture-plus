@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { saveTokens, getHomeUrl, rememberLoginId, getSavedLoginId } from "@/lib/auth";
 
@@ -15,16 +16,20 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(false);
+  const router = useRouter();
 
   // ログイン済みなら開いた瞬間に管理画面へ。未ログインなら記憶したIDを補完してフォーム表示。
+  // 自動リダイレクトはソフト遷移(router.replace)で行い、ログイン画面のフル再起動を避ける。
+  // （通常は起動ゲート(/) 側で /login を素通りするが、/login を直接開いた場合の保険）
   useEffect(() => {
     const home = getHomeUrl();
-    if (home) { window.location.assign(home); return; }
+    if (home) { router.replace(home); return; }
     const savedEmail = getSavedLoginId("login");
     // マウント後のクライアント専用初期化（ログイン済み判定・記憶したIDの補完・フォーム表示）
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setForm((f) => (savedEmail ? { ...f, email: savedEmail } : f));
     setReady(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handle = (field: string, value: string) => setForm((f) => ({ ...f, [field]: value }));

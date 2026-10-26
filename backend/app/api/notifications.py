@@ -19,6 +19,7 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.services.auth import create_slack_state_token, verify_slack_state_token
 from app.services.crypto import encrypt_dict, decrypt_dict
+from app.services import chatwork as chatwork_service
 from app.services.slack import SlackNotifier, SlackOAuthError, SlackApiError
 from app.services.webpush import send_push
 from app.config import settings
@@ -30,13 +31,17 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 _SLACK_TEST_MESSAGE = ":bell: mokuture のSlack通知テストです\n\nこのチャンネルに受付通知が送信されます。"
 
 
-class SlackConfig(BaseModel):
-    webhook_url: str
-
-
 class ChatworkConfig(BaseModel):
-    api_token: str
-    room_id: str
+    """Chatwork の接続設定。
+
+    **空欄は「変更しない」**。API トークンはレスポンスで `***` にマスクしていて画面に
+    戻らないため、入力欄は常に空で表示される。素直に受け取って上書きすると、ルーム ID
+    だけ直したいときに**トークンが空で潰れ、Chatwork 通知が丸ごと止まる**（担当者ごとの
+    ルームも道連れになる）。秘密情報を伏せている以上、部分更新を既定にするしかない。
+    """
+
+    api_token: str = ""
+    room_id: str = ""
 
 
 class WebhookConfig(BaseModel):
@@ -74,8 +79,9 @@ async def get_settings(user: User = Depends(require_roles("admin", "superadmin")
 
 # NOTE: 受付用 Slack (type="slack") は OAuth 連携（/slack/oauth/url → /slack/callback）
 # のみで設定する。Webhook URL を手入力/上書きする PUT /settings/slack は廃止した
-# （顧客に Webhook URL を触らせない方針・OAuth バイパス防止）。配達用 slack_delivery は
-# 従来どおり手入力（下記）。
+# （顧客に Webhook URL を触らせない方針・OAuth バイパス防止）。配達用 slack_delivery も
+# 手入力のPUTは廃止し、POST /slack/channel に target="slack_delivery" を渡して
+# 共通連携のチャンネルだけを上書きする方式にした（下記「Delivery-specific」節）。
 
 
 @router.put("/settings/chatwork")
@@ -84,8 +90,41 @@ async def update_chatwork(
     user: User = Depends(require_roles("admin", "superadmin")),
     db: AsyncSession = Depends(get_db),
 ):
-    await _upsert_setting(user.tenant_id, "chatwork", {"api_token": body.api_token, "room_id": body.room_id}, db)
+    # ルームは任意: トークンだけで「連携済」にできる（担当者ごとのルーム指定・
+    # テスト送信はトークンさえあれば使える）。ルームを設定すると、それが**配達の呼び出し
+    # 専用の宛先**になる（受付通知には使われない。common room is delivery-only）。
+    await _upsert_chatwork(user.tenant_id, "chatwork", body, db)
     return {"ok": True}
+
+
+class ChatworkRoomLookup(BaseModel):
+    """ルーム一覧の取得元トークン。空なら共通の `chatwork` 設定の保存済みトークンを使う。
+
+    `api_token` を渡せるのは、まだ保存していない(入力中の)トークンでもルーム一覧を
+    見てから保存できるようにするため（Slack の OAuth 後チャンネル選択と同じ体験）。
+    値は保存しない。
+    """
+
+    api_token: str = ""
+
+
+@router.post("/chatwork/rooms")
+async def chatwork_rooms(
+    body: ChatworkRoomLookup,
+    user: User = Depends(require_roles("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """管理画面のルーム選択用。トークンさえあれば保存前でも一覧を取れる。"""
+    token = (body.api_token or "").strip()
+    if not token:
+        token = await chatwork_service.load_api_token(db, user.tenant_id)
+    if not token:
+        raise HTTPException(status_code=400, detail="Chatworkが未連携です。APIトークンを入力してください。")
+    try:
+        rooms = await chatwork_service.list_rooms(token)
+    except chatwork_service.ChatworkApiError:
+        raise HTTPException(status_code=502, detail="ルーム一覧の取得に失敗しました。APIトークンを確認してください。")
+    return {"rooms": rooms}
 
 
 @router.put("/settings/webhook")
@@ -99,28 +138,13 @@ async def update_webhook(
 
 
 # ── Delivery-specific notification destinations (荷物の配達/呼び出し) ──────────────
-# Same config shape as the base types; falls back to the base destination in kiosk
-# call-staff when unset (see app.api.kiosk).
-
-@router.put("/settings/slack_delivery")
-async def update_slack_delivery(
-    body: SlackConfig,
-    user: User = Depends(require_roles("admin", "superadmin")),
-    db: AsyncSession = Depends(get_db),
-):
-    await _upsert_setting(user.tenant_id, "slack_delivery", {"webhook_url": body.webhook_url}, db)
-    return {"ok": True}
-
-
-@router.put("/settings/chatwork_delivery")
-async def update_chatwork_delivery(
-    body: ChatworkConfig,
-    user: User = Depends(require_roles("admin", "superadmin")),
-    db: AsyncSession = Depends(get_db),
-):
-    await _upsert_setting(user.tenant_id, "chatwork_delivery", {"api_token": body.api_token, "room_id": body.room_id}, db)
-    return {"ok": True}
-
+# Webhook: same config shape as the base type; falls back to the base destination in
+# kiosk call-staff when unset (see app.api.kiosk). Slack/Chatwork no longer have their
+# own "連携設定"(接続) here — they reuse the shared Slack bot / Chatwork token and only
+# let delivery override the channel/room (Slack: POST /slack/channel with
+# target="slack_delivery"; Chatwork: the common card's room *is* the delivery room,
+# see CLAUDE.md「Chatwork の接続設定」)。2026-10-24: 通常の通知先と配達の通知先で
+# それぞれ別にSlack/Chatworkへ連携させていたのを統合した(無駄な二重連携の解消)。
 
 @router.put("/settings/webhook_delivery")
 async def update_webhook_delivery(
@@ -167,13 +191,53 @@ async def _run_test_slack(
     return {"ok": ok}
 
 
+async def _load_setting_config(tenant_id: str, type_: str, db: AsyncSession) -> dict | None:
+    """1種類ぶんの通知設定を復号して返す。行が無い/空/壊れているなら None。"""
+    result = await db.execute(
+        select(NotificationSetting).where(NotificationSetting.tenant_id == tenant_id, NotificationSetting.type == type_)
+    )
+    setting = result.scalar_one_or_none()
+    if setting is None or not setting.config_json or setting.config_json == "{}":
+        return None
+    try:
+        return decrypt_dict(setting.config_json)
+    except Exception:
+        return None
+
+
+async def _run_test_slack_delivery(tenant_id: str, db: AsyncSession) -> dict:
+    """配達（荷物の配達の呼び出し）専用のSlackテスト送信。
+
+    共通の Slack 連携(Bot Token) + 配達専用のチャンネル上書き(あれば)を合成して送る
+    （`SlackNotifier.resolve_delivery_config`。kiosk.py の実送信と同じ解決）。"""
+    base = await _load_setting_config(tenant_id, "slack", db)
+    override = await _load_setting_config(tenant_id, "slack_delivery", db)
+    config = SlackNotifier.resolve_delivery_config(base, override)
+    if not config.get("bot_access_token") and not config.get("webhook_url"):
+        raise HTTPException(status_code=400, detail="Slackが未連携です。上の「Slack」で連携してください。")
+    if config.get("bot_access_token") and not config.get("channel_id"):
+        raise HTTPException(status_code=400, detail="通知先チャンネルが選択されていません。チャンネルを選択してください。")
+    ok = await SlackNotifier.send_to_config(
+        config,
+        ":package: mokuture の配達通知テストです\n\nこのチャンネルに配達の呼び出し・置き配が通知されます。",
+    )
+    return {"ok": ok}
+
+
 async def _run_test_chatwork(tenant_id: str, type_: str, db: AsyncSession) -> dict:
     setting = await _get_setting_or_404(tenant_id, type_, "Chatwork", db)
     config = decrypt_dict(setting.config_json)
     api_token = config.get("api_token", "")
     room_id = config.get("room_id", "")
-    if not api_token or not room_id:
-        raise HTTPException(status_code=400, detail="Chatwork API token or room ID missing")
+    if not api_token:
+        raise HTTPException(status_code=400, detail="Chatwork API token missing")
+    if not room_id:
+        # ルーム未設定＝トークンだけの「連携済」状態。実際にメッセージは送れないので、
+        # トークンが有効かどうかの確認に留める（GET /v2/me）。
+        info = await chatwork_service.verify_token(api_token)
+        if info is None:
+            raise HTTPException(status_code=400, detail="Chatwork API トークンが無効です")
+        return {"ok": True, "checked": "token"}
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             res = await client.post(
@@ -192,23 +256,9 @@ async def _run_test_push_delivery(tenant_id: str, db: AsyncSession) -> dict:
 
     Push shares the tenant's device subscriptions with reception, so there is no
     separate destination — this simply confirms the 配達の呼び出し push works."""
-    vapid_result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "vapid",
-        )
-    )
-    vapid_setting = vapid_result.scalar_one_or_none()
-    private_key = ""
-    if vapid_setting and vapid_setting.config_json and vapid_setting.config_json != "{}":
-        try:
-            private_key = decrypt_dict(vapid_setting.config_json).get("private_key", "")
-        except Exception:
-            private_key = ""
+    private_key = settings.vapid_private_key
     if not private_key:
-        private_key = settings.vapid_private_key
-    if not private_key:
-        raise HTTPException(status_code=400, detail="プッシュ通知が未設定です。「プッシュ通知」で VAPID 鍵を生成してください。")
+        raise HTTPException(status_code=400, detail="プッシュ通知が使えない状態です。運営にお問い合わせください。")
 
     subs_result = await db.execute(
         select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
@@ -279,15 +329,7 @@ async def test_webhook(user: User = Depends(require_roles("admin", "superadmin")
 
 @router.post("/test/slack_delivery")
 async def test_slack_delivery(user: User = Depends(require_roles("admin", "superadmin")), db: AsyncSession = Depends(get_db)):
-    return await _run_test_slack(
-        user.tenant_id, "slack_delivery", db,
-        message=":package: mokuture の配達通知テストです\n\nこのチャンネルに配達の呼び出し・置き配が通知されます。",
-    )
-
-
-@router.post("/test/chatwork_delivery")
-async def test_chatwork_delivery(user: User = Depends(require_roles("admin", "superadmin")), db: AsyncSession = Depends(get_db)):
-    return await _run_test_chatwork(user.tenant_id, "chatwork_delivery", db)
+    return await _run_test_slack_delivery(user.tenant_id, db)
 
 
 @router.post("/test/webhook_delivery")
@@ -311,6 +353,37 @@ async def _upsert_setting(tenant_id: str, type_: str, config: dict, db: AsyncSes
     else:
         db.add(NotificationSetting(tenant_id=tenant_id, type=type_, config_json=encrypted))
     await db.commit()
+
+
+async def _upsert_chatwork(tenant_id: str, type_: str, body: "ChatworkConfig", db: AsyncSession) -> None:
+    """Chatwork 設定を**部分更新**する。空欄の項目は現在値を残す。
+
+    理由は `ChatworkConfig` の docstring を参照（トークンはマスクして返しているので、
+    画面から素直に上書きすると片方だけ直したときに消える）。
+
+    ルームは任意: トークンだけで「連携済」として保存できる（担当者ごとのルーム指定・
+    テスト送信はトークンだけで使える）。ルームを設定すると、それが**配達の呼び出し専用の
+    宛先**になる（common room is delivery-only。受付通知には使われない）。
+    """
+    result = await db.execute(
+        select(NotificationSetting).where(
+            NotificationSetting.tenant_id == tenant_id,
+            NotificationSetting.type == type_,
+        )
+    )
+    setting = result.scalar_one_or_none()
+    current: dict = {}
+    if setting is not None and setting.config_json and setting.config_json != "{}":
+        try:
+            current = decrypt_dict(setting.config_json)
+        except Exception:
+            current = {}
+
+    api_token = (body.api_token or "").strip() or (current.get("api_token") or "").strip()
+    room_id = (body.room_id or "").strip() or (current.get("room_id") or "").strip()
+    if not api_token:
+        raise HTTPException(status_code=422, detail="API トークンを入力してください")
+    await _upsert_setting(tenant_id, type_, {"api_token": api_token, "room_id": room_id}, db)
 
 
 # ── Slack OAuth (Bot Token + chat.postMessage) ─────────────────────────────────
@@ -363,24 +436,30 @@ async def slack_oauth_url(user: User = Depends(require_roles("admin", "superadmi
 
 
 class ChannelSelect(BaseModel):
-    channel_id: str
+    """通知先。チャンネルへ送るか、個人へDMするかのどちらか一方を指定する。
+
+    `user_id` 指定時は `conversations.open` でDMを開いて得た channel_id を保存する
+    （送信そのものは通常のチャンネルと同じ `chat.postMessage` なので追加スコープ不要。
+    DMを開くときだけ `im:write` が要る）。`display_name` はDM相手の表示名（`users.list`
+    で取得済みのものをそのまま渡す。無くても動く）。
+
+    `target`: どちらの宛先を設定するか。既定 `"slack"` は受付通知の共通チャンネル
+    （従来どおり、共通の Bot Token と一緒に保存する）。`"slack_delivery"` は**配達の呼び出し
+    専用のチャンネル上書き**（Bot Token は共通連携を使い回し、ここには channel_id/channel_name
+    だけを保存する。チャンネル・DM先を1つも指定しない呼び出しは「上書きを解除して受付と
+    同じチャンネルに戻す」を意味する）。2026-10-24追記: 配達専用に別のSlack連携を結ばせない
+    ための設計（無駄な二重連携の解消）。
+    """
+
+    channel_id: str = ""
+    user_id: str = ""
+    display_name: str = ""
+    target: str = "slack"
 
 
 async def _load_slack_config(tenant_id: str, db: AsyncSession) -> dict | None:
     """Decrypted Slack config for a tenant, or None if not connected."""
-    result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "slack",
-        )
-    )
-    setting = result.scalar_one_or_none()
-    if setting is None or not setting.config_json or setting.config_json == "{}":
-        return None
-    try:
-        return decrypt_dict(setting.config_json)
-    except Exception:
-        return None
+    return await _load_setting_config(tenant_id, "slack", db)
 
 
 @router.get("/slack/channels")
@@ -403,35 +482,128 @@ async def slack_channels(
     return {"channels": channels}
 
 
-@router.post("/slack/channel")
-async def slack_set_channel(
-    body: ChannelSelect,
+def _slack_scope_error(e: SlackApiError, fallback: str) -> HTTPException:
+    """`missing_scope` は「連携し直せば直る」と分かる専用メッセージにする。
+
+    `im:write`/`users:read` は DM対応(issue #1追記分)で後から足したスコープなので、
+    それ以前に連携済みのテナントの Bot Token には付与されていない。"""
+    if "missing_scope" in str(e):
+        return HTTPException(
+            status_code=400,
+            detail="DM機能を使うには権限が足りません。「Slackに追加」でもう一度連携してください。",
+        )
+    return HTTPException(status_code=502, detail=fallback)
+
+
+@router.get("/slack/users")
+async def slack_users(
     user: User = Depends(require_roles("admin", "superadmin")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Set the notification channel. Joins the channel if it is public and the bot is
-    not a member yet (conversations.join); private channels require a manual invite."""
+    """List workspace members for the DM picker (`users:read`). Requires an
+    OAuth-connected bot token with the DM scopes (see `services.slack._SCOPE`)."""
     if not SlackNotifier.enabled():
         raise HTTPException(status_code=404, detail="Slack integration disabled")
     config = await _load_slack_config(user.tenant_id, db)
     token = (config or {}).get("bot_access_token") or ""
     if not token:
         raise HTTPException(status_code=400, detail="Slackが未連携です")
-    channel_id = (body.channel_id or "").strip()
-    if not channel_id:
-        raise HTTPException(status_code=422, detail="channel_id is required")
     try:
-        info = await SlackNotifier.get_channel_info(token, channel_id)
-    except SlackApiError:
-        raise HTTPException(status_code=400, detail="チャンネル情報の取得に失敗しました。")
-    if not info["is_private"] and not info["is_member"]:
-        await SlackNotifier.join_channel(token, channel_id)  # best-effort
-    display = ("#" if not info["is_private"] else "") + (info["name"] or channel_id)
-    config["channel_id"] = channel_id
-    config["channel_name"] = display
-    config["updated_at"] = datetime.now(timezone.utc).isoformat()
-    await _upsert_setting(user.tenant_id, "slack", config, db)
-    return {"ok": True, "channel_name": display}
+        users = await SlackNotifier.list_users(token)
+    except SlackApiError as e:
+        raise _slack_scope_error(e, "メンバー一覧の取得に失敗しました。連携をやり直してください。")
+    return {"users": users}
+
+
+async def _clear_stale_delivery_channel_override(tenant_id: str, db: AsyncSession) -> None:
+    """配達専用のチャンネル上書き(`slack_delivery`)のうち、共通のBot連携に依存する
+    **新形式**(channel_id だけを持つ)だけを消す。channel id はワークスペース固有なので、
+    共通連携を解除・再連携した直後は別ワークスペースの channel id が残っていると送信が
+    静かに失敗する。**旧形式**(自前の `webhook_url` を持つ)は共通連携と無関係に動くので
+    残す。"""
+    override = await _load_setting_config(tenant_id, "slack_delivery", db)
+    if override is not None and not override.get("webhook_url"):
+        await db.execute(
+            delete(NotificationSetting).where(
+                NotificationSetting.tenant_id == tenant_id,
+                NotificationSetting.type == "slack_delivery",
+            )
+        )
+        await db.commit()
+
+
+@router.post("/slack/channel")
+async def slack_set_channel(
+    body: ChannelSelect,
+    user: User = Depends(require_roles("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set the notification destination: a channel, or a DM to one person.
+
+    Channels: joins the channel if it is public and the bot is not a member yet
+    (conversations.join); private channels require a manual invite. DM: opens (or
+    resumes) a 1:1 conversation via `conversations.open` and stores that channel id —
+    sending afterward is the same `chat.postMessage` as any channel (CLAUDE.md参照)。
+
+    `target="slack_delivery"`: 配達の呼び出し専用のチャンネル上書き。共通の Bot Token は
+    使うが保存はしない(channel_id/channel_name だけ `slack_delivery` 行に保存。常に共通の
+    連携を使い回す)。channel_id も user_id も指定しなければ上書きを解除し、以後は受付と
+    同じ共通チャンネルに配達通知も届く。"""
+    if not SlackNotifier.enabled():
+        raise HTTPException(status_code=404, detail="Slack integration disabled")
+    if body.target not in ("slack", "slack_delivery"):
+        raise HTTPException(status_code=422, detail="invalid target")
+    config = await _load_slack_config(user.tenant_id, db)
+    token = (config or {}).get("bot_access_token") or ""
+    if not token:
+        raise HTTPException(status_code=400, detail="Slackが未連携です")
+
+    user_id = (body.user_id or "").strip()
+    channel_id = (body.channel_id or "").strip()
+    if not channel_id and not user_id:
+        if body.target == "slack_delivery":
+            # 配達専用の上書きを解除 = 受付と同じ共通チャンネルに戻す。
+            await db.execute(
+                delete(NotificationSetting).where(
+                    NotificationSetting.tenant_id == user.tenant_id,
+                    NotificationSetting.type == "slack_delivery",
+                )
+            )
+            await db.commit()
+            return {"ok": True, "channel_name": ""}
+        raise HTTPException(status_code=422, detail="channel_id or user_id is required")
+
+    if user_id:
+        try:
+            dm_channel_id = await SlackNotifier.open_dm(token, user_id)
+        except SlackApiError as e:
+            raise _slack_scope_error(e, "DMの作成に失敗しました。")
+        display = f"DM: {(body.display_name or '').strip() or user_id}"
+        channel_id, channel_name = dm_channel_id, display
+    else:
+        try:
+            info = await SlackNotifier.get_channel_info(token, channel_id)
+        except SlackApiError:
+            raise HTTPException(status_code=400, detail="チャンネル情報の取得に失敗しました。")
+        if not info["is_private"] and not info["is_member"]:
+            await SlackNotifier.join_channel(token, channel_id)  # best-effort
+        channel_name = ("#" if not info["is_private"] else "") + (info["name"] or channel_id)
+        channel_id = info["id"]
+
+    now = datetime.now(timezone.utc).isoformat()
+    if body.target == "slack_delivery":
+        # Bot Token は複製しない(共通の連携を使い回す)。チャンネルだけ上書きで保存する。
+        await _upsert_setting(
+            user.tenant_id, "slack_delivery",
+            {"channel_id": channel_id, "channel_name": channel_name, "updated_at": now},
+            db,
+        )
+    else:
+        config["channel_id"] = channel_id
+        config["channel_name"] = channel_name
+        config["updated_at"] = now
+        await _upsert_setting(user.tenant_id, "slack", config, db)
+    return {"ok": True, "channel_name": channel_name}
 
 
 @router.post("/slack/disconnect")
@@ -448,6 +620,7 @@ async def slack_disconnect(
         )
     )
     await db.commit()
+    await _clear_stale_delivery_channel_override(user.tenant_id, db)
     return {"ok": True}
 
 
@@ -495,6 +668,9 @@ async def slack_callback(
 
     # Overwrite any existing Slack link (再連携 = 上書き, 作業指示 §3).
     await _upsert_setting(tenant_id, "slack", config, db)
+    # 再連携は別ワークスペースの可能性がある。配達専用のチャンネル上書き(新形式)は
+    # channel id がワークスペース固有なので、持ち越すと静かに送信失敗する。
+    await _clear_stale_delivery_channel_override(tenant_id, db)
     return _slack_redirect(slug, "connected")
 
 

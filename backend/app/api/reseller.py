@@ -16,6 +16,7 @@ from app.models.user import User
 from app.models.device import Device
 from app.models.reception import ReceptionLog
 from app.services.auth import hash_password, create_access_token, create_refresh_token
+from app.services.timeutil import iso_z
 
 router = APIRouter(prefix="/reseller", tags=["reseller"])
 
@@ -256,20 +257,6 @@ async def create_customer(
     )
     db.add(user)
 
-    try:
-        from app.services.webpush import generate_vapid_keys
-        from app.services.crypto import encrypt_dict
-        from app.models.notification import NotificationSetting
-        priv_b64, pub_b64 = generate_vapid_keys()
-        vapid_setting = NotificationSetting(
-            tenant_id=tenant.id,
-            type="webpush",
-            config_json=encrypt_dict({"private_key": priv_b64, "public_key": pub_b64}),
-        )
-        db.add(vapid_setting)
-    except Exception:
-        pass
-
     await db.commit()
     return {"id": tenant.id, "slug": tenant.slug, "name": tenant.name}
 
@@ -365,7 +352,7 @@ async def list_reseller_devices(
             "name": d.name,
             "location": d.location,
             "tenant_id": d.tenant_id,
-            "last_seen_at": d.last_seen_at.isoformat() + "Z" if d.last_seen_at else None,
+            "last_seen_at": iso_z(d.last_seen_at),
         }
         for d in devices
     ]

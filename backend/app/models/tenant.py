@@ -41,6 +41,9 @@ class Tenant(Base):
     # Kiosk design pattern selection
     kiosk_style: Mapped[str] = mapped_column(String(32), default="default")
 
+    # Kiosk default display language ("ja"/"en"). 来訪者がタッチで切り替えるまでの既定言語。
+    kiosk_default_lang: Mapped[str] = mapped_column(String(8), default="ja")
+
     # Suspension flag — set by operator to block kiosk access
     is_suspended: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
@@ -48,6 +51,12 @@ class Tenant(Base):
     # true のとき: 受付通知は実送信しつつ担当者返信をサーバが自動再現し、キオスクに
     # デモバッジ表示・配達導線の無効化・手荷物預かりの固定PIN化を行う(非デモは一切不変)。
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # 【廃止】受付の音声のクラウド中継(AmiVoice)の可否。機能は 2026-09-29 に削除した。
+    # 列は本番 DB に残っており、既定値なしの NOT NULL で作られた DB もあるので、
+    # 定義だけ残して INSERT が失敗しないようにしている。読み書きするコードは無い。
+    voice_cloud_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    voice_cloud_opt_out: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # OTA: timestamp set by admin to trigger force-push to all devices of this tenant
     kiosk_force_update_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -78,4 +87,5 @@ class Tenant(Base):
     lockers = relationship("Locker", back_populates="tenant", cascade="all, delete-orphan")
     notification_settings = relationship("NotificationSetting", back_populates="tenant", cascade="all, delete-orphan")
     push_subscriptions = relationship("PushSubscription", back_populates="tenant", cascade="all, delete-orphan")
+    staff_notification_routes = relationship("StaffNotificationRoute", back_populates="tenant", cascade="all, delete-orphan")
     inquiries = relationship("Inquiry", back_populates="tenant", cascade="all, delete-orphan")

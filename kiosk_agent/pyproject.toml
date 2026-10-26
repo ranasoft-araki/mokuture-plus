@@ -1,3 +1,8 @@
+[build-system]
+# `[tool.setuptools]` を pyproject.toml から読むには setuptools>=61 が要る。
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "mokuture-kiosk-agent"
 version = "0.1.0"
@@ -16,4 +21,49 @@ rpi = [
     "gpiozero>=2.0",
     "lgpio",
 ]
+# 名刺読み取り（QR無し来訪者の受付フォーム自動入力）。
+# 入っていない端末でもキオスク本体は従来どおり起動し、名刺の導線だけが出なくなる。
+# opencv は Raspberry Pi OS では apt の python3-opencv を使うほうが速く入る
+# （install.sh が apt を先に試し、失敗したら pip に落とす）。
+card = [
+    "opencv-python-headless>=4.9",
+    "numpy>=1.26",
+    "onnxruntime>=1.17",
+    "PyYAML>=6.0",
+]
+# 音声入力（QR無し来訪者の受付フォームを声で埋める / 実験導入）。
+# 録音は arecord（alsa-utils）を使うので、録音まわりの Python 依存は無い。
+voice = [
+    "PyYAML>=6.0",
+    # 声で操作する（画面ごとに語彙を絞って聞き分ける）。
+    "vosk>=0.3.45",
+    # 任意: 入っていれば VAD を webrtcvad に切り替えられる
+    # "webrtcvad-wheels>=2.0.14",
+]
+# Windows 開発機で動作試験するとき用（arecord が無いのでマイクは PortAudio 経由）。
+# 本番の Raspberry Pi には入れない。scripts/install_voice_windows.ps1 が入れる。
+voice-windows = [
+    "PyYAML>=6.0",
+    "sounddevice>=0.4.6",
+    "vosk>=0.3.45",
+]
+dev = [
+    "pytest>=8.0",
+    "Pillow>=10.0",      # tests/make_fixtures.py が架空名刺の画像を作るのに使う
+]
 
+[tool.setuptools]
+# 配布物ではなく「依存を .venv に入れるための editable install」なので、パッケージは
+# 明示列挙する。列挙しないと setuptools の自動検出が kiosk_agent 直下のディレクトリを
+# 全部パッケージ候補と見なし（static/assets/vendor/models/voice_models/analytics_spool…）、
+# "Multiple top-level packages discovered in a flat-layout" で install.sh ごと止まる。
+# 直下の .py（main.py 等）はサービスが WorkingDirectory から読むので、ここには含めない。
+packages = ["card", "card.ocr", "voice"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "ocr: OCR モデルを必要とするテスト（モデル未取得なら自動で skip）",
+    "slow: 数秒かかるテスト",
+]

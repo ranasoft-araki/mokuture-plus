@@ -9,6 +9,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
+from app.config import settings as app_settings
 from app.database import get_db
 from app.middleware.tenant import require_operator
 from app.models.tenant import Tenant
@@ -16,6 +17,7 @@ from app.models.user import User
 from app.models.device import Device
 from app.models.reception import ReceptionLog
 from app.services.auth import hash_password, create_access_token, create_refresh_token
+from app.services.timeutil import iso_z
 
 router = APIRouter(prefix="/operator", tags=["operator"])
 
@@ -242,20 +244,6 @@ async def create_tenant(
         role="admin",
     )
     db.add(user)
-
-    try:
-        from app.services.webpush import generate_vapid_keys
-        from app.services.crypto import encrypt_dict
-        from app.models.notification import NotificationSetting
-        priv_b64, pub_b64 = generate_vapid_keys()
-        vapid_setting = NotificationSetting(
-            tenant_id=tenant.id,
-            type="webpush",
-            config_json=encrypt_dict({"private_key": priv_b64, "public_key": pub_b64}),
-        )
-        db.add(vapid_setting)
-    except Exception:
-        pass
 
     await db.commit()
     return {"id": tenant.id, "slug": tenant.slug, "name": tenant.name, "admin_email": body.admin_email}
@@ -765,7 +753,7 @@ async def list_all_devices(
             "tenant_id": d.tenant_id,
             "tenant_name": t_name,
             "reseller_name": r_name,
-            "last_seen_at": d.last_seen_at.isoformat() + "Z" if d.last_seen_at else None,
+            "last_seen_at": iso_z(d.last_seen_at),
             "is_online": is_online,
             "status": getattr(d, "status", "active") or "active",
         })

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api, type MediaItem, type Playlist } from "@/lib/api";
-import { clearTokens, getAccessToken } from "@/lib/auth";
+import { getAccessToken } from "@/lib/auth";
 import { AdminShell, MkBtn, MkCard, MkPill } from "@/components/AdminShell";
 
 function MediaPreviewModal({ item, usedIn, onClose }: { item: MediaItem; usedIn: string[]; onClose: () => void }) {
@@ -137,13 +137,12 @@ export default function AdminMediaPage() {
       const [mediaList, pls] = await Promise.all([api.listMedia(token), api.listPlaylists(token)]);
       setMedia(mediaList);
       setPlaylists(pls);
-    } catch {
-      clearTokens();
-      router.push("/login");
+    } catch (e) {
+      // セッション切れは api.ts がログイン画面へ移す。ここに来るのは通信断などの一時的な失敗なのでログアウトさせない
+      setError(e instanceof Error ? e.message : "取得に失敗しました");
     } finally {
       setLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

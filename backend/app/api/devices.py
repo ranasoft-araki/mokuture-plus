@@ -10,7 +10,9 @@ from sqlalchemy import select
 from app.database import get_db
 from app.middleware.tenant import get_current_user
 from app.models.device import Device
+from app.models.content import Playlist
 from app.models.user import User
+from app.services.timeutil import iso_z
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
@@ -27,6 +29,10 @@ class DeviceOut(BaseModel):
     status: str
     last_seen_at: str | None
     created_at: str
+    agent_version: str | None = None
+    ip_address: str | None = None
+    online_since: str | None = None
+    current_playlist_name: str | None = None
 
 
 @router.get("", response_model=list[DeviceOut])
@@ -34,7 +40,18 @@ async def list_devices(user: User = Depends(get_current_user), db: AsyncSession 
     result = await db.execute(
         select(Device).where(Device.tenant_id == user.tenant_id).order_by(Device.created_at.desc())
     )
-    return [_out(d) for d in result.scalars()]
+    devices = list(result.scalars())
+    # current_playlist_id → プレイリスト名を解決（削除済みプレイリストを指す場合は None）。
+    pl_ids = {d.current_playlist_id for d in devices if d.current_playlist_id}
+    pl_names: dict[str, str] = {}
+    if pl_ids:
+        pl_rows = await db.execute(
+            select(Playlist.id, Playlist.name).where(
+                Playlist.id.in_(pl_ids), Playlist.tenant_id == user.tenant_id
+            )
+        )
+        pl_names = {pid: name for pid, name in pl_rows.all()}
+    return [_out(d, pl_names.get(d.current_playlist_id)) for d in devices]
 
 
 @router.post("", status_code=201)
@@ -146,12 +163,16 @@ async def delete_device(
     await db.commit()
 
 
-def _out(d: Device) -> dict:
+def _out(d: Device, playlist_name: str | None = None) -> dict:
     return {
         "id": d.id,
         "name": d.name,
         "location": d.location,
         "status": d.status or "active",
-        "last_seen_at": d.last_seen_at.isoformat() + "Z" if d.last_seen_at else None,
-        "created_at": d.created_at.isoformat() + "Z" if d.created_at else "",
+        "last_seen_at": iso_z(d.last_seen_at),
+        "created_at": iso_z(d.created_at) or "",
+        "agent_version": d.agent_version,
+        "ip_address": d.ip_address,
+        "online_since": iso_z(d.online_since),
+        "current_playlist_name": playlist_name,
     }

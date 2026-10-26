@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 
 async function _fetch(path: string, init?: RequestInit, token?: string): Promise<Response> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -7,23 +7,65 @@ async function _fetch(path: string, init?: RequestInit, token?: string): Promise
 }
 
 // Singleton: prevents race condition when multiple requests expire simultaneously
-let _pendingRefresh: Promise<string | null> | null = null;
+type _RefreshResult = { token: string | null; sessionDead: boolean; role: string | null };
+let _pendingRefresh: Promise<_RefreshResult> | null = null;
 
-async function _doRefresh(): Promise<string | null> {
-  const { getRefreshToken, refreshSaveTokens, clearTokens } = await import("@/lib/auth");
+async function _doRefresh(): Promise<_RefreshResult> {
+  const { getRefreshToken, getRole, refreshSaveTokens, clearTokens } = await import("@/lib/auth");
   const rt = getRefreshToken();
-  if (!rt) return null;
-  const res = await _fetch("/auth/refresh", {
-    method: "POST",
-    body: JSON.stringify({ refresh_token: rt }),
-  });
+  const role = getRole();
+  if (!rt) return { token: null, sessionDead: true, role };
+
+  let res: Response;
+  try {
+    res = await _fetch("/auth/refresh", {
+      method: "POST",
+      body: JSON.stringify({ refresh_token: rt }),
+    });
+  } catch {
+    // ネットワーク断等: セッションが死んだとは限らないので強制ログアウトしない
+    return { token: null, sessionDead: false, role };
+  }
+
   if (res.ok) {
     const { access_token, refresh_token } = await res.json();
     refreshSaveTokens(access_token, refresh_token);
-    return access_token;
+    return { token: access_token, sessionDead: false, role };
   }
-  clearTokens();
-  return null;
+
+  // リフレッシュトークン自体が無効/失効 → セッション死亡が確定（デプロイ中の5xx等は対象外）
+  if (res.status === 401 || res.status === 403) {
+    clearTokens();
+    return { token: null, sessionDead: true, role };
+  }
+  return { token: null, sessionDead: false, role };
+}
+
+// サーバー側の一時的な失敗(通信断・デプロイ中の5xx)。「セッション」の語を入れないこと:
+// ダッシュボードはこの語を見てログアウトさせるため、入れると一時的な失敗でもログアウトになる。
+const _TEMP_FAILURE = "サーバーに接続できません。時間をおいて再度お試しください。";
+
+// 通信そのものが失敗したとき(オフライン等)、ブラウザの英語メッセージ(Failed to fetch)を画面に出さない
+async function _fetchOrTempFailure(path: string, init?: RequestInit, token?: string): Promise<Response> {
+  try {
+    return await _fetch(path, init, token);
+  } catch {
+    throw new Error(_TEMP_FAILURE);
+  }
+}
+
+// 多重リダイレクト防止用フラグ
+let _redirecting = false;
+
+/** セッション死亡確定時、役割に応じたログイン画面へ強制的に飛ばす。 */
+function _forceLoginRedirect(role: string | null) {
+  if (typeof window === "undefined" || _redirecting) return;
+  _redirecting = true;
+  const dest = role === "operator" ? "/ops-console" : role === "reseller" ? "/partner-portal" : "/login";
+  if (window.location.pathname !== dest) {
+    // replace: 戻るで死んだページへ戻れないようにする(戻ると _redirecting が立ったままで以後リダイレクトしない)
+    window.location.replace(dest);
+  }
 }
 
 // アクセストークン(JWT)の exp をローカルで確認し、失効(間近)なら true を返す。
@@ -43,7 +85,66 @@ function _isAccessTokenExpired(token: string): boolean {
   }
 }
 
+// 審査環境の閲覧専用アカウント判定（アクセストークンの ro クレーム）。lib/auth の getReadonly と
+// 同じロジックだが、ここでは request() に渡された token 引数からストレージ非依存で判定する。
+function _tokenIsReadonly(token: string): boolean {
+  try {
+    const part = token.split(".")[1];
+    if (!part) return false;
+    let b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    b64 += "=".repeat((4 - (b64.length % 4)) % 4);
+    return JSON.parse(atob(b64)).ro === true;
+  } catch {
+    return false;
+  }
+}
+
+// 閲覧専用アカウントがミューテーション(GET/HEAD以外)を来社予定(/appointments)以外へ
+// 投げようとしていれば true。サーバの ReadOnlyGuardMiddleware と対を成すクライアント側ガードで、
+// ボタンを押した瞬間に分かりやすく止める（エラーはページ既存のエラー表示に流れる）。
+function _blockedByReadonly(path: string, method: string | undefined, token: string): boolean {
+  const m = (method ?? "GET").toUpperCase();
+  if (m === "GET" || m === "HEAD" || m === "OPTIONS") return false;
+  if (!_tokenIsReadonly(token)) return false;
+  const p = path.split("?")[0];
+  const allowed = p === "/appointments" || p.startsWith("/appointments/");
+  return !allowed;
+}
+
+// 有効なアクセストークンを返す（失効間近なら先にリフレッシュ）。SSE(EventSource)の接続直前に
+// 使い、失効トークンで張って 401→再接続ループに陥るのを防ぐ。request() と同じ先読み判定・
+// シングルトンリフレッシュを再利用する。
+export async function ensureFreshToken(): Promise<string | null> {
+  const { getAccessToken } = await import("@/lib/auth");
+  let token = getAccessToken();
+  if (!token) return null;
+  if (_isAccessTokenExpired(token)) {
+    if (!_pendingRefresh) {
+      _pendingRefresh = _doRefresh().finally(() => { _pendingRefresh = null; });
+    }
+    const result = await _pendingRefresh;
+    if (result.token) token = result.token;
+    else if (result.sessionDead) { _forceLoginRedirect(result.role); return null; }
+  }
+  return token;
+}
+
+/** 未設定(undefined/null/"")のパラメータを落としてクエリ文字列にする。 */
+function _qs(params?: object): string {
+  if (!params) return "";
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params as Record<string, unknown>)) {
+    if (v === undefined || v === null || v === "") continue;
+    sp.set(k, String(v));
+  }
+  const q = sp.toString();
+  return q ? `?${q}` : "";
+}
+
 async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+  if (token && _blockedByReadonly(path, init?.method, token)) {
+    throw new Error("この環境は閲覧専用です。操作できるのは「来社予定」のみです。");
+  }
   // 先読みリフレッシュ: 失効が判明していれば先にトークンを更新し、無駄な401往復を省く。
   // (ホーム画面ショートカット起動時は15分超で失効している事が多く、ここが効く)
   if (token && _isAccessTokenExpired(token)) {
@@ -51,10 +152,18 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
       _pendingRefresh = _doRefresh().finally(() => { _pendingRefresh = null; });
     }
     const proactive = await _pendingRefresh;
-    if (proactive) token = proactive;
+    if (proactive.token) {
+      token = proactive.token;
+    } else if (proactive.sessionDead) {
+      _forceLoginRedirect(proactive.role);
+      return new Promise<T>(() => {}); // リダイレクト中: 誤ったエラー表示が一瞬でも出ないよう解決させない
+    } else {
+      // 一時的な失敗: 失効済みトークンで叩いても401→再refreshになるだけなので、ここで止める
+      throw new Error(_TEMP_FAILURE);
+    }
   }
 
-  let res = await _fetch(path, init, token);
+  let res = await _fetchOrTempFailure(path, init, token);
 
   if (res.status === 401 && token) {
     // 保険: 先読みで漏れた失効(端末/サーバ時刻ずれ等)にも従来どおり対応。
@@ -62,9 +171,15 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
     if (!_pendingRefresh) {
       _pendingRefresh = _doRefresh().finally(() => { _pendingRefresh = null; });
     }
-    const newToken = await _pendingRefresh;
-    if (!newToken) throw new Error("セッションが切れました。再ログインしてください。");
-    res = await _fetch(path, init, newToken);
+    const result = await _pendingRefresh;
+    if (!result.token) {
+      if (result.sessionDead) {
+        _forceLoginRedirect(result.role);
+        return new Promise<T>(() => {}); // リダイレクト中: 誤ったエラー表示が一瞬でも出ないよう解決させない
+      }
+      throw new Error(_TEMP_FAILURE);
+    }
+    res = await _fetchOrTempFailure(path, init, result.token);
   }
 
   if (!res.ok) {
@@ -116,6 +231,28 @@ export const api = {
     request<AuthResponse>("/auth/operator/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   resellerLogin: (reseller_id: string, password: string) =>
     request<AuthResponse>("/auth/reseller/login", { method: "POST", body: JSON.stringify({ reseller_id, password }) }),
+
+  // 分析ログ(実証実験・製品改善 / ANALYTICS.md)。運営のみが参照できる。
+  // 匿名セッションと行動イベントだけを扱い、氏名・会社名・担当者などは API 側に存在しない。
+  listAnalyticsSessions: (token: string, params?: AnalyticsFilters & { offset?: number; limit?: number }) =>
+    request<AnalyticsSessionList>(`/analytics/sessions${_qs(params)}`, {}, token),
+  getAnalyticsSession: (token: string, sessionId: string) =>
+    request<AnalyticsSessionDetail>(`/analytics/sessions/${encodeURIComponent(sessionId)}`, {}, token),
+  getAnalyticsSummary: (token: string, params?: AnalyticsFilters) =>
+    request<AnalyticsSummary>(`/analytics/summary${_qs(params)}`, {}, token),
+  getAnalyticsUptime: (token: string, params?: { tenant_id?: string; device_id?: string; date_from?: string; date_to?: string }) =>
+    request<{ items: AnalyticsUptimeItem[] }>(`/analytics/uptime${_qs(params)}`, {}, token),
+  /** CSV/JSON をダウンロードする（JWT が要るので <a href> ではなく fetch → Blob）。 */
+  downloadAnalyticsExport: async (
+    token: string,
+    params: AnalyticsFilters & { kind: "sessions" | "events"; fmt: "csv" | "json" },
+  ): Promise<{ blob: Blob; filename: string }> => {
+    const res = await _fetch(`/analytics/export${_qs(params)}`, {}, token);
+    if (!res.ok) throw new Error("エクスポートに失敗しました");
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const match = /filename="?([^";]+)"?/.exec(disposition);
+    return { blob: await res.blob(), filename: match ? match[1] : `${params.kind}.${params.fmt}` };
+  },
 
   // Operator API (運営)
   getOperatorStats: (token: string) =>
@@ -295,7 +432,7 @@ export const api = {
     kiosk_menu_title?: string; kiosk_welcome_qr_guide?: string; kiosk_welcome_form_label?: string;
     kiosk_idle_timeout_sec?: number; kiosk_complete_timeout_sec?: number;
     logo_pos_x?: number; logo_pos_y?: number; logo_width_pct?: number;
-    kiosk_style?: string; staff_list?: string | null; purpose_list?: string | null;
+    kiosk_style?: string; kiosk_default_lang?: string; staff_list?: string | null; purpose_list?: string | null;
     department_list?: string | null;
     kiosk_phone_number?: string | null; inquiry_form_url?: string | null;
   }) =>
@@ -442,8 +579,6 @@ export const api = {
   // Push notifications (admin)
   getPushVapidKey: (token: string) =>
     request<{ public_key: string | null }>("/notifications/push/vapid-public-key", {}, token),
-  setupPushVapid: (token: string) =>
-    request<{ public_key: string }>("/notifications/push/setup", { method: "POST" }, token),
   subscribePush: (token: string, body: { endpoint: string; p256dh: string; auth: string }) =>
     request("/notifications/push/subscribe", { method: "POST", body: JSON.stringify(body) }, token),
   listPushSubscriptions: (token: string) =>
@@ -452,8 +587,6 @@ export const api = {
     request("/notifications/push/unsubscribe", { method: "DELETE", body: JSON.stringify({ endpoint }) }, token),
   testPushNotification: (token: string) =>
     request<{ sent: number; total: number }>("/notifications/push/test", { method: "POST" }, token),
-  regenerateVapid: (token: string) =>
-    request<{ public_key: string; regenerated: boolean }>("/notifications/push/regenerate", { method: "POST" }, token),
 
   // Notification settings
   getNotificationSettings: (token: string) =>
@@ -470,14 +603,57 @@ export const api = {
   getSlackChannels: (token: string) =>
     request<{ channels: { id: string; name: string; is_private: boolean; is_member: boolean }[] }>(
       "/notifications/slack/channels", {}, token),
-  setSlackChannel: (token: string, channel_id: string) =>
-    request<{ ok: boolean; channel_name: string }>("/notifications/slack/channel", { method: "POST", body: JSON.stringify({ channel_id }) }, token),
+  /** DM先の選択肢（issue #1追記分）。`users:read` スコープが無い旧トークンは 400 を返す。 */
+  getSlackUsers: (token: string) =>
+    request<{ users: { id: string; name: string }[] }>(
+      "/notifications/slack/users", {}, token),
+  /** チャンネルへ送るか、個人へDMするか（どちらか一方）。`target="slack_delivery"` は配達の
+   * 呼び出し専用のチャンネル上書き（共通のBot Tokenを使い回す。空のdestで上書きを解除し、
+   * 受付と同じ共通チャンネルに戻す）。 */
+  setSlackChannel: (
+    token: string,
+    dest: { channel_id: string } | { user_id: string; display_name?: string } | Record<string, never>,
+    target: "slack" | "slack_delivery" = "slack",
+  ) =>
+    request<{ ok: boolean; channel_name: string }>(
+      "/notifications/slack/channel", { method: "POST", body: JSON.stringify({ ...dest, target }) }, token),
   disconnectSlack: (token: string) =>
     request<{ ok: boolean }>("/notifications/slack/disconnect", { method: "POST" }, token),
+
+  // 訪問先担当者ごとの通知先 / 代理通知（応答が無いときのエスカレーション）。
+  getStaffRoutes: (token: string) =>
+    request<StaffNotificationRoutesResponse>("/notifications/staff-routes", {}, token),
+  saveStaffRoute: (token: string, body: StaffRouteInput) =>
+    request<{ ok: boolean; route: StaffNotificationRoute }>(
+      "/notifications/staff-routes", { method: "PUT", body: JSON.stringify(body) }, token),
+  deleteStaffRoute: (token: string, routeId: string) =>
+    request<{ ok: boolean }>(
+      `/notifications/staff-routes/${encodeURIComponent(routeId)}`, { method: "DELETE" }, token),
+  /** 担当者リストを丸ごと置き換える（追加・削除・並べ替え）。編集の場は「通知設定」。 */
+  replaceStaffList: (token: string, names: string[], version?: string) =>
+    request<{ ok: boolean; staff_list: string[]; staff_list_version: string; removed: string[] }>(
+      "/notifications/staff-routes/staff",
+      { method: "PUT", body: JSON.stringify({ names, version }) }, token),
+  /** 担当者名の変更。通知先設定・代理通知先・未応答の受付も追随する。 */
+  renameStaff: (token: string, from_name: string, to_name: string, version?: string) =>
+    request<{ ok: boolean; staff_list: string[]; staff_list_version: string; pending_updated?: number }>(
+      "/notifications/staff-routes/staff/rename",
+      { method: "POST", body: JSON.stringify({ from_name, to_name, version }) }, token),
+  testStaffRoute: (token: string, staff_name: string, stage: "primary" | "fallback") =>
+    request<StaffRouteTestResult>(
+      "/notifications/staff-routes/test",
+      { method: "POST", body: JSON.stringify({ staff_name, stage }) }, token),
+  /** 空欄の項目は現在値を維持する（トークンはマスクして返しているため）。room_id は任意
+   * （トークンだけで連携済にできる。配達通知の宛先として使うときだけ必要）。 */
   updateChatworkSettings: (token: string, api_token: string, room_id: string) =>
     request("/notifications/settings/chatwork", { method: "PUT", body: JSON.stringify({ api_token, room_id }) }, token),
   testChatworkNotification: (token: string) =>
     request<{ ok: boolean }>("/notifications/test/chatwork", { method: "POST" }, token),
+  /** ルーム選択の一覧。api_token を渡すと(未保存でも)そのトークンで取得する。省略時は保存済みの
+   * 共通トークンを使う。 */
+  getChatworkRooms: (token: string, api_token: string = "") =>
+    request<{ rooms: { room_id: string; name: string; type: string }[] }>(
+      "/notifications/chatwork/rooms", { method: "POST", body: JSON.stringify({ api_token }) }, token),
   testNotification: (token: string, type: string): Promise<{ ok: boolean; error?: string; sent?: number }> => {
     if (type === "push") {
       return request<{ sent: number; total: number }>("/notifications/push/test", { method: "POST" }, token)
@@ -493,18 +669,14 @@ export const api = {
     request<{ ok: boolean }>("/notifications/test/webhook", { method: "POST" }, token),
 
   // Delivery-specific notification destinations (荷物の配達 / 呼び出し)
-  updateSlackDelivery: (token: string, webhook_url: string) =>
-    request("/notifications/settings/slack_delivery", { method: "PUT", body: JSON.stringify({ webhook_url }) }, token),
-  updateChatworkDelivery: (token: string, api_token: string, room_id: string) =>
-    request("/notifications/settings/chatwork_delivery", { method: "PUT", body: JSON.stringify({ api_token, room_id }) }, token),
+  // Slack/Chatwork はここで新たに連携させず、共通の連携(上の Slack/Chatwork カード)を
+  // 使い回す。Slack のチャンネル上書きは setSlackChannel(…, "slack_delivery") で行う。
   updateWebhookDelivery: (token: string, webhook_url: string) =>
     request("/notifications/settings/webhook_delivery", { method: "PUT", body: JSON.stringify({ webhook_url }) }, token),
   updatePushDelivery: (token: string, enabled: boolean) =>
     request("/notifications/settings/push_delivery", { method: "PUT", body: JSON.stringify({ enabled }) }, token),
   testSlackDelivery: (token: string) =>
     request<{ ok: boolean }>("/notifications/test/slack_delivery", { method: "POST" }, token),
-  testChatworkDelivery: (token: string) =>
-    request<{ ok: boolean }>("/notifications/test/chatwork_delivery", { method: "POST" }, token),
   testWebhookDelivery: (token: string) =>
     request<{ ok: boolean }>("/notifications/test/webhook_delivery", { method: "POST" }, token),
 
@@ -549,6 +721,9 @@ export const api = {
     request<VisitorAppointment>(`/appointments/${id}`, { method: "PATCH", body: JSON.stringify(body) }, token),
   deleteAppointment: (token: string, id: string): Promise<void> =>
     request(`/appointments/${id}`, { method: "DELETE" }, token),
+  // 来社予定QRを指定メールアドレスへ送信(宛先は保存しない・都度入力)
+  sendAppointmentEmail: (token: string, id: string, email: string) =>
+    request<{ ok: boolean; sent_to: string }>(`/appointments/${id}/send-email`, { method: "POST", body: JSON.stringify({ email }) }, token),
 
   // Kiosk appointment lookup (device token auth)
   getKioskAppointment: (kioskToken: string, apptToken: string) =>
@@ -762,6 +937,80 @@ export interface ReceptionLog extends ReceptionCreate {
   state: string;
   staff_notes: string | null;
   created_at: string;
+  /** 代理通知(応答が無いときのエスカレーション)を送った時刻。未送信は null。 */
+  escalated_at?: string | null;
+}
+
+/** 訪問先担当者ごとの通知先と代理通知の設定（管理画面「通知設定」）。 */
+export interface StaffNotificationRoute {
+  id: string;
+  staff_name: string;
+  slack_channel_id: string;
+  slack_channel_name: string;
+  /** Chatwork のルーム ID。API トークンはテナント共通のものを使い回す。 */
+  chatwork_room_id: string;
+  /** ルームの表示名（ルーム選択で取得したもの。無ければ空）。 */
+  chatwork_room_name: string;
+  /** Web Push を届ける管理ユーザーの id（""=共通の購読へ）。購読はユーザーのブラウザに紐づく。 */
+  push_user_id: string;
+  email: string;
+  /** Webhook URL が設定済みか。URL 自体は秘密情報なのでサーバから返さない。 */
+  webhook_configured: boolean;
+  /** テナント共通の通知先(Slack/Webhook/プッシュ)へも送るか。 */
+  include_default: boolean;
+  /** 応答が無いときに転送する代理担当者名（空＝代理通知しない）。 */
+  fallback_staff_name: string;
+  /** 代理通知までの待機秒。0 = 代理通知しない。 */
+  escalate_after_sec: number;
+  /** 受付設定の担当者リストから消えた担当者（キオスクでは選ばれない）。 */
+  orphan: boolean;
+  updated_at: string | null;
+}
+
+/** 担当者ごとのプッシュ先に指定できる管理ユーザー。 */
+export interface StaffPushUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  /** この人がブラウザでプッシュを許可済みか。false だと指定しても届かない。 */
+  has_push: boolean;
+}
+
+export interface StaffNotificationRoutesResponse {
+  staff_list: string[];
+  /** 担当者リストの版。更新時に送り返すと、他の人の変更を巻き込む前に 409 で止まる。 */
+  staff_list_version: string;
+  routes: StaffNotificationRoute[];
+  slack: { bot_connected: boolean; default_channel_name: string };
+  chatwork: { connected: boolean };
+  users: StaffPushUser[];
+  smtp_enabled: boolean;
+  default_escalate_sec: number;
+  min_escalate_sec: number;
+  max_escalate_sec: number;
+}
+
+export interface StaffRouteTestResult {
+  ok: boolean;
+  results: { channel: string; target: string; ok: boolean; error?: string }[];
+}
+
+export interface StaffRouteInput {
+  staff_name: string;
+  slack_channel_id?: string;
+  /** DM先のSlackユーザーID。指定時は slack_channel_id を無視してDMチャンネルを解決する。 */
+  slack_user_id?: string;
+  slack_display_name?: string;
+  chatwork_room_id?: string;
+  chatwork_room_name?: string;
+  push_user_id?: string;
+  email?: string;
+  /** null/未指定=変更しない（既存を維持）、""=解除、URL=差し替え。 */
+  webhook_url?: string | null;
+  include_default?: boolean;
+  fallback_staff_name?: string;
+  escalate_after_sec?: number;
 }
 
 export interface Locker {
@@ -815,6 +1064,10 @@ export interface Device {
   status: string; // "pending" | "active"
   last_seen_at: string | null;
   created_at: string;
+  agent_version?: string | null;
+  ip_address?: string | null;
+  online_since?: string | null;
+  current_playlist_name?: string | null;
 }
 
 export interface PushSubscriptionInfo {
@@ -873,6 +1126,7 @@ export interface TenantSettings {
   logo_pos_y: number;
   logo_width_pct: number;
   kiosk_style: string;
+  kiosk_default_lang: string;
   staff_list?: string | null;
   purpose_list?: string | null;
   department_list?: string | null;
@@ -909,6 +1163,7 @@ export interface PublicTenantSettings {
   logo_pos_y: number;
   logo_width_pct: number;
   kiosk_style: string;
+  kiosk_default_lang: string;
   is_suspended: boolean;
   staff_list?: string[];
   purpose_list?: string[];
@@ -1028,4 +1283,132 @@ export function setCachedKioskSettings(tenantSlug: string, s: PublicTenantSettin
   try {
     localStorage.setItem(`${_SETTINGS_KEY}_${tenantSlug}`, JSON.stringify(s));
   } catch {}
+}
+
+
+/* ─ 分析ログ（実証実験・製品改善 / ANALYTICS.md） ────────────────────────────
+   **個人情報の項目は存在しない**（氏名・会社名・担当者・入力値は API が返さない）。 */
+
+export interface AnalyticsFilters {
+  tenant_id?: string;
+  device_id?: string;
+  outcome?: string;
+  entry_method?: string;
+  ui_version?: string;
+  date_from?: string;
+  date_to?: string;
+}
+
+export interface AnalyticsSession {
+  id: string;
+  tenant_id: string;
+  tenant_name: string | null;
+  site_id: string;
+  device_id: string | null;
+  device_name: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_ms: number | null;
+  outcome: string | null;
+  entry_method: string | null;
+  app_version: string | null;
+  ui_version: string | null;
+  flow_version: string | null;
+  client_tz_offset_min: number | null;
+  first_screen_id: string | null;
+  last_screen_id: string | null;
+  event_count: number;
+  error_count: number;
+  screen_count: number;
+  back_count: number;
+  notified: boolean;
+  staff_response: string | null;
+  staff_response_ms: number | null;
+  answer_clarity: string | null;
+  answer_confidence: string | null;
+  answer_assistance: string | null;
+}
+
+export interface AnalyticsEvent {
+  event_id: string;
+  session_id: string;
+  sequence_no: number;
+  client_occurred_at: string | null;
+  server_received_at: string | null;
+  event_source: string;
+  device_id: string | null;
+  app_version: string | null;
+  ui_version: string | null;
+  event_name: string;
+  screen_id: string | null;
+  previous_screen_id: string | null;
+  element_id: string | null;
+  field_id: string | null;
+  input_method: string | null;
+  result: string | null;
+  error_code: string | null;
+  screen_dwell_ms: number | null;
+  duration_ms: number | null;
+  retry_count: number | null;
+  recovered: boolean | null;
+  question_id: string | null;
+  answer_code: string | null;
+}
+
+export interface AnalyticsSessionList {
+  total: number;
+  items: AnalyticsSession[];
+}
+
+export interface AnalyticsSessionDetail {
+  session: AnalyticsSession;
+  events: AnalyticsEvent[];
+}
+
+export interface AnalyticsStat {
+  count: number;
+  avg: number | null;
+  median: number | null;
+  p90: number | null;
+}
+
+export interface AnalyticsSummary {
+  sessions_started: number;
+  completed: number;
+  completion_rate: number | null;
+  abandon_rate: number | null;
+  error_rate: number | null;
+  error_recovery_rate: number | null;
+  duration_ms: AnalyticsStat;
+  staff_response_ms: AnalyticsStat;
+  self_reported_unassisted: {
+    rate: number | null;
+    answered: number;
+    response_rate: number | null;
+    unassisted: number;
+  };
+  by_entry_method: Record<string, {
+    started: number;
+    completed: number;
+    completion_rate: number | null;
+    duration_median: number | null;
+    duration_p90: number | null;
+  }>;
+  survey: Record<string, { answered: number; response_rate: number | null; counts: Record<string, number> }>;
+}
+
+export interface AnalyticsUptimeItem {
+  device_id: string;
+  device_name: string | null;
+  tenant_id: string;
+  tenant_name: string | null;
+  samples: number;
+  powered_sec: number;
+  healthy_sec: number;
+  offline_sec: number;
+  uptime_rate: number | null;
+  restart_count: number;
+  cpu_percent_avg: number | null;
+  cpu_temp_max: number | null;
+  disk_free_mb_min: number | null;
 }

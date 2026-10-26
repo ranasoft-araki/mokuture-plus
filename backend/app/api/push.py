@@ -1,4 +1,8 @@
-"""PWA Push Notification API — VAPID key management and subscription CRUD."""
+"""PWA Push Notification API — VAPID public key and subscription CRUD.
+
+The VAPID key pair is one system-wide pair (VAPID_PRIVATE_KEY / VAPID_PUBLIC_KEY env)
+shared by every tenant. Regenerating it invalidates every subscription everywhere.
+"""
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,49 +10,14 @@ from sqlalchemy import select, delete
 
 from app.database import get_db
 from app.middleware.tenant import require_roles
-from app.models.notification import NotificationSetting, PushSubscription
+from app.models.notification import PushSubscription
 from app.models.user import User
-from app.services.crypto import encrypt_dict, decrypt_dict
-from app.services.webpush import generate_vapid_keys, send_push
+from app.services.webpush import send_push
 from app.config import settings
 
 router = APIRouter(prefix="/notifications/push", tags=["push"])
 
-_VAPID_TYPE = "vapid"
-
-
-# ── VAPID key helpers ─────────────────────────────────────────────────
-
-async def _get_vapid(tenant_id: str, db: AsyncSession) -> dict | None:
-    result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == _VAPID_TYPE,
-        )
-    )
-    setting = result.scalar_one_or_none()
-    if setting is None:
-        return None
-    try:
-        return decrypt_dict(setting.config_json)
-    except Exception:
-        return None
-
-
-async def _upsert_vapid(tenant_id: str, private_pem: str, public_b64: str, db: AsyncSession) -> None:
-    encrypted = encrypt_dict({"private_key": private_pem, "public_key": public_b64})
-    result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == _VAPID_TYPE,
-        )
-    )
-    setting = result.scalar_one_or_none()
-    if setting:
-        setting.config_json = encrypted
-    else:
-        db.add(NotificationSetting(tenant_id=tenant_id, type=_VAPID_TYPE, config_json=encrypted))
-    await db.commit()
+_NOT_CONFIGURED = "プッシュ通知が使えない状態です。運営にお問い合わせください。"
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────
@@ -56,44 +25,9 @@ async def _upsert_vapid(tenant_id: str, private_pem: str, public_b64: str, db: A
 @router.get("/vapid-public-key")
 async def get_vapid_public_key(
     user: User = Depends(require_roles("admin", "superadmin")),
-    db: AsyncSession = Depends(get_db),
 ):
-    """Return the VAPID public key for this tenant (used by front-end to subscribe)."""
-    vapid = await _get_vapid(user.tenant_id, db)
-    # Fall back to global settings if available
-    pub_key = (vapid or {}).get("public_key") or settings.vapid_public_key or None
-    return {"public_key": pub_key}
-
-
-@router.post("/setup")
-async def setup_vapid(
-    user: User = Depends(require_roles("admin", "superadmin")),
-    db: AsyncSession = Depends(get_db),
-):
-    """Generate and store VAPID keys for this tenant (idempotent — skips if already set)."""
-    existing = await _get_vapid(user.tenant_id, db)
-    if existing and existing.get("public_key"):
-        return {"public_key": existing["public_key"], "generated": False}
-
-    private_pem, public_b64 = generate_vapid_keys()
-    await _upsert_vapid(user.tenant_id, private_pem, public_b64, db)
-    return {"public_key": public_b64, "generated": True}
-
-
-@router.post("/regenerate")
-async def regenerate_vapid(
-    user: User = Depends(require_roles("admin", "superadmin")),
-    db: AsyncSession = Depends(get_db),
-):
-    """Force-regenerate VAPID keys. Existing subscriptions will stop working and must re-subscribe."""
-    private_pem, public_b64 = generate_vapid_keys()
-    await _upsert_vapid(user.tenant_id, private_pem, public_b64, db)
-    # Remove all subscriptions since they were created with the old key
-    await db.execute(
-        delete(PushSubscription).where(PushSubscription.tenant_id == user.tenant_id)
-    )
-    await db.commit()
-    return {"public_key": public_b64, "regenerated": True}
+    """Return the VAPID public key the front-end subscribes with."""
+    return {"public_key": settings.vapid_public_key or None}
 
 
 # ── Subscription CRUD ────────────────────────────────────────────────
@@ -180,12 +114,11 @@ async def test_push(
     db: AsyncSession = Depends(get_db),
 ):
     """Send a test push to all subscriptions for this tenant."""
-    vapid = await _get_vapid(user.tenant_id, db)
-    private_key = (vapid or {}).get("private_key") or settings.vapid_private_key
+    private_key = settings.vapid_private_key
     subject = settings.vapid_subject
 
     if not private_key:
-        raise HTTPException(status_code=400, detail="VAPID not configured. Call /setup first.")
+        raise HTTPException(status_code=400, detail=_NOT_CONFIGURED)
 
     result = await db.execute(
         select(PushSubscription).where(PushSubscription.tenant_id == user.tenant_id)

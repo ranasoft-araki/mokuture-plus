@@ -11,8 +11,9 @@ import os
 import random
 import re
 import secrets
+import time
 import zoneinfo
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _JST = zoneinfo.ZoneInfo("Asia/Tokyo")
@@ -20,16 +21,16 @@ logger = logging.getLogger(__name__)
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.database import AsyncSessionLocal, get_db
-from app.models.device import Device, Locker
+from app.models.device import Device, KioskBundleRelease, Locker
 from app.models.tenant import Tenant
 from app.models.content import Media, Playlist, PlaylistItem, Schedule
 from app.models.reception import ReceptionLog
@@ -41,6 +42,11 @@ from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
 from app.services.webpush import send_push
 from app.services.auth import hash_password, verify_password, create_decision_token
+from app.services import chatwork as chatwork_service
+from app.services import events as event_bus
+from app.services import reception_notify
+from app.services import analytics as analytics_service
+from app.services import analytics_link
 from app.config import settings
 
 _PIN_RE = re.compile(r"^\d{4}$")
@@ -52,8 +58,9 @@ _demo_auto_tasks: set[asyncio.Task] = set()
 async def _demo_auto_accept(tenant_id: str, log_id: str) -> None:
     """審査用デモ: 実通知の後に担当者の「受付(参ります)」応答を自動再現する。
 
-    展示・審査ではスマホ側で担当者が返信する人手が無いので、3〜5秒待ってから accepted を
+    展示・審査ではスマホ側で担当者が返信する人手が無いので、5〜7秒待ってから accepted を
     確定させる＝キオスクは本番と同じ `GET /kiosk/reception/{id}` ポーリングで結果画面へ遷移する。
+    (待機はスマホへの実プッシュ通知が届く前に画面が遷移しないための猶予でもある)
     `_apply_decision` は idempotent(確定後は上書き不可)なので、万一実担当者が先に押しても衝突しない。
     通知タスク(Slack join 等で最大〜30s)と別の task にして、体感タイミングを本番同様に保つ。"""
     lo = settings.demo_auto_reply_min_sec
@@ -87,6 +94,34 @@ def _generate_delivery_pin() -> str:
     return f"{secrets.randbelow(10000):04d}"
 
 
+def _remember_analytics_session(
+    tenant: Tenant,
+    session_id: str | None,
+    reception_log_id: str,
+    device: Device | None = None,
+) -> None:
+    """分析ログの匿名セッションと受付ログIDの対応を **メモリにだけ** 覚える。
+
+    通知の成否(`notification_succeeded`/`failed`/`retried`)をサーバ側から匿名セッションへ
+    書き戻すための一時参照。永続化しないので逆引き（匿名セッション→氏名・担当者）は
+    成立しない。詳細は ANALYTICS.md §2 / services/analytics_link.py。
+    """
+    if not session_id:
+        return
+    try:
+        analytics_link.remember(
+            reception_log_id,
+            analytics_link.SessionRef(
+                session_id=session_id,
+                tenant_id=tenant.id,
+                site_id=tenant.id,
+                device_id=device.id if device is not None else None,
+            ),
+        )
+    except Exception:
+        pass  # 分析ログの都合で受付を止めない
+
+
 def _mirror_int(v) -> int | None:
     """ミラー item の door_number/id を安全に int 化（数値でなければ None）。"""
     try:
@@ -101,14 +136,60 @@ _limiter = Limiter(key_func=get_remote_address)
 _ALLOWED_METHODS = {"form", "qr", "appointment"}
 
 # ── OTA bundle ────────────────────────────────────────────────────────────────
-# Env var override; default resolves to <repo>/kiosk_agent relative to this file.
+# Bundle files are served from the local kiosk_agent dir when it exists (local dev
+# and any deploy that ships it). On the Render image the backend build context is
+# backend/ only, so kiosk_agent/ is NOT in the image — there we transparently fall
+# back to fetching each file from the public GitHub repo (the deployed commit, see
+# _BUNDLE_REF; `master` where that is unknown). This
+# keeps OTA working for deployed kiosks without vendoring copies into backend/ or
+# reworking the Docker build/context. Both sources hash bytes with sha256[:16],
+# identical to kiosk_agent/updater._local_hash, so the device never re-downloads
+# an unchanged file. Override the mirror with KIOSK_BUNDLE_GITHUB_RAW if the repo
+# moves; override the local dir with KIOSK_BUNDLE_DIR.
 _KIOSK_AGENT_DIR = Path(
     os.environ.get("KIOSK_BUNDLE_DIR", str(Path(__file__).parents[3] / "kiosk_agent"))
+)
+_BUNDLE_GITHUB_REPO = os.environ.get("KIOSK_BUNDLE_GITHUB_REPO", "ranasoft-araki/mokuture-plus")
+# 配る中身の git ref。Render は自分がデプロイしたコミットを RENDER_GIT_COMMIT に入れるので、
+# そのコミットに固定する。こうすると
+#   - バックエンドとキオスクのコードが同じコミットで揃う(新 API を使う画面だけ先に届かない)
+#   - 中身が変わらないので取り寄せた分をずっと使い回せる
+#   - 「どのコミットの中身か」を端末に名乗れる(デバイスチェック画面の版表示)
+# RENDER_GIT_COMMIT の無い環境では従来どおり master を追う(版の名前は付かない)。
+_BUNDLE_REF = (
+    os.environ.get("KIOSK_BUNDLE_REF") or os.environ.get("RENDER_GIT_COMMIT") or "master"
+).strip()
+_BUNDLE_GITHUB_RAW = os.environ.get(
+    "KIOSK_BUNDLE_GITHUB_RAW",
+    f"https://raw.githubusercontent.com/{_BUNDLE_GITHUB_REPO}/{_BUNDLE_REF}/kiosk_agent",
+).rstrip("/")
+# raw.githubusercontent.com は Git LFS 管理ファイルだと実体ではなくポインタ文字列
+# (下の _LFS_POINTER_MAGIC で始まる約130バイトのテキスト)を返す。実体は
+# media.githubusercontent.com/media/<owner>/<repo>/<ref>/<path> から取れる(公開リポジトリ)。
+# .gitattributes で `kiosk_agent/voice_models/*.zip` が LFS 指定なので、その配下のパスだけ
+# ここを使う。
+_BUNDLE_GITHUB_MEDIA = os.environ.get(
+    "KIOSK_BUNDLE_GITHUB_MEDIA",
+    f"https://media.githubusercontent.com/media/{_BUNDLE_GITHUB_REPO}/{_BUNDLE_REF}/kiosk_agent",
+).rstrip("/")
+_LFS_BUNDLE_PATHS = {"voice_models/vosk-model-en-us-0.22-lgraph.zip"}
+_LFS_POINTER_MAGIC = b"version https://git-lfs.github.com/spec/v1"
+
+
+def _is_lfs_pointer(data: bytes) -> bool:
+    """scripts/fetch_voice_models.py の is_lfs_pointer と同じ判定(先頭バイトの一致)。"""
+    return data[: len(_LFS_POINTER_MAGIC)] == _LFS_POINTER_MAGIC
+# コミットに固定して取り寄せているか(=中身が変わらない)。取り寄せ元を直接指定されたときは
+# 何を指しているか分からないので、従来どおり短い取り置きにする。
+_BUNDLE_PINNED = (
+    re.fullmatch(r"[0-9a-f]{40}", _BUNDLE_REF) is not None
+    and "KIOSK_BUNDLE_GITHUB_RAW" not in os.environ
 )
 
 # Files distributed via OTA (relative to kiosk_agent root); order is stable for hashing.
 BUNDLE_FILES = [
     "static/kiosk.html",
+    "static/analytics.js",  # 行動ログ(匿名)のロガー。kiosk.html が script タグで読み込む
     "static/tap.mp3",   # タップ操作音の音源(木琴C6の単音。VSQ plus+のフリー効果音を加工)。kiosk.html が /tap.mp3 で再生
     "main.py",
     "updater.py",
@@ -117,21 +198,232 @@ BUNDLE_FILES = [
     "state.py",
     "config.py",
     "locker_store.py",  # ロッカーのローカル状態・ミラーペイロード生成。agent の MANAGED_FILES と一致させる
+    # 端末稼働ログ(ANALYTICS.md §9)。main.py がこれらを import するので**必ず一緒に配る**
+    # (main.py だけ新しくなると import 失敗でエージェントが起動しなくなる)。
+    "analytics.py",
+    "sysinfo.py",
+    "watchdog.py",
+    # 名刺読み取り(QR無し来訪の受付フォーム自動入力)。agent の updater.MANAGED_FILES と
+    # 同じ並びにしておくこと(片方だけ足すと、その端末だけ古いコードのまま動く)。
+    # 依存パッケージと OCR モデルは OTA では配らない(install.sh / fetch_ocr_models.py の担当)。
+    "card/__init__.py",
+    "card/api.py",
+    "card/defaults.py",
+    "card/detect.py",
+    "card/text_detect.py",
+    "card/dicts.py",
+    # 辞書そのものも配信対象にする。**コードだけ配っても中身が古いままになる。**
+    # 姓辞書を 113 件から約 2 万件へ増やしたとき、ここに無いと既設の端末には
+    # 届かず、読めた氏名が確信度不足で空欄になる挙動が残ったままになる。
+    # 現場で足した語は `*.local.*` に書く（そちらは配信しないので消えない）。
+    "card/dictionaries/surnames.tsv",
+    "card/dictionaries/company_suffixes.txt",
+    "card/dictionaries/company_suffixes_en.txt",
+    "card/dictionaries/departments.txt",
+    "card/dictionaries/department_suffixes.txt",
+    "card/dictionaries/titles.txt",
+    "card/dictionaries/prefectures.txt",
+    "card/dictionaries/address_keywords.txt",
+    "card/dictionaries/phone_labels.txt",
+    "card/dump.py",
+    "card/extract.py",
+    "card/pipeline.py",
+    "card/preprocess.py",
+    "card/quality.py",
+    "card/session.py",
+    "card/settings.py",
+    "card/textnorm.py",
+    "card/types.py",
+    "card/ocr/__init__.py",
+    "card/ocr/base.py",
+    "card/ocr/paddle_onnx.py",
+    "card/ocr/tesseract.py",
+    # 声で操作する(画面操作のキーワード / 実験導入)。こちらも agent の
+    # updater.MANAGED_FILES と同じ並びにしておくこと。
+    # 名刺と違って端末では**別プロセス**(mokuture-voice.service / 127.0.0.1:8181)で動く。
+    # エージェント本体を再起動しても入れ替わらないので、音声サービスが自分のソースの
+    # ハッシュ変化を検知して自ら終了し、systemd に起こし直してもらう。
+    "voice/__init__.py",
+    "voice/api.py",
+    "voice/capture.py",
+    "voice/defaults.py",
+    "voice/metrics.py",
+    "voice/server.py",
+    "voice/session.py",
+    "voice/settings.py",
+    "voice/types.py",
+    "voice/vad.py",
+    "voice/vosk_engine.py",
+    # 英語の Vosk モデル(130MB)。唯一 OTA で配るモデルファイル(日本語(50MB)は従来どおり
+    # install_voice.sh の担当)。Git LFS 管理(.gitattributes の voice_models/*.zip)なので
+    # _read_bundle_bytes は LFS ポインタ検知(_is_lfs_pointer)と media.githubusercontent.com
+    # 経由の取得(_LFS_BUNDLE_PATHS)が必要——raw.githubusercontent.com は LFS ファイルの
+    # 実体ではなくポインタ文字列(約130バイト)を返すため。
+    "voice_models/vosk-model-en-us-0.22-lgraph.zip",
 ]
 _FORCE_WINDOW_SEC = 7200  # force flag stays active for 2 hours after trigger
 
+# GitHub-fallback byte cache: rel -> (monotonic_ts, bytes). Avoids refetching the
+# same file on every manifest poll; short TTL so master edits still propagate fast.
+_bundle_bytes_cache: dict[str, tuple[float, bytes]] = {}
+_BUNDLE_CACHE_TTL = 120.0
 
-def _file_sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+async def _read_bundle_bytes(rel: str) -> bytes | None:
+    """Return the bytes of an OTA bundle file, or None if unavailable.
+
+    Prefers the local kiosk_agent copy; if it is missing (Render backend/-only
+    image) fetches from the public GitHub raw mirror and caches briefly. On a
+    fetch error the last cached copy (if any) is returned so a transient GitHub
+    blip does not blank the manifest.
+
+    `rel` in `_LFS_BUNDLE_PATHS` is Git-LFS-tracked (.gitattributes), so both the
+    local checkout (if `git lfs pull` was never run there) and the plain GitHub
+    raw mirror can return the ~130-byte LFS *pointer* text instead of the real
+    object. `_is_lfs_pointer` catches that on every path so we never hash/cache/
+    serve a pointer as if it were the real file(見かけ200・無言で中身だけ壊れる、を防ぐ)。
+    """
+    if rel not in BUNDLE_FILES:
+        return None
+    local = _KIOSK_AGENT_DIR / rel
+    try:
+        if local.exists():
+            data = local.read_bytes()
+            if not _is_lfs_pointer(data):
+                return data
+            logger.warning("[ota] local %s is an LFS pointer (run `git lfs pull`); falling back to GitHub", rel)
+    except OSError:
+        pass
+    now = time.monotonic()
+    cached = _bundle_bytes_cache.get(rel)
+    if cached is not None and (_BUNDLE_PINNED or now - cached[0] < _BUNDLE_CACHE_TTL):
+        return cached[1]
+    is_lfs = rel in _LFS_BUNDLE_PATHS
+    host = _BUNDLE_GITHUB_MEDIA if is_lfs else _BUNDLE_GITHUB_RAW
+    timeout = 120.0 if is_lfs else 15.0
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.get(f"{host}/{rel}")
+        if resp.status_code == 200:
+            data = resp.content
+            if _is_lfs_pointer(data):
+                logger.warning("[ota] github fetch for %s returned an LFS pointer, not content", rel)
+            else:
+                _bundle_bytes_cache[rel] = (now, data)
+                return data
+        else:
+            logger.warning("[ota] github bundle fetch %s -> HTTP %s", rel, resp.status_code)
+    except Exception:
+        logger.warning("[ota] github bundle fetch failed for %s", rel)
+    return cached[1] if cached is not None else None
 
 
-def _bundle_version() -> str:
-    parts = []
-    for rel in BUNDLE_FILES:
-        p = _KIOSK_AGENT_DIR / rel
-        if p.exists():
-            parts.append(f"{rel}:{_file_sha(p)}")
-    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+async def _collect_bundle() -> tuple[str, list[dict]]:
+    """Compute the bundle version and per-file hashes over the available files.
+
+    Per-file hash = sha256(bytes)[:16], matching kiosk_agent/updater._local_hash so
+    the device's per-file "unchanged → skip" check stays correct. version =
+    sha256[:16] over the ordered `rel:hash` list (deterministic per content).
+
+    Files are read concurrently so a cold-cache manifest (GitHub fallback) resolves
+    in ~one round trip instead of 9 sequential fetches. gather keeps input order,
+    which the version hash depends on."""
+    datas = await asyncio.gather(*(_read_bundle_bytes(rel) for rel in BUNDLE_FILES))
+    parts: list[str] = []
+    files: list[dict] = []
+    for rel, data in zip(BUNDLE_FILES, datas):
+        if data is None:
+            continue
+        sha = hashlib.sha256(data).hexdigest()[:16]
+        parts.append(f"{rel}:{sha}")
+        files.append({"path": rel, "hash": sha, "size": len(data)})
+    version = hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+    return version, files
+
+
+# 配信中の版の「人が読める名前」。
+#  - label: 版番号 YYMMDD-NNN(画面に大きく出すもの)。DB で振るので GitHub に頼らない(_bundle_label)。
+#  - commit/date/subject: kiosk_agent に触れた最後のコミット。GitHub API で引く。コミットに固定して
+#    配っているときだけ付け(master 追従やローカル配信では中身とコミットが一対一にならない)、
+#    一度引けば足りる。**Render の外向き IP は共有で、未認証 API(1時間60回/IP)は他の利用者に
+#    使い切られて通らないことがある**(2026-10-02 実測)。引けなかったときはデプロイしたコミットの
+#    SHA だけを名乗り、しばらくしてから引き直す。件名が無くても版番号は出る。
+_bundle_source_cache: dict | None = None
+_bundle_source_tried_at: float | None = None
+_BUNDLE_SOURCE_RETRY_SEC = 600.0
+
+_bundle_labels: dict[str, str] = {}   # version -> label(DB の写し。版番号は一度振ったら変わらない)
+_bundle_label_lock = asyncio.Lock()
+
+
+async def _bundle_label(db: AsyncSession, version: str, now: datetime | None = None) -> str | None:
+    """人が読む版番号 YYMMDD-NNN(例 261002-001)。
+
+    この配信サーバーがその中身(version)を初めて配った日(日本時間)と、その日に配り始めた
+    何番目の中身か。kiosk_bundle_releases に記録するので、再起動・再デプロイしても番号は
+    変わらず、前の中身に戻せば前の番号に戻る。記録できなかったときは None(次の問い合わせで
+    やり直す)。"""
+    cached = _bundle_labels.get(version)
+    if cached:
+        return cached
+    async with _bundle_label_lock:
+        try:
+            row = await db.get(KioskBundleRelease, version)
+            if row is None:
+                now = now or datetime.now(timezone.utc)
+                day = now.astimezone(_JST).strftime("%y%m%d")
+                n = await db.scalar(
+                    select(func.count()).select_from(KioskBundleRelease)
+                    .where(KioskBundleRelease.label.like(f"{day}-%"))
+                )
+                row = KioskBundleRelease(
+                    version=version,
+                    label=f"{day}-{(n or 0) + 1:03d}",
+                    first_served_at=now.astimezone(timezone.utc).replace(tzinfo=None),
+                )
+                db.add(row)
+                await db.commit()
+                logger.info("[ota] new bundle %s -> %s", version, row.label)
+            _bundle_labels[version] = row.label
+            return row.label
+        except Exception:
+            logger.warning("[ota] bundle label failed for %s", version, exc_info=True)
+            await db.rollback()
+            return None
+
+
+async def _bundle_source() -> dict | None:
+    global _bundle_source_cache, _bundle_source_tried_at
+    if not _BUNDLE_PINNED:
+        return None
+    if _bundle_source_cache is not None and _bundle_source_cache.get("subject") is not None:
+        return _bundle_source_cache
+    now = time.monotonic()
+    if _bundle_source_tried_at is not None and now - _bundle_source_tried_at < _BUNDLE_SOURCE_RETRY_SEC:
+        return _bundle_source_cache
+    _bundle_source_tried_at = now
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"https://api.github.com/repos/{_BUNDLE_GITHUB_REPO}/commits",
+                params={"sha": _BUNDLE_REF, "path": "kiosk_agent", "per_page": 1},
+                headers={"Accept": "application/vnd.github+json"},
+            )
+        commits = resp.json() if resp.status_code == 200 else None
+        if commits:
+            c = commits[0]
+            message = c["commit"].get("message") or ""
+            _bundle_source_cache = {
+                "commit": c["sha"],
+                "date": c["commit"]["committer"]["date"],
+                "subject": (message.splitlines() or [""])[0][:120],
+            }
+            return _bundle_source_cache
+        logger.warning("[ota] github commit lookup -> HTTP %s", resp.status_code)
+    except Exception:
+        logger.warning("[ota] github commit lookup failed")
+    _bundle_source_cache = {"commit": _BUNDLE_REF, "date": None, "subject": None}
+    return _bundle_source_cache
 
 
 class RegisterRequest(BaseModel):
@@ -168,7 +460,7 @@ async def register_device(request: Request, body: RegisterRequest, db: AsyncSess
         )
         existing = existing_result.scalar_one_or_none()
         if existing is not None:
-            existing.last_seen_at = datetime.now(_JST).replace(tzinfo=None)
+            existing.last_seen_at = datetime.now(timezone.utc).replace(tzinfo=None)
             await db.commit()
             return {
                 "device_token": existing.token,
@@ -187,7 +479,7 @@ async def register_device(request: Request, body: RegisterRequest, db: AsyncSess
         token=secrets.token_hex(32),  # 64-char hex, cryptographically secure
         status="pending",
         hardware_id=hardware_id,
-        last_seen_at=datetime.now(_JST).replace(tzinfo=None),
+        last_seen_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
     db.add(device)
     try:
@@ -223,7 +515,17 @@ async def get_kiosk_device(
     if device is None:
         raise HTTPException(status_code=401, detail="Invalid kiosk token")
 
-    device.last_seen_at = datetime.now(_JST).replace(tzinfo=None)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # 連続オンライン開始時刻(online_since)を維持する。前回接続から3分超の空白があれば
+    # 「一度オフラインになった」とみなしてリセット。連続稼働時間 = now - online_since。
+    # 注: 本番Neonの日時列は timestamptz で aware に読み戻るため、naive の now と引き算する前に
+    # naive-UTC へ揃える（揃えないと aware/naive 混在で TypeError→500。SQLite開発では naive で素通り）。
+    prev = device.last_seen_at
+    if prev is not None and prev.tzinfo is not None:
+        prev = prev.astimezone(timezone.utc).replace(tzinfo=None)
+    if device.online_since is None or prev is None or (now - prev) > timedelta(minutes=3):
+        device.online_since = now
+    device.last_seen_at = now
     await db.commit()
 
     tenant_result = await db.execute(select(Tenant).where(Tenant.id == device.tenant_id))
@@ -234,9 +536,32 @@ async def get_kiosk_device(
     return tenant, device
 
 
+class HeartbeatBody(BaseModel):
+    version: str | None = None
+    ip: str | None = None
+
+
 @router.post("/heartbeat", status_code=200)
-async def kiosk_heartbeat(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device)):
-    """軽量生存確認。get_kiosk_device が last_seen_at を更新するためここでの追加処理不要。"""
+async def kiosk_heartbeat(
+    body: HeartbeatBody | None = None,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """軽量生存確認。last_seen_at/online_since は get_kiosk_device が更新する。
+    エージェントが版数/IP を body で送ってきたら端末テレメトリとして保存する(任意・後方互換)。"""
+    _, device = ctx
+    changed = False
+    if body is not None:
+        v = (body.version or "").strip()
+        if v and v != device.agent_version:
+            device.agent_version = v[:32]
+            changed = True
+        ip = (body.ip or "").strip()
+        if ip and ip != device.ip_address:
+            device.ip_address = ip[:64]
+            changed = True
+    if changed:
+        await db.commit()
     return {"ok": True}
 
 
@@ -253,12 +578,20 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     """Return the current scheduled playlist with embedded media data."""
     tenant, device = ctx
 
+    async def _set_current_playlist(pid: str | None) -> None:
+        """現在配信中のプレイリストを端末行に記録する（管理画面の「現在のプレイリスト」表示用）。変化時のみ commit。"""
+        if device.current_playlist_id != pid:
+            device.current_playlist_id = pid
+            await db.commit()
+
     # 承認待ち端末はスケジュールを返さない — キオスクは承認待ち画面を表示する
     if (device.status or "active") == "pending":
+        await _set_current_playlist(None)
         return {"pending": True, "playlist": None, "force_update_at": None, "device_name": device.name}
 
     # Return suspension status immediately — kiosk handles UI
     if tenant.is_suspended:
+        await _set_current_playlist(None)
         return {"suspended": True, "message": "このテナントは現在停止中です", "playlist": None, "force_update_at": None, "device_name": device.name}
 
     now = datetime.now(_JST)
@@ -277,12 +610,16 @@ async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
     force_update_at = device.force_update_at.isoformat() if device.force_update_at else None
 
     if schedule is None:
+        await _set_current_playlist(None)
         return {"playlist": None, "force_update_at": force_update_at, "device_name": device.name}
 
     pl_result = await db.execute(select(Playlist).where(Playlist.id == schedule.playlist_id))
     pl = pl_result.scalar_one_or_none()
     if pl is None:
+        await _set_current_playlist(None)
         return {"playlist": None, "force_update_at": force_update_at, "device_name": device.name}
+
+    await _set_current_playlist(pl.id)
 
     items_result = await db.execute(
         select(PlaylistItem)
@@ -395,6 +732,32 @@ class ReceptionCreate(BaseModel):
     department: str | None = None
     method: str = "form"
     appointment_id: str | None = None
+    # 分析ログ(ANALYTICS.md)の匿名セッションID。**DB には保存しない**。
+    # 通知の成否イベントを匿名セッションへ紐づけるためだけに、プロセス内 TTL マップ
+    # (services/analytics_link.py) へ一時的に覚えさせる。受付ログ(個人情報)側には残さない
+    # ＝匿名セッションから氏名・会社名・担当者を逆引きできない。
+    analytics_session_id: str | None = None
+
+    @field_validator("analytics_session_id")
+    @classmethod
+    def analytics_session_id_len(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        return v[:36] if v else None
+
+    @field_validator("staff")
+    @classmethod
+    def staff_trim(cls, v: str | None) -> str | None:
+        """訪問先担当者名は前後空白を落として保存する。
+
+        担当者ごとの通知先(`staff_notification_routes.staff_name`)は保存時に必ず strip される
+        ので、受付側に空白が残ると突き合わせに失敗して**代理通知だけ飛ばない**（1通目は
+        strip して引くので届く＝原因に気づけない）。入口で揃えておく。"""
+        if v is None:
+            return None
+        v = v.strip()
+        return v[:255] if v else None
 
     @field_validator("department")
     @classmethod
@@ -478,7 +841,7 @@ async def kiosk_reception(
     db: AsyncSession = Depends(get_db),
 ):
     """Submit a reception form entry using device token authentication."""
-    tenant, _ = ctx
+    tenant, device = ctx
     log = ReceptionLog(
         tenant_id=tenant.id,
         visitor_name=body.visitor_name,
@@ -506,13 +869,21 @@ async def kiosk_reception(
     await db.commit()
     await db.refresh(log)
 
-    # 通知はレスポンス送出後にバックグラウンドで送る（Slack / Web Push / Webhook, best-effort）。
+    # 分析ログ: 「この受付はどの匿名セッションの操作だったか」をプロセス内 TTL マップへ。
+    # 永続化しないので、匿名セッション ↔ 受付ログ(氏名等) の逆引きは成立しない。
+    _remember_analytics_session(tenant, body.analytics_session_id, log.id, device)
+
+    # 通知はレスポンス送出後にバックグラウンドで送る（Slack / Web Push / Webhook / メール, best-effort）。
     # inline で await すると通知の往復ぶんキオスク(agent)の応答待ちが延び、10秒プロキシタイムアウトを
     # 超えてキオスクに「リモートAPIに接続できません」が出る（配達系と同じ理由で非ブロック化する）。
-    background.add_task(_fire_reception_notifications, tenant.id, log)
+    # 宛先(訪問先担当者ごと/テナント共通)の決定を含めて services/reception_notify.py に集約している。
+    background.add_task(reception_notify.fire_reception_notifications, tenant.id, log)
+
+    # 管理画面(SSE)へ「受付が増えた」を即 push（ニアリアルタイム連動・best-effort）。
+    event_bus.publish(tenant.id, {"type": "reception"})
 
     # 審査用デモモード: 実通知の後、担当者返信「受付(参ります)」をサーバ側で自動再現する。
-    # 通知は上の BackgroundTasks で即送信し、こちらは別 task で 3〜5 秒後に accepted を確定させる。
+    # 通知は上の BackgroundTasks で即送信し、こちらは別 task で 5〜7 秒後に accepted を確定させる。
     if getattr(tenant, "is_demo", False):
         _spawn_demo_auto_accept(tenant.id, log.id)
 
@@ -542,6 +913,8 @@ async def kiosk_reception_status(
 
 class CallStaffBody(BaseModel):
     message: str | None = None
+    # 分析ログの匿名セッションID。DB には保存しない（ReceptionCreate と同じ扱い）。
+    analytics_session_id: str | None = None
 
 
 @router.post("/call-staff")
@@ -574,6 +947,12 @@ async def kiosk_call_staff(
     db.add(log)
     await db.commit()
     await db.refresh(log)
+
+    # 分析ログ: 匿名セッションとの一時対応（メモリのみ・ANALYTICS.md §2）
+    _remember_analytics_session(tenant, body.analytics_session_id, log.id, device)
+
+    # 管理画面(SSE)へ「受付(配達呼び出し)が増えた」を即 push（best-effort）。
+    event_bus.publish(tenant.id, {"type": "reception"})
 
     title = "配達の呼び出し"
     text = f"🔔 配達の呼び出し\n「{device_label}」から呼び出しがあります。{message or ''}"
@@ -870,158 +1249,27 @@ async def kiosk_mirror_lockers(
             "has_pin": bool(it.has_pin),
             "kind": it.kind,
         })
-    device.locker_state_json = json.dumps(items, ensure_ascii=False)
+    new_json = json.dumps(items, ensure_ascii=False)
+    # 占有スナップショットが実際に変わった時だけ管理画面(SSE)へ push する。
+    # ミラーは操作時に加え heartbeat で60秒ごとにも届く(無変化)ので、差分がある時のみ通知して
+    # アイドル時のストリームを静かに保つ（同じ状態を同じ手順で直列化するので文字列比較で判定できる）。
+    changed = (device.locker_state_json or "") != new_json
+    device.locker_state_json = new_json
     device.locker_state_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
+    if changed:
+        event_bus.publish(device.tenant_id, {"type": "locker"})
     return {"ok": True, "updated": len(items)}
 
 
-async def _notify_slack(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:
-    result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "slack",
-        )
-    )
-    setting = result.scalar_one_or_none()
-    if setting is None or not setting.config_json or setting.config_json == "{}":
-        return
-    try:
-        config = decrypt_dict(setting.config_json)
-        # 送信先が確定していない場合(Bot連携済だがチャンネル未選択 等)はエラーではないので静かに終了。
-        has_dest = bool(config.get("bot_access_token") and config.get("channel_id")) or bool(config.get("webhook_url"))
-        if not has_dest:
-            return
-        msg = SlackNotifier.build_reception_message(
-            visitor_name=log.visitor_name,
-            company=log.company,
-            host_name=log.staff,
-            when=log.created_at,
-            department=log.department,
-        )
-        # 署名シークレット設定時のみ、受付/電話/お断りの対応ボタン(Block Kit)を付ける。
-        # Bot Token 経路のときだけ(webhook はインタラクション不可)。押下は署名トークンで検証。
-        blocks = None
-        if settings.slack_signing_secret and config.get("bot_access_token") and config.get("channel_id"):
-            from app.api.reception import decision_actions
-            token = create_decision_token(log.id, tenant_id)
-            blocks = SlackNotifier.build_reception_blocks(msg, decision_actions(log), token)
-        ok = await SlackNotifier.send_to_config(config, msg, blocks=blocks)
-        if not ok:
-            # 受付は失敗させない(best-effort)。エラーは残すが Bot Token/Webhook URL は絶対に出さない。
-            logger.warning("Slack reception notification failed (tenant=%s, reception=%s)", tenant_id, log.id)
-    except Exception:
-        # decrypt/整形エラー等。秘密情報を含めないため exc_info は付けない。
-        logger.warning("Slack reception notification error (tenant=%s, reception=%s)", tenant_id, log.id)
-
-
-async def _notify_push(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:
-    """Fire Web Push to all registered subscriptions for this tenant."""
-    # Get VAPID keys (from per-tenant setting or global config)
-    vapid_result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "vapid",
-        )
-    )
-    vapid_setting = vapid_result.scalar_one_or_none()
-    private_key = ""
-    if vapid_setting and vapid_setting.config_json and vapid_setting.config_json != "{}":
-        try:
-            vapid_config = decrypt_dict(vapid_setting.config_json)
-            private_key = vapid_config.get("private_key", "")
-        except Exception:
-            pass
-    if not private_key:
-        private_key = settings.vapid_private_key
-    if not private_key:
-        return
-
-    subs_result = await db.execute(
-        select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
-    )
-    subs = subs_result.scalars().all()
-    if not subs:
-        return
-
-    title = "来客のお知らせ"
-    body = f"{log.visitor_name}様（{log.company or '—'}）が受付を完了しました。"
-    if log.department:
-        body += f" 部署：{log.department}"
-    if log.purpose:
-        body += f" 用件：{log.purpose}"
-
-    from app.api.reception import build_decision_push_extras
-    data, actions = build_decision_push_extras(tenant_id, log)
-    for sub in subs:
-        await send_push(
-            endpoint=sub.endpoint,
-            p256dh=sub.p256dh,
-            auth=sub.auth_key,
-            title=title,
-            body=body,
-            url=f"/{tenant_id}/admin/reception",
-            private_key=private_key,
-            subject=settings.vapid_subject,
-            tag=f"reception-{log.id}",
-            data=data,
-            actions=actions,
-        )  # fire-and-forget: ignore (bool, str) return
-
-
-async def _send_webhook(url: str, data: dict) -> None:
+async def _send_webhook(url: str, data: dict) -> bool:
+    """best-effort な Webhook POST。送信できたら True（URL はログに出さない）。"""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(url, json=data)
+            resp = await client.post(url, json=data)
+        return resp.status_code < 400
     except Exception:
-        pass
-
-
-async def _notify_webhook(tenant_id: str, log: ReceptionLog, db: AsyncSession) -> None:
-    result = await db.execute(
-        select(NotificationSetting).where(
-            NotificationSetting.tenant_id == tenant_id,
-            NotificationSetting.type == "webhook",
-        )
-    )
-    setting = result.scalar_one_or_none()
-    if setting is None or not setting.config_json or setting.config_json == "{}":
-        return
-    try:
-        config = decrypt_dict(setting.config_json)
-        webhook_url = config.get("webhook_url", "")
-        if webhook_url:
-            payload = {
-                "event": "reception",
-                "tenant_id": tenant_id,
-                "visitor_name": log.visitor_name,
-                "company": log.company,
-                "staff": log.staff,
-                "department": log.department,
-                "purpose": log.purpose,
-                "method": log.method,
-                "created_at": log.created_at.isoformat() if log.created_at else None,
-            }
-            await _send_webhook(webhook_url, payload)
-    except Exception:
-        pass
-
-
-async def _fire_reception_notifications(tenant_id: str, log: ReceptionLog) -> None:
-    """受付通知(Slack / Web Push / Webhook)をレスポンス送出後に新しいDBセッションで送る（BackgroundTasks 用）。
-
-    inline で await すると通知の往復時間ぶんキオスク(agent)の応答待ちが延び、10秒プロキシタイムアウトを
-    超えて「リモートAPIに接続できません」を招く（Slack chat.postMessage は未参加chの join+retry で最大
-    ~30s、Web Push は死んだ購読を逐次送信）。配達系(_fire_delivery_notifications)と同様に非ブロック化する。
-    log は呼び出し元で commit 済み（AsyncSessionLocal は expire_on_commit=False なので列値は失効せず、
-    別セッションの本関数からも安全に読める）。各チャネルは best-effort（失敗しても受付は成立済み）。"""
-    try:
-        async with AsyncSessionLocal() as db:
-            await _notify_slack(tenant_id, log, db)
-            await _notify_push(tenant_id, log, db)
-            await _notify_webhook(tenant_id, log, db)
-    except Exception:
-        pass
+        return False
 
 
 # ── Generic-message notify helpers (staff call etc.) ───────────────────────────
@@ -1045,29 +1293,39 @@ async def _first_configured_setting(
 
 
 async def _notify_slack_text(
-    tenant_id: str, text: str, db: AsyncSession, types: tuple[str, ...] = ("slack",),
+    tenant_id: str, text: str, db: AsyncSession,
     decision: tuple[list[dict], str] | None = None,
-) -> None:
-    """Send a plain text message to the first configured Slack webhook among ``types``.
+) -> bool | None:
+    """配達（荷物の配達の呼び出し・置き配）専用のSlack送信。
 
-    Best-effort. ``types`` is an ordered preference (e.g. delivery-specific first,
-    then the normal reception destination as fallback). ``decision`` = (actions, token)
-    を渡すと、署名シークレット設定済み & Bot Token 経路のときだけ 受付/電話 の対応ボタン
-    (Block Kit)を付ける。押下は受付通知と同じ interactions エンドポイントで処理される。"""
-    setting = await _first_configured_setting(tenant_id, types, db)
-    if setting is None:
-        return
+    チャンネルは配達専用の上書き(`slack_delivery`。あれば) → 共通の Slack 連携(`slack`) の順。
+    Bot Token は常に共通の連携を使い回す(`SlackNotifier.resolve_delivery_config`。担当者ごとの
+    チャンネル指定と同じ考え方で、配達用に別の連携を結ばせない)。**旧形式**(`slack_delivery`
+    が自前の `webhook_url` を持つ)はそのまま使う(後方互換)。
+
+    戻り値は分析ログ用: True=送信成功 / False=失敗 / None=未設定(送らなかった)。
+    ``decision`` = (actions, token) を渡すと、署名シークレット設定済み & Bot Token 経路の
+    ときだけ 受付/電話 の対応ボタン(Block Kit)を付ける。押下は受付通知と同じ interactions
+    エンドポイントで処理される。"""
+    base_setting = await _first_configured_setting(tenant_id, ("slack",), db)
+    override_setting = await _first_configured_setting(tenant_id, ("slack_delivery",), db)
+    if base_setting is None and override_setting is None:
+        return None
     try:
-        config = decrypt_dict(setting.config_json)
+        base = decrypt_dict(base_setting.config_json) if base_setting is not None else None
+        override = decrypt_dict(override_setting.config_json) if override_setting is not None else None
+        config = SlackNotifier.resolve_delivery_config(base, override)
+        if not config.get("bot_access_token") and not config.get("webhook_url"):
+            return None
         blocks = None
         if (decision is not None and settings.slack_signing_secret
                 and config.get("bot_access_token") and config.get("channel_id")):
             actions, dtoken = decision
             blocks = SlackNotifier.build_reception_blocks(text, actions, dtoken)
         # Bot Token(chat.postMessage) と 旧Webhook のどちらの設定でも送れる(webhook はボタン無し)。
-        await SlackNotifier.send_to_config(config, text, blocks=blocks)
+        return bool(await SlackNotifier.send_to_config(config, text, blocks=blocks))
     except Exception:
-        pass
+        return False
 
 
 async def _push_delivery_enabled(tenant_id: str, db: AsyncSession) -> bool:
@@ -1094,40 +1352,28 @@ async def _notify_push_text(
     tenant_id: str, title: str, body: str, url_tenant_id: str, db: AsyncSession,
     url: str | None = None, data: dict | None = None, actions: list | None = None,
     tag: str | None = None,
-) -> None:
+) -> bool | None:
     """Fire Web Push with a plain title/body to all subscriptions. Best-effort.
+
+    戻り値は分析ログ用: True=1件以上送れた / False=全滅 / None=購読・鍵が無く送らなかった。
 
     ``url`` は通知タップ時に開くURL。未指定なら受付ログ一覧を開く。``data``/``actions``/``tag``
     を渡すと、通知に 受付/電話 アクションボタン(SWが署名トークンで応答)を付けられる
     (配達の呼び出し用。受付通知と同じ仕組み)。"""
     target_url = url or f"/{url_tenant_id}/admin/reception"
     try:
-        vapid_result = await db.execute(
-            select(NotificationSetting).where(
-                NotificationSetting.tenant_id == tenant_id,
-                NotificationSetting.type == "vapid",
-            )
-        )
-        vapid_setting = vapid_result.scalar_one_or_none()
-        private_key = ""
-        if vapid_setting and vapid_setting.config_json and vapid_setting.config_json != "{}":
-            try:
-                vapid_config = decrypt_dict(vapid_setting.config_json)
-                private_key = vapid_config.get("private_key", "")
-            except Exception:
-                pass
+        private_key = settings.vapid_private_key
         if not private_key:
-            private_key = settings.vapid_private_key
-        if not private_key:
-            return
+            return None
 
         subs_result = await db.execute(
             select(PushSubscription).where(PushSubscription.tenant_id == tenant_id)
         )
         subs = subs_result.scalars().all()
         if not subs:
-            return
+            return None
 
+        any_ok = False
         for sub in subs:
             try:
                 await send_push(
@@ -1143,55 +1389,57 @@ async def _notify_push_text(
                     data=data,
                     actions=actions,
                 )
+                any_ok = True
             except Exception:
                 pass
+        return any_ok
     except Exception:
-        pass
+        return False
 
 
 async def _notify_webhook_event(
     tenant_id: str, payload: dict, db: AsyncSession, types: tuple[str, ...] = ("webhook",)
-) -> None:
+) -> bool | None:
     """POST an arbitrary event payload to the first configured webhook among ``types``.
 
     Best-effort. ``types`` is an ordered preference (delivery-specific first, then
-    the normal reception destination as fallback)."""
-    setting = await _first_configured_setting(tenant_id, types, db)
-    if setting is None:
-        return
+    the normal reception destination as fallback). URL が空の行は未設定として次へ進む
+    (配達用の URL を空欄で保存し直すと {"webhook_url": ""} の行が残るため。そこで止めると
+    画面の「空欄なら上の「カスタムWebhook」カードのURLへ届きます」が嘘になる)。"""
     try:
-        config = decrypt_dict(setting.config_json)
-        webhook_url = config.get("webhook_url", "")
-        if webhook_url:
-            await _send_webhook(webhook_url, payload)
+        for type_ in types:
+            setting = await _first_configured_setting(tenant_id, (type_,), db)
+            if setting is None:
+                continue
+            webhook_url = decrypt_dict(setting.config_json).get("webhook_url", "")
+            if webhook_url:
+                return await _send_webhook(webhook_url, payload)
+        return None
     except Exception:
-        pass
+        return False
 
 
 async def _notify_chatwork_text(
     tenant_id: str, text: str, db: AsyncSession, types: tuple[str, ...] = ("chatwork",)
-) -> None:
+) -> bool | None:
     """Post a message to the first configured Chatwork room among ``types``.
 
     Best-effort. ``types`` is an ordered preference (delivery-specific first, then
-    the normal reception destination as fallback)."""
-    setting = await _first_configured_setting(tenant_id, types, db)
-    if setting is None:
-        return
-    try:
-        config = decrypt_dict(setting.config_json)
-        api_token = config.get("api_token", "")
-        room_id = config.get("room_id", "")
-        if not api_token or not room_id:
-            return
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(
-                f"https://api.chatwork.com/v2/rooms/{room_id}/messages",
-                headers={"X-ChatWorkToken": api_token},
-                data={"body": text},
-            )
-    except Exception:
-        pass
+    the normal reception destination as fallback).
+
+    送信の実体は `services/chatwork.py`（受付通知の担当者ごとのルーム指定と同じ経路）。
+    ここは配達の呼び出し専用の入口で、宛先の選び方だけが違う。
+
+    戻り値は分析ログ用: True=成功 / False=失敗 / None=未設定(送らなかった)。
+    """
+    # 「最初に見つかった行」で確定させる（不完全ならそこで終わる）。不完全な行を飛ばして
+    # 次の候補へ流すと、配達専用ルームを空にしているテナントの配達通知が受付用ルームへ漏れる。
+    config = await chatwork_service.load_config(db, tenant_id, types)
+    api_token = (config.get("api_token") or "").strip()
+    room_id = (config.get("room_id") or "").strip()
+    if not api_token or not room_id:
+        return None
+    return await chatwork_service.send_message(api_token, room_id, text)
 
 
 async def _log_delivery_dropoff(
@@ -1218,6 +1466,8 @@ async def _log_delivery_dropoff(
         )
         db.add(log)
         await db.commit()
+        # 管理画面(SSE)へ「置き配が受付ログに増えた」を即 push（best-effort）。
+        event_bus.publish(tenant_id, {"type": "reception"})
         return log.id
     except Exception:
         try:
@@ -1264,18 +1514,53 @@ async def _fire_delivery_notifications(
     try:
         async with AsyncSessionLocal() as db:
             tasks = [
-                _notify_slack_text(tenant_id, text, db, types=("slack_delivery", "slack"), decision=slack_decision),
+                _notify_slack_text(tenant_id, text, db, decision=slack_decision),
                 _notify_webhook_event(tenant_id, webhook_payload, db, types=("webhook_delivery", "webhook")),
                 _notify_chatwork_text(tenant_id, text, db, types=("chatwork_delivery", "chatwork")),
             ]
+            channels = ["slack", "webhook", "chatwork"]
             if await _push_delivery_enabled(tenant_id, db):
+                channels.append("push")
                 tasks.append(_notify_push_text(
                     tenant_id, title, text, tenant_id, db, push_url,
                     data=push_data, actions=push_actions, tag=push_tag,
                 ))
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        # 分析ログ: 配達の呼び出し(decision_log)に匿名セッションが紐づいていれば通知結果を残す。
+        # 置き配(dropoff)は受付セッションを伴わないので記録しない。
+        if decision_log is not None:
+            await _record_delivery_analytics(decision_log.id, channels, results)
     except Exception:
         pass
+
+
+async def _record_delivery_analytics(
+    reception_log_id: str, channels: list[str], results: list
+) -> None:
+    """配達呼び出し通知の成否を匿名セッションへ記録する（best-effort）。
+
+    受付ログIDから匿名セッションを引けるのは `analytics_link` のプロセス内 TTL マップだけ
+    （永続化しない＝逆引き不可）。引けなければ何もしない。"""
+    try:
+        ref = analytics_link.lookup(reception_log_id)
+        if ref is None:
+            return
+        for channel, outcome in zip(channels, results):
+            if outcome is None or isinstance(outcome, BaseException):
+                # None=未設定(送らなかった) / 例外=想定外。未設定は記録しない。
+                if outcome is None:
+                    continue
+                ok = False
+            else:
+                ok = bool(outcome)
+            await analytics_service.record_backend_event(
+                ref,
+                "notification_succeeded" if ok else "notification_failed",
+                result="succeeded" if ok else "failed",
+                element_id=channel,
+            )
+    except Exception:
+        logger.warning("analytics: delivery notification result not recorded")
 
 
 # ── OTA bundle endpoints ───────────────────────────────────────────────────────
@@ -1283,6 +1568,7 @@ async def _fire_delivery_notifications(
 @router.get("/bundle/manifest")
 async def kiosk_bundle_manifest(
     ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
 ):
     """Return current bundle version + per-file hashes. Device uses this to detect changes."""
     tenant, _ = ctx
@@ -1294,13 +1580,12 @@ async def kiosk_bundle_manifest(
         diff = (now - fat).total_seconds()
         force = 0 <= diff <= _FORCE_WINDOW_SEC
 
-    files = []
-    for rel in BUNDLE_FILES:
-        p = _KIOSK_AGENT_DIR / rel
-        if p.exists():
-            files.append({"path": rel, "hash": _file_sha(p), "size": p.stat().st_size})
-
-    return {"version": _bundle_version(), "files": files, "force": force}
+    (version, files), source = await asyncio.gather(_collect_bundle(), _bundle_source())
+    label = await _bundle_label(db, version) if files else None
+    if label:
+        source = {**(source or {"commit": None, "date": None, "subject": None}), "label": label}
+    # source は旧エージェントには無視される(追加のキーのみ)。
+    return {"version": version, "files": files, "force": force, "source": source}
 
 
 @router.get("/bundle/file/{file_path:path}")
@@ -1311,7 +1596,15 @@ async def kiosk_bundle_file(
     """Download a single bundle file. Path must be in BUNDLE_FILES whitelist."""
     if file_path not in BUNDLE_FILES:
         raise HTTPException(status_code=404, detail="Not in bundle")
-    p = _KIOSK_AGENT_DIR / file_path
-    if not p.exists():
+    # Local file when present (dev / full deploy) — streamed directly.
+    local = _KIOSK_AGENT_DIR / file_path
+    if local.exists():
+        return FileResponse(local)
+    # Otherwise serve the bytes fetched from the GitHub mirror (Render image).
+    data = await _read_bundle_bytes(file_path)
+    if data is None:
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(p)
+    media = "text/html; charset=utf-8" if file_path.endswith(".html") else "application/octet-stream"
+    return Response(content=data, media_type=media)
+
+

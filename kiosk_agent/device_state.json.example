@@ -1,0 +1,4 @@
+{
+  "device_token": "<自動生成: POST /register 成功時に取得した64桁hexのデバイストークン>",
+  "device_name": "<自動生成: 端末名。既定はホスト名 (例: DESKTOP-XXXXXXX)>"
+}

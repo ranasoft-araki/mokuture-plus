@@ -1,0 +1,71 @@
+# mokuture+ 声で操作する(実験導入)の設定
+#
+#   cp voice_input.yaml.example voice_input.yaml
+#   （編集したら） sudo systemctl restart mokuture-voice
+#
+# ここに書いたキーだけが既定値(voice/defaults.py)を上書きする。書いていない項目は
+# 既定のまま。打ち間違えたキーは無視され、その旨が /voice/status の config_notes に出る。
+#
+# 環境変数でも上書きできる(こちらが最優先):
+#   VOICE_AUDIO__DEVICE=plughw:1,0
+#   VOICE_COMMAND__MIN_CONF=0.9
+
+# 声で操作するごと止めるスイッチ。false にすると画面から「声で操作する」が消える。
+enabled: true
+
+server:
+  # 127.0.0.1 以外にしないこと。音声 API が端末の外から見えるようになる。
+  bind_host: 127.0.0.1
+  port: 8181
+  # キオスク画面のオリジン。agent のポートを変えたらここも合わせる。
+  allowed_origins:
+    - http://localhost:8080
+    - http://127.0.0.1:8080
+
+audio:
+  # Raspberry Pi: `arecord -L` で出てくる名前。USB マイクは plughw:1,0 など。
+  # 開けなければ挿さっているマイクへ自動で移るので、普通は default のままでよい。
+  # Windows(動作試験): 装置番号か名前の一部。番号は次で確認する
+  #   .venv\Scripts\python scripts\voice_selftest.py --devices
+  device: default
+  # auto = arecord → sounddevice の順に試す(Windows は自動で sounddevice)
+  # file = 下の file_path の WAV をマイクの代わりに流す(動作試験用)
+  backend: auto
+  # file_path: samples/lobby.wav
+  # 開始音の回り込みを避けるため、録音の頭を捨てる長さ(ms)
+  start_guard_ms: 250
+  # 小さすぎるマイクの救済用。上げすぎると歪む(3.0 くらいまで)
+  input_gain: 1.0
+
+vad:
+  # 小さい声を拾わない → 下げる。上げても近くの雑談は減らず(合成音声で 12・15 を試した)、
+  # うるさい場所で声の途中で切れ始めるので、上げるのは慎重に
+  speech_margin_db: 9.0
+  # ドア・足音などの物音で聞き始める → 上げる(短い「はい」を取りこぼさない範囲で)
+  onset_ms: 100
+
+command:
+  # 画面を開いたら「声で操作する」を押さなくても聞き取る(待機画面ではマイクを開けない)。
+  # false にすると、押したときだけ聞き取る
+  auto_start: true
+  # 採る信頼度。上げると誤爆が減り、「もう一度お願いします」が増える
+  min_conf: 0.85
+  # 数字の語(一〜十・「一番」)だけの合格ライン。番号が反応しない → 下げる / 別の番号になる → 上げる
+  number_min_conf: 0.75
+  # 認識の前に声の大きさをそろえる(入力の小さいマイク向け)。0 にするとそろえない。
+  # 上げると小さい雑談も聞こえるようになるので、まずは OS の録音レベルを上げる
+  level_target_db: -20.0
+  level_max_gain_db: 30.0
+  # ロッカーの番号を通常の認識で聞き直したときに採る信頼度
+  fallback_min_conf: 0.4
+  # キーワードの後ろに語彙外の発話がこの秒数以上続いたら、文の一部として捨てる
+  trailing_unk_sec: 0.25
+  # 話し終わりとみなす無音(秒)
+  silence_sec: 0.7
+  # 1 回の窓の長さ(秒)。過ぎたら黙って開け直す
+  window_sec: 8.0
+
+metrics:
+  # 匿名の実験ログ(認識した言葉は書かない)
+  enabled: true
+  path: ~/.mokuture-voice/metrics.jsonl

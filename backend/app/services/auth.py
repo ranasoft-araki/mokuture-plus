@@ -17,10 +17,23 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
-def create_access_token(tenant_id: str, user_id: str, role: str) -> str:
+def create_access_token(tenant_id: str, user_id: str, role: str, readonly: bool = False) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_access_expire_minutes)
     payload = {"sub": user_id, "tenant_id": tenant_id, "role": role, "exp": expire, "type": "access"}
+    # 審査環境の閲覧専用アカウント(demo1@ranasoft.co.jp 等)。この ro クレームを見て、
+    # サーバ側(ReadOnlyGuardMiddleware)は来社予定以外のミューテーションを拒否し、
+    # フロント(lib/auth.ts の getReadonly)は UI を閲覧専用に切り替える。
+    if readonly:
+        payload["ro"] = True
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
+def is_readonly_account(email: str | None) -> bool:
+    """審査用の閲覧専用アカウントか（config の review_readonly_emails に一致する email か）。"""
+    if not email:
+        return False
+    target = email.strip().lower()
+    return any(target == e.strip().lower() for e in settings.review_readonly_emails)
 
 
 def create_refresh_token(tenant_id: str, user_id: str) -> str:

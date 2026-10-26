@@ -59,15 +59,38 @@ class Settings(BaseSettings):
     slack_signing_secret: str = ""
 
     # 審査用デモモード(demo テナント: tenants.is_demo=true)向け設定。
-    # DEMO_LOCKER_PIN: 手荷物預かりで来訪者が何を入力しても内部的に施錠する固定PIN(受取もこれ)。
+    # DEMO_LOCKER_PIN: 手荷物預かりで来訪者が何を入力しても内部的に施錠する固定PIN(受取もこれ)。既定 0805。
     # DEMO_AUTO_REPLY_MIN/MAX_SEC: 受付通知後、担当者返信「受付(参ります)」を自動再現するまでの待機秒。
-    demo_locker_pin: str = "1111"
-    demo_auto_reply_min_sec: float = 3.0
-    demo_auto_reply_max_sec: float = 5.0
+    # スマホへの実プッシュ通知が届く前に画面が遷移しないよう、2026-07-27に 3〜5 → 5〜7 秒へ延長。
+    demo_locker_pin: str = "0805"
+    demo_auto_reply_min_sec: float = 5.0
+    demo_auto_reply_max_sec: float = 7.0
+
+    # 審査環境の閲覧専用アカウント。ここに列挙した email でログインしたアカウントは、
+    # アクセストークンに ro=true が付与され、来社予定(appointments)以外のミューテーションを
+    # サーバ側(ReadOnlyGuardMiddleware)とフロント(lib/api.ts, AdminShell)の双方で拒否する。
+    # env 上書き例: REVIEW_READONLY_EMAILS='["demo1@ranasoft.co.jp","demo2@ranasoft.co.jp"]'
+    review_readonly_emails: list[str] = ["demo1@ranasoft.co.jp"]
+
+    # SMTP メール送信(来社予定QRのメール送信)。host/username/password が揃ったときのみ有効(smtp_enabled)。
+    # 587=STARTTLS(smtp_starttls=True)、465=implicit TLS(smtp_ssl=True)。Gmail は「アプリパスワード」を smtp_password に。
+    # 注意: Render は無料/starter プランで送信SMTPポート(587/465)を塞ぐことがあり、その場合本番で送信に失敗する。
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""       # 差出人アドレス(空なら smtp_username を使う)
+    smtp_from_name: str = ""  # 差出人表示名(空ならテナント名 → app_name)
+    smtp_starttls: bool = True  # 587: STARTTLS で暗号化
+    smtp_ssl: bool = False      # 465: implicit TLS を使う場合 True(starttls は無視)
 
     @property
     def slack_oauth_enabled(self) -> bool:
         return bool(self.slack_client_id and self.slack_client_secret and self.slack_redirect_uri)
+
+    @property
+    def smtp_enabled(self) -> bool:
+        return bool(self.smtp_host and self.smtp_username and self.smtp_password)
 
 
 settings = Settings()

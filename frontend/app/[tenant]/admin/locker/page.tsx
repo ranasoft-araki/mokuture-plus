@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { AdminShell } from "@/components/AdminShell";
 import { api, LockerDeviceStatus, LockerStatusItem } from "@/lib/api";
+import { subscribeRealtime } from "@/lib/realtime";
 import { getAccessToken, clearTokens } from "@/lib/auth";
 
 const FONT_MONO = '"JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace';
@@ -158,8 +159,7 @@ export default function AdminLockerPage() {
       setDevices(data.devices);
       setError(null);
     } catch (err: unknown) {
-      // 認証切れは初回のみログインへ。自動更新中のネットワーク一時失敗では画面を保持。
-      if (!silent) { clearTokens(); router.push("/login"); return; }
+      // セッション切れは api.ts がログイン画面へ移す。ここに来るのは通信断などの一時的な失敗なので画面を保持。
       setError(err instanceof Error ? err.message : "取得に失敗しました");
     } finally {
       if (!silent) setLoading(false);
@@ -172,12 +172,24 @@ export default function AdminLockerPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ニアリアルタイム連動: 端末がロッカーの占有状態を変えてミラーした瞬間に backend が SSE で
+  // push → ロッカー状況を即再取得する。SSE が切れた稀なケースは 30秒ポーリングが拾う。
   useEffect(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    if (autoRefresh) {
-      timerRef.current = setInterval(() => load(true), 15000);
-    }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    if (!autoRefresh) return;
+    // 連続ミラー(複数端末が同時に報告する等)を300msでまとめて1回だけ取得する。
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const unsub = subscribeRealtime((e) => {
+      if (e.type !== "locker") return;
+      if (debounce) return;
+      debounce = setTimeout(() => { debounce = null; load(true); }, 300);
+    });
+    timerRef.current = setInterval(() => load(true), 30000); // フォールバック（SSE 断の保険）
+    return () => {
+      unsub();
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      if (debounce) clearTimeout(debounce);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRefresh]);
 

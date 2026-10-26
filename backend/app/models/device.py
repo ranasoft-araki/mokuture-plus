@@ -26,6 +26,16 @@ class Device(Base):
     hardware_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     force_update_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # 端末テレメトリ（heartbeat で受信・管理画面の端末詳細に表示）。
+    agent_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)   # エージェント版数
+    ip_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)      # 端末が報告する LAN IP
+    # 分析ログ(ANALYTICS.md)で端末イベント/メトリクスから最新値をミラーする。
+    os_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)      # 例: "Debian GNU/Linux 12 (6.6.51-v8+)"
+    ui_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)      # キオスク画面(kiosk.html)の版数ラベル
+    last_boot_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # 直近の端末起動時刻(UTC naive)
+    # 連続オンライン開始時刻（UTC naive）。heartbeat/各キオスクAPIのたびに get_kiosk_device が
+    # 「3分超の空白があればリセット」して維持する＝連続稼働時間 = now - online_since。
+    online_since: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     # ローカルファースト・ロッカーの占有スナップショット（管理画面の表示専用）。
     # ロッカーは各端末の GPIO 直結＝端末が真実の源なので、agent が best-effort で
     # 全件スナップショット（occupied/has_pin のブールのみ・PIN 本体は含まない）を
@@ -34,6 +44,18 @@ class Device(Base):
     locker_state_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     tenant = relationship("Tenant", back_populates="devices")
+
+
+class KioskBundleRelease(Base):
+    """OTA で配ったキオスクの中身(バンドル)ごとの版番号。全テナント共通。
+
+    backend の kiosk._bundle_label が、その中身を初めて配るときに振る。端末のデバイス
+    チェック画面に出す「261002-001」(日本時間の日付＋その日に配り始めた何番目の中身か)。"""
+    __tablename__ = "kiosk_bundle_releases"
+
+    version: Mapped[str] = mapped_column(String(32), primary_key=True)          # manifest の version(中身のハッシュ)
+    label: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)  # YYMMDD-NNN
+    first_served_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)  # UTC naive
 
 
 class Locker(Base):

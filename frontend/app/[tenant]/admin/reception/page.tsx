@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, type ReceptionLog } from "@/lib/api";
-import { getAccessToken, clearTokens } from "@/lib/auth";
+import { subscribeRealtime } from "@/lib/realtime";
+import { getAccessToken } from "@/lib/auth";
+import { hasHonorific } from "@/lib/honorific";
 import { AdminShell, MkCard } from "@/components/AdminShell";
 import { ConfirmModal } from "@/components/ConfirmModal";
 
@@ -405,7 +407,7 @@ function RespondModal({ log, token, onClose, onUpdate }: { log: ReceptionLog; to
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: "#fffefb", borderRadius: 20, padding: 28, width: 460, maxWidth: "94vw", boxShadow: "0 24px 70px rgba(0,0,0,0.25)" }}>
         <div style={{ fontSize: 11, color: "#a8a198", letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: 6 }}>受付対応</div>
-        <div style={{ fontSize: 26, fontWeight: 700, color: "#1d1a15" }}>{log.visitor_name} <span style={{ fontSize: 18, fontWeight: 500 }}>様</span></div>
+        <div style={{ fontSize: 26, fontWeight: 700, color: "#1d1a15" }}>{log.visitor_name}{!hasHonorific(log.visitor_name) && <span style={{ fontSize: 18, fontWeight: 500 }}> 様</span>}</div>
         <div style={{ fontSize: 14, color: "#6b6559", marginTop: 4 }}>{log.company || "—"}{log.purpose ? ` ・ ${log.purpose}` : ""}</div>
         <div style={{ fontSize: 12, color: "#a8a198", marginTop: 4 }}>{timeStr} 受付</div>
 
@@ -458,6 +460,8 @@ export default function ReceptionLogsPage() {
   const [token, setToken] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  // 一覧の取得に失敗したとき(通信断・デプロイ中)の表示。取れたら消す
+  const [loadError, setLoadError] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [modal, setModal] = useState<{ msg: string; confirmLabel?: string; action: () => Promise<void> } | null>(null);
@@ -471,8 +475,9 @@ export default function ReceptionLogsPage() {
     if (!t) { router.push("/login"); return; }
     setToken(t);
     api.listReception(t)
-      .then((data) => { setLogs(data); setLastRefreshed(new Date()); })
-      .catch(() => { clearTokens(); router.push("/login"); })
+      .then((data) => { setLogs(data); setLastRefreshed(new Date()); setLoadError(""); })
+      // セッション切れは api.ts がログイン画面へ移す。通信断などの一時的な失敗ではログアウトさせず、理由を出す
+      .catch((e) => setLoadError(e instanceof Error ? e.message : "受付ログを取得できませんでした"))
       .finally(() => setLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -510,14 +515,29 @@ export default function ReceptionLogsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [respondId, detailId, token]);
 
+  // ニアリアルタイム連動: キオスクの受付送信/配達呼び出し/置き配、およびスタッフ応答が起きた瞬間に
+  // backend が SSE で push → 受付一覧を即再取得する。SSE が切れた稀なケースは 30秒ポーリングが拾う。
+  // 「自動更新 OFF」時は SSE もポーリングも張らない（ユーザーが更新を止めた意図を尊重）。
   useEffect(() => {
     if (!autoRefresh || !token) return;
-    const id = setInterval(() => {
+    const refetch = () => {
       api.listReception(token)
-        .then((data) => { setLogs(data); setLastRefreshed(new Date()); })
+        .then((data) => { setLogs(data); setLastRefreshed(new Date()); setLoadError(""); })
         .catch(() => {});
-    }, 30000);
-    return () => clearInterval(id);
+    };
+    // 連続イベント(通知直後の状態変化が続く等)を300msでまとめて1回だけ取得する。
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const unsub = subscribeRealtime((e) => {
+      if (e.type !== "reception") return;
+      if (debounce) return;
+      debounce = setTimeout(() => { debounce = null; refetch(); }, 300);
+    });
+    const id = setInterval(refetch, 30000); // フォールバック（SSE 断の保険）
+    return () => {
+      unsub();
+      clearInterval(id);
+      if (debounce) clearTimeout(debounce);
+    };
   }, [autoRefresh, token]);
 
   const handleStateUpdate = (id: string, state: string) => {
@@ -806,7 +826,7 @@ export default function ReceptionLogsPage() {
           {autoRefresh && (
             <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#a8a198" }}>
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#16a34a", display: "inline-block", animation: "mk-pulse 2s ease-in-out infinite" }} />
-              30秒ごとに更新
+              リアルタイム更新
             </span>
           )}
           {lastRefreshed && (
@@ -815,6 +835,11 @@ export default function ReceptionLogsPage() {
         </div>
       </div>
 
+      {loadError && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#f6e0dc", border: "1px solid #a84238", color: "#a84238", fontSize: 13 }}>
+          受付ログを取得できませんでした（{loadError}）。下の一覧は最新ではない可能性があります。
+        </div>
+      )}
       <MkCard padding="0">
         {loading ? (
           <div style={{ padding: "48px 20px", textAlign: "center", color: "#a8a198" }}>読み込み中…</div>
@@ -873,6 +898,10 @@ export default function ReceptionLogsPage() {
                         <span style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                           {r.visitor_name}
                           {r.staff_notes && <span style={{ fontSize: 10, fontWeight: 600, background: "#fef9c3", color: "#854d0e", border: "1px solid #fef08a", borderRadius: 4, padding: "1px 6px" }}>メモあり</span>}
+                          {r.escalated_at && (
+                            // 応答が無かったため代理担当者へ転送済み（通知設定「担当者ごとの通知先」）。
+                            <span style={{ fontSize: 10, fontWeight: 600, background: "#eef2ff", color: "#4338ca", border: "1px solid #c7d2fe", borderRadius: 4, padding: "1px 6px" }}>代理通知済</span>
+                          )}
                           {agingLevel === "alert" && (
                             <span style={{ fontSize: 10, fontWeight: 600, background: "#fff7ed", color: "#c2410c", border: "1px solid #fed7aa", borderRadius: 4, padding: "1px 6px" }}>15分以上待機中</span>
                           )}

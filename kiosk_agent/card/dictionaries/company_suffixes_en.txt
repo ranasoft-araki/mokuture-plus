@@ -1,0 +1,28 @@
+# 法人種別（英文）。会社名の判定に使う。大文字小文字は無視して照合する。
+Co., Ltd.
+Co.,Ltd.
+Co., Ltd
+Co. Ltd.
+Company Limited
+Corporation
+Incorporated
+Holdings
+Limited
+Inc.
+Inc
+Corp.
+Corp
+Ltd.
+Ltd
+LLC
+L.L.C.
+LLP
+PLC
+K.K.
+G.K.
+GmbH
+S.A.
+N.V.
+B.V.
+Pte. Ltd.
+Pty Ltd

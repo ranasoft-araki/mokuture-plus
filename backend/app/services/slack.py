@@ -18,14 +18,15 @@ from __future__ import annotations
 
 import logging
 import urllib.parse
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 import httpx
 
 from app.config import settings
+from app.services.honorific import with_honorific
+from app.services.timeutil import format_jst
 
 logger = logging.getLogger(__name__)
-_JST = timezone(timedelta(hours=9))
 
 _AUTHORIZE_ENDPOINT = "https://slack.com/oauth/v2/authorize"
 _ACCESS_ENDPOINT = "https://slack.com/api/oauth.v2.access"
@@ -33,7 +34,10 @@ _API_BASE = "https://slack.com/api"
 
 # Bot Token Scopes. chat:write=送信, channels:read/groups:read=公開/非公開chの列挙,
 # channels:join=公開chへのBot自動参加(conversations.join)。
-_SCOPE = "chat:write,channels:read,groups:read,channels:join"
+# im:write=DM開始(conversations.open)、users:read=DM相手の選択肢(users.list)用(issue #1追記分)。
+# **スコープを追加しても既存の連携には後から付与されない**: Slack App側(Bot Token Scopes)
+# にも追加し、各テナントは「Slackに追加」を再度押して連携し直す必要がある(CLAUDE.md参照)。
+_SCOPE = "chat:write,channels:read,groups:read,channels:join,im:write,users:read"
 
 _HTTP_TIMEOUT = 10.0
 
@@ -196,6 +200,49 @@ class SlackNotifier:
         return out
 
     @staticmethod
+    async def list_users(token: str) -> list[dict]:
+        """List workspace members the bot can DM (`users.list`, scope `users:read`).
+
+        Excludes bots, deleted accounts, and Slackbot — they aren't valid 1:1 DM targets
+        for a notification destination. Returns `[{id, name}]` sorted by name. Raises
+        `SlackApiError` (e.g. `missing_scope` on bot tokens connected before this scope
+        was added) so the caller can surface a clear "reconnect" message."""
+        _MAX_PAGES = 10
+        out: list[dict] = []
+        cursor = ""
+        for page in range(_MAX_PAGES):
+            params: dict = {"limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            data = await _slack_get(token, "users.list", params)
+            if not data.get("ok"):
+                raise SlackApiError(str(data.get("error") or "users_list_failed"))
+            for m in data.get("members", []):
+                if m.get("deleted") or m.get("is_bot") or m.get("id") == "USLACKBOT":
+                    continue
+                profile = m.get("profile") or {}
+                name = (profile.get("real_name") or profile.get("display_name")
+                        or m.get("real_name") or m.get("name") or m.get("id") or "")
+                out.append({"id": m.get("id") or "", "name": name})
+            cursor = ((data.get("response_metadata") or {}).get("next_cursor") or "").strip()
+            if not cursor:
+                break
+        out.sort(key=lambda u: u["name"])
+        return out
+
+    @staticmethod
+    async def open_dm(token: str, user_id: str) -> str:
+        """Open (or resume) a 1:1 DM with `user_id` (`conversations.open`, scope
+        `im:write`). Returns the DM channel id (`D...`). Raises `SlackApiError`."""
+        data = await _slack_post(token, "conversations.open", {"users": user_id})
+        if not data.get("ok"):
+            raise SlackApiError(str(data.get("error") or "conversations_open_failed"))
+        channel_id = ((data.get("channel") or {}).get("id") or "").strip()
+        if not channel_id:
+            raise SlackApiError("conversations_open_no_channel")
+        return channel_id
+
+    @staticmethod
     async def get_channel_info(token: str, channel_id: str) -> dict:
         """Return {id, name, is_private, is_member} for one channel. Raises SlackApiError."""
         data = await _slack_get(token, "conversations.info", {"channel": channel_id})
@@ -286,6 +333,24 @@ class SlackNotifier:
         ]
 
     @staticmethod
+    def resolve_delivery_config(base: dict | None, override: dict | None) -> dict:
+        """配達（荷物の配達の呼び出し）用の送信設定を解決する。
+
+        チャンネルは `override`(配達専用の上書き。あれば) → `base`(共通の Slack 連携) の順。
+        Bot Token は常に共通の連携を使い回す（担当者ごとのチャンネル指定と同じ考え方で、
+        配達用に別の Bot 連携を結ばせない）。**旧形式**（`override` が自前の `webhook_url`
+        を持つ = 2026-10 以前の「配達だけ生のWebhook URLを入力する」仕様で保存された行）は
+        そのまま自己完結した設定として使う（後方互換）。
+        """
+        if override and override.get("webhook_url"):
+            return override
+        result = dict(base or {})
+        if override and override.get("channel_id"):
+            result["channel_id"] = override["channel_id"]
+            result["channel_name"] = override.get("channel_name", "")
+        return result
+
+    @staticmethod
     def public_config(config: dict) -> dict:
         """Non-secret view of a stored Slack config for the admin UI.
 
@@ -314,30 +379,26 @@ class SlackNotifier:
         host_name: str | None = None,
         when: datetime | None = None,
         department: str | None = None,
+        escalated_from: str | None = None,
     ) -> str:
         """Reception notification text. Company / department / host lines are omitted when
-        blank; name + time are always present (see 作業指示 §7)."""
-        lines = [":bell: 来客がありました", ""]
+        blank; name + time are always present (see 作業指示 §7).
+
+        `escalated_from` を渡すと代理通知(応答が無いときのエスカレーション)の文面になる
+        — 見出しを「応答がありません」に変え、末尾で元の訪問先担当者名を示す。"""
+        head = ":warning: 受付に応答がありません（代理通知）" if escalated_from else ":bell: 来客がありました"
+        lines = [head, ""]
         if (company or "").strip():
             lines.append(f"会社名：{company.strip()}")
-        lines.append(f"お名前：{visitor_name.strip()} 様")
+        lines.append(f"お名前：{with_honorific(visitor_name)}")
         if (department or "").strip():
             lines.append(f"訪問先部署：{department.strip()}")
         if (host_name or "").strip():
             lines.append(f"訪問先：{host_name.strip()}")
-        lines.append(f"時刻：{_format_jst(when)}")
+        lines.append(f"時刻：{format_jst(when)}")
         lines.append("")
-        lines.append("対応をお願いします。")
+        if escalated_from:
+            lines.append(f"「{escalated_from}」宛の受付に応答がありません。代わりに対応をお願いします。")
+        else:
+            lines.append("対応をお願いします。")
         return "\n".join(lines)
-
-
-def _format_jst(when: datetime | None) -> str:
-    """Format a timestamp as JST 'YYYY/MM/DD HH:MM'. Naive datetimes are assumed UTC
-    (DB `func.now()` stores UTC); None means 'now'."""
-    if when is None:
-        dt = datetime.now(_JST)
-    else:
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=timezone.utc)
-        dt = when.astimezone(_JST)
-    return dt.strftime("%Y/%m/%d %H:%M")

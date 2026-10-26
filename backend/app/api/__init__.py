@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api import appointments, auth, content, reception, lockers, notifications, kiosk, devices, push, settings, operator, reseller, users, rooms, inquiries
+from app.api import appointments, auth, content, reception, lockers, notifications, staff_routes, kiosk, devices, push, settings, operator, reseller, users, rooms, inquiries, events, analytics
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
@@ -7,6 +7,7 @@ api_router.include_router(content.router)
 api_router.include_router(reception.router)
 api_router.include_router(lockers.router)
 api_router.include_router(notifications.router)
+api_router.include_router(staff_routes.router)
 api_router.include_router(push.router)
 api_router.include_router(kiosk.router)
 api_router.include_router(devices.router)
@@ -17,3 +18,5 @@ api_router.include_router(users.router)
 api_router.include_router(appointments.router)
 api_router.include_router(rooms.router)
 api_router.include_router(inquiries.router)
+api_router.include_router(events.router)
+api_router.include_router(analytics.router)

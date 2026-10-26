@@ -15,13 +15,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
+import analytics as analytics_mod
 import kana_kanji
 import locker_store
 from config import settings
 from gpio import DoorSensor, LockerController, PirSensor
-from state import get_device_name, get_device_token, is_registered, save_device_state
+from state import clear_device_state, get_device_name, get_device_token, is_registered, save_device_state
 from sync import find_media, heartbeat_loop, sync_loop
 from updater import updater, read_version
+from watchdog import BrowserHeartbeatState, SystemdWatchdog
 
 
 def _hardware_id() -> str:
@@ -468,7 +470,18 @@ def _configured_door_numbers() -> list[int]:
 # バックする。※有効化には DOOR_PINS_JSON のキーを door_number(=LOCKER_PINS_JSON のキー)と
 # 一致させること。
 _OPEN_WINDOW_SEC = float(os.getenv("LOCKER_OPEN_WINDOW_SEC", "12"))
+_OPEN_AFTER_DELAY_SEC = float(os.getenv("LOCKER_OPEN_AFTER_DELAY_SEC", "1"))
 _bg_tasks: set = set()
+browser_heartbeat_state = BrowserHeartbeatState()
+systemd_watchdog = SystemdWatchdog(
+    browser_state=browser_heartbeat_state,
+    browser_required=settings.systemd_watchdog_browser_required,
+    browser_startup_grace_sec=settings.systemd_watchdog_browser_startup_grace_sec,
+    browser_stale_sec=settings.systemd_watchdog_browser_stale_sec,
+)
+# 分析ログ（ANALYTICS.md）: 端末稼働イベント/メトリクスの記録と、ブラウザイベントの中継。
+# ブラウザのハートビート状態は watchdog と共有する（二重に持たない）。
+device_analytics = analytics_mod.DeviceAnalytics(browser_heartbeat_state)
 
 
 def _spawn(coro):
@@ -481,14 +494,12 @@ def _spawn(coro):
 async def _open_with_autolock(locker_id: str, door: DoorSensor) -> None:
     locker_ctrl.set_state(locker_id, True)   # 解錠(通電)
     waited = 0.0
-    door_opened = False
     try:
         while waited < _OPEN_WINDOW_SEC:
             if door.configured:
+                # 扉が開いたら少し待ってから施錠位置へ戻す
                 if door.is_closed is False:
-                    door_opened = True
-                # 扉が開いて、その後閉じたら → 施錠位置へ戻す
-                if door_opened and door.is_closed is True:
+                    await asyncio.sleep(_OPEN_AFTER_DELAY_SEC)
                     break
             await asyncio.sleep(0.15)
             waited += 0.15
@@ -496,8 +507,22 @@ async def _open_with_autolock(locker_id: str, door: DoorSensor) -> None:
         locker_ctrl.set_state(locker_id, False)  # 無通電=施錠位置(閉扉で自動施錠)
 
 
+# 名刺読み取り（QR無し来訪者の受付フォーム自動入力）。
+# opencv / onnxruntime は任意依存なので、入っていない端末では import に失敗する。
+# その場合でもキオスク本体は従来どおり動かし、/card/* を生やさないだけにする。
+# 画面側は起動時に /card/status を見て、使えなければ名刺の導線を出さない。
+try:
+    from card.api import purge_loop as card_purge_loop, router as card_router, warmup_sync as card_warmup
+    _CARD_IMPORT_ERROR = ""
+except Exception as _e:          # ImportError 以外（モデル破損など）でも止めない
+    card_purge_loop = None       # type: ignore[assignment]
+    card_router = None           # type: ignore[assignment]
+    card_warmup = None           # type: ignore[assignment]
+    _CARD_IMPORT_ERROR = f"{type(_e).__name__}: {_e}"
+
 _KIOSK_HTML = Path(__file__).parent / "static" / "kiosk.html"
 _JSQR_JS   = Path(__file__).parent / "static" / "jsqr.min.js"
+_ANALYTICS_JS = Path(__file__).parent / "static" / "analytics.js"
 _TAP_MP3   = Path(__file__).parent / "static" / "tap.mp3"
 _CONTROL_PANEL_HTML = Path(__file__).parent / "static" / "device-control.html"
 
@@ -511,17 +536,40 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(sync_loop())
     update_task = asyncio.create_task(updater.run())
     heartbeat_task = asyncio.create_task(heartbeat_loop())
+    watchdog_task = asyncio.create_task(systemd_watchdog.run())
+    # 分析ログ: 起動/再起動の判定を先に済ませてから、アップローダとメトリクス採取を回す。
+    await device_analytics.on_startup()
+    analytics_tasks = [
+        asyncio.create_task(device_analytics.uploader_loop()),
+        asyncio.create_task(device_analytics.metrics_loop()),
+    ]
     # かな漢字辞書: 無ければ取得→事前ロード(別スレッド)。OTA 更新の Pi でも自動で辞書を揃え、
     # 初回変換の遅延も回避する。取得失敗(オフライン)時は同梱 kana_dict.tsv にフォールバック。
     async def _prepare_convert_dict():
         await asyncio.to_thread(kana_kanji.ensure_dict)
         await asyncio.to_thread(kana_kanji.warmup)
     warmup_task = asyncio.create_task(_prepare_convert_dict())
+    # 名刺読み取り: OCR モデルの事前ロード（初回の待ち時間を消す）と、
+    # 期限切れセッション（＝メモリ上の画像）の定期破棄。
+    card_tasks: list[asyncio.Task] = []
+    if card_router is not None:
+        card_tasks.append(asyncio.create_task(asyncio.to_thread(card_warmup)))
+        card_tasks.append(asyncio.create_task(card_purge_loop()))
+    elif _CARD_IMPORT_ERROR:
+        print(f"[card] disabled: {_CARD_IMPORT_ERROR}")
+    await systemd_watchdog.ready("mokuture kiosk agent started")
     yield
+    # 分析ログ: 正常停止として記録し、最後に1回だけ送信を試みる（届かなければ次回起動後に再送）。
+    await device_analytics.on_shutdown()
+    for t in analytics_tasks:
+        t.cancel()
     task.cancel()
     update_task.cancel()
     heartbeat_task.cancel()
+    watchdog_task.cancel()
     warmup_task.cancel()
+    for t in card_tasks:
+        t.cancel()
     locker_ctrl.close()
     pir.close()
     for door in doors.values():
@@ -536,6 +584,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if card_router is not None:
+    app.include_router(card_router)
 
 
 class ReceptionBody(BaseModel):
@@ -563,6 +614,20 @@ class LockerConfigBody(BaseModel):
     count: int
 
 
+class KioskHeartbeatBody(BaseModel):
+    screen: str = ""
+    hidden: bool = False
+    focused: bool | None = None
+    href: str = ""
+    ts: int | None = None
+    # ページ読み込みごとに変わるランダムID。ブラウザ起動/リロードの検出に使う（分析ログ）。
+    page_id: str | None = None
+    # キオスク画面(kiosk.html)の版数ラベル。端末イベント/メトリクスに載せる。
+    ui_version: str | None = None
+    # 受付アプリの起動完了(boot 完了)。起動ごとに1回だけ true が来る（分析ログの app_started）。
+    booted: bool = False
+
+
 @app.get("/", include_in_schema=False)
 async def index():
     return RedirectResponse(url="/kiosk.html")
@@ -573,6 +638,21 @@ async def serve_jsqr():
     if not _JSQR_JS.exists():
         raise HTTPException(status_code=404, detail="jsqr.min.js not found")
     return FileResponse(_JSQR_JS, media_type="application/javascript")
+
+
+@app.get("/kiosk-oplog.js", include_in_schema=False)
+@app.get("/analytics.js", include_in_schema=False)  # 旧名。古い kiosk.html のため残す
+async def serve_analytics_js():
+    """キオスク画面が読み込む行動ログのロガー（ANALYTICS.md §7）。
+
+    画面が読む URL は /kiosk-oplog.js。名前に analytics を入れないのは、Pi の Chromium に
+    最初から入っている広告ブロッカー(uBlock Origin Lite)の規則に当たらないようにするため
+    （下の /device/oplog と同じ理由）。
+    無い端末（OTA 未着など）でも 404 になるだけで、kiosk.html は従来どおり動く
+    （ロガーが無ければログを取らないだけ）。"""
+    if not _ANALYTICS_JS.exists():
+        raise HTTPException(status_code=404, detail="analytics.js not found")
+    return FileResponse(_ANALYTICS_JS, media_type="application/javascript")
 
 
 @app.get("/tap.mp3", include_in_schema=False)
@@ -606,6 +686,12 @@ async def get_config():
         "remote_api_url": settings.remote_api_url,
         "device_name": get_device_name(),
         "registered": is_registered(),
+        # 分析ログ用: バンドル版数(app_version)と、ブラウザ側ロガーの送信間隔。
+        "app_version": read_version(),
+        "analytics": {
+            "flush_sec": analytics_mod.FLUSH_SEC,
+            "max_batch": analytics_mod.MAX_BROWSER_BATCH,
+        },
     }
 
 
@@ -659,6 +745,15 @@ async def register_device():
     }
 
 
+@app.post("/device/unregister")
+async def device_unregister():
+    """端末の紐づけを解除する。保存済みトークン(device_state.json)を削除し、次回 /register で
+    TENANT_SLUG による新規登録をやり直せるようにする（別テナントへの付け替え・再登録用）。
+    ブラウザ側の localStorage トークン削除はキオスク UI が別途行う。"""
+    clear_device_state()
+    return {"ok": True}
+
+
 _STATUS_UNREACHABLE = "__unreachable__"
 
 
@@ -691,7 +786,49 @@ async def health():
         "device_name": get_device_name(),
         "media_dir": str(settings.media_dir),
         "mock_gpio": settings.mock_gpio,
+        "watchdog": systemd_watchdog.status(),
+        "analytics": device_analytics.status(),
     }
+
+
+@app.post("/device/kiosk-heartbeat")
+async def kiosk_heartbeat(body: KioskHeartbeatBody):
+    payload = body.model_dump()
+    browser_heartbeat_state.record(payload)
+    # 分析ログ: ブラウザ起動/リロードの検出（失敗してもハートビートは成立させる）。
+    try:
+        await device_analytics.on_browser_heartbeat(payload)
+    except Exception:
+        pass
+    return {"ok": True, "watchdog": systemd_watchdog.status()}
+
+
+class AnalyticsBatchBody(BaseModel):
+    events: list[dict] = []
+
+
+@app.post("/device/oplog")
+@app.post("/device/analytics/events")  # 旧名。古い analytics.js のため残す(Pi の Chromium では届かない)
+async def device_analytics_events(body: AnalyticsBatchBody):
+    """キオスク画面(ブラウザ)からの行動イベントを受け取る中継。
+
+    **ここでディスク(スプール)へ書いてから ack する**ので、ブラウザは accepted に載った
+    event_id だけを IndexedDB から消せばよい（ANALYTICS.md §7）。デバイストークンは
+    エージェントだけが持ち、ブラウザのコードには渡さない。
+    バックエンドへの送信はアップローダが指数バックオフで行う（通信断でも失われない）。
+
+    **ブラウザが叩く名前は /device/oplog**。旧名 /device/analytics/events は、Raspberry Pi OS の
+    Chromium に最初から入っている uBlock Origin Lite(EasyPrivacy の `/analytics/event`)に
+    当たり、送信がブラウザ内で止められて 1 件も届いていなかった。名前に analytics / track /
+    telemetry / beacon / collect などを入れないこと（tests/test_oplog_paths.py が見張る）。
+    """
+    return await device_analytics.submit_browser_events(body.events)
+
+
+@app.get("/device/analytics/status")
+async def device_analytics_status():
+    """未送信件数・オンライン状態などの軽量な状態（秘密情報は含まない）。"""
+    return device_analytics.status()
 
 
 @app.get("/proxy/settings")
@@ -1261,7 +1398,18 @@ async def device_convert(kana: str = "", limit: int = 60):
 
 @app.get("/update-status")
 async def update_status():
-    return {"ready": updater.is_ready(), "force": updater.is_force(), "version": read_version()}
+    # ready/force/version は待機画面の自動適用が使う。残りはデバイスチェック画面の
+    # 「ソフトウェア更新」用(この端末の版・配信中の版・最後の確認・適用待ち)。
+    return {"ready": updater.is_ready(), "force": updater.is_force(), "version": read_version(),
+            **updater.status()}
+
+
+@app.post("/update-check")
+async def update_check():
+    """今すぐ配信サーバーと突き合わせる(デバイスチェック画面の「今すぐ確認」)。
+    自動更新が有効な端末では、違うファイルの取り寄せまで済ませてから返す。"""
+    await updater.check()
+    return await update_status()
 
 
 @app.post("/apply-update")

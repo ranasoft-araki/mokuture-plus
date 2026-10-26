@@ -3,10 +3,11 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.database import get_db
 from app.middleware.tenant import get_current_user
+from app.models.staff_route import StaffNotificationRoute
 from app.models.user import User
 from app.services.auth import hash_password, verify_password
 
@@ -128,6 +129,17 @@ async def delete_user(
     target = result.scalar_one_or_none()
     if target is None or target.tenant_id != user.tenant_id:
         raise HTTPException(status_code=403, detail="User not found in your tenant")
+    # 担当者ごとのプッシュ宛先から外す。本番 DB の push_user_id は ALTER TABLE で
+    # 足した列で外部キー制約が無く、ON DELETE SET NULL が効かない。残すと画面上は
+    # 「指定しない」に見えるのに、実際は宛先が解決できず届かない状態になる。
+    await db.execute(
+        update(StaffNotificationRoute)
+        .where(
+            StaffNotificationRoute.tenant_id == user.tenant_id,
+            StaffNotificationRoute.push_user_id == user_id,
+        )
+        .values(push_user_id=None)
+    )
     await db.delete(target)
     await db.commit()
 

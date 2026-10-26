@@ -27,12 +27,60 @@ frontend/.netlify/
 *.db-shm
 *.db-wal
 
-# Kiosk agent local-first locker state (per-device, must not be committed)
+# Kiosk agent per-device state (端末ごとのローカル状態・実トークンを含む。コミット禁止)
+# フォーマットは device_state.json.example を参照。実体は /register 時に agent が自動生成する。
+kiosk_agent/device_state.json
 kiosk_agent/locker_state.json
+# OTA が最後に適用した版(updater.py が端末ごとに書く)。追跡すると Pi の git pull と食い違う
+kiosk_agent/.bundle_version
+kiosk_agent/.bundle_info.json
+
+# 分析ログの送信待ちスプール(端末ごと・JSONL)。ANALYTICS.md §7。
+# 個人情報は含まないが端末固有の実データなのでコミットしない。
+kiosk_agent/analytics_spool/
+
+# install.sh が残す pip の試行ログ(失敗時の原因追跡用。端末ごとの実行記録)
+kiosk_agent/.install-pip.log
 
 # Kiosk agent かな漢字辞書のダウンロード中間物(SKK-JISYO.L 本体は資産として commit 済み)
 kiosk_agent/SKK-JISYO.L.gz
 
+# 名刺 OCR のモデル(約 23MB)。scripts/fetch_ocr_models.py が導入時に取得する。
+# ハッシュ付きの取得元はスクリプト側に書いてあるので、リポジトリには置かない。
+kiosk_agent/models/
+
+# 名刺テストの生成画像。tests/make_fixtures.py がその場で作る(実在の名刺は使わない)。
+kiosk_agent/tests/fixtures/
+
+# 端末ごとの名刺読み取り設定(現場でしきい値を調整したもの)。
+# 配布するのは card_reader.yaml.example のほう。
+kiosk_agent/card_reader.yaml
+
+# 端末ごとの声で操作する設定(マイクのデバイス名・しきい値)。
+# 配布するのは voice_input.yaml.example のほう。
+kiosk_agent/voice_input.yaml
+
+# Vosk モデルの展開先(zip を fetch_voice_models.py --extract で開いたもの)。
+# リポジトリに入っているのは zip のほう。
+kiosk_agent/voice_models/vosk-model-small-ja-0.22/
+kiosk_agent/voice_models/vosk-model-en-us-0.22-lgraph/
+
+# 声で操作するの匿名メトリクス(端末内にだけ置く。既定は ~/.mokuture-voice/)
+kiosk_agent/**/metrics.jsonl*
+
+# 削除した音声入力(受付フォームを声で埋める)の名残。以前導入した端末には残っている
+# ことがあるので、誤ってコミットしないよう無視し続ける。staff_readings.yaml には
+# 実在の社員の氏名・読みが入っている。
+kiosk_agent/staff_readings.yaml
+kiosk_agent/vendor/
+kiosk_agent/voice_models/*.gguf
+kiosk_agent/voice_models/ggml-*.bin
+kiosk_agent/voice_eval_audio/
+
 # Misc
 .DS_Store
 *.log
+
+# 名刺読み取りの調整用フレーム保存(card.debug.dump_dir)。**撮影した名刺そのもの**が
+# 入るのでコミットしない。既定は無効で、調整が終わったらフォルダごと消すこと。
+kiosk_agent/card_dump/

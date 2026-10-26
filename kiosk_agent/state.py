@@ -25,5 +25,12 @@ def save_device_state(token: str, name: str) -> None:
     _STATE_FILE.write_text(json.dumps({"device_token": token, "device_name": name}, indent=2))
 
 
+def clear_device_state() -> None:
+    """保存済みの端末トークンを削除する（別テナントへの付け替え/再登録用）。
+    次回 /register で TENANT_SLUG による新規登録がやり直される。"""
+    if _STATE_FILE.exists():
+        _STATE_FILE.unlink()
+
+
 def is_registered() -> bool:
     return bool(get_device_token())

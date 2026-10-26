@@ -1,0 +1,96 @@
+# 部署。ここに無い部署でも departments_suffixes.txt の接尾辞で拾えるようにしてある。
+# よく来る取引先の部署名を足していくと精度が上がる。
+営業部
+第一営業部
+第二営業部
+海外営業部
+法人営業部
+営業推進部
+営業企画部
+総務部
+人事部
+人事総務部
+経理部
+財務部
+会計部
+法務部
+知的財産部
+広報部
+宣伝部
+マーケティング部
+経営企画部
+企画部
+商品企画部
+開発部
+研究開発部
+技術部
+技術開発部
+生産技術部
+製造部
+生産管理部
+品質保証部
+品質管理部
+購買部
+調達部
+物流部
+情報システム部
+システム部
+IT推進部
+デジタル推進部
+カスタマーサポート部
+サポート部
+事業開発部
+新規事業部
+管理部
+業務部
+企画開発部
+編集部
+制作部
+設計部
+施工部
+工事部
+保守部
+営業課
+総務課
+人事課
+経理課
+企画課
+開発課
+技術課
+制作課
+業務課
+管理課
+販売課
+調達課
+品質管理課
+営業本部
+開発本部
+技術本部
+管理本部
+事業本部
+営業統括本部
+経営管理本部
+第一事業部
+第二事業部
+営業所
+支店
+支社
+研究所
+工場
+センター
+カスタマーセンター
+コールセンター
+サービスセンター
+Sales Division
+Sales Department
+Marketing Department
+Engineering Department
+Development Division
+Research and Development
+Human Resources
+General Affairs
+Finance Department
+Legal Department
+Product Division
+Customer Success
+Business Development

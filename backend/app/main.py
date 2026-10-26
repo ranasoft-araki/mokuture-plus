@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +11,9 @@ from sqlalchemy import inspect, select, text
 from app.config import settings
 from app.database import engine, Base, AsyncSessionLocal
 from app.api import api_router
+from app.middleware.readonly import ReadOnlyGuardMiddleware
+from app.services.escalation import run_escalation_loop
+from app.services.analytics import run_analytics_sweeper_loop
 
 
 # Alembic 未導入のため、起動時に冪等な軽量カラム追加を適用する。
@@ -29,10 +33,16 @@ _ENSURE_COLUMNS = {
         "kiosk_menu_title": "VARCHAR(255) DEFAULT 'ご用件をお選びください'",
         "kiosk_welcome_qr_guide": "VARCHAR(255) DEFAULT 'ご予約QRをお持ちの方はカメラへかざしてください'",
         "kiosk_welcome_form_label": "VARCHAR(255) DEFAULT 'QRをお持ちでない方はこちら'",
+        # キオスクの既定表示言語("ja"/"en")。来訪者がタッチで切り替えるまでの既定。
+        "kiosk_default_lang": "VARCHAR(8) DEFAULT 'ja'",
         # 来訪者が受付フォームで選べる訪問先部署のリスト(カンマ区切り)。
         "department_list": "TEXT",
         # 審査用デモモード。既存行は FALSE。demo1/demo2 は下でバックフィルして有効化。
         "is_demo": "BOOLEAN DEFAULT FALSE",
+        # 【廃止】受付の音声のクラウド中継。機能は削除済みだが、モデルに列の定義を残して
+        # いるので古い DB にも揃えておく(既存行は FALSE)。
+        "voice_cloud_enabled": "BOOLEAN DEFAULT FALSE",
+        "voice_cloud_opt_out": "BOOLEAN DEFAULT FALSE",
     },
     "lockers": {
         "name": "VARCHAR(255)",
@@ -44,6 +54,14 @@ _ENSURE_COLUMNS = {
         "decided_at": "TIMESTAMP",
         # 来訪者が選んだ訪問先部署。
         "department": "VARCHAR(255)",
+        # 代理通知(応答が無いときのエスカレーション)を送った時刻。二重送信の防止も兼ねる。
+        "escalated_at": "TIMESTAMP",
+    },
+    "staff_notification_routes": {
+        # 担当者ごとの Web Push 宛先(管理ユーザー)。購読は端末ではなくユーザーに紐づくため、
+        # 「この担当者あての通知を誰の端末へ出すか」をここで結びつける。
+        # 既存行は NULL = 従来どおりテナント共通の購読すべてへ送る。
+        "push_user_id": "VARCHAR(36)",
     },
     "devices": {
         # 承認フロー。既存端末は 'active' で埋めて後方互換を保つ。
@@ -52,6 +70,16 @@ _ENSURE_COLUMNS = {
         # ローカルファースト・ロッカーの占有スナップショット（管理画面の表示専用）。
         "locker_state_json": "TEXT",
         "locker_state_at": "TIMESTAMP",
+        # 現在配信中プレイリスト（モデルには当初から存在するが、古い本番テーブルにも確実に揃える防御）。
+        "current_playlist_id": "VARCHAR(36)",
+        # 端末テレメトリ（heartbeat 受信・管理画面表示）。
+        "agent_version": "VARCHAR(32)",
+        "ip_address": "VARCHAR(64)",
+        "online_since": "TIMESTAMP",
+        # 分析ログ(ANALYTICS.md)で端末イベント/メトリクスから最新値をミラーする。
+        "os_version": "VARCHAR(64)",
+        "ui_version": "VARCHAR(32)",
+        "last_boot_at": "TIMESTAMP",
     },
 }
 
@@ -81,6 +109,16 @@ def _ensure_schema(sync_conn) -> None:
         except Exception:
             pass  # 列未追加/型差異などがあっても致命的ではない
 
+    # 担当者ごとの通知先: (tenant_id, staff_name) は1行だけ（upsert の前提）。
+    if "staff_notification_routes" in tables:
+        try:
+            sync_conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_staff_routes_tenant_staff "
+                "ON staff_notification_routes (tenant_id, staff_name)"
+            ))
+        except Exception:
+            pass  # 既存の重複データ等で作成できなくても致命的ではない
+
     # 承認フロー: (tenant_id, hardware_id) の重複登録を防ぐ一意インデックス。
     # hardware_id が NULL の行(手動作成端末)は Postgres/SQLite とも「相異なる」扱いのため衝突しない。
     if "devices" in tables:
@@ -98,7 +136,8 @@ def _ensure_schema(sync_conn) -> None:
 _DEMO_SLUGS = ("demo1", "demo2")
 _DEMO_STAFF = "mokuture⁺担当者"     # 訪問先(担当者)
 _DEMO_PURPOSE = "製品体験"          # 用件(目的)
-_DEMO_ROOM = "審査会場"             # 案内先(会議室)
+_DEMO_ROOM = "商談ルーム"           # 案内先(会議室)
+_DEMO_ROOM_LEGACY = "審査会場"      # 旧・案内先名。既存デモ環境はこれを改称して引き継ぐ
 # デモ管理者アカウント（slug→email）。テナントの削除→再作成等で管理者ユーザーの tenant_id が
 # 現デモテナントから外れて孤児化すると、会議室作成などの書込が FK 違反で 500 になる。
 # シードで現デモテナントへ確実に再リンクして自己修復する。
@@ -147,11 +186,21 @@ async def _seed_demo_master_data() -> None:
                     )
                 )).scalar_one_or_none()
                 if room is None:
-                    db.add(MeetingRoom(
-                        tenant_id=t.id, name=_DEMO_ROOM, location="デモ会場",
-                        color="#7c3aed", is_active=True,
-                    ))
-                    changed = True
+                    # 旧「審査会場」があれば改称して引き継ぐ(id維持=既存来社予定の紐付けを保持)。
+                    legacy = (await db.execute(
+                        select(MeetingRoom).where(
+                            MeetingRoom.tenant_id == t.id, MeetingRoom.name == _DEMO_ROOM_LEGACY
+                        )
+                    )).scalar_one_or_none()
+                    if legacy is not None:
+                        legacy.name = _DEMO_ROOM
+                        changed = True
+                    else:
+                        db.add(MeetingRoom(
+                            tenant_id=t.id, name=_DEMO_ROOM, location="2階",
+                            color="#7c3aed", is_active=True,
+                        ))
+                        changed = True
             if changed:
                 await db.commit()
     except Exception:
@@ -165,7 +214,19 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_ensure_schema)
     await _seed_demo_master_data()
-    yield
+    # 代理通知(応答が無い受付のエスカレーション)の定期スイープ。単一ワーカー前提。
+    escalation_task = asyncio.create_task(run_escalation_loop())
+    # 分析ログ: 終了イベントが来なかった匿名セッションを畳む定期スイープ（単一ワーカー前提）。
+    analytics_task = asyncio.create_task(run_analytics_sweeper_loop())
+    try:
+        yield
+    finally:
+        escalation_task.cancel()
+        analytics_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await escalation_task
+        with suppress(asyncio.CancelledError):
+            await analytics_task
 
 
 limiter = Limiter(key_func=get_remote_address)
@@ -180,6 +241,11 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# 審査環境の閲覧専用アカウント(ro=true)のミューテーションを来社予定以外で拒否する。
+# CORS より「先に」add_middleware することで CORS が最外になり、ここで返す 403 にも
+# CORS ヘッダが付く（ブラウザが detail を読める）。
+app.add_middleware(ReadOnlyGuardMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
