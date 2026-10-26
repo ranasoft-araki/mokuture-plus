@@ -7,6 +7,16 @@ import { api, type StaffNotificationRoute, type StaffNotificationRoutesResponse,
 import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, matchesVapidKey, type PushStatus } from "@/lib/push";
 import { getAccessToken } from "@/lib/auth";
 
+// カスタムWebhook は当面、管理画面に出さない（送信の仕組みと API はそのまま）。
+// 戻すときは true にする。説明文に出てくるカード名もこれに合わせて切り替わる。
+const SHOW_CUSTOM_WEBHOOK = false;
+/** 担当者の個別設定が無いときに届く先（カード名）。 */
+const DEFAULT_CARDS = SHOW_CUSTOM_WEBHOOK ? "「Slack」「カスタムWebhook」「プッシュ通知」" : "「Slack」「プッシュ通知」";
+/** 担当者の個別設定にある、共通の宛先にも送るチェックの名前。 */
+const INCLUDE_DEFAULT_LABEL = SHOW_CUSTOM_WEBHOOK
+  ? "上の「Slack」・下の「カスタムWebhook」・上の「プッシュ通知」にも送る"
+  : "上の「Slack」・上の「プッシュ通知」にも送る";
+
 function Field({ label, hint, children, required }: { label: string; hint?: string; children: React.ReactNode; required?: boolean }) {
   return (
     <label style={{ display: "block" }}>
@@ -481,20 +491,20 @@ function routeSummary(
   route: StaffNotificationRoute | undefined,
   users: StaffPushUser[] = [],
 ): string {
-  if (!route) return "未設定（「Slack」「カスタムWebhook」「プッシュ通知」カードの宛先のみ）";
+  if (!route) return `未設定（${DEFAULT_CARDS}カードの宛先のみ）`;
   const parts: string[] = [];
   if (route.slack_channel_name || route.slack_channel_id) {
     parts.push(`Slack ${route.slack_channel_name || route.slack_channel_id}`);
   }
   if (route.chatwork_room_id) parts.push(`Chatwork ${route.chatwork_room_name || `ルーム${route.chatwork_room_id}`}`);
   if (route.email) parts.push(`メール ${route.email}`);
-  if (route.webhook_configured) parts.push("Webhook");
+  if (SHOW_CUSTOM_WEBHOOK && route.webhook_configured) parts.push("Webhook");
   if (route.push_user_id) {
     const u = users.find((x) => x.id === route.push_user_id);
     parts.push(`プッシュ ${u ? u.name : "指定ユーザー"}`);
   }
   if (parts.length === 0) parts.push("個別の宛先なし");
-  if (route.include_default) parts.push("「Slack」「カスタムWebhook」「プッシュ通知」カードにも送る");
+  if (route.include_default) parts.push(`${DEFAULT_CARDS}カードにも送る`);
   return parts.join(" ・ ");
 }
 
@@ -764,7 +774,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
     <div>
       <div style={{ padding: "12px 14px", background: "#f4f1ea", border: "1px solid #efece5", borderRadius: 8, fontSize: 11.5, color: "#6b6559", lineHeight: 1.8, marginBottom: 16 }}>
         担当者の登録と、担当者ごとの通知の届け先をここで管理します。ここで登録した担当者が、そのままキオスクの訪問先リストになります。
-        設定していない担当者あての受付は、「Slack」「カスタムWebhook」「プッシュ通知」の各カードの宛先だけに届きます。応答が無いときは、指定した代理担当者の通知先へ自動で転送します。
+        設定していない担当者あての受付は、{DEFAULT_CARDS}の各カードの宛先だけに届きます。応答が無いときは、指定した代理担当者の通知先へ自動で転送します。
       </div>
 
       <StaffMasterEditor
@@ -877,7 +887,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
                     </Field>
                     <Field
                       label="プッシュ通知の宛先"
-                      hint="プッシュはブラウザ（ログインした人）に届きます。指定すると、この担当者あてはその人の端末だけに送ります。その人がまだプッシュを許可していないときは、下のチェック『上の「Slack」・下の「カスタムWebhook」・上の「プッシュ通知」にも送る』がONなら、上の「プッシュ通知」で登録した全端末へ送ります"
+                      hint={`プッシュはブラウザ（ログインした人）に届きます。指定すると、この担当者あてはその人の端末だけに送ります。その人がまだプッシュを許可していないときは、下のチェック『${INCLUDE_DEFAULT_LABEL}』がONなら、上の「プッシュ通知」で登録した全端末へ送ります`}
                     >
                       <select
                         value={draft.push_user_id}
@@ -899,38 +909,40 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
                         onChange={(v) => setDraft({ ...draft, email: v })}
                       />
                     </Field>
-                    <Field
-                      label="Webhook URL"
-                      hint={
-                        route?.webhook_configured
-                          ? draft.webhook_url === null
-                            ? "設定済み。URLは安全のため表示しません（変更するときだけ入力）"
-                            : draft.webhook_url === ""
-                              ? "保存すると解除されます"
-                              : "保存すると新しいURLに差し替わります"
-                          : "この担当者宛の受付だけを外部システムへPOSTします（任意）"
-                      }
-                    >
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <TextInput
-                            placeholder={route?.webhook_configured ? "設定済み（変更するときだけ入力）" : "https://hooks.example.com/..."}
-                            mono
-                            value={draft.webhook_url ?? ""}
-                            onChange={(v) => setDraft({ ...draft, webhook_url: v })}
-                          />
+                    {SHOW_CUSTOM_WEBHOOK && (
+                      <Field
+                        label="Webhook URL"
+                        hint={
+                          route?.webhook_configured
+                            ? draft.webhook_url === null
+                              ? "設定済み。URLは安全のため表示しません（変更するときだけ入力）"
+                              : draft.webhook_url === ""
+                                ? "保存すると解除されます"
+                                : "保存すると新しいURLに差し替わります"
+                            : "この担当者宛の受付だけを外部システムへPOSTします（任意）"
+                        }
+                      >
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <TextInput
+                              placeholder={route?.webhook_configured ? "設定済み（変更するときだけ入力）" : "https://hooks.example.com/..."}
+                              mono
+                              value={draft.webhook_url ?? ""}
+                              onChange={(v) => setDraft({ ...draft, webhook_url: v })}
+                            />
+                          </div>
+                          {route?.webhook_configured && (
+                            <button
+                              type="button"
+                              onClick={() => setDraft({ ...draft, webhook_url: draft.webhook_url === null ? "" : null })}
+                              style={testBtnStyle(false)}
+                            >
+                              {draft.webhook_url === null ? "解除" : "取り消し"}
+                            </button>
+                          )}
                         </div>
-                        {route?.webhook_configured && (
-                          <button
-                            type="button"
-                            onClick={() => setDraft({ ...draft, webhook_url: draft.webhook_url === null ? "" : null })}
-                            style={testBtnStyle(false)}
-                          >
-                            {draft.webhook_url === null ? "解除" : "取り消し"}
-                          </button>
-                        )}
-                      </div>
-                    </Field>
+                      </Field>
+                    )}
                     <Field label="代理通知先（応答が無いとき）" hint="別の担当者を指定します。転送は1段のみで、代理の代理は辿りません">
                       <select
                         value={draft.fallback_staff_name}
@@ -962,9 +974,9 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
                       style={{ marginTop: 2 }}
                     />
                     <span style={{ fontSize: 12.5, color: "#2d2a24", lineHeight: 1.7 }}>
-                      上の「Slack」・下の「カスタムWebhook」・上の「プッシュ通知」にも送る
+                      {INCLUDE_DEFAULT_LABEL}
                       <span style={{ display: "block", fontSize: 11, color: "#a8a198" }}>
-                        OFF にすると、この担当者宛の受付の最初の通知は、ここで指定した宛先にだけ届きます（上の「Slack」カードのチャンネル・下の「カスタムWebhook」カードのURL・上の「プッシュ通知」で登録した全端末へは送りません）。応答が無く代理担当者へ転送するときは、誰にも届かないことを防ぐため、これらへ送ることがあります
+                        OFF にすると、この担当者宛の受付の最初の通知は、ここで指定した宛先にだけ届きます（上の「Slack」カードのチャンネル・{SHOW_CUSTOM_WEBHOOK && "下の「カスタムWebhook」カードのURL・"}上の「プッシュ通知」で登録した全端末へは送りません）。応答が無く代理担当者へ転送するときは、誰にも届かないことを防ぐため、これらへ送ることがあります
                       </span>
                     </span>
                   </label>
@@ -994,7 +1006,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
                         {confirmClear === route.id ? (
                           <>
                             <span style={{ fontSize: 12, color: "#a84238" }}>
-                              この担当者の個別設定を解除します（以後この担当者あての受付は、「Slack」「カスタムWebhook」「プッシュ通知」の各カードの宛先だけに届きます）
+                              この担当者の個別設定を解除します（以後この担当者あての受付は、{DEFAULT_CARDS}の各カードの宛先だけに届きます）
                             </span>
                             <MkBtn variant="danger" size="sm" onClick={() => clearRoute(route.id)} disabled={saving}>
                               {saving ? "解除中…" : "解除する"}
@@ -1768,82 +1780,84 @@ export default function AdminNotifyPage() {
         </MkCard>
 
         {/* Custom Webhook */}
-        <MkCard style={{ gridColumn: "span 2" }}>
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 18 }}>
-            <div style={{ width: 40, height: 40, borderRadius: 7, background: "#f0eaf5", color: "#6b3fa0", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-              </svg>
+        {SHOW_CUSTOM_WEBHOOK && (
+          <MkCard style={{ gridColumn: "span 2" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 18 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 7, background: "#f0eaf5", color: "#6b3fa0", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                </svg>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>カスタムWebhook</div>
+                <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>来客の受付があった際に指定URLへPOSTリクエストを送信します。下の「荷物の配達（呼び出し）通知先」で別のURLを設定しなければ、配達の呼び出しもここへ届きます</div>
+              </div>
+              <MkPill tone={customWebhookConfigured ? "live" : "off"}>{customWebhookConfigured ? "設定済" : "未設定"}</MkPill>
             </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>カスタムWebhook</div>
-              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>来客の受付があった際に指定URLへPOSTリクエストを送信します。下の「荷物の配達（呼び出し）通知先」で別のURLを設定しなければ、配達の呼び出しもここへ届きます</div>
-            </div>
-            <MkPill tone={customWebhookConfigured ? "live" : "off"}>{customWebhookConfigured ? "設定済" : "未設定"}</MkPill>
-          </div>
-          <div className="adm-grid-2" style={{ gap: 20 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <Field label="Webhook URL" required>
-                <TextInput
-                  placeholder="https://hooks.example.com/..."
-                  mono
-                  value={customWebhookUrl}
-                  onChange={setCustomWebhookUrl}
-                />
-              </Field>
-              <div style={{ padding: "12px 14px", background: "#f4f1ea", borderRadius: 8, border: "1px solid #efece5" }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "#6b6559", marginBottom: 6 }}>送信されるJSONペイロード例</div>
-                <pre style={{ fontSize: 10.5, color: "#2d2a24", margin: 0, lineHeight: 1.6, fontFamily: "monospace", whiteSpace: "pre-wrap" }}>{`{
-  "event": "reception",
-  "tenant_id": "...",
-  "reception_id": "...",
-  "visitor_name": "佐々木 美咲",
-  "company": "アルチザン株式会社",
-  "staff": "田中 誠",
-  "department": "営業部",
-  "purpose": "打ち合わせ",
-  "method": "form",
-  "created_at": "2026-01-01T10:00:00Z"
-}`}</pre>
+            <div className="adm-grid-2" style={{ gap: 20 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <Field label="Webhook URL" required>
+                  <TextInput
+                    placeholder="https://hooks.example.com/..."
+                    mono
+                    value={customWebhookUrl}
+                    onChange={setCustomWebhookUrl}
+                  />
+                </Field>
+                <div style={{ padding: "12px 14px", background: "#f4f1ea", borderRadius: 8, border: "1px solid #efece5" }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#6b6559", marginBottom: 6 }}>送信されるJSONペイロード例</div>
+                  <pre style={{ fontSize: 10.5, color: "#2d2a24", margin: 0, lineHeight: 1.6, fontFamily: "monospace", whiteSpace: "pre-wrap" }}>{`{
+    "event": "reception",
+    "tenant_id": "...",
+    "reception_id": "...",
+    "visitor_name": "佐々木 美咲",
+    "company": "アルチザン株式会社",
+    "staff": "田中 誠",
+    "department": "営業部",
+    "purpose": "打ち合わせ",
+    "method": "form",
+    "created_at": "2026-01-01T10:00:00Z"
+  }`}</pre>
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{ padding: "14px", background: "#f4f1ea", borderRadius: 8, border: "1px solid #efece5" }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 8 }}>使い方</div>
+                  <ul style={{ fontSize: 11.5, color: "#6b6559", margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
+                    <li>Zapier・Make・n8n などの自動化ツールと連携できます</li>
+                    <li>自社システムへのリアルタイム通知に利用できます</li>
+                    <li>HTTP POST（JSON形式）で受付情報を送信します</li>
+                    <li>送信失敗時もキオスク受付処理はブロックしません</li>
+                    <li>応答が無く代理通知された場合は <code>event</code> が <code>reception_escalated</code> になり <code>escalated_from</code>（元の担当者名）が付きます</li>
+                  </ul>
+                </div>
               </div>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div style={{ padding: "14px", background: "#f4f1ea", borderRadius: 8, border: "1px solid #efece5" }}>
-                <div style={{ fontSize: 11.5, fontWeight: 600, color: "#2d2a24", marginBottom: 8 }}>使い方</div>
-                <ul style={{ fontSize: 11.5, color: "#6b6559", margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
-                  <li>Zapier・Make・n8n などの自動化ツールと連携できます</li>
-                  <li>自社システムへのリアルタイム通知に利用できます</li>
-                  <li>HTTP POST（JSON形式）で受付情報を送信します</li>
-                  <li>送信失敗時もキオスク受付処理はブロックしません</li>
-                  <li>応答が無く代理通知された場合は <code>event</code> が <code>reception_escalated</code> になり <code>escalated_from</code>（元の担当者名）が付きます</li>
-                </ul>
+            {customWebhookError && (
+              <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
+                {customWebhookError}
               </div>
-            </div>
-          </div>
-          {customWebhookError && (
-            <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
-              {customWebhookError}
-            </div>
-          )}
-          <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <MkBtn variant="primary" size="sm" onClick={handleSaveCustomWebhook}>
-              {customWebhookSaving ? "保存中…" : "保存"}
-            </MkBtn>
-            {customWebhookConfigured && (
-              <button
-                onClick={handleTestCustomWebhook}
-                disabled={customWebhookTesting}
-                style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: customWebhookTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: customWebhookTesting ? 0.6 : 1 }}
-              >
-                {customWebhookTesting ? "送信中..." : "テスト送信"}
-              </button>
             )}
-            {customWebhookTested && (
-              <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
-            )}
-          </div>
-        </MkCard>
+            <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <MkBtn variant="primary" size="sm" onClick={handleSaveCustomWebhook}>
+                {customWebhookSaving ? "保存中…" : "保存"}
+              </MkBtn>
+              {customWebhookConfigured && (
+                <button
+                  onClick={handleTestCustomWebhook}
+                  disabled={customWebhookTesting}
+                  style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: customWebhookTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: customWebhookTesting ? 0.6 : 1 }}
+                >
+                  {customWebhookTesting ? "送信中..." : "テスト送信"}
+                </button>
+              )}
+              {customWebhookTested && (
+                <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
+              )}
+            </div>
+          </MkCard>
+        )}
 
         {/* Delivery call notification target (荷物の配達/呼び出し) */}
         <MkCard style={{ gridColumn: "span 2" }}>
@@ -1857,11 +1871,15 @@ export default function AdminNotifyPage() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>荷物の配達（呼び出し）通知先</div>
-              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>キオスクの「配達の呼び出し」専用の通知先。Slack・Webhookは、上の「Slack」「カスタムWebhook」カードとは別のチャンネル／URLに切り替えられます。</div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>
+                {SHOW_CUSTOM_WEBHOOK
+                  ? "キオスクの「配達の呼び出し」専用の通知先。Slack・Webhookは、上の「Slack」「カスタムWebhook」カードとは別のチャンネル／URLに切り替えられます。"
+                  : "キオスクの「配達の呼び出し」専用の通知先。Slackは、上の「Slack」カードとは別のチャンネルに切り替えられます。"}
+              </div>
             </div>
           </div>
           <div style={{ marginBottom: 18, padding: "10px 14px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.25)", borderRadius: 8, fontSize: 12, color: "#7a5c00", lineHeight: 1.55 }}>
-            ここで別の送信先を設定しない場合、Slackは上の「Slack」カード、Webhookは上の「カスタムWebhook」カードの送信先へ届きます（Chatworkは上の「Chatwork」カードで設定したルームがそのまま配達の宛先です）
+            ここで別の送信先を設定しない場合、Slackは上の「Slack」カード{SHOW_CUSTOM_WEBHOOK && "、Webhookは上の「カスタムWebhook」カード"}の送信先へ届きます（Chatworkは上の「Chatwork」カードで設定したルームがそのまま配達の宛先です）
           </div>
 
           <div className="adm-autofit-lg">
@@ -1946,47 +1964,49 @@ export default function AdminNotifyPage() {
             </div>
 
             {/* Delivery Webhook */}
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15", flex: 1 }}>カスタムWebhook（配達）</div>
-                <MkPill tone={dlWebhookConfigured ? "live" : "off"}>{dlWebhookConfigured ? "設定済" : "未設定"}</MkPill>
-              </div>
-              <Field
-                label="Webhook URL"
-                hint={dlWebhookConfigured
-                  ? "配達専用のURLを設定済みです（URLは表示しません）。空欄のまま保存すると解除され、上の「カスタムWebhook」カードのURLへ届くようになります"
-                  : "未設定のあいだは、上の「カスタムWebhook」カードのURLへ届きます"}
-              >
-                <TextInput
-                  placeholder="https://hooks.example.com/..."
-                  mono
-                  value={dlWebhookUrl}
-                  onChange={setDlWebhookUrl}
-                />
-              </Field>
-              {dlWebhookError && (
-                <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
-                  {dlWebhookError}
+            {SHOW_CUSTOM_WEBHOOK && (
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1d1a15", flex: 1 }}>カスタムWebhook（配達）</div>
+                  <MkPill tone={dlWebhookConfigured ? "live" : "off"}>{dlWebhookConfigured ? "設定済" : "未設定"}</MkPill>
                 </div>
-              )}
-              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <MkBtn variant="primary" size="sm" onClick={handleSaveDlWebhook}>
-                  {dlWebhookSaving ? "保存中…" : "保存"}
-                </MkBtn>
-                {dlWebhookConfigured && (
-                  <button
-                    onClick={handleTestDlWebhook}
-                    disabled={dlWebhookTesting}
-                    style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: dlWebhookTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: dlWebhookTesting ? 0.6 : 1 }}
-                  >
-                    {dlWebhookTesting ? "送信中..." : "テスト送信"}
-                  </button>
+                <Field
+                  label="Webhook URL"
+                  hint={dlWebhookConfigured
+                    ? "配達専用のURLを設定済みです（URLは表示しません）。空欄のまま保存すると解除され、上の「カスタムWebhook」カードのURLへ届くようになります"
+                    : "未設定のあいだは、上の「カスタムWebhook」カードのURLへ届きます"}
+                >
+                  <TextInput
+                    placeholder="https://hooks.example.com/..."
+                    mono
+                    value={dlWebhookUrl}
+                    onChange={setDlWebhookUrl}
+                  />
+                </Field>
+                {dlWebhookError && (
+                  <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12 }}>
+                    {dlWebhookError}
+                  </div>
                 )}
-                {dlWebhookTested && (
-                  <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
-                )}
+                <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <MkBtn variant="primary" size="sm" onClick={handleSaveDlWebhook}>
+                    {dlWebhookSaving ? "保存中…" : "保存"}
+                  </MkBtn>
+                  {dlWebhookConfigured && (
+                    <button
+                      onClick={handleTestDlWebhook}
+                      disabled={dlWebhookTesting}
+                      style={{ padding: "6px 12px", fontSize: 13, border: "1px solid #efece5", borderRadius: 6, cursor: dlWebhookTesting ? "not-allowed" : "pointer", background: "#fffefb", color: "#6b6559", opacity: dlWebhookTesting ? 0.6 : 1 }}
+                    >
+                      {dlWebhookTesting ? "送信中..." : "テスト送信"}
+                    </button>
+                  )}
+                  {dlWebhookTested && (
+                    <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Delivery Push */}
             <div>
