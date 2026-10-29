@@ -340,6 +340,16 @@ const ESCALATE_CHOICES = [
   { sec: 600, label: "10分" },
 ];
 
+// API の認可エラーをそのまま見せても利用者は次に何をすべきか判断できないため、
+// この設定に必要な権限と具体的な対処を案内する。ほかのエラーは従来の詳細を保つ。
+function staffRoutesErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : "";
+  if (message === "Insufficient permissions") {
+    return "この設定を変更できるのはテナント管理者です。管理者アカウントでログインし直すか、テナント管理者に設定を依頼してください。";
+  }
+  return message || fallback;
+}
+
 const selectStyle: React.CSSProperties = {
   width: "100%", height: 34, border: "1px solid #d8d3c7", borderRadius: 7,
   background: "#fffefb", padding: "0 8px", fontSize: 12.5, color: "#2d2a24",
@@ -540,7 +550,7 @@ function StaffMasterEditor({
       await onChanged();
       return true;
     } catch (e: unknown) {
-      onError(e instanceof Error ? e.message : "担当者の更新に失敗しました");
+      onError(staffRoutesErrorMessage(e, "担当者の更新に失敗しました"));
       // 失敗時も読み直す。ほかの人が変更していて 409 になった場合、画面が古い
       // ままだと同じ操作を繰り返して同じところで止まるため、最新の内容を見せる。
       await onChanged();
@@ -670,7 +680,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
     try {
       setData(await api.getStaffRoutes(authToken));
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "設定の読み込みに失敗しました");
+      setError(staffRoutesErrorMessage(e, "設定の読み込みに失敗しました"));
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -724,7 +734,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
       setDraft(null);
       await reload();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "保存に失敗しました");
+      setError(staffRoutesErrorMessage(e, "保存に失敗しました"));
     } finally {
       setSaving(false);
     }
@@ -740,7 +750,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
       setConfirmClear(null);
       await reload();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "解除に失敗しました");
+      setError(staffRoutesErrorMessage(e, "解除に失敗しました"));
     } finally {
       setSaving(false);
     }
@@ -753,7 +763,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
     try {
       setTestResult({ staff, result: await api.testStaffRoute(authToken, staff, stage) });
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "テスト送信に失敗しました");
+      setError(staffRoutesErrorMessage(e, "テスト送信に失敗しました"));
     } finally {
       setTesting("");
     }
