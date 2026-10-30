@@ -579,7 +579,7 @@ export const api = {
   // Push notifications (admin)
   getPushVapidKey: (token: string) =>
     request<{ public_key: string | null }>("/notifications/push/vapid-public-key", {}, token),
-  subscribePush: (token: string, body: { endpoint: string; p256dh: string; auth: string }) =>
+  subscribePush: (token: string, body: { endpoint: string; p256dh: string; auth: string; os_name?: string }) =>
     request("/notifications/push/subscribe", { method: "POST", body: JSON.stringify(body) }, token),
   listPushSubscriptions: (token: string) =>
     request<PushSubscriptionInfo[]>("/notifications/push/subscriptions", {}, token),
@@ -590,7 +590,19 @@ export const api = {
 
   // Notification settings
   getNotificationSettings: (token: string) =>
-    request<Record<string, Record<string, string>>>("/notifications/settings", {}, token),
+    request<Record<string, Record<string, unknown>>>("/notifications/settings", {}, token),
+  getNotificationHealth: (token: string) =>
+    request<NotificationHealth>("/notifications/health", {}, token),
+  updateNotificationChannelEnabled: (
+    token: string,
+    channel: "slack" | "chatwork" | "push",
+    enabled: boolean,
+  ) =>
+    request<{ ok: boolean }>(
+      `/notifications/settings/channel-enabled/${channel}`,
+      { method: "PUT", body: JSON.stringify({ enabled }) },
+      token,
+    ),
 
   // Slack OAuth (Bot Token + chat.postMessage) — "Slackに追加" flow. The customer never
   // types/sees a bot token; it is stored server-side and never returned (only status).
@@ -626,6 +638,10 @@ export const api = {
   saveStaffRoute: (token: string, body: StaffRouteInput) =>
     request<{ ok: boolean; route: StaffNotificationRoute }>(
       "/notifications/staff-routes", { method: "PUT", body: JSON.stringify(body) }, token),
+  updateNotificationContinueTime: (token: string, timeoutSec: number) =>
+    request<{ ok: boolean; timeout_sec: number }>(
+      "/notifications/staff-routes/notification-timeout",
+      { method: "PUT", body: JSON.stringify({ timeout_sec: timeoutSec }) }, token),
   deleteStaffRoute: (token: string, routeId: string) =>
     request<{ ok: boolean }>(
       `/notifications/staff-routes/${encodeURIComponent(routeId)}`, { method: "DELETE" }, token),
@@ -939,6 +955,9 @@ export interface ReceptionLog extends ReceptionCreate {
   created_at: string;
   /** 代理通知(応答が無いときのエスカレーション)を送った時刻。未送信は null。 */
   escalated_at?: string | null;
+  decided_by_name?: string | null;
+  decision_applied?: boolean | null;
+  decision_expired?: boolean | null;
 }
 
 /** 訪問先担当者ごとの通知先と代理通知の設定（管理画面「通知設定」）。 */
@@ -987,6 +1006,9 @@ export interface StaffNotificationRoutesResponse {
   users: StaffPushUser[];
   smtp_enabled: boolean;
   default_escalate_sec: number;
+  notification_continue_sec: number;
+  min_notification_timeout_sec: number;
+  max_notification_timeout_sec: number;
   min_escalate_sec: number;
   max_escalate_sec: number;
 }
@@ -1075,7 +1097,16 @@ export interface PushSubscriptionInfo {
   endpoint: string;
   display_endpoint: string;
   user_id: string | null;
+  os_name: string;
   created_at: string;
+}
+
+export interface NotificationHealth {
+  issues: { channel: "slack" | "chatwork" | "push"; failed_at: string; target: string }[];
+  issue_count: number;
+  configured: Record<"slack" | "chatwork" | "push", boolean>;
+  enabled: Record<"slack" | "chatwork" | "push", boolean>;
+  no_active_channel: boolean;
 }
 
 export interface KioskMediaItem {

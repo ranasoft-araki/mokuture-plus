@@ -26,9 +26,12 @@ from app.database import AsyncSessionLocal
 from app.models.notification import NotificationSetting, PushSubscription
 from app.models.reception import ReceptionLog
 from app.models.tenant import Tenant
+from app.models.user import User
 from app.services import analytics as analytics_service
 from app.services import analytics_link
 from app.services import chatwork
+from app.services import notification_channels
+from app.services import notification_health
 from app.services import email as email_service
 from app.services import staff_routing
 from app.services.crypto import decrypt_dict
@@ -125,6 +128,124 @@ async def fire_reception_notifications(
         logger.warning("reception notification failed (tenant=%s, reception=%s)", tenant_id, log.id)
 
 
+async def fire_decision_notifications(tenant_id: str, log_id: str) -> None:
+    """Tell both the original and escalated recipients who won the response race."""
+    try:
+        async with AsyncSessionLocal() as db:
+            log = await db.get(ReceptionLog, log_id)
+            if log is None or log.tenant_id != tenant_id or log.state not in _DECISION_LABELS:
+                return
+            primary = await staff_routing.resolve_primary(db, tenant_id, log.staff)
+            destinations = [primary]
+            if log.escalated_at is not None:
+                fallback = await staff_routing.resolve_fallback(db, tenant_id, log.staff)
+                if fallback is not None:
+                    destinations.append(fallback)
+
+            expired = getattr(log, "decided_via", None) == "kiosk_timeout"
+            actor = (log.decided_by_name or "担当者").strip()
+            label = _DECISION_LABELS[log.state]
+            if expired:
+                text = (
+                    "⌛ 対応時間切れのため、キオスクを電話案内に切り替えました。\n"
+                    f"{with_honorific(log.visitor_name)}（{log.company or '—'}）"
+                )
+            else:
+                text = f"✅ {actor}さんが対応済みです（{label}）\n{with_honorific(log.visitor_name)}（{log.company or '—'}）"
+
+            default_slack = await staff_routing.load_default_slack_config(db, tenant_id)
+            slack_enabled = await notification_channels.is_enabled(db, tenant_id, "slack")
+            slack_targets: dict[str, dict] = {}
+            for dest in destinations:
+                for config, target_label in staff_routing.slack_send_configs(
+                    default_slack, dest, default_enabled=slack_enabled
+                ):
+                    key = str(config.get("channel_id") or config.get("webhook_url") or target_label)
+                    slack_targets[key] = config
+            for config in slack_targets.values():
+                try:
+                    await SlackNotifier.send_to_config(config, text)
+                except Exception:
+                    pass
+
+            if settings.smtp_enabled:
+                emails = {addr for dest in destinations for addr in dest.emails if addr}
+                tenant = await db.get(Tenant, tenant_id)
+                tenant_name = tenant.name if tenant else settings.app_name
+                subject = f"【{tenant_name}】受付対応時間切れのお知らせ" if expired else f"【{tenant_name}】受付対応のお知らせ"
+                if expired:
+                    plain = text
+                    html = (
+                        "<p><strong>対応時間切れのため、キオスクを電話案内に切り替えました。</strong></p>"
+                        f"<p>{escape(with_honorific(log.visitor_name))}（{escape(log.company or '—')}）</p>"
+                    )
+                else:
+                    plain = f"{actor}さんが{label}で対応しました。\n\n{text}"
+                    html = (
+                        f"<p><strong>{escape(actor)}さんが{escape(label)}で対応しました。</strong></p>"
+                        f"<p>{escape(with_honorific(log.visitor_name))}（{escape(log.company or '—')}）</p>"
+                    )
+                for addr in emails:
+                    try:
+                        await email_service.send_email(
+                            to=addr, subject=subject, html=html, text=plain,
+                            host=settings.smtp_host, port=settings.smtp_port,
+                            username=settings.smtp_username, password=settings.smtp_password,
+                            from_addr=settings.smtp_from or settings.smtp_username,
+                            from_name=settings.smtp_from_name or tenant_name,
+                            starttls=settings.smtp_starttls, use_ssl=settings.smtp_ssl,
+                        )
+                    except Exception:
+                        pass
+
+            token = await chatwork.load_api_token(db, tenant_id)
+            if token:
+                rooms: set[str] = set()
+                for dest in destinations:
+                    rooms.update(room_id for room_id, _ in staff_routing.chatwork_send_rooms(dest))
+                for room_id in rooms:
+                    try:
+                        await chatwork.send_message(token, room_id, text)
+                    except Exception:
+                        pass
+
+            private_key = settings.vapid_private_key
+            if private_key:
+                push_by_endpoint: dict[str, PushSubscription] = {}
+                for index, dest in enumerate(destinations):
+                    escalated = (log.staff or "") if index > 0 else ""
+                    for sub in await push_targets(db, tenant_id, dest, escalated):
+                        if sub.user_id != log.decided_by_user_id:
+                            push_by_endpoint[sub.endpoint] = sub
+                for sub in push_by_endpoint.values():
+                    try:
+                        await send_push(
+                            endpoint=sub.endpoint,
+                            p256dh=sub.p256dh,
+                            auth=sub.auth_key,
+                            title="受付対応時間切れのお知らせ" if expired else "受付対応のお知らせ",
+                            body=(
+                                "対応時間切れのため、キオスクを電話案内に切り替えました。"
+                                if expired else f"{actor}さんが{label}で対応しました。"
+                            ),
+                            url=f"/{tenant_id}/admin/reception?respond={log.id}",
+                            private_key=private_key,
+                            subject=settings.vapid_subject,
+                            tag=f"reception-decided-{log.id}",
+                        )
+                    except Exception:
+                        pass
+    except Exception:
+        logger.warning("decision notification failed (tenant=%s, reception=%s)", tenant_id, log_id)
+
+
+_DECISION_LABELS = {
+    "accepted": "受付",
+    "phone": "電話",
+    "declined": "お断り",
+}
+
+
 # ── Slack ──────────────────────────────────────────────────────────────────────
 
 async def _notify_slack(
@@ -132,7 +253,10 @@ async def _notify_slack(
 ) -> bool | None:
     """True=1件以上成功 / False=全滅 / None=宛先が無く送らなかった（分析ログの判定に使う）。"""
     default_config = await staff_routing.load_default_slack_config(db, tenant_id)
-    targets = staff_routing.slack_send_configs(default_config, dest)
+    default_enabled = await notification_channels.is_enabled(db, tenant_id, "slack")
+    targets = staff_routing.slack_send_configs(
+        default_config, dest, default_enabled=default_enabled
+    )
     if not targets:
         return None
     try:
@@ -149,6 +273,7 @@ async def _notify_slack(
         return False
 
     any_ok = False
+    failed_labels: list[str] = []
     for config, label in targets:
         # 署名シークレット設定時のみ、受付/電話/お断りの対応ボタン(Block Kit)を付ける。
         # Bot Token 経路のときだけ(webhook はインタラクション不可)。押下は署名トークンで検証。
@@ -165,11 +290,18 @@ async def _notify_slack(
             ok = False
         any_ok = any_ok or bool(ok)
         if not ok:
+            failed_labels.append(label)
             # 受付は失敗させない(best-effort)。Bot Token/Webhook URL は絶対に出さない。
             logger.warning(
                 "Slack reception notification failed (tenant=%s, reception=%s, target=%s)",
                 tenant_id, log.id, label,
             )
+    await notification_health.record_result(
+        tenant_id,
+        "slack",
+        failed=bool(failed_labels),
+        target="、".join(failed_labels),
+    )
     return any_ok
 
 
@@ -203,7 +335,9 @@ async def push_targets(
             return targeted
 
     # ここから先は「担当者ごとの指定が無い／効かなかった」場合。
-    if dest.use_default or escalated_from:
+    if (dest.use_default or escalated_from) and await notification_channels.is_enabled(
+        db, tenant_id, "push"
+    ):
         return all_subs
     return []
 
@@ -240,8 +374,18 @@ async def _notify_chatwork(
         escalated_from=escalated_from or None,
     )
     any_ok = False
-    for room_id, _label in rooms:
-        any_ok = await chatwork.send_message(token, room_id, text) or any_ok
+    failed_labels: list[str] = []
+    for room_id, label in rooms:
+        ok = await chatwork.send_message(token, room_id, text)
+        any_ok = ok or any_ok
+        if not ok:
+            failed_labels.append(label or room_id)
+    await notification_health.record_result(
+        tenant_id,
+        "chatwork",
+        failed=bool(failed_labels),
+        target="、".join(failed_labels),
+    )
     return any_ok
 
 
@@ -287,10 +431,29 @@ async def _notify_push(
     from app.api.reception import build_decision_push_extras  # 遅延 import で循環参照を避ける
 
     data, actions = build_decision_push_extras(tenant_id, log)
+    user_ids = {sub.user_id for sub in subs if sub.user_id}
+    users = {}
+    if user_ids:
+        rows = (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
+        users = {user.id: user for user in rows}
     any_ok = False
+    failed = False
     for sub in subs:
         try:
-            await send_push(
+            push_data = data
+            if sub.user_id:
+                recipient = users.get(sub.user_id)
+                recipient_name = (
+                    ((recipient.name or "").strip() or recipient.email.split("@", 1)[0])
+                    if recipient else "担当者"
+                )
+                push_data, _ = build_decision_push_extras(
+                    tenant_id,
+                    log,
+                    actor_user_id=sub.user_id,
+                    actor_name=recipient_name,
+                )
+            ok, error = await send_push(
                 endpoint=sub.endpoint,
                 p256dh=sub.p256dh,
                 auth=sub.auth_key,
@@ -301,12 +464,18 @@ async def _notify_push(
                 subject=settings.vapid_subject,
                 # 代理通知は元の通知を上書きせず別タグで並べる(見逃しを防ぐ)。
                 tag=f"reception-{log.id}" + ("-esc" if escalated_from else ""),
-                data=data,
+                data=push_data,
                 actions=actions,
             )
-            any_ok = True
+            any_ok = any_ok or ok
+            failed = failed or not ok
+            if not ok and notification_health.push_subscription_expired(error):
+                await notification_health.delete_expired_push_subscription(sub.id)
         except Exception:
-            pass  # fire-and-forget: 死んだ購読で全体を止めない
+            failed = True  # fire-and-forget: 死んだ購読で全体を止めない
+    await notification_health.record_result(
+        tenant_id, "push", failed=failed, target="登録端末"
+    )
     return any_ok
 
 

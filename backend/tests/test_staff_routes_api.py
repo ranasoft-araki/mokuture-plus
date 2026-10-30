@@ -14,6 +14,7 @@ from app.models.reception import ReceptionLog
 from app.models.staff_route import StaffNotificationRoute
 from app.models.tenant import Tenant
 from app.services import staff_routing
+from app.api.kiosk import _notification_timeout_sec
 from conftest import (  # type: ignore[import-not-found]
     add_push_subscription, add_reception, add_route, add_user,
     set_notification_setting, set_staff_list,
@@ -61,6 +62,30 @@ async def test_一覧にChatworkの連携状態が出る(staff_client, tenant):
     await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": "111"})
     data = staff_client.get(API).json()
     assert data["chatwork"]["connected"] is True
+
+
+async def test_通知継続時間の初期値が一覧に出る(staff_client, tenant):
+    data = staff_client.get(API).json()
+    assert data["notification_continue_sec"] == 90
+
+
+async def test_共通の通知継続時間を保存できる(staff_client, tenant):
+    r = staff_client.put(f"{API}/notification-timeout", json={"timeout_sec": 180})
+    assert r.status_code == 200
+    assert r.json()["timeout_sec"] == 180
+    assert staff_client.get(API).json()["notification_continue_sec"] == 180
+
+
+async def test_kioskの通知継続時間は代理開始までと代理継続の合計(tenant):
+    await add_route(
+        tenant.id, "田中太郎", fallback="佐藤花子", escalate_after_sec=60,
+    )
+    async with AsyncSessionLocal() as db:
+        current_tenant = await db.get(Tenant, tenant.id)
+        current_tenant.notification_continue_sec = 120
+        await db.commit()
+        assert await _notification_timeout_sec(db, current_tenant, "田中太郎") == 180
+        assert await _notification_timeout_sec(db, current_tenant, "未設定の担当者") == 120
 
 
 # ── 担当者マスター ─────────────────────────────────────────────────────────────

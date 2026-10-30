@@ -20,6 +20,8 @@ from app.models.user import User
 from app.services.auth import create_slack_state_token, verify_slack_state_token
 from app.services.crypto import encrypt_dict, decrypt_dict
 from app.services import chatwork as chatwork_service
+from app.services import notification_channels
+from app.services import notification_health
 from app.services.slack import SlackNotifier, SlackOAuthError, SlackApiError
 from app.services.webpush import send_push
 from app.config import settings
@@ -52,12 +54,18 @@ class PushDeliveryConfig(BaseModel):
     enabled: bool = True
 
 
+class ChannelEnabledConfig(BaseModel):
+    enabled: bool = True
+
+
 @router.get("/settings")
 async def get_settings(user: User = Depends(require_roles("admin", "superadmin")), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(NotificationSetting).where(NotificationSetting.tenant_id == user.tenant_id))
     settings_list = result.scalars().all()
     out = {}
     for s in settings_list:
+        if s.type.startswith("notification_health_"):
+            continue
         try:
             config = decrypt_dict(s.config_json) if s.config_json and s.config_json != "{}" else {}
         except Exception:
@@ -77,6 +85,51 @@ async def get_settings(user: User = Depends(require_roles("admin", "superadmin")
     return out
 
 
+@router.get("/health")
+async def get_notification_health(
+    user: User = Depends(require_roles("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Failures visible in the admin UI plus whether any usable channel exists."""
+    rows = (await db.execute(select(NotificationSetting).where(
+        NotificationSetting.tenant_id == user.tenant_id,
+        NotificationSetting.type.in_(("slack", "chatwork")),
+    ))).scalars().all()
+    configs: dict[str, dict] = {}
+    for row in rows:
+        try:
+            configs[row.type] = decrypt_dict(row.config_json)
+        except Exception:
+            configs[row.type] = {}
+    slack = configs.get("slack", {})
+    chatwork = configs.get("chatwork", {})
+    push_count = len((await db.execute(select(PushSubscription.id).where(
+        PushSubscription.tenant_id == user.tenant_id,
+    ))).scalars().all())
+    enabled = {
+        channel: await notification_channels.is_enabled(db, user.tenant_id, channel)
+        for channel in notification_channels.CHANNELS
+    }
+    configured = {
+        "slack": bool(
+            slack.get("webhook_url")
+            or (slack.get("bot_access_token") and slack.get("channel_id"))
+        ),
+        "chatwork": bool(chatwork.get("api_token")),
+        "push": push_count > 0,
+    }
+    issues = await notification_health.get_issues(db, user.tenant_id)
+    return {
+        "issues": issues,
+        "issue_count": len(issues),
+        "configured": configured,
+        "enabled": enabled,
+        "no_active_channel": not any(
+            configured[channel] and enabled[channel] for channel in notification_channels.CHANNELS
+        ),
+    }
+
+
 # NOTE: 受付用 Slack (type="slack") は OAuth 連携（/slack/oauth/url → /slack/callback）
 # のみで設定する。Webhook URL を手入力/上書きする PUT /settings/slack は廃止した
 # （顧客に Webhook URL を触らせない方針・OAuth バイパス防止）。配達用 slack_delivery も
@@ -94,6 +147,7 @@ async def update_chatwork(
     # テスト送信はトークンさえあれば使える）。ルームを設定すると、それが**配達の呼び出し
     # 専用の宛先**になる（受付通知には使われない。common room is delivery-only）。
     await _upsert_chatwork(user.tenant_id, "chatwork", body, db)
+    await notification_health.clear(user.tenant_id, "chatwork")
     return {"ok": True}
 
 
@@ -166,6 +220,27 @@ async def update_push_delivery(
     registered devices (shared with reception); this only enables/disables it for
     the 配達の呼び出し flow. Default = enabled (see app.api.kiosk.call-staff)."""
     await _upsert_setting(user.tenant_id, "push_delivery", {"enabled": bool(body.enabled)}, db)
+    return {"ok": True}
+
+
+@router.put("/settings/channel-enabled/{channel}")
+async def update_channel_enabled(
+    channel: str,
+    body: ChannelEnabledConfig,
+    user: User = Depends(require_roles("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Enable/disable shared notifications without deleting integration settings."""
+    if channel not in notification_channels.CHANNELS:
+        raise HTTPException(status_code=422, detail="invalid notification channel")
+    await _upsert_setting(
+        user.tenant_id,
+        notification_channels.setting_type(channel),
+        {"enabled": bool(body.enabled)},
+        db,
+    )
+    if not body.enabled:
+        await notification_health.clear(user.tenant_id, channel)
     return {"ok": True}
 
 
@@ -603,6 +678,7 @@ async def slack_set_channel(
         config["channel_name"] = channel_name
         config["updated_at"] = now
         await _upsert_setting(user.tenant_id, "slack", config, db)
+    await notification_health.clear(user.tenant_id, "slack")
     return {"ok": True, "channel_name": channel_name}
 
 
@@ -621,6 +697,7 @@ async def slack_disconnect(
     )
     await db.commit()
     await _clear_stale_delivery_channel_override(user.tenant_id, db)
+    await notification_health.clear(user.tenant_id, "slack")
     return {"ok": True}
 
 
@@ -752,13 +829,23 @@ async def slack_interactions(
     if not log or log.tenant_id != tenant_id:
         return {"text": "対象の受付が見つかりません。"}
 
-    state = await _apply_decision(db, log, decision)
+    slack_user = payload.get("user") or {}
+    who = slack_user.get("real_name") or slack_user.get("username") or slack_user.get("name") or "Slack担当者"
+    outcome = await _apply_decision(
+        db, log, decision, actor_name=who, actor_user_id=slack_user.get("id"), via="slack"
+    )
+    if outcome.applied:
+        background.add_task(reception_notify.fire_decision_notifications, log.tenant_id, log.id)
 
     # 元メッセージを「対応済み」に置換（ボタン除去）。押した人も添える。response_url は30分/5回有効。
-    label = _DECISION_JP.get(state, state)
-    who = (payload.get("user") or {}).get("username") or (payload.get("user") or {}).get("name") or ""
+    label = _DECISION_JP.get(outcome.state, outcome.state)
+    who = outcome.decided_by_name
     orig_text = (payload.get("message") or {}).get("text") or "来客の受付"
-    ctx = f"✅ 対応済み：*{label}*" + (f"（{who}）" if who else "")
+    ctx = (
+        "⌛ 対応時間切れです。キオスクは電話案内に切り替わりました。"
+        if outcome.decision_expired
+        else f"✅ 対応済み：*{label}*" + (f"（{who}）" if who else "")
+    )
     updated = {
         "replace_original": True,
         "text": orig_text,

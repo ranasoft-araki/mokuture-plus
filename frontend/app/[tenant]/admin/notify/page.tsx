@@ -3,8 +3,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
-import { api, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffPushUser, type StaffRouteTestResult } from "@/lib/api";
-import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, matchesVapidKey, type PushStatus } from "@/lib/push";
+import { api, type NotificationHealth, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffPushUser, type StaffRouteTestResult } from "@/lib/api";
+import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, getClientOsName, matchesVapidKey, type PushStatus } from "@/lib/push";
 import { getAccessToken } from "@/lib/auth";
 
 // カスタムWebhook は当面、管理画面に出さない（送信の仕組みと API はそのまま）。
@@ -43,6 +43,39 @@ function TextInput({ placeholder, mono, value, onChange }: { placeholder?: strin
   );
 }
 
+function NotificationToggle({
+  enabled,
+  saving,
+  error,
+  onChange,
+}: {
+  enabled: boolean;
+  saving: boolean;
+  error?: string;
+  onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 13px", marginBottom: 16, background: "#f4f1ea", border: "1px solid #efece5", borderRadius: 8 }}>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={enabled}
+        aria-label="通知のオン・オフ"
+        disabled={saving}
+        onClick={() => onChange(!enabled)}
+        style={{ width: 38, height: 22, padding: 2, border: "none", borderRadius: 999, background: enabled ? "#4a7c4e" : "#c8c2b7", cursor: saving ? "wait" : "pointer", opacity: saving ? 0.65 : 1, transition: "background 0.15s", flexShrink: 0 }}
+      >
+        <span style={{ display: "block", width: 18, height: 18, borderRadius: "50%", background: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,0.2)", transform: enabled ? "translateX(16px)" : "translateX(0)", transition: "transform 0.15s" }} />
+      </button>
+      <div>
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: "#2d2a24" }}>{saving ? "保存中…" : enabled ? "通知する" : "通知しない"}</div>
+        <div style={{ fontSize: 10.5, color: "#8a8378", marginTop: 2 }}>連携情報は保持されます。担当者ごとに指定した通知先には影響しません。</div>
+        {error && <div style={{ fontSize: 10.5, color: "#a84238", marginTop: 4 }}>{error}</div>}
+      </div>
+    </div>
+  );
+}
+
 // Official Slack logo mark (4-color hash).
 function SlackMark({ size = 20 }: { size?: number }) {
   return (
@@ -60,10 +93,10 @@ function SlackMark({ size = 20 }: { size?: number }) {
 }
 
 // ── Push Push Panel ────────────────────────────────────────────────────
-function PushPanel({ authToken }: { authToken: string }) {
+function PushPanel({ authToken, notificationsEnabled, toggleSaving, toggleError, onToggle, onHealthChanged }: { authToken: string; notificationsEnabled: boolean; toggleSaving: boolean; toggleError?: string; onToggle: (enabled: boolean) => void; onHealthChanged: () => void }) {
   const [vapidKey, setVapidKey] = useState<string | null>(null);
   const [isSubscribed, setIsSubscribed] = useState(false);
-  const [subscriptions, setSubscriptions] = useState<{ id: string; endpoint: string; display_endpoint: string; created_at: string }[]>([]);
+  const [subscriptions, setSubscriptions] = useState<{ id: string; endpoint: string; display_endpoint: string; os_name: string; created_at: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [testSent, setTestSent] = useState(false);
@@ -80,6 +113,19 @@ function PushPanel({ authToken }: { authToken: string }) {
         getCurrentPushSubscription(),
       ]);
       setVapidKey(keyRes.public_key);
+      const own = sub ? subs.find((s) => s.endpoint === sub.endpoint) : undefined;
+      const osName = getClientOsName();
+      // 既存購読には OS 列が無かったため、このブラウザの行は画面を開いた時点で補完する。
+      if (sub && own && own.os_name === "不明") {
+        const json = sub.toJSON();
+        await api.subscribePush(authToken, {
+          endpoint: sub.endpoint,
+          p256dh: json.keys?.p256dh ?? "",
+          auth: json.keys?.auth ?? "",
+          os_name: osName,
+        });
+        own.os_name = osName;
+      }
       setSubscriptions(subs);
       // Only "receiving" if this browser's subscription uses the current key and the
       // server still has it — otherwise offer to register again.
@@ -127,10 +173,12 @@ function PushPanel({ authToken }: { authToken: string }) {
         endpoint: sub.endpoint,
         p256dh: json.keys?.p256dh ?? "",
         auth: json.keys?.auth ?? "",
+        os_name: getClientOsName(),
       });
       setIsSubscribed(true);
       setPushStatus(getPushStatus());
       await reload();
+      onHealthChanged();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "登録に失敗しました");
     } finally {
@@ -152,6 +200,7 @@ function PushPanel({ authToken }: { authToken: string }) {
       }
       setIsSubscribed(false);
       await reload();
+      onHealthChanged();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "登録解除に失敗しました");
     } finally {
@@ -180,6 +229,7 @@ function PushPanel({ authToken }: { authToken: string }) {
   const handleDeleteSub = async (endpoint: string) => {
     await api.deletePushSubscription(authToken, endpoint);
     await reload();
+    onHealthChanged();
   };
 
   if (loading) {
@@ -188,6 +238,7 @@ function PushPanel({ authToken }: { authToken: string }) {
 
   return (
     <div>
+      <NotificationToggle enabled={notificationsEnabled} saving={toggleSaving} error={toggleError} onChange={onToggle} />
       {/* Tabs */}
       <div style={{ display: "flex", borderBottom: "1px solid #efece5", marginBottom: 20 }}>
         {[
@@ -304,6 +355,7 @@ function PushPanel({ authToken }: { authToken: string }) {
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 11.5, color: "#2d2a24", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.display_endpoint}</div>
+                    <div style={{ fontSize: 10.5, color: "#a8a198", marginTop: 2 }}>OS: {s.os_name || "不明"}</div>
                     <div style={{ fontSize: 10.5, color: "#a8a198", marginTop: 2 }}>登録日: {new Date(s.created_at).toLocaleString("ja-JP")}</div>
                   </div>
                   <button
@@ -334,11 +386,25 @@ function PushPanel({ authToken }: { authToken: string }) {
 const ESCALATE_CHOICES = [
   { sec: 30, label: "30秒" },
   { sec: 60, label: "1分" },
+  { sec: 90, label: "1分30秒" },
   { sec: 120, label: "2分" },
   { sec: 180, label: "3分" },
   { sec: 300, label: "5分" },
   { sec: 600, label: "10分" },
+  { sec: 900, label: "15分" },
+  { sec: 1800, label: "30分" },
+  { sec: 3600, label: "60分" },
 ];
+
+// API の認可エラーをそのまま見せても利用者は次に何をすべきか判断できないため、
+// この設定に必要な権限と具体的な対処を案内する。ほかのエラーは従来の詳細を保つ。
+function staffRoutesErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : "";
+  if (message === "Insufficient permissions") {
+    return "この設定を変更できるのはテナント管理者です。管理者アカウントでログインし直すか、テナント管理者に設定を依頼してください。";
+  }
+  return message || fallback;
+}
 
 const selectStyle: React.CSSProperties = {
   width: "100%", height: 34, border: "1px solid #d8d3c7", borderRadius: 7,
@@ -540,7 +606,7 @@ function StaffMasterEditor({
       await onChanged();
       return true;
     } catch (e: unknown) {
-      onError(e instanceof Error ? e.message : "担当者の更新に失敗しました");
+      onError(staffRoutesErrorMessage(e, "担当者の更新に失敗しました"));
       // 失敗時も読み直す。ほかの人が変更していて 409 になった場合、画面が古い
       // ままだと同じ操作を繰り返して同じところで止まるため、最新の内容を見せる。
       await onChanged();
@@ -661,6 +727,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
   const [slackUsers, setSlackUsers] = useState<{ id: string; name: string }[] | null>(null);
   // 解除は取り消せないので2段階にする（Slack連携解除と同じ方式。JSダイアログは使わない）。
   const [confirmClear, setConfirmClear] = useState<string | null>(null);
+  const [savingDefaultTimeout, setSavingDefaultTimeout] = useState(false);
 
   // quiet=true は「読み込み中…」に落とさずデータだけ差し替える。担当者の追加・
   // 並べ替えのたびにパネル全体がアンマウントされ、開いていた編集欄が閉じるのを防ぐ。
@@ -670,7 +737,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
     try {
       setData(await api.getStaffRoutes(authToken));
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "設定の読み込みに失敗しました");
+      setError(staffRoutesErrorMessage(e, "設定の読み込みに失敗しました"));
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -724,7 +791,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
       setDraft(null);
       await reload();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "保存に失敗しました");
+      setError(staffRoutesErrorMessage(e, "保存に失敗しました"));
     } finally {
       setSaving(false);
     }
@@ -740,7 +807,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
       setConfirmClear(null);
       await reload();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "解除に失敗しました");
+      setError(staffRoutesErrorMessage(e, "解除に失敗しました"));
     } finally {
       setSaving(false);
     }
@@ -753,9 +820,22 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
     try {
       setTestResult({ staff, result: await api.testStaffRoute(authToken, staff, stage) });
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "テスト送信に失敗しました");
+      setError(staffRoutesErrorMessage(e, "テスト送信に失敗しました"));
     } finally {
       setTesting("");
+    }
+  };
+
+  const saveDefaultTimeout = async (timeoutSec: number) => {
+    setSavingDefaultTimeout(true);
+    setError("");
+    try {
+      await api.updateNotificationContinueTime(authToken, timeoutSec);
+      await reload(true);
+    } catch (e: unknown) {
+      setError(staffRoutesErrorMessage(e, "通知継続時間の保存に失敗しました"));
+    } finally {
+      setSavingDefaultTimeout(false);
     }
   };
 
@@ -784,6 +864,22 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
         onChanged={() => reload(true)}
         onError={setError}
       />
+
+      <div style={{ border: "1px solid #efece5", borderRadius: 9, background: "#fffefb", padding: "14px", marginBottom: 16 }}>
+        <Field
+          label="通知継続時間"
+          hint="担当者が未設定の場合は最初の通知後から、代理通知がある場合は代理への通知後から、この時間だけ応答を待って「電話してください」を表示します。"
+        >
+          <select
+            value={String(data.notification_continue_sec)}
+            disabled={savingDefaultTimeout}
+            onChange={(e) => saveDefaultTimeout(Number(e.target.value))}
+            style={selectStyle}
+          >
+            {ESCALATE_CHOICES.map((c) => <option key={c.sec} value={c.sec}>{c.label}</option>)}
+          </select>
+        </Field>
+      </div>
 
       {names.length === 0 && (
         <div style={{ padding: "16px 18px", background: "#f4f1ea", border: "1px solid #efece5", borderRadius: 8, fontSize: 12.5, color: "#6b6559", lineHeight: 1.8 }}>
@@ -1082,6 +1178,13 @@ export default function AdminNotifyPage() {
   const [cwError, setCwError] = useState("");
   const [cwTested, setCwTested] = useState(false);
 
+  const [slackNotificationsEnabled, setSlackNotificationsEnabled] = useState(true);
+  const [chatworkNotificationsEnabled, setChatworkNotificationsEnabled] = useState(true);
+  const [pushNotificationsEnabled, setPushNotificationsEnabled] = useState(true);
+  const [channelToggleSaving, setChannelToggleSaving] = useState<"" | "slack" | "chatwork" | "push">("");
+  const [channelToggleError, setChannelToggleError] = useState<{ channel: "slack" | "chatwork" | "push"; message: string } | null>(null);
+  const [notificationHealth, setNotificationHealth] = useState<NotificationHealth | null>(null);
+
   // 「担当者ごとの通知先」パネルは別フェッチなので、ここでの連携/解除/保存を伝えて
   // 読み直させる合図（単調増加カウンタ。0=初回マウント扱いで無視される）。
   const [staffRoutesRefresh, setStaffRoutesRefresh] = useState(0);
@@ -1189,6 +1292,8 @@ export default function AdminNotifyPage() {
     if (!authToken) return;
     try {
       const settings = await api.getNotificationSettings(authToken);
+      const health = await api.getNotificationHealth(authToken).catch(() => null);
+      if (health) setNotificationHealth(health);
       const cw = settings["chatwork"] ?? {};
       const wh = settings["webhook"] ?? {};
       if (cw["api_token"]) setCwConfigured(true);
@@ -1204,12 +1309,45 @@ export default function AdminNotifyPage() {
       // push_delivery stores { enabled: bool }; default ON when unset
       const dlPush = (settings["push_delivery"] ?? {}) as Record<string, unknown>;
       setDlPushEnabled(dlPush["enabled"] !== false);
+
+      setSlackNotificationsEnabled(settings["channel_enabled_slack"]?.["enabled"] !== false);
+      setChatworkNotificationsEnabled(settings["channel_enabled_chatwork"]?.["enabled"] !== false);
+      setPushNotificationsEnabled(settings["channel_enabled_push"]?.["enabled"] !== false);
     } catch {
       /* leave previous state */
     }
   }, [authToken]);
 
   useEffect(() => { reloadNotificationSettings(); }, [reloadNotificationSettings]);
+
+  const refreshNotificationHealth = useCallback(async () => {
+    try {
+      setNotificationHealth(await api.getNotificationHealth(authToken));
+      window.dispatchEvent(new Event("notification-health-changed"));
+    } catch { /* 通知設定そのものの操作は成功扱いのままにする */ }
+  }, [authToken]);
+
+  const handleToggleChannel = async (channel: "slack" | "chatwork" | "push", enabled: boolean) => {
+    const setters = {
+      slack: setSlackNotificationsEnabled,
+      chatwork: setChatworkNotificationsEnabled,
+      push: setPushNotificationsEnabled,
+    };
+    const setEnabled = setters[channel];
+    setEnabled(enabled);
+    setChannelToggleSaving(channel);
+    setChannelToggleError(null);
+    try {
+      await api.updateNotificationChannelEnabled(authToken, channel, enabled);
+      setNotificationHealth(await api.getNotificationHealth(authToken));
+      window.dispatchEvent(new Event("notification-health-changed"));
+    } catch (e: unknown) {
+      setEnabled(!enabled);
+      setChannelToggleError({ channel, message: e instanceof Error ? e.message : "通知設定の保存に失敗しました" });
+    } finally {
+      setChannelToggleSaving("");
+    }
+  };
 
   const handleConnectSlack = async () => {
     setSlackConnecting(true);
@@ -1240,6 +1378,7 @@ export default function AdminNotifyPage() {
       setSlackChannels(null);
       setSlackUsers(null);
       await loadSlack();
+      await refreshNotificationHealth();
       bumpStaffRoutesRefresh();
     } catch (e: unknown) {
       setSlackError(e instanceof Error ? e.message : "連携解除に失敗しました");
@@ -1263,6 +1402,7 @@ export default function AdminNotifyPage() {
       setSlackShowPicker(false);
       setSlackChannelId("");
       await loadSlack();
+      await refreshNotificationHealth();
       bumpStaffRoutesRefresh();
     } catch (e: unknown) {
       setSlackError(e instanceof Error ? e.message : "チャンネルの保存に失敗しました");
@@ -1287,6 +1427,7 @@ export default function AdminNotifyPage() {
       setCwConfigured(true);
       setCwApiToken("");
       setCwRoomId("");
+      await refreshNotificationHealth();
       bumpStaffRoutesRefresh();
     } catch (e: unknown) {
       setCwError(e instanceof Error ? e.message : "保存に失敗しました");
@@ -1498,6 +1639,25 @@ export default function AdminNotifyPage() {
       breadcrumb="ホーム / 設定 / 通知"
       subtitle="Slack · Chatwork · プッシュ通知の連携と受信者管理"
     >
+      {notificationHealth?.issues.map((issue) => {
+        const label = issue.channel === "slack" ? "Slack" : issue.channel === "chatwork" ? "Chatwork" : "プッシュ通知";
+        const action = issue.channel === "push"
+          ? "登録端末の通知許可を確認し、必要に応じて端末を登録し直してください。"
+          : "通知先が削除・変更されていないか確認し、通知先を設定し直してください。";
+        return (
+          <div key={issue.channel} style={{ marginBottom: 12, padding: "12px 16px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.3)", borderRadius: 8, color: "#7a5c00", fontSize: 12.5, lineHeight: 1.65 }}>
+            <strong>{label}への通知に失敗しました。</strong> {action}
+            {issue.target && <div style={{ marginTop: 3 }}>通知先：{issue.target}</div>}
+            {issue.failed_at && <div style={{ marginTop: 2, fontSize: 11, opacity: 0.8 }}>検知日時：{new Date(issue.failed_at).toLocaleString("ja-JP")}</div>}
+          </div>
+        );
+      })}
+      {notificationHealth?.no_active_channel && (
+        <div style={{ marginBottom: 16, padding: "12px 16px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.3)", borderRadius: 8, color: "#7a5c00", fontSize: 12.5, lineHeight: 1.65 }}>
+          <strong>通知を受け取れるサービスが設定されていません。</strong><br />
+          Slack、Chatwork、またはプッシュ通知のいずれかを連携し、「通知する」に設定することをおすすめします。このままでも運用は続けられます。
+        </div>
+      )}
       <div className="adm-grid-2" style={{ gap: 20 }}>
         {/* Slack (OAuth: Slackに追加) */}
         <MkCard>
@@ -1511,6 +1671,13 @@ export default function AdminNotifyPage() {
             </div>
             <MkPill tone={slackStatus?.connected ? "live" : "off"}>{slackStatus?.connected ? "連携済" : "未連携"}</MkPill>
           </div>
+
+          <NotificationToggle
+            enabled={slackNotificationsEnabled}
+            saving={channelToggleSaving !== ""}
+            error={channelToggleError?.channel === "slack" ? channelToggleError.message : undefined}
+            onChange={(enabled) => handleToggleChannel("slack", enabled)}
+          />
 
           {slackNotice === "connected" && (
             <div style={{ marginBottom: 14, padding: "10px 14px", background: "#eaf0e8", border: "1px solid rgba(74,124,78,0.25)", borderRadius: 8, color: "#3a6240", fontSize: 12 }}>
@@ -1699,6 +1866,12 @@ export default function AdminNotifyPage() {
             </div>
             <MkPill tone={cwConfigured ? "live" : "off"}>{cwConfigured ? "連携済" : "未連携"}</MkPill>
           </div>
+          <NotificationToggle
+            enabled={chatworkNotificationsEnabled}
+            saving={channelToggleSaving !== ""}
+            error={channelToggleError?.channel === "chatwork" ? channelToggleError.message : undefined}
+            onChange={(enabled) => handleToggleChannel("chatwork", enabled)}
+          />
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Field
               label="API トークン"
@@ -1760,7 +1933,14 @@ export default function AdminNotifyPage() {
             subtitle="担当者のスマホに、アプリの通知として届けます"
           />
           {authToken ? (
-            <PushPanel authToken={authToken} />
+            <PushPanel
+              authToken={authToken}
+              notificationsEnabled={pushNotificationsEnabled}
+              toggleSaving={channelToggleSaving !== ""}
+              toggleError={channelToggleError?.channel === "push" ? channelToggleError.message : undefined}
+              onToggle={(enabled) => handleToggleChannel("push", enabled)}
+              onHealthChanged={() => { void refreshNotificationHealth(); }}
+            />
           ) : (
             <div style={{ padding: "20px 0", color: "#a8a198", fontSize: 13 }}>認証が必要です。ページを再読み込みしてください。</div>
           )}

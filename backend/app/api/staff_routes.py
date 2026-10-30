@@ -52,6 +52,9 @@ logger = logging.getLogger(__name__)
 
 _MAX_STAFF_NAME = 255
 _MAX_WEBHOOK_URL = 512
+DEFAULT_NOTIFICATION_CONTINUE_SEC = 90
+MIN_NOTIFICATION_TIMEOUT_SEC = 30
+MAX_NOTIFICATION_TIMEOUT_SEC = 3600
 
 
 class StaffRouteBody(BaseModel):
@@ -127,6 +130,18 @@ class StaffRouteBody(BaseModel):
             return 0  # 0 = 代理通知しない
         if v < MIN_ESCALATE_SEC or v > MAX_ESCALATE_SEC:
             raise ValueError(f"代理通知までの秒数は 0(無効) または {MIN_ESCALATE_SEC}〜{MAX_ESCALATE_SEC} 秒です")
+        return v
+
+class NotificationTimeoutBody(BaseModel):
+    timeout_sec: int
+
+    @field_validator("timeout_sec")
+    @classmethod
+    def timeout_range(cls, v: int) -> int:
+        if v < MIN_NOTIFICATION_TIMEOUT_SEC or v > MAX_NOTIFICATION_TIMEOUT_SEC:
+            raise ValueError(
+                f"通知継続時間は {MIN_NOTIFICATION_TIMEOUT_SEC}〜{MAX_NOTIFICATION_TIMEOUT_SEC} 秒で指定してください"
+            )
         return v
 
 
@@ -244,6 +259,12 @@ async def list_staff_routes(
         "users": push_users,
         "smtp_enabled": settings.smtp_enabled,
         "default_escalate_sec": DEFAULT_ESCALATE_SEC,
+        "notification_continue_sec": int(
+            getattr(tenant, "notification_continue_sec", DEFAULT_NOTIFICATION_CONTINUE_SEC)
+            or DEFAULT_NOTIFICATION_CONTINUE_SEC
+        ),
+        "min_notification_timeout_sec": MIN_NOTIFICATION_TIMEOUT_SEC,
+        "max_notification_timeout_sec": MAX_NOTIFICATION_TIMEOUT_SEC,
         "min_escalate_sec": MIN_ESCALATE_SEC,
         "max_escalate_sec": MAX_ESCALATE_SEC,
     }
@@ -398,6 +419,21 @@ async def upsert_staff_route(
 
     tenant = await _get_tenant(user, db)
     return {"ok": True, "route": _route_out(route, set(_staff_list(tenant)))}
+
+
+@router.put("/notification-timeout")
+async def update_notification_timeout(
+    body: NotificationTimeoutBody,
+    user: User = Depends(require_roles("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """最終通知後、電話案内へ進むまでの共通待機時間を保存する。"""
+    tenant = await _get_tenant(user, db)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    tenant.notification_continue_sec = body.timeout_sec
+    await db.commit()
+    return {"ok": True, "timeout_sec": body.timeout_sec}
 
 
 # ── 担当者マスター ─────────────────────────────────────────────────────────────
@@ -695,7 +731,7 @@ async def test_staff_route(
             sent = 0
             for sub in push_subs:
                 try:
-                    await send_push(
+                    ok, _error = await send_push(
                         endpoint=sub.endpoint, p256dh=sub.p256dh, auth=sub.auth_key,
                         title="通知テスト",
                         body=f"「{body.staff_name}」宛の通知テストです。",
@@ -703,7 +739,8 @@ async def test_staff_route(
                         private_key=private_key, subject=settings.vapid_subject,
                         tag="staff-route-test",
                     )
-                    sent += 1
+                    if ok:
+                        sent += 1
                 except Exception:
                     pass
             results.append({

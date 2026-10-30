@@ -222,7 +222,9 @@ async def load_default_slack_config(db: AsyncSession, tenant_id: str) -> dict:
         return {}
 
 
-def slack_send_configs(default_config: dict, dest: Destinations) -> list[tuple[dict, str]]:
+def slack_send_configs(
+    default_config: dict, dest: Destinations, *, default_enabled: bool = True
+) -> list[tuple[dict, str]]:
     """実際に `SlackNotifier.send_to_config` へ渡す (config, 宛先ラベル) の一覧を組み立てる。
 
     担当者チャンネルはテナントの Bot Token を使い回してチャンネルだけ差し替える
@@ -245,7 +247,7 @@ def slack_send_configs(default_config: dict, dest: Destinations) -> list[tuple[d
             channel_name or channel_id,
         ))
 
-    if dest.use_default and default_config:
+    if dest.use_default and default_enabled and default_config:
         has_dest = bool(bot_token and default_channel) or bool(default_config.get("webhook_url"))
         if has_dest and default_channel not in seen:
             if default_channel:

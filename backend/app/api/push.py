@@ -18,6 +18,13 @@ from app.config import settings
 router = APIRouter(prefix="/notifications/push", tags=["push"])
 
 _NOT_CONFIGURED = "プッシュ通知が使えない状態です。運営にお問い合わせください。"
+_KNOWN_OS_NAMES = {"Windows", "macOS", "iOS", "Android", "Linux", "ChromeOS"}
+
+
+def _normalized_os_name(value: str | None) -> str | None:
+    """画面表示用の既知ラベルだけを保存し、生の User-Agent 等を受け入れない。"""
+    value = (value or "").strip()
+    return value if value in _KNOWN_OS_NAMES else None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────
@@ -36,6 +43,7 @@ class SubscribeBody(BaseModel):
     endpoint: str
     p256dh: str
     auth: str
+    os_name: str | None = None
 
 
 class UnsubscribeBody(BaseModel):
@@ -57,6 +65,7 @@ async def subscribe(
         existing.p256dh = body.p256dh
         existing.auth_key = body.auth
         existing.user_id = user.id
+        existing.os_name = _normalized_os_name(body.os_name)
     else:
         db.add(PushSubscription(
             tenant_id=user.tenant_id,
@@ -64,6 +73,7 @@ async def subscribe(
             endpoint=body.endpoint,
             p256dh=body.p256dh,
             auth_key=body.auth,
+            os_name=_normalized_os_name(body.os_name),
         ))
     await db.commit()
     return {"ok": True}
@@ -102,6 +112,7 @@ async def list_subscriptions(
             "endpoint": s.endpoint,
             "display_endpoint": s.endpoint[:60] + "…",
             "user_id": s.user_id,
+            "os_name": s.os_name or "不明",
             "created_at": s.created_at.isoformat() if s.created_at else "",
         }
         for s in subs

@@ -358,7 +358,16 @@ function DecisionButtons({ log, token, onUpdate }: { log: ReceptionLog; token: s
     e.stopPropagation();
     setBusy(true);
     api.decideReception(token, log.id, decision)
-      .then(() => onUpdate(log.id, nextState))
+      .then((updated) => {
+        onUpdate(log.id, updated.state || nextState);
+        if (updated.decision_applied === false) {
+          window.alert(
+            updated.decision_expired
+              ? "対応時間切れです。キオスクは電話案内に切り替わりました。"
+              : `${updated.decided_by_name || "別の担当者"}さんが対応済みです。`,
+          );
+        }
+      })
       .catch(() => {})
       .finally(() => setBusy(false));
   };
@@ -380,6 +389,7 @@ function DecisionButtons({ log, token, onUpdate }: { log: ReceptionLog; token: s
 function RespondModal({ log, token, onClose, onUpdate }: { log: ReceptionLog; token: string; onClose: () => void; onUpdate: (id: string, state: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
+  const [alreadyHandledMessage, setAlreadyHandledMessage] = useState<string | null>(null);
   const state = log.state ?? "received";
   const alreadyDecided = state !== "received" && state !== "notified";
   const hideDecline = log.method === "appointment" || log.method === "delivery";
@@ -396,7 +406,18 @@ function RespondModal({ log, token, onClose, onUpdate }: { log: ReceptionLog; to
   const decide = (decision: "accept" | "phone" | "decline", nextState: string, label: string) => () => {
     setBusy(true);
     api.decideReception(token, log.id, decision)
-      .then(() => { onUpdate(log.id, nextState); setDone(label); })
+      .then((updated) => {
+        onUpdate(log.id, updated.state || nextState);
+        if (updated.decision_applied === false) {
+          setAlreadyHandledMessage(
+            updated.decision_expired
+              ? "対応時間切れです。キオスクは電話案内に切り替わりました。"
+              : `${updated.decided_by_name || "別の担当者"}さんが対応済みです。`,
+          );
+        } else {
+          setDone(label);
+        }
+      })
       .catch(() => setBusy(false));
   };
 
@@ -411,7 +432,12 @@ function RespondModal({ log, token, onClose, onUpdate }: { log: ReceptionLog; to
         <div style={{ fontSize: 14, color: "#6b6559", marginTop: 4 }}>{log.company || "—"}{log.purpose ? ` ・ ${log.purpose}` : ""}</div>
         <div style={{ fontSize: 12, color: "#a8a198", marginTop: 4 }}>{timeStr} 受付</div>
 
-        {done ? (
+        {alreadyHandledMessage ? (
+          <div style={{ marginTop: 24, textAlign: "center" }}>
+            <div style={{ fontSize: 14, color: "#6b6559" }}>{alreadyHandledMessage}</div>
+            <button onClick={onClose} style={closeBtn}>閉じる</button>
+          </div>
+        ) : done ? (
           <div style={{ marginTop: 24, textAlign: "center" }}>
             <div style={{ fontSize: 40, marginBottom: 8, color: "#059669" }}>✓</div>
             <div style={{ fontSize: 16, fontWeight: 700, color: "#1d1a15" }}>「{done}」で応答しました</div>
@@ -420,7 +446,11 @@ function RespondModal({ log, token, onClose, onUpdate }: { log: ReceptionLog; to
           </div>
         ) : alreadyDecided ? (
           <div style={{ marginTop: 24, textAlign: "center" }}>
-            <div style={{ fontSize: 14, color: "#6b6559" }}>この受付は既に対応済みです（{STATUS_LABEL[state] ?? state}）</div>
+            <div style={{ fontSize: 14, color: "#6b6559" }}>
+              {log.decision_expired
+                ? "対応時間切れです。キオスクは電話案内に切り替わりました。"
+                : <>{log.decided_by_name ? `${log.decided_by_name}さんが` : "この受付は既に"}対応済みです（{STATUS_LABEL[state] ?? state}）</>}
+            </div>
             <button onClick={onClose} style={closeBtn}>閉じる</button>
           </div>
         ) : (

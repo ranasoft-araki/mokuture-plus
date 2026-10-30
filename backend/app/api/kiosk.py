@@ -34,15 +34,19 @@ from app.models.device import Device, KioskBundleRelease, Locker
 from app.models.tenant import Tenant
 from app.models.content import Media, Playlist, PlaylistItem, Schedule
 from app.models.reception import ReceptionLog
+from app.models.staff_route import StaffNotificationRoute
 from app.models.notification import NotificationSetting, PushSubscription
 from app.models.visitor_appointment import VisitorAppointment
 from app.models.room import MeetingRoom
+from app.models.user import User
 from app.services.slack import SlackNotifier
 from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
 from app.services.webpush import send_push
 from app.services.auth import hash_password, verify_password, create_decision_token
 from app.services import chatwork as chatwork_service
+from app.services import notification_channels
+from app.services import notification_health
 from app.services import events as event_bus
 from app.services import reception_notify
 from app.services import analytics as analytics_service
@@ -50,6 +54,27 @@ from app.services import analytics_link
 from app.config import settings
 
 _PIN_RE = re.compile(r"^\d{4}$")
+_DEFAULT_NOTIFICATION_TIMEOUT_SEC = 90
+
+
+async def _notification_timeout_sec(db: AsyncSession, tenant: Tenant, staff_name: str | None) -> int:
+    """受付先の設定から、kiosk が電話案内へ進むまでの合計秒数を返す。"""
+    continue_sec = int(
+        getattr(tenant, "notification_continue_sec", _DEFAULT_NOTIFICATION_TIMEOUT_SEC)
+        or _DEFAULT_NOTIFICATION_TIMEOUT_SEC
+    )
+    name = (staff_name or "").strip()
+    if not name:
+        return continue_sec
+    route = (await db.execute(
+        select(StaffNotificationRoute).where(
+            StaffNotificationRoute.tenant_id == tenant.id,
+            StaffNotificationRoute.staff_name == name,
+        )
+    )).scalar_one_or_none()
+    if route is None or not route.fallback_staff_name or int(route.escalate_after_sec or 0) <= 0:
+        return continue_sec
+    return int(route.escalate_after_sec) + continue_sec
 
 # 審査用デモモードの自動返信タスク参照(fire-and-forget の GC 回避に保持)。
 _demo_auto_tasks: set[asyncio.Task] = set()
@@ -842,6 +867,7 @@ async def kiosk_reception(
 ):
     """Submit a reception form entry using device token authentication."""
     tenant, device = ctx
+    notification_timeout_sec = await _notification_timeout_sec(db, tenant, body.staff)
     log = ReceptionLog(
         tenant_id=tenant.id,
         visitor_name=body.visitor_name,
@@ -891,6 +917,7 @@ async def kiosk_reception(
         "id": log.id,
         "visitor_name": log.visitor_name,
         "created_at": log.created_at.isoformat() if log.created_at else "",
+        "notification_timeout_sec": notification_timeout_sec,
     }
 
 
@@ -907,6 +934,40 @@ async def kiosk_reception_status(
     if log is None or log.tenant_id != tenant.id:
         raise HTTPException(status_code=404, detail="Reception log not found")
     return {"id": log.id, "state": log.state}
+
+
+@router.post("/reception/{log_id}/timeout")
+async def kiosk_reception_timeout(
+    log_id: str,
+    background: BackgroundTasks,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """応答待ち時間の終了を、スタッフ応答と同じ先着保証で電話案内として確定する。"""
+    tenant, _ = ctx
+    log = await db.get(ReceptionLog, log_id)
+    if log is None or log.tenant_id != tenant.id:
+        raise HTTPException(status_code=404, detail="Reception log not found")
+
+    # 遅延 import で kiosk ↔ reception のモジュール循環を避ける。
+    from app.api.reception import _apply_decision
+
+    outcome = await _apply_decision(
+        db,
+        log,
+        "phone",
+        actor_name="システム",
+        via="kiosk_timeout",
+    )
+    if outcome.applied:
+        background.add_task(reception_notify.fire_decision_notifications, tenant.id, log.id)
+    return {
+        "ok": True,
+        "id": log.id,
+        "state": outcome.state,
+        "timeout_applied": outcome.applied,
+        "decision_expired": outcome.decision_expired,
+    }
 
 
 # ── Staff call (delivery) ──────────────────────────────────────────────────────
@@ -978,7 +1039,11 @@ async def kiosk_call_staff(
     )
 
     # id を返してキオスクの待機画面が応答(受付/電話)をポーリングできるようにする。
-    return {"ok": True, "id": log.id}
+    return {
+        "ok": True,
+        "id": log.id,
+        "notification_timeout_sec": await _notification_timeout_sec(db, tenant, None),
+    }
 
 
 # ── Lockers (device token auth) ────────────────────────────────────────────────
@@ -1307,6 +1372,8 @@ async def _notify_slack_text(
     ``decision`` = (actions, token) を渡すと、署名シークレット設定済み & Bot Token 経路の
     ときだけ 受付/電話 の対応ボタン(Block Kit)を付ける。押下は受付通知と同じ interactions
     エンドポイントで処理される。"""
+    if not await notification_channels.is_enabled(db, tenant_id, "slack"):
+        return None
     base_setting = await _first_configured_setting(tenant_id, ("slack",), db)
     override_setting = await _first_configured_setting(tenant_id, ("slack_delivery",), db)
     if base_setting is None and override_setting is None:
@@ -1323,7 +1390,14 @@ async def _notify_slack_text(
             actions, dtoken = decision
             blocks = SlackNotifier.build_reception_blocks(text, actions, dtoken)
         # Bot Token(chat.postMessage) と 旧Webhook のどちらの設定でも送れる(webhook はボタン無し)。
-        return bool(await SlackNotifier.send_to_config(config, text, blocks=blocks))
+        ok = bool(await SlackNotifier.send_to_config(config, text, blocks=blocks))
+        await notification_health.record_result(
+            tenant_id,
+            "slack",
+            failed=not ok,
+            target=str(config.get("channel_name") or config.get("channel_id") or "設定済みチャンネル"),
+        )
+        return ok
     except Exception:
         return False
 
@@ -1333,6 +1407,8 @@ async def _push_delivery_enabled(tenant_id: str, db: AsyncSession) -> bool:
 
     ON by default (backward compatible) — only a stored ``push_delivery`` setting
     with ``enabled == False`` disables it. Tenant-scoped."""
+    if not await notification_channels.is_enabled(db, tenant_id, "push"):
+        return False
     result = await db.execute(
         select(NotificationSetting).where(
             NotificationSetting.tenant_id == tenant_id,
@@ -1374,9 +1450,29 @@ async def _notify_push_text(
             return None
 
         any_ok = False
+        failed = False
+        user_ids = {sub.user_id for sub in subs if sub.user_id}
+        users = {}
+        if user_ids:
+            rows = (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
+            users = {user.id: user for user in rows}
         for sub in subs:
             try:
-                await send_push(
+                push_data = data
+                if data and data.get("kind") == "reception_decision" and data.get("logId"):
+                    recipient = users.get(sub.user_id) if sub.user_id else None
+                    recipient_name = (
+                        ((recipient.name or "").strip() or recipient.email.split("@", 1)[0])
+                        if recipient else "担当者"
+                    )
+                    push_data = dict(data)
+                    push_data["decisionToken"] = create_decision_token(
+                        str(data["logId"]),
+                        tenant_id,
+                        actor_user_id=sub.user_id,
+                        actor_name=recipient_name,
+                    )
+                ok, error = await send_push(
                     endpoint=sub.endpoint,
                     p256dh=sub.p256dh,
                     auth=sub.auth_key,
@@ -1386,12 +1482,18 @@ async def _notify_push_text(
                     private_key=private_key,
                     subject=settings.vapid_subject,
                     tag=tag or "reception",
-                    data=data,
+                    data=push_data,
                     actions=actions,
                 )
-                any_ok = True
+                any_ok = any_ok or ok
+                failed = failed or not ok
+                if not ok and notification_health.push_subscription_expired(error):
+                    await notification_health.delete_expired_push_subscription(sub.id)
             except Exception:
-                pass
+                failed = True
+        await notification_health.record_result(
+            tenant_id, "push", failed=failed, target="登録端末"
+        )
         return any_ok
     except Exception:
         return False
@@ -1434,12 +1536,18 @@ async def _notify_chatwork_text(
     """
     # 「最初に見つかった行」で確定させる（不完全ならそこで終わる）。不完全な行を飛ばして
     # 次の候補へ流すと、配達専用ルームを空にしているテナントの配達通知が受付用ルームへ漏れる。
+    if not await notification_channels.is_enabled(db, tenant_id, "chatwork"):
+        return None
     config = await chatwork_service.load_config(db, tenant_id, types)
     api_token = (config.get("api_token") or "").strip()
     room_id = (config.get("room_id") or "").strip()
     if not api_token or not room_id:
         return None
-    return await chatwork_service.send_message(api_token, room_id, text)
+    ok = await chatwork_service.send_message(api_token, room_id, text)
+    await notification_health.record_result(
+        tenant_id, "chatwork", failed=not ok, target=f"ルーム {room_id}"
+    )
+    return ok
 
 
 async def _log_delivery_dropoff(

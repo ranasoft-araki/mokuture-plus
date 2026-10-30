@@ -517,6 +517,10 @@ async function mockFetch(method, path, body) {
     _mockDecisionState = ["accepted", "phone", "declined"][_mockCreateCount++ % 3];
     return { id: "mock", visitor_name: body?.visitor_name ?? "", created_at: "" };
   }
+  if (path.endsWith("/timeout") && path.startsWith("/proxy/reception/")) {
+    _mockDecisionState = "phone";
+    return { id: "mock", state: "phone", timeout_applied: true, decision_expired: true };
+  }
   if (path.startsWith("/proxy/reception/")) {
     // 待機画面のポーリング: 数回で確定状態を返して結果画面デモへ。
     _mockDecisionPolls += 1;
@@ -644,6 +648,7 @@ async function _realFetch(method, path, body, token) {
 function _isRealNotifyPath(path) {
   return path === "/proxy/reception"                                   // 受付→スタッフ通知
       || /^\/proxy\/reception\/[^/]+$/.test(path)                      // OK/NG応答のポーリング(通知と整合)
+      || /^\/proxy\/reception\/[^/]+\/timeout$/.test(path)            // 待機終了→電話案内の確定・関係者通知
       || path === "/proxy/call-staff";                                 // 配達の呼び出し→通知
   // 注: 置き配通知はローカルファースト化に伴い /device 経路(agent→backend notify-delivery)へ移行。
 }
@@ -1933,7 +1938,7 @@ ${errBanner}
           analytics_session_id: AN.sessionId(),
         }, token);
         stopStream(); cleanup();
-        go("calling", { name: appt.visitor_name, staff: appt.staff || "", room: appt.meeting_room || null, scheduledAt: appt.scheduled_at || null, method: "appointment", receptionId: rec?.id });
+        go("calling", { name: appt.visitor_name, staff: appt.staff || "", room: appt.meeting_room || null, scheduledAt: appt.scheduled_at || null, method: "appointment", receptionId: rec?.id, notificationTimeoutSec: rec?.notification_timeout_sec });
       } catch (e) {
         AN.apiError("api_5xx", { fieldId: "qr_scan" });   // 本文・URLは送らない
         pauseScan(e.message || "予約情報の取得に失敗しました", QR_ERROR_COOLDOWN_MS);
@@ -1946,7 +1951,7 @@ ${errBanner}
     try {
       AN.notificationRequested();
       const rec = await apiPost("/proxy/reception", { visitor_name: parsed.name, company: parsed.company, purpose: parsed.purpose, method: "qr", analytics_session_id: AN.sessionId() }, token);
-      stopStream(); cleanup(); go("calling", { name: parsed.name, staff: "", method: "qr", receptionId: rec?.id });
+      stopStream(); cleanup(); go("calling", { name: parsed.name, staff: "", method: "qr", receptionId: rec?.id, notificationTimeoutSec: rec?.notification_timeout_sec });
     } catch (e) {
       AN.apiError("api_5xx", { fieldId: "qr_scan" });
       pauseScan(e.message || "受付処理に失敗しました", QR_ERROR_COOLDOWN_MS);
@@ -2519,7 +2524,7 @@ function showDelivery() {
   let lockers = [], available = 0;
   let view = "loading";  // loading | choose | pick | openwait | sending | result | error
   let sel = null, err = "", resultTitle = "", resultSub = "", resultTitleEn = "", resultSubEn = "";
-  let idleId, resultTimer = null, callId = null, lastView = "loading";
+  let idleId, resultTimer = null, callId = null, callNotificationTimeoutSec = null, lastView = "loading";
   let countId = null, idleLeft = ST.kiosk_idle_timeout_sec;
   const paintIdle = () => paintIdleMeter("dl-idle", idleLeft, ST.kiosk_idle_timeout_sec);
   function resetIdle() {
@@ -2653,7 +2658,21 @@ function showDelivery() {
           } catch (_) { /* 通信不調は無視。下のタイムアウトで必ず離脱 */ }
         });
         // 無応答フォールバック: 90秒で電話案内へ(配達員が電話できるように)。
-        later(90000, () => finish("resultPhone"));
+        const timeoutSec = Number(callNotificationTimeoutSec);
+        if (Number.isFinite(timeoutSec) && timeoutSec > 0) {
+          const expire = async () => {
+            if (settled) return;
+            try {
+              const r = await apiPost("/proxy/reception/" + encodeURIComponent(callId) + "/timeout", {}, ptoken);
+              if (r && r.state === "accepted") finish("resultOk");
+              else if (r && (r.state === "phone" || r.state === "declined")) finish("resultPhone");
+            } catch (_) {
+              // バックエンドで電話案内を確定できるまで画面は切り替えず、応答ポーリングも継続する。
+              later(2500, expire);
+            }
+          };
+          later(timeoutSec * 1000, expire);
+        }
       } else {
         // 受付IDが無く応答をポーリングできない場合: 一定時間で電話案内へ(応答不明時も電話で呼び出せるように)。
         resultTimer = setTimeout(() => { cleanup(); go("resultPhone", {}); }, Math.max(30, ST.kiosk_complete_timeout_sec * 3) * 1000);
@@ -2718,6 +2737,7 @@ function showDelivery() {
       AN.notificationRequested();
       // analytics_session_id は通知の成否をこの匿名セッションへ書き戻すためだけに送る（DB非保存）。
       const r = await apiPost("/proxy/call-staff", { message: "", analytics_session_id: AN.sessionId() }, token);
+      callNotificationTimeoutSec = r && r.notification_timeout_sec;
       callId = (r && r.id) || null;   // 応答(受付/電話)ポーリング用の受付ID
       view = "wait"; render();        // お待ちください画面へ(応答をポーリング)
     } catch (e) {
@@ -4480,7 +4500,7 @@ function showReception(initPurpose, initCard, from) {
         analytics_session_id: AN.sessionId(),
       }, token);
       cleanup();
-      go("calling", { name: form.visitor_name, staff: form.staff, department: form.department, method: "form", receptionId: res?.id });
+      go("calling", { name: form.visitor_name, staff: form.staff, department: form.department, method: "form", receptionId: res?.id, notificationTimeoutSec: res?.notification_timeout_sec });
     } catch (e) {
       // エラー本文には入力値が混ざりうるので送らない（固定コードと所要時間だけ）。
       AN.apiError("api_5xx", { durationMs: Date.now() - startedAt });
@@ -4578,7 +4598,22 @@ function showCalling(data) {
     } catch (_) { /* 通信不調は無視。下のタイムアウトで必ず離脱する */ }
   });
   // 無応答フォールバック: 通知の応答が時間切れなら電話案内へ(来訪者が電話で呼び出せる)→自動でidle復帰。
-  later(90000, () => { if (done) return; done = true; AN.staffResponded("timeout"); cleanup(); go("resultPhone", data); });
+  const timeoutSec = Number(data.notificationTimeoutSec);
+  if (Number.isFinite(timeoutSec) && timeoutSec > 0) {
+    const expire = async () => {
+      if (done) return;
+      try {
+        const r = await apiPost("/proxy/reception/" + encodeURIComponent(rid) + "/timeout", {}, token);
+        if (r && r.state === "accepted")      { done = true; AN.staffResponded("accepted"); cleanup(); go("resultOk", data); }
+        else if (r && r.state === "phone")    { done = true; AN.staffResponded(r.decision_expired ? "timeout" : "phone"); cleanup(); go("resultPhone", data); }
+        else if (r && r.state === "declined") { done = true; AN.staffResponded("declined"); cleanup(); go("resultDecline", data); }
+      } catch (_) {
+        // 状態を更新できないまま電話案内を出さない。通信復旧まで再試行し、通常の応答監視も続ける。
+        later(2500, expire);
+      }
+    };
+    later(timeoutSec * 1000, expire);
+  }
 }
 
 // ─── RESULT: OK (スタッフが「すぐ伺います」) ─────────────────────────────────

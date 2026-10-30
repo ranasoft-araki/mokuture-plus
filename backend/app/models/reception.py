@@ -23,6 +23,9 @@ class ReceptionLog(Base):
     staff_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     appointment_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("visitor_appointments.id", ondelete="SET NULL"), nullable=True)
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # スタッフが OK/NG を押した時刻
+    decided_by_user_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    decided_by_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    decided_via: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     escalated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # 代理通知(エスカレーション)を送った時刻
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

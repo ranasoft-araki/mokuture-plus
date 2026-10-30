@@ -1,13 +1,14 @@
 import csv
 import io
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from jose import JWTError
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, update
 
 from app.database import get_db
 from app.middleware.tenant import get_current_user
@@ -54,19 +55,54 @@ def _normalize_decision(value: str) -> str:
     raise HTTPException(status_code=422, detail="decision must be accept(ed), phone, or decline(d)")
 
 
-async def _apply_decision(db: AsyncSession, log: ReceptionLog, decision: str) -> str:
-    """Set accepted/phone/declined on a reception log. Idempotent: a log already
-    decided (via push button AND/OR in-app button, or a double-tap) is left as-is."""
-    if log.state in _DECIDED_STATES:
-        return log.state
-    log.state = _normalize_decision(decision)
-    log.decided_at = datetime.now(timezone.utc).replace(tzinfo=None)
+@dataclass(frozen=True)
+class DecisionResult:
+    state: str
+    applied: bool
+    decided_by_name: str
+    decision_expired: bool
+
+
+async def _apply_decision(
+    db: AsyncSession,
+    log: ReceptionLog,
+    decision: str,
+    *,
+    actor_user_id: str | None = None,
+    actor_name: str = "",
+    via: str = "admin",
+) -> DecisionResult:
+    """Atomically apply the first decision; later attempts only observe the winner."""
+    state = _normalize_decision(decision)
+    display_name = (actor_name or "担当者").strip()[:255]
+    result = await db.execute(
+        update(ReceptionLog)
+        .where(
+            ReceptionLog.id == log.id,
+            ReceptionLog.state.in_(("received", "notified")),
+        )
+        .values(
+            state=state,
+            decided_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            decided_by_user_id=actor_user_id,
+            decided_by_name=display_name,
+            decided_via=via[:32],
+        )
+        .execution_options(synchronize_session=False)
+    )
+    applied = result.rowcount == 1
     await db.commit()
     await db.refresh(log)
     # 応答が実際に確定した時だけ通知（冪等early-returnでは通知しない）。JWT/署名トークン/
     # Slackインタラクション/デモ自動応答の全経路がここを通る＝単一の通知ポイント。
-    _publish_reception(log.tenant_id)
-    return log.state
+    if applied:
+        _publish_reception(log.tenant_id)
+    return DecisionResult(
+        state=log.state,
+        applied=applied,
+        decided_by_name=(log.decided_by_name or "担当者"),
+        decision_expired=(getattr(log, "decided_via", None) == "kiosk_timeout"),
+    )
 
 
 def decision_actions(log: ReceptionLog) -> list[dict]:
@@ -82,11 +118,19 @@ def decision_actions(log: ReceptionLog) -> list[dict]:
     return actions
 
 
-def build_decision_push_extras(tenant_id: str, log: ReceptionLog) -> tuple[dict, list]:
+def build_decision_push_extras(
+    tenant_id: str,
+    log: ReceptionLog,
+    *,
+    actor_user_id: str | None = None,
+    actor_name: str | None = None,
+) -> tuple[dict, list]:
     """(data, actions) to attach to the reception push so staff can answer
     受付/電話/お断り from the notification itself. The token lets the Service Worker
     post the decision without a login (see auth.create_decision_token)."""
-    token = create_decision_token(log.id, tenant_id)
+    token = create_decision_token(
+        log.id, tenant_id, actor_user_id=actor_user_id, actor_name=actor_name
+    )
     data = {
         "kind": "reception_decision",
         # 通知本体タップ時の遷移先。?respond=<id> を付けて受付ログ画面で該当受付の
@@ -159,6 +203,9 @@ class ReceptionOut(BaseModel):
     created_at: str
     # 代理通知(応答が無いときのエスカレーション)を送った時刻。未送信は None。
     escalated_at: str | None = None
+    decided_by_name: str | None = None
+    decision_applied: bool | None = None
+    decision_expired: bool | None = None
 
     model_config = {"from_attributes": True}
 
@@ -324,6 +371,7 @@ class TokenDecisionRequest(BaseModel):
 @router.post("/decision")
 async def decide_reception_by_token(
     body: TokenDecisionRequest,
+    background: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """Public, token-authenticated. Called by the staff PWA Service Worker when a
@@ -341,14 +389,31 @@ async def decide_reception_by_token(
     log = result.scalar_one_or_none()
     if not log or log.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Reception log not found")
-    state = await _apply_decision(db, log, body.decision)
-    return {"ok": True, "id": log.id, "state": state}
+    outcome = await _apply_decision(
+        db,
+        log,
+        body.decision,
+        actor_user_id=payload.get("actor_user_id"),
+        actor_name=payload.get("actor_name") or "担当者",
+        via="push",
+    )
+    if outcome.applied:
+        background.add_task(reception_notify.fire_decision_notifications, log.tenant_id, log.id)
+    return {
+        "ok": True,
+        "id": log.id,
+        "state": outcome.state,
+        "decision_applied": outcome.applied,
+        "decided_by_name": outcome.decided_by_name,
+        "decision_expired": outcome.decision_expired,
+    }
 
 
 @router.post("/{log_id}/decision", response_model=ReceptionOut)
 async def decide_reception(
     log_id: str,
     body: DecisionRequest,
+    background: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -360,8 +425,18 @@ async def decide_reception(
         raise HTTPException(status_code=404, detail="Reception log not found")
     if log.tenant_id != user.tenant_id:
         raise HTTPException(status_code=403, detail="Forbidden")
-    await _apply_decision(db, log, body.decision)
-    return _log_out(log)
+    actor_name = (user.name or "").strip() or user.email.split("@", 1)[0]
+    outcome = await _apply_decision(
+        db, log, body.decision,
+        actor_user_id=user.id, actor_name=actor_name, via="admin",
+    )
+    if outcome.applied:
+        background.add_task(reception_notify.fire_decision_notifications, log.tenant_id, log.id)
+    return _log_out(
+        log,
+        decision_applied=outcome.applied,
+        decision_expired=outcome.decision_expired,
+    )
 
 
 class BulkDeleteRequest(BaseModel):
@@ -512,7 +587,12 @@ async def today_stats(user: User = Depends(get_current_user), db: AsyncSession =
     return {"date": today.isoformat(), "count": count}
 
 
-def _log_out(r: ReceptionLog) -> dict:
+def _log_out(
+    r: ReceptionLog,
+    *,
+    decision_applied: bool | None = None,
+    decision_expired: bool | None = None,
+) -> dict:
     return {
         "id": r.id,
         "visitor_name": r.visitor_name,
@@ -525,4 +605,11 @@ def _log_out(r: ReceptionLog) -> dict:
         "staff_notes": r.staff_notes,
         "created_at": r.created_at.isoformat() if r.created_at else "",
         "escalated_at": iso_z(getattr(r, "escalated_at", None)),
+        "decided_by_name": getattr(r, "decided_by_name", None),
+        "decision_applied": decision_applied,
+        "decision_expired": (
+            decision_expired
+            if decision_expired is not None
+            else getattr(r, "decided_via", None) == "kiosk_timeout"
+        ),
     }
