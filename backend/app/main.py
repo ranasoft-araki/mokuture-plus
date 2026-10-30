@@ -63,6 +63,10 @@ _ENSURE_COLUMNS = {
         # 既存行は NULL = 従来どおりテナント共通の購読すべてへ送る。
         "push_user_id": "VARCHAR(36)",
     },
+    "push_subscriptions": {
+        # プッシュ通知の登録端末一覧に表示する正規化済み OS 名。既存行は NULL＝不明。
+        "os_name": "VARCHAR(32)",
+    },
     "devices": {
         # 承認フロー。既存端末は 'active' で埋めて後方互換を保つ。
         "status": "VARCHAR(16) DEFAULT 'active'",

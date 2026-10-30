@@ -3,6 +3,19 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 
 export type PushStatus = "unsupported" | "insecure-context" | "ios-not-pwa" | "denied" | "granted" | "default";
 
+/** Return a coarse OS label for the registered-device list without retaining a raw User-Agent. */
+export function getClientOsName(): string {
+  const ua = navigator.userAgent;
+  // iPadOS 13+ may identify itself as macOS; touch support distinguishes it for this display.
+  if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1)) return "iOS";
+  if (/CrOS/i.test(ua)) return "ChromeOS";
+  if (/Android/i.test(ua)) return "Android";
+  if (/Windows/i.test(ua)) return "Windows";
+  if (/Macintosh|Mac OS X/i.test(ua)) return "macOS";
+  if (/Linux/i.test(ua)) return "Linux";
+  return "不明";
+}
+
 /** Detect why push notifications may not be available on this device. */
 export function getPushStatus(): PushStatus {
   // iOS non-PWA must be checked FIRST: on iOS Safari (non-standalone), the Push/Notification
@@ -94,6 +107,7 @@ export async function sendSubscriptionToServer(authToken: string, sub: PushSubsc
         endpoint: sub.endpoint,
         p256dh: json.keys?.p256dh ?? "",
         auth: json.keys?.auth ?? "",
+        os_name: getClientOsName(),
       }),
     });
     return res.ok;

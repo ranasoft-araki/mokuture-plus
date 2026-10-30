@@ -579,7 +579,7 @@ export const api = {
   // Push notifications (admin)
   getPushVapidKey: (token: string) =>
     request<{ public_key: string | null }>("/notifications/push/vapid-public-key", {}, token),
-  subscribePush: (token: string, body: { endpoint: string; p256dh: string; auth: string }) =>
+  subscribePush: (token: string, body: { endpoint: string; p256dh: string; auth: string; os_name?: string }) =>
     request("/notifications/push/subscribe", { method: "POST", body: JSON.stringify(body) }, token),
   listPushSubscriptions: (token: string) =>
     request<PushSubscriptionInfo[]>("/notifications/push/subscriptions", {}, token),
@@ -1075,6 +1075,7 @@ export interface PushSubscriptionInfo {
   endpoint: string;
   display_endpoint: string;
   user_id: string | null;
+  os_name: string;
   created_at: string;
 }
 

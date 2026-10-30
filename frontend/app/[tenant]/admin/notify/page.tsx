@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
 import { api, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffPushUser, type StaffRouteTestResult } from "@/lib/api";
-import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, matchesVapidKey, type PushStatus } from "@/lib/push";
+import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, getClientOsName, matchesVapidKey, type PushStatus } from "@/lib/push";
 import { getAccessToken } from "@/lib/auth";
 
 // カスタムWebhook は当面、管理画面に出さない（送信の仕組みと API はそのまま）。
@@ -63,7 +63,7 @@ function SlackMark({ size = 20 }: { size?: number }) {
 function PushPanel({ authToken }: { authToken: string }) {
   const [vapidKey, setVapidKey] = useState<string | null>(null);
   const [isSubscribed, setIsSubscribed] = useState(false);
-  const [subscriptions, setSubscriptions] = useState<{ id: string; endpoint: string; display_endpoint: string; created_at: string }[]>([]);
+  const [subscriptions, setSubscriptions] = useState<{ id: string; endpoint: string; display_endpoint: string; os_name: string; created_at: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [testSent, setTestSent] = useState(false);
@@ -80,6 +80,19 @@ function PushPanel({ authToken }: { authToken: string }) {
         getCurrentPushSubscription(),
       ]);
       setVapidKey(keyRes.public_key);
+      const own = sub ? subs.find((s) => s.endpoint === sub.endpoint) : undefined;
+      const osName = getClientOsName();
+      // 既存購読には OS 列が無かったため、このブラウザの行は画面を開いた時点で補完する。
+      if (sub && own && own.os_name === "不明") {
+        const json = sub.toJSON();
+        await api.subscribePush(authToken, {
+          endpoint: sub.endpoint,
+          p256dh: json.keys?.p256dh ?? "",
+          auth: json.keys?.auth ?? "",
+          os_name: osName,
+        });
+        own.os_name = osName;
+      }
       setSubscriptions(subs);
       // Only "receiving" if this browser's subscription uses the current key and the
       // server still has it — otherwise offer to register again.
@@ -127,6 +140,7 @@ function PushPanel({ authToken }: { authToken: string }) {
         endpoint: sub.endpoint,
         p256dh: json.keys?.p256dh ?? "",
         auth: json.keys?.auth ?? "",
+        os_name: getClientOsName(),
       });
       setIsSubscribed(true);
       setPushStatus(getPushStatus());
@@ -304,6 +318,7 @@ function PushPanel({ authToken }: { authToken: string }) {
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 11.5, color: "#2d2a24", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.display_endpoint}</div>
+                    <div style={{ fontSize: 10.5, color: "#a8a198", marginTop: 2 }}>OS: {s.os_name || "不明"}</div>
                     <div style={{ fontSize: 10.5, color: "#a8a198", marginTop: 2 }}>登録日: {new Date(s.created_at).toLocaleString("ja-JP")}</div>
                   </div>
                   <button

@@ -27,6 +27,8 @@ class PushSubscription(Base):
     endpoint: Mapped[str] = mapped_column(Text, nullable=False)
     p256dh: Mapped[str] = mapped_column(String(512), nullable=False)
     auth_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    # 生の User-Agent は保持せず、画面表示に必要な正規化済み OS 名だけを保存する。
+    os_name: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     tenant = relationship("Tenant", back_populates="push_subscriptions")
