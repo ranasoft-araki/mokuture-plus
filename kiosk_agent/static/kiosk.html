@@ -517,6 +517,10 @@ async function mockFetch(method, path, body) {
     _mockDecisionState = ["accepted", "phone", "declined"][_mockCreateCount++ % 3];
     return { id: "mock", visitor_name: body?.visitor_name ?? "", created_at: "" };
   }
+  if (path.endsWith("/timeout") && path.startsWith("/proxy/reception/")) {
+    _mockDecisionState = "phone";
+    return { id: "mock", state: "phone", timeout_applied: true, decision_expired: true };
+  }
   if (path.startsWith("/proxy/reception/")) {
     // 待機画面のポーリング: 数回で確定状態を返して結果画面デモへ。
     _mockDecisionPolls += 1;
@@ -644,6 +648,7 @@ async function _realFetch(method, path, body, token) {
 function _isRealNotifyPath(path) {
   return path === "/proxy/reception"                                   // 受付→スタッフ通知
       || /^\/proxy\/reception\/[^/]+$/.test(path)                      // OK/NG応答のポーリング(通知と整合)
+      || /^\/proxy\/reception\/[^/]+\/timeout$/.test(path)            // 待機終了→電話案内の確定・関係者通知
       || path === "/proxy/call-staff";                                 // 配達の呼び出し→通知
   // 注: 置き配通知はローカルファースト化に伴い /device 経路(agent→backend notify-delivery)へ移行。
 }
@@ -2655,7 +2660,18 @@ function showDelivery() {
         // 無応答フォールバック: 90秒で電話案内へ(配達員が電話できるように)。
         const timeoutSec = Number(callNotificationTimeoutSec);
         if (Number.isFinite(timeoutSec) && timeoutSec > 0) {
-          later(timeoutSec * 1000, () => finish("resultPhone"));
+          const expire = async () => {
+            if (settled) return;
+            try {
+              const r = await apiPost("/proxy/reception/" + encodeURIComponent(callId) + "/timeout", {}, ptoken);
+              if (r && r.state === "accepted") finish("resultOk");
+              else if (r && (r.state === "phone" || r.state === "declined")) finish("resultPhone");
+            } catch (_) {
+              // バックエンドで電話案内を確定できるまで画面は切り替えず、応答ポーリングも継続する。
+              later(2500, expire);
+            }
+          };
+          later(timeoutSec * 1000, expire);
         }
       } else {
         // 受付IDが無く応答をポーリングできない場合: 一定時間で電話案内へ(応答不明時も電話で呼び出せるように)。
@@ -4584,7 +4600,19 @@ function showCalling(data) {
   // 無応答フォールバック: 通知の応答が時間切れなら電話案内へ(来訪者が電話で呼び出せる)→自動でidle復帰。
   const timeoutSec = Number(data.notificationTimeoutSec);
   if (Number.isFinite(timeoutSec) && timeoutSec > 0) {
-    later(timeoutSec * 1000, () => { if (done) return; done = true; AN.staffResponded("timeout"); cleanup(); go("resultPhone", data); });
+    const expire = async () => {
+      if (done) return;
+      try {
+        const r = await apiPost("/proxy/reception/" + encodeURIComponent(rid) + "/timeout", {}, token);
+        if (r && r.state === "accepted")      { done = true; AN.staffResponded("accepted"); cleanup(); go("resultOk", data); }
+        else if (r && r.state === "phone")    { done = true; AN.staffResponded(r.decision_expired ? "timeout" : "phone"); cleanup(); go("resultPhone", data); }
+        else if (r && r.state === "declined") { done = true; AN.staffResponded("declined"); cleanup(); go("resultDecline", data); }
+      } catch (_) {
+        // 状態を更新できないまま電話案内を出さない。通信復旧まで再試行し、通常の応答監視も続ける。
+        later(2500, expire);
+      }
+    };
+    later(timeoutSec * 1000, expire);
   }
 }
 

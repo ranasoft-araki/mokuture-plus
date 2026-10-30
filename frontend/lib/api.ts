@@ -957,6 +957,7 @@ export interface ReceptionLog extends ReceptionCreate {
   escalated_at?: string | null;
   decided_by_name?: string | null;
   decision_applied?: boolean | null;
+  decision_expired?: boolean | null;
 }
 
 /** 訪問先担当者ごとの通知先と代理通知の設定（管理画面「通知設定」）。 */

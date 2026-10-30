@@ -60,6 +60,7 @@ class DecisionResult:
     state: str
     applied: bool
     decided_by_name: str
+    decision_expired: bool
 
 
 async def _apply_decision(
@@ -100,6 +101,7 @@ async def _apply_decision(
         state=log.state,
         applied=applied,
         decided_by_name=(log.decided_by_name or "担当者"),
+        decision_expired=(getattr(log, "decided_via", None) == "kiosk_timeout"),
     )
 
 
@@ -203,6 +205,7 @@ class ReceptionOut(BaseModel):
     escalated_at: str | None = None
     decided_by_name: str | None = None
     decision_applied: bool | None = None
+    decision_expired: bool | None = None
 
     model_config = {"from_attributes": True}
 
@@ -402,6 +405,7 @@ async def decide_reception_by_token(
         "state": outcome.state,
         "decision_applied": outcome.applied,
         "decided_by_name": outcome.decided_by_name,
+        "decision_expired": outcome.decision_expired,
     }
 
 
@@ -428,7 +432,11 @@ async def decide_reception(
     )
     if outcome.applied:
         background.add_task(reception_notify.fire_decision_notifications, log.tenant_id, log.id)
-    return _log_out(log, decision_applied=outcome.applied)
+    return _log_out(
+        log,
+        decision_applied=outcome.applied,
+        decision_expired=outcome.decision_expired,
+    )
 
 
 class BulkDeleteRequest(BaseModel):
@@ -579,7 +587,12 @@ async def today_stats(user: User = Depends(get_current_user), db: AsyncSession =
     return {"date": today.isoformat(), "count": count}
 
 
-def _log_out(r: ReceptionLog, *, decision_applied: bool | None = None) -> dict:
+def _log_out(
+    r: ReceptionLog,
+    *,
+    decision_applied: bool | None = None,
+    decision_expired: bool | None = None,
+) -> dict:
     return {
         "id": r.id,
         "visitor_name": r.visitor_name,
@@ -594,4 +607,9 @@ def _log_out(r: ReceptionLog, *, decision_applied: bool | None = None) -> dict:
         "escalated_at": iso_z(getattr(r, "escalated_at", None)),
         "decided_by_name": getattr(r, "decided_by_name", None),
         "decision_applied": decision_applied,
+        "decision_expired": (
+            decision_expired
+            if decision_expired is not None
+            else getattr(r, "decided_via", None) == "kiosk_timeout"
+        ),
     }

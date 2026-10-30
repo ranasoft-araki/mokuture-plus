@@ -936,6 +936,40 @@ async def kiosk_reception_status(
     return {"id": log.id, "state": log.state}
 
 
+@router.post("/reception/{log_id}/timeout")
+async def kiosk_reception_timeout(
+    log_id: str,
+    background: BackgroundTasks,
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    db: AsyncSession = Depends(get_db),
+):
+    """応答待ち時間の終了を、スタッフ応答と同じ先着保証で電話案内として確定する。"""
+    tenant, _ = ctx
+    log = await db.get(ReceptionLog, log_id)
+    if log is None or log.tenant_id != tenant.id:
+        raise HTTPException(status_code=404, detail="Reception log not found")
+
+    # 遅延 import で kiosk ↔ reception のモジュール循環を避ける。
+    from app.api.reception import _apply_decision
+
+    outcome = await _apply_decision(
+        db,
+        log,
+        "phone",
+        actor_name="システム",
+        via="kiosk_timeout",
+    )
+    if outcome.applied:
+        background.add_task(reception_notify.fire_decision_notifications, tenant.id, log.id)
+    return {
+        "ok": True,
+        "id": log.id,
+        "state": outcome.state,
+        "timeout_applied": outcome.applied,
+        "decision_expired": outcome.decision_expired,
+    }
+
+
 # ── Staff call (delivery) ──────────────────────────────────────────────────────
 
 class CallStaffBody(BaseModel):

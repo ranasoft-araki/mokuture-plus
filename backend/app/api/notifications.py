@@ -841,7 +841,11 @@ async def slack_interactions(
     label = _DECISION_JP.get(outcome.state, outcome.state)
     who = outcome.decided_by_name
     orig_text = (payload.get("message") or {}).get("text") or "来客の受付"
-    ctx = f"✅ 対応済み：*{label}*" + (f"（{who}）" if who else "")
+    ctx = (
+        "⌛ 対応時間切れです。キオスクは電話案内に切り替わりました。"
+        if outcome.decision_expired
+        else f"✅ 対応済み：*{label}*" + (f"（{who}）" if who else "")
+    )
     updated = {
         "replace_original": True,
         "text": orig_text,

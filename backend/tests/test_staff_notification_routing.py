@@ -330,6 +330,32 @@ async def test_先の担当者が対応したら代理担当者へ対応済み�
     assert sent_push == ["ep-sato"]
 
 
+async def test_対応時間切れは最初の担当者と代理担当者の両方へ通知する(tenant, sent_push, sent_chatwork, no_slack):
+    from datetime import datetime
+
+    await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
+    tanaka = await add_user(tenant.id, "田中太郎")
+    sato = await add_user(tenant.id, "佐藤花子")
+    await add_push_subscription(tenant.id, tanaka.id, "ep-tanaka")
+    await add_push_subscription(tenant.id, sato.id, "ep-sato")
+    await add_route(
+        tenant.id, "田中太郎", push_user_id=tanaka.id,
+        include_default=False, fallback="佐藤花子", escalate_after_sec=60,
+    )
+    await add_route(tenant.id, "佐藤花子", push_user_id=sato.id, include_default=False)
+    log = await add_reception(tenant.id, "田中太郎", state="phone")
+    async with AsyncSessionLocal() as db:
+        row = await db.get(type(log), log.id)
+        row.escalated_at = datetime.utcnow()
+        row.decided_by_name = "システム"
+        row.decided_via = "kiosk_timeout"
+        await db.commit()
+
+    await reception_notify.fire_decision_notifications(tenant.id, log.id)
+
+    assert set(sent_push) == {"ep-tanaka", "ep-sato"}
+
+
 async def test_他テナントの端末へは送らない(tenant, sent_push, sent_chatwork, no_slack):
     from app.models.tenant import Tenant
     import uuid as _uuid

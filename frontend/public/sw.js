@@ -129,7 +129,9 @@ self.addEventListener('notificationclick', (e) => {
           if (result.decision_applied === false) {
             const who = result.decided_by_name || '別の担当者';
             await self.registration.showNotification('受付対応のお知らせ', {
-              body: `${who}さんが対応済みです。`,
+              body: result.decision_expired
+                ? '対応時間切れです。キオスクは電話案内に切り替わりました。'
+                : `${who}さんが対応済みです。`,
               icon: '/icons/icon.svg',
               tag: `reception-already-${result.id || data.logId || ''}`,
               data: { url: data.url || '/', logId: result.id || data.logId },

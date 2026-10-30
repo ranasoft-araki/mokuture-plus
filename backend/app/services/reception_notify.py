@@ -142,9 +142,16 @@ async def fire_decision_notifications(tenant_id: str, log_id: str) -> None:
                 if fallback is not None:
                     destinations.append(fallback)
 
+            expired = getattr(log, "decided_via", None) == "kiosk_timeout"
             actor = (log.decided_by_name or "担当者").strip()
             label = _DECISION_LABELS[log.state]
-            text = f"✅ {actor}さんが対応済みです（{label}）\n{with_honorific(log.visitor_name)}（{log.company or '—'}）"
+            if expired:
+                text = (
+                    "⌛ 対応時間切れのため、キオスクを電話案内に切り替えました。\n"
+                    f"{with_honorific(log.visitor_name)}（{log.company or '—'}）"
+                )
+            else:
+                text = f"✅ {actor}さんが対応済みです（{label}）\n{with_honorific(log.visitor_name)}（{log.company or '—'}）"
 
             default_slack = await staff_routing.load_default_slack_config(db, tenant_id)
             slack_enabled = await notification_channels.is_enabled(db, tenant_id, "slack")
@@ -165,12 +172,19 @@ async def fire_decision_notifications(tenant_id: str, log_id: str) -> None:
                 emails = {addr for dest in destinations for addr in dest.emails if addr}
                 tenant = await db.get(Tenant, tenant_id)
                 tenant_name = tenant.name if tenant else settings.app_name
-                subject = f"【{tenant_name}】受付対応のお知らせ"
-                plain = f"{actor}さんが{label}で対応しました。\n\n{text}"
-                html = (
-                    f"<p><strong>{escape(actor)}さんが{escape(label)}で対応しました。</strong></p>"
-                    f"<p>{escape(with_honorific(log.visitor_name))}（{escape(log.company or '—')}）</p>"
-                )
+                subject = f"【{tenant_name}】受付対応時間切れのお知らせ" if expired else f"【{tenant_name}】受付対応のお知らせ"
+                if expired:
+                    plain = text
+                    html = (
+                        "<p><strong>対応時間切れのため、キオスクを電話案内に切り替えました。</strong></p>"
+                        f"<p>{escape(with_honorific(log.visitor_name))}（{escape(log.company or '—')}）</p>"
+                    )
+                else:
+                    plain = f"{actor}さんが{label}で対応しました。\n\n{text}"
+                    html = (
+                        f"<p><strong>{escape(actor)}さんが{escape(label)}で対応しました。</strong></p>"
+                        f"<p>{escape(with_honorific(log.visitor_name))}（{escape(log.company or '—')}）</p>"
+                    )
                 for addr in emails:
                     try:
                         await email_service.send_email(
@@ -209,8 +223,11 @@ async def fire_decision_notifications(tenant_id: str, log_id: str) -> None:
                             endpoint=sub.endpoint,
                             p256dh=sub.p256dh,
                             auth=sub.auth_key,
-                            title="受付対応のお知らせ",
-                            body=f"{actor}さんが{label}で対応しました。",
+                            title="受付対応時間切れのお知らせ" if expired else "受付対応のお知らせ",
+                            body=(
+                                "対応時間切れのため、キオスクを電話案内に切り替えました。"
+                                if expired else f"{actor}さんが{label}で対応しました。"
+                            ),
                             url=f"/{tenant_id}/admin/reception?respond={log.id}",
                             private_key=private_key,
                             subject=settings.vapid_subject,
