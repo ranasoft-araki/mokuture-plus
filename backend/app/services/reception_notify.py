@@ -29,6 +29,7 @@ from app.models.tenant import Tenant
 from app.services import analytics as analytics_service
 from app.services import analytics_link
 from app.services import chatwork
+from app.services import notification_channels
 from app.services import email as email_service
 from app.services import staff_routing
 from app.services.crypto import decrypt_dict
@@ -132,7 +133,10 @@ async def _notify_slack(
 ) -> bool | None:
     """True=1件以上成功 / False=全滅 / None=宛先が無く送らなかった（分析ログの判定に使う）。"""
     default_config = await staff_routing.load_default_slack_config(db, tenant_id)
-    targets = staff_routing.slack_send_configs(default_config, dest)
+    default_enabled = await notification_channels.is_enabled(db, tenant_id, "slack")
+    targets = staff_routing.slack_send_configs(
+        default_config, dest, default_enabled=default_enabled
+    )
     if not targets:
         return None
     try:
@@ -203,7 +207,9 @@ async def push_targets(
             return targeted
 
     # ここから先は「担当者ごとの指定が無い／効かなかった」場合。
-    if dest.use_default or escalated_from:
+    if (dest.use_default or escalated_from) and await notification_channels.is_enabled(
+        db, tenant_id, "push"
+    ):
         return all_subs
     return []
 

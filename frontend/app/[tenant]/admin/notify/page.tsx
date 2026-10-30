@@ -43,6 +43,39 @@ function TextInput({ placeholder, mono, value, onChange }: { placeholder?: strin
   );
 }
 
+function NotificationToggle({
+  enabled,
+  saving,
+  error,
+  onChange,
+}: {
+  enabled: boolean;
+  saving: boolean;
+  error?: string;
+  onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 13px", marginBottom: 16, background: "#f4f1ea", border: "1px solid #efece5", borderRadius: 8 }}>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={enabled}
+        aria-label="通知のオン・オフ"
+        disabled={saving}
+        onClick={() => onChange(!enabled)}
+        style={{ width: 38, height: 22, padding: 2, border: "none", borderRadius: 999, background: enabled ? "#4a7c4e" : "#c8c2b7", cursor: saving ? "wait" : "pointer", opacity: saving ? 0.65 : 1, transition: "background 0.15s", flexShrink: 0 }}
+      >
+        <span style={{ display: "block", width: 18, height: 18, borderRadius: "50%", background: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,0.2)", transform: enabled ? "translateX(16px)" : "translateX(0)", transition: "transform 0.15s" }} />
+      </button>
+      <div>
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: "#2d2a24" }}>{saving ? "保存中…" : enabled ? "通知する" : "通知しない"}</div>
+        <div style={{ fontSize: 10.5, color: "#8a8378", marginTop: 2 }}>連携情報は保持されます。担当者ごとに指定した通知先には影響しません。</div>
+        {error && <div style={{ fontSize: 10.5, color: "#a84238", marginTop: 4 }}>{error}</div>}
+      </div>
+    </div>
+  );
+}
+
 // Official Slack logo mark (4-color hash).
 function SlackMark({ size = 20 }: { size?: number }) {
   return (
@@ -60,7 +93,7 @@ function SlackMark({ size = 20 }: { size?: number }) {
 }
 
 // ── Push Push Panel ────────────────────────────────────────────────────
-function PushPanel({ authToken }: { authToken: string }) {
+function PushPanel({ authToken, notificationsEnabled, toggleSaving, toggleError, onToggle }: { authToken: string; notificationsEnabled: boolean; toggleSaving: boolean; toggleError?: string; onToggle: (enabled: boolean) => void }) {
   const [vapidKey, setVapidKey] = useState<string | null>(null);
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [subscriptions, setSubscriptions] = useState<{ id: string; endpoint: string; display_endpoint: string; os_name: string; created_at: string }[]>([]);
@@ -202,6 +235,7 @@ function PushPanel({ authToken }: { authToken: string }) {
 
   return (
     <div>
+      <NotificationToggle enabled={notificationsEnabled} saving={toggleSaving} error={toggleError} onChange={onToggle} />
       {/* Tabs */}
       <div style={{ display: "flex", borderBottom: "1px solid #efece5", marginBottom: 20 }}>
         {[
@@ -1107,6 +1141,12 @@ export default function AdminNotifyPage() {
   const [cwError, setCwError] = useState("");
   const [cwTested, setCwTested] = useState(false);
 
+  const [slackNotificationsEnabled, setSlackNotificationsEnabled] = useState(true);
+  const [chatworkNotificationsEnabled, setChatworkNotificationsEnabled] = useState(true);
+  const [pushNotificationsEnabled, setPushNotificationsEnabled] = useState(true);
+  const [channelToggleSaving, setChannelToggleSaving] = useState<"" | "slack" | "chatwork" | "push">("");
+  const [channelToggleError, setChannelToggleError] = useState<{ channel: "slack" | "chatwork" | "push"; message: string } | null>(null);
+
   // 「担当者ごとの通知先」パネルは別フェッチなので、ここでの連携/解除/保存を伝えて
   // 読み直させる合図（単調増加カウンタ。0=初回マウント扱いで無視される）。
   const [staffRoutesRefresh, setStaffRoutesRefresh] = useState(0);
@@ -1229,12 +1269,36 @@ export default function AdminNotifyPage() {
       // push_delivery stores { enabled: bool }; default ON when unset
       const dlPush = (settings["push_delivery"] ?? {}) as Record<string, unknown>;
       setDlPushEnabled(dlPush["enabled"] !== false);
+
+      setSlackNotificationsEnabled(settings["channel_enabled_slack"]?.["enabled"] !== false);
+      setChatworkNotificationsEnabled(settings["channel_enabled_chatwork"]?.["enabled"] !== false);
+      setPushNotificationsEnabled(settings["channel_enabled_push"]?.["enabled"] !== false);
     } catch {
       /* leave previous state */
     }
   }, [authToken]);
 
   useEffect(() => { reloadNotificationSettings(); }, [reloadNotificationSettings]);
+
+  const handleToggleChannel = async (channel: "slack" | "chatwork" | "push", enabled: boolean) => {
+    const setters = {
+      slack: setSlackNotificationsEnabled,
+      chatwork: setChatworkNotificationsEnabled,
+      push: setPushNotificationsEnabled,
+    };
+    const setEnabled = setters[channel];
+    setEnabled(enabled);
+    setChannelToggleSaving(channel);
+    setChannelToggleError(null);
+    try {
+      await api.updateNotificationChannelEnabled(authToken, channel, enabled);
+    } catch (e: unknown) {
+      setEnabled(!enabled);
+      setChannelToggleError({ channel, message: e instanceof Error ? e.message : "通知設定の保存に失敗しました" });
+    } finally {
+      setChannelToggleSaving("");
+    }
+  };
 
   const handleConnectSlack = async () => {
     setSlackConnecting(true);
@@ -1537,6 +1601,13 @@ export default function AdminNotifyPage() {
             <MkPill tone={slackStatus?.connected ? "live" : "off"}>{slackStatus?.connected ? "連携済" : "未連携"}</MkPill>
           </div>
 
+          <NotificationToggle
+            enabled={slackNotificationsEnabled}
+            saving={channelToggleSaving !== ""}
+            error={channelToggleError?.channel === "slack" ? channelToggleError.message : undefined}
+            onChange={(enabled) => handleToggleChannel("slack", enabled)}
+          />
+
           {slackNotice === "connected" && (
             <div style={{ marginBottom: 14, padding: "10px 14px", background: "#eaf0e8", border: "1px solid rgba(74,124,78,0.25)", borderRadius: 8, color: "#3a6240", fontSize: 12 }}>
               Slack連携が完了しました。
@@ -1724,6 +1795,12 @@ export default function AdminNotifyPage() {
             </div>
             <MkPill tone={cwConfigured ? "live" : "off"}>{cwConfigured ? "連携済" : "未連携"}</MkPill>
           </div>
+          <NotificationToggle
+            enabled={chatworkNotificationsEnabled}
+            saving={channelToggleSaving !== ""}
+            error={channelToggleError?.channel === "chatwork" ? channelToggleError.message : undefined}
+            onChange={(enabled) => handleToggleChannel("chatwork", enabled)}
+          />
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Field
               label="API トークン"
@@ -1785,7 +1862,13 @@ export default function AdminNotifyPage() {
             subtitle="担当者のスマホに、アプリの通知として届けます"
           />
           {authToken ? (
-            <PushPanel authToken={authToken} />
+            <PushPanel
+              authToken={authToken}
+              notificationsEnabled={pushNotificationsEnabled}
+              toggleSaving={channelToggleSaving !== ""}
+              toggleError={channelToggleError?.channel === "push" ? channelToggleError.message : undefined}
+              onToggle={(enabled) => handleToggleChannel("push", enabled)}
+            />
           ) : (
             <div style={{ padding: "20px 0", color: "#a8a198", fontSize: 13 }}>認証が必要です。ページを再読み込みしてください。</div>
           )}

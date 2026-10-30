@@ -233,6 +233,31 @@ async def test_ルート未設定なら従来どおり全端末へ(tenant, sent_
     assert sorted(sent_push) == ["ep-1", "ep-2"]
 
 
+async def test_全体プッシュOFFなら共通端末へ送らない(tenant, sent_push, sent_chatwork, no_slack):
+    await set_staff_list(tenant.id, ["田中太郎"])
+    u = await add_user(tenant.id, "誰か")
+    await add_push_subscription(tenant.id, u.id, "ep-1")
+    await set_notification_setting(tenant.id, "channel_enabled_push", {"enabled": False})
+
+    log = await add_reception(tenant.id, "田中太郎")
+    await notify(tenant.id, log)
+
+    assert sent_push == []
+
+
+async def test_全体プッシュOFFでも担当者指定端末へは送る(tenant, sent_push, sent_chatwork, no_slack):
+    await set_staff_list(tenant.id, ["田中太郎"])
+    tanaka = await add_user(tenant.id, "田中太郎")
+    await add_push_subscription(tenant.id, tanaka.id, "ep-tanaka")
+    await add_route(tenant.id, "田中太郎", push_user_id=tanaka.id, include_default=False)
+    await set_notification_setting(tenant.id, "channel_enabled_push", {"enabled": False})
+
+    log = await add_reception(tenant.id, "田中太郎")
+    await notify(tenant.id, log)
+
+    assert sent_push == ["ep-tanaka"]
+
+
 async def test_共通OFFでプッシュ先未指定なら送らない(tenant, sent_push, sent_chatwork, no_slack):
     """従来の挙動を保つ: 個別宛先だけに送る設定なら、プッシュは鳴らさない。"""
     await set_staff_list(tenant.id, ["田中太郎"])
@@ -311,6 +336,20 @@ async def test_宛先にルームとプッシュ先が乗る(tenant):
     assert dest.chatwork_rooms == ("222",)
     assert dest.push_user_ids == (u.id,)
     assert dest.has_direct is True
+
+
+def test_Slack全体OFFでも担当者指定チャンネルは残る():
+    config = {"bot_access_token": "xoxb-test", "channel_id": "C-DEFAULT"}
+    dest = staff_routing.Destinations(
+        slack_channels=(("C-STAFF", "担当者"),),
+        use_default=True,
+    )
+
+    targets = staff_routing.slack_send_configs(config, dest, default_enabled=False)
+
+    assert [(target[0]["channel_id"], target[1]) for target in targets] == [
+        ("C-STAFF", "担当者")
+    ]
 
 
 async def test_ルームだけでも個別宛先とみなす(tenant):

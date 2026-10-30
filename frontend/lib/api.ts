@@ -590,7 +590,17 @@ export const api = {
 
   // Notification settings
   getNotificationSettings: (token: string) =>
-    request<Record<string, Record<string, string>>>("/notifications/settings", {}, token),
+    request<Record<string, Record<string, unknown>>>("/notifications/settings", {}, token),
+  updateNotificationChannelEnabled: (
+    token: string,
+    channel: "slack" | "chatwork" | "push",
+    enabled: boolean,
+  ) =>
+    request<{ ok: boolean }>(
+      `/notifications/settings/channel-enabled/${channel}`,
+      { method: "PUT", body: JSON.stringify({ enabled }) },
+      token,
+    ),
 
   // Slack OAuth (Bot Token + chat.postMessage) — "Slackに追加" flow. The customer never
   // types/sees a bot token; it is stored server-side and never returned (only status).

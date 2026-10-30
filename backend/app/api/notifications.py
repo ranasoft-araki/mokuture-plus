@@ -20,6 +20,7 @@ from app.models.user import User
 from app.services.auth import create_slack_state_token, verify_slack_state_token
 from app.services.crypto import encrypt_dict, decrypt_dict
 from app.services import chatwork as chatwork_service
+from app.services import notification_channels
 from app.services.slack import SlackNotifier, SlackOAuthError, SlackApiError
 from app.services.webpush import send_push
 from app.config import settings
@@ -49,6 +50,10 @@ class WebhookConfig(BaseModel):
 
 
 class PushDeliveryConfig(BaseModel):
+    enabled: bool = True
+
+
+class ChannelEnabledConfig(BaseModel):
     enabled: bool = True
 
 
@@ -166,6 +171,25 @@ async def update_push_delivery(
     registered devices (shared with reception); this only enables/disables it for
     the 配達の呼び出し flow. Default = enabled (see app.api.kiosk.call-staff)."""
     await _upsert_setting(user.tenant_id, "push_delivery", {"enabled": bool(body.enabled)}, db)
+    return {"ok": True}
+
+
+@router.put("/settings/channel-enabled/{channel}")
+async def update_channel_enabled(
+    channel: str,
+    body: ChannelEnabledConfig,
+    user: User = Depends(require_roles("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Enable/disable shared notifications without deleting integration settings."""
+    if channel not in notification_channels.CHANNELS:
+        raise HTTPException(status_code=422, detail="invalid notification channel")
+    await _upsert_setting(
+        user.tenant_id,
+        notification_channels.setting_type(channel),
+        {"enabled": bool(body.enabled)},
+        db,
+    )
     return {"ok": True}
 
 

@@ -43,6 +43,7 @@ from app.services.crypto import decrypt_dict
 from app.services.webpush import send_push
 from app.services.auth import hash_password, verify_password, create_decision_token
 from app.services import chatwork as chatwork_service
+from app.services import notification_channels
 from app.services import events as event_bus
 from app.services import reception_notify
 from app.services import analytics as analytics_service
@@ -1307,6 +1308,8 @@ async def _notify_slack_text(
     ``decision`` = (actions, token) を渡すと、署名シークレット設定済み & Bot Token 経路の
     ときだけ 受付/電話 の対応ボタン(Block Kit)を付ける。押下は受付通知と同じ interactions
     エンドポイントで処理される。"""
+    if not await notification_channels.is_enabled(db, tenant_id, "slack"):
+        return None
     base_setting = await _first_configured_setting(tenant_id, ("slack",), db)
     override_setting = await _first_configured_setting(tenant_id, ("slack_delivery",), db)
     if base_setting is None and override_setting is None:
@@ -1333,6 +1336,8 @@ async def _push_delivery_enabled(tenant_id: str, db: AsyncSession) -> bool:
 
     ON by default (backward compatible) — only a stored ``push_delivery`` setting
     with ``enabled == False`` disables it. Tenant-scoped."""
+    if not await notification_channels.is_enabled(db, tenant_id, "push"):
+        return False
     result = await db.execute(
         select(NotificationSetting).where(
             NotificationSetting.tenant_id == tenant_id,
@@ -1434,6 +1439,8 @@ async def _notify_chatwork_text(
     """
     # 「最初に見つかった行」で確定させる（不完全ならそこで終わる）。不完全な行を飛ばして
     # 次の候補へ流すと、配達専用ルームを空にしているテナントの配達通知が受付用ルームへ漏れる。
+    if not await notification_channels.is_enabled(db, tenant_id, "chatwork"):
+        return None
     config = await chatwork_service.load_config(db, tenant_id, types)
     api_token = (config.get("api_token") or "").strip()
     room_id = (config.get("room_id") or "").strip()
