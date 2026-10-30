@@ -43,6 +43,7 @@ _ENSURE_COLUMNS = {
         # いるので古い DB にも揃えておく(既存行は FALSE)。
         "voice_cloud_enabled": "BOOLEAN DEFAULT FALSE",
         "voice_cloud_opt_out": "BOOLEAN DEFAULT FALSE",
+        "notification_continue_sec": "INTEGER DEFAULT 90 NOT NULL",
     },
     "lockers": {
         "name": "VARCHAR(255)",
@@ -52,6 +53,9 @@ _ENSURE_COLUMNS = {
     },
     "reception_logs": {
         "decided_at": "TIMESTAMP",
+        "decided_by_user_id": "VARCHAR(36)",
+        "decided_by_name": "VARCHAR(255)",
+        "decided_via": "VARCHAR(32)",
         # 来訪者が選んだ訪問先部署。
         "department": "VARCHAR(255)",
         # 代理通知(応答が無いときのエスカレーション)を送った時刻。二重送信の防止も兼ねる。

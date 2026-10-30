@@ -386,10 +386,14 @@ function PushPanel({ authToken, notificationsEnabled, toggleSaving, toggleError,
 const ESCALATE_CHOICES = [
   { sec: 30, label: "30秒" },
   { sec: 60, label: "1分" },
+  { sec: 90, label: "1分30秒" },
   { sec: 120, label: "2分" },
   { sec: 180, label: "3分" },
   { sec: 300, label: "5分" },
   { sec: 600, label: "10分" },
+  { sec: 900, label: "15分" },
+  { sec: 1800, label: "30分" },
+  { sec: 3600, label: "60分" },
 ];
 
 // API の認可エラーをそのまま見せても利用者は次に何をすべきか判断できないため、
@@ -723,6 +727,7 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
   const [slackUsers, setSlackUsers] = useState<{ id: string; name: string }[] | null>(null);
   // 解除は取り消せないので2段階にする（Slack連携解除と同じ方式。JSダイアログは使わない）。
   const [confirmClear, setConfirmClear] = useState<string | null>(null);
+  const [savingDefaultTimeout, setSavingDefaultTimeout] = useState(false);
 
   // quiet=true は「読み込み中…」に落とさずデータだけ差し替える。担当者の追加・
   // 並べ替えのたびにパネル全体がアンマウントされ、開いていた編集欄が閉じるのを防ぐ。
@@ -821,6 +826,19 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
     }
   };
 
+  const saveDefaultTimeout = async (timeoutSec: number) => {
+    setSavingDefaultTimeout(true);
+    setError("");
+    try {
+      await api.updateNotificationContinueTime(authToken, timeoutSec);
+      await reload(true);
+    } catch (e: unknown) {
+      setError(staffRoutesErrorMessage(e, "通知継続時間の保存に失敗しました"));
+    } finally {
+      setSavingDefaultTimeout(false);
+    }
+  };
+
   if (loading) {
     return <div style={{ padding: "20px 0", color: "#a8a198", fontSize: 13 }}>読み込み中…</div>;
   }
@@ -846,6 +864,22 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
         onChanged={() => reload(true)}
         onError={setError}
       />
+
+      <div style={{ border: "1px solid #efece5", borderRadius: 9, background: "#fffefb", padding: "14px", marginBottom: 16 }}>
+        <Field
+          label="通知継続時間"
+          hint="担当者が未設定の場合は最初の通知後から、代理通知がある場合は代理への通知後から、この時間だけ応答を待って「電話してください」を表示します。"
+        >
+          <select
+            value={String(data.notification_continue_sec)}
+            disabled={savingDefaultTimeout}
+            onChange={(e) => saveDefaultTimeout(Number(e.target.value))}
+            style={selectStyle}
+          >
+            {ESCALATE_CHOICES.map((c) => <option key={c.sec} value={c.sec}>{c.label}</option>)}
+          </select>
+        </Field>
+      </div>
 
       {names.length === 0 && (
         <div style={{ padding: "16px 18px", background: "#f4f1ea", border: "1px solid #efece5", borderRadius: 8, fontSize: 12.5, color: "#6b6559", lineHeight: 1.8 }}>

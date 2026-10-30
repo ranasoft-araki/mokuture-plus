@@ -54,9 +54,19 @@ def decode_token(token: str) -> dict:
 _DECISION_TOKEN_EXPIRE_HOURS = 2
 
 
-def create_decision_token(log_id: str, tenant_id: str) -> str:
+def create_decision_token(
+    log_id: str,
+    tenant_id: str,
+    *,
+    actor_user_id: str | None = None,
+    actor_name: str | None = None,
+) -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=_DECISION_TOKEN_EXPIRE_HOURS)
     payload = {"sub": log_id, "tenant_id": tenant_id, "type": "decision", "exp": expire}
+    if actor_user_id:
+        payload["actor_user_id"] = actor_user_id
+    if actor_name:
+        payload["actor_name"] = actor_name[:255]
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 

@@ -1,5 +1,5 @@
 /* mokuture+ Service Worker — push notifications & offline shell cache */
-const CACHE = 'mokuture-v6';
+const CACHE = 'mokuture-v7';
 const SHELL = ['/', '/icons/icon.svg', '/manifest.json'];
 
 // 受付 OK/NG 応答の送信先フォールバック（プッシュ payload に decisionEndpoint が無い場合）
@@ -123,6 +123,18 @@ self.addEventListener('notificationclick', (e) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token: data.decisionToken, decision: e.action }),
+        }).then(async (response) => {
+          if (!response.ok) return;
+          const result = await response.json();
+          if (result.decision_applied === false) {
+            const who = result.decided_by_name || '別の担当者';
+            await self.registration.showNotification('受付対応のお知らせ', {
+              body: `${who}さんが対応済みです。`,
+              icon: '/icons/icon.svg',
+              tag: `reception-already-${result.id || data.logId || ''}`,
+              data: { url: data.url || '/', logId: result.id || data.logId },
+            });
+          }
         }).catch(() => {})
       );
     }

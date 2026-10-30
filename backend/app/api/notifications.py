@@ -829,11 +829,17 @@ async def slack_interactions(
     if not log or log.tenant_id != tenant_id:
         return {"text": "対象の受付が見つかりません。"}
 
-    state = await _apply_decision(db, log, decision)
+    slack_user = payload.get("user") or {}
+    who = slack_user.get("real_name") or slack_user.get("username") or slack_user.get("name") or "Slack担当者"
+    outcome = await _apply_decision(
+        db, log, decision, actor_name=who, actor_user_id=slack_user.get("id"), via="slack"
+    )
+    if outcome.applied:
+        background.add_task(reception_notify.fire_decision_notifications, log.tenant_id, log.id)
 
     # 元メッセージを「対応済み」に置換（ボタン除去）。押した人も添える。response_url は30分/5回有効。
-    label = _DECISION_JP.get(state, state)
-    who = (payload.get("user") or {}).get("username") or (payload.get("user") or {}).get("name") or ""
+    label = _DECISION_JP.get(outcome.state, outcome.state)
+    who = outcome.decided_by_name
     orig_text = (payload.get("message") or {}).get("text") or "来客の受付"
     ctx = f"✅ 対応済み：*{label}*" + (f"（{who}）" if who else "")
     updated = {

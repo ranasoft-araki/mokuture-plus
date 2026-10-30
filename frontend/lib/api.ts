@@ -638,6 +638,10 @@ export const api = {
   saveStaffRoute: (token: string, body: StaffRouteInput) =>
     request<{ ok: boolean; route: StaffNotificationRoute }>(
       "/notifications/staff-routes", { method: "PUT", body: JSON.stringify(body) }, token),
+  updateNotificationContinueTime: (token: string, timeoutSec: number) =>
+    request<{ ok: boolean; timeout_sec: number }>(
+      "/notifications/staff-routes/notification-timeout",
+      { method: "PUT", body: JSON.stringify({ timeout_sec: timeoutSec }) }, token),
   deleteStaffRoute: (token: string, routeId: string) =>
     request<{ ok: boolean }>(
       `/notifications/staff-routes/${encodeURIComponent(routeId)}`, { method: "DELETE" }, token),
@@ -951,6 +955,8 @@ export interface ReceptionLog extends ReceptionCreate {
   created_at: string;
   /** 代理通知(応答が無いときのエスカレーション)を送った時刻。未送信は null。 */
   escalated_at?: string | null;
+  decided_by_name?: string | null;
+  decision_applied?: boolean | null;
 }
 
 /** 訪問先担当者ごとの通知先と代理通知の設定（管理画面「通知設定」）。 */
@@ -999,6 +1005,9 @@ export interface StaffNotificationRoutesResponse {
   users: StaffPushUser[];
   smtp_enabled: boolean;
   default_escalate_sec: number;
+  notification_continue_sec: number;
+  min_notification_timeout_sec: number;
+  max_notification_timeout_sec: number;
   min_escalate_sec: number;
   max_escalate_sec: number;
 }

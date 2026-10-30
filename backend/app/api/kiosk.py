@@ -34,9 +34,11 @@ from app.models.device import Device, KioskBundleRelease, Locker
 from app.models.tenant import Tenant
 from app.models.content import Media, Playlist, PlaylistItem, Schedule
 from app.models.reception import ReceptionLog
+from app.models.staff_route import StaffNotificationRoute
 from app.models.notification import NotificationSetting, PushSubscription
 from app.models.visitor_appointment import VisitorAppointment
 from app.models.room import MeetingRoom
+from app.models.user import User
 from app.services.slack import SlackNotifier
 from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
@@ -52,6 +54,27 @@ from app.services import analytics_link
 from app.config import settings
 
 _PIN_RE = re.compile(r"^\d{4}$")
+_DEFAULT_NOTIFICATION_TIMEOUT_SEC = 90
+
+
+async def _notification_timeout_sec(db: AsyncSession, tenant: Tenant, staff_name: str | None) -> int:
+    """受付先の設定から、kiosk が電話案内へ進むまでの合計秒数を返す。"""
+    continue_sec = int(
+        getattr(tenant, "notification_continue_sec", _DEFAULT_NOTIFICATION_TIMEOUT_SEC)
+        or _DEFAULT_NOTIFICATION_TIMEOUT_SEC
+    )
+    name = (staff_name or "").strip()
+    if not name:
+        return continue_sec
+    route = (await db.execute(
+        select(StaffNotificationRoute).where(
+            StaffNotificationRoute.tenant_id == tenant.id,
+            StaffNotificationRoute.staff_name == name,
+        )
+    )).scalar_one_or_none()
+    if route is None or not route.fallback_staff_name or int(route.escalate_after_sec or 0) <= 0:
+        return continue_sec
+    return int(route.escalate_after_sec) + continue_sec
 
 # 審査用デモモードの自動返信タスク参照(fire-and-forget の GC 回避に保持)。
 _demo_auto_tasks: set[asyncio.Task] = set()
@@ -844,6 +867,7 @@ async def kiosk_reception(
 ):
     """Submit a reception form entry using device token authentication."""
     tenant, device = ctx
+    notification_timeout_sec = await _notification_timeout_sec(db, tenant, body.staff)
     log = ReceptionLog(
         tenant_id=tenant.id,
         visitor_name=body.visitor_name,
@@ -893,6 +917,7 @@ async def kiosk_reception(
         "id": log.id,
         "visitor_name": log.visitor_name,
         "created_at": log.created_at.isoformat() if log.created_at else "",
+        "notification_timeout_sec": notification_timeout_sec,
     }
 
 
@@ -980,7 +1005,11 @@ async def kiosk_call_staff(
     )
 
     # id を返してキオスクの待機画面が応答(受付/電話)をポーリングできるようにする。
-    return {"ok": True, "id": log.id}
+    return {
+        "ok": True,
+        "id": log.id,
+        "notification_timeout_sec": await _notification_timeout_sec(db, tenant, None),
+    }
 
 
 # ── Lockers (device token auth) ────────────────────────────────────────────────
@@ -1388,8 +1417,27 @@ async def _notify_push_text(
 
         any_ok = False
         failed = False
+        user_ids = {sub.user_id for sub in subs if sub.user_id}
+        users = {}
+        if user_ids:
+            rows = (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()
+            users = {user.id: user for user in rows}
         for sub in subs:
             try:
+                push_data = data
+                if data and data.get("kind") == "reception_decision" and data.get("logId"):
+                    recipient = users.get(sub.user_id) if sub.user_id else None
+                    recipient_name = (
+                        ((recipient.name or "").strip() or recipient.email.split("@", 1)[0])
+                        if recipient else "担当者"
+                    )
+                    push_data = dict(data)
+                    push_data["decisionToken"] = create_decision_token(
+                        str(data["logId"]),
+                        tenant_id,
+                        actor_user_id=sub.user_id,
+                        actor_name=recipient_name,
+                    )
                 ok, error = await send_push(
                     endpoint=sub.endpoint,
                     p256dh=sub.p256dh,
@@ -1400,7 +1448,7 @@ async def _notify_push_text(
                     private_key=private_key,
                     subject=settings.vapid_subject,
                     tag=tag or "reception",
-                    data=data,
+                    data=push_data,
                     actions=actions,
                 )
                 any_ok = any_ok or ok

@@ -32,6 +32,8 @@ class Tenant(Base):
     kiosk_welcome_form_label: Mapped[str] = mapped_column(String(255), default="QRをお持ちでない方はこちら")
     kiosk_idle_timeout_sec: Mapped[int] = mapped_column(Integer, default=60)
     kiosk_complete_timeout_sec: Mapped[int] = mapped_column(Integer, default=10)
+    # 最終通知後、kiosk が電話案内へ切り替わるまで応答を待つ秒数。
+    notification_continue_sec: Mapped[int] = mapped_column(Integer, default=90, nullable=False)
 
     # Logo placement on kiosk screen (relative to 1920x1080)
     logo_pos_x: Mapped[float] = mapped_column(Float, default=0.04)
