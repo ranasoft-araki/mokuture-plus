@@ -336,6 +336,47 @@ async def test_先の担当者が対応したら代理担当者へ対応済み�
     assert sent_push == ["ep-sato"]
 
 
+async def test_先着確定後は最初と代理のSlackチャンネルへ対応済み通知を送る(
+    tenant, sent_push, sent_chatwork, monkeypatch,
+):
+    from datetime import datetime
+
+    sent_slack: list[tuple[str, str]] = []
+
+    async def fake_send(config, text, blocks=None):
+        sent_slack.append((config.get("channel_id", ""), text))
+        return True
+
+    monkeypatch.setattr(reception_notify.SlackNotifier, "send_to_config", fake_send)
+    await set_notification_setting(
+        tenant.id,
+        "slack",
+        {"bot_access_token": "xoxb-test", "channel_id": "C-DEFAULT"},
+    )
+    await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
+    await add_route(
+        tenant.id, "田中太郎",
+        config={"slack_channel_id": "C-FIRST", "slack_channel_name": "最初の担当者"},
+        include_default=False, fallback="佐藤花子", escalate_after_sec=60,
+    )
+    await add_route(
+        tenant.id, "佐藤花子",
+        config={"slack_channel_id": "C-FALLBACK", "slack_channel_name": "代理担当者"},
+        include_default=False,
+    )
+    log = await add_reception(tenant.id, "田中太郎", state="accepted")
+    async with AsyncSessionLocal() as db:
+        row = await db.get(type(log), log.id)
+        row.escalated_at = datetime.utcnow()
+        row.decided_by_name = "田中太郎"
+        await db.commit()
+
+    await reception_notify.fire_decision_notifications(tenant.id, log.id)
+
+    assert {channel for channel, _ in sent_slack} == {"C-FIRST", "C-FALLBACK"}
+    assert all("田中太郎さんが対応済みです（受付）" in text for _, text in sent_slack)
+
+
 async def test_対応時間切れは最初の担当者と代理担当者の両方へ通知する(tenant, sent_push, sent_chatwork, no_slack):
     from datetime import datetime
 
