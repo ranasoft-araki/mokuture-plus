@@ -71,12 +71,7 @@ async def test_担当者のルームへ送る(tenant, sent_chatwork, sent_push, 
     assert "テスト株式会社" in sent_chatwork[0][1]
 
 
-async def test_共通ルームには送らない(tenant, sent_chatwork, sent_push, no_slack):
-    """受付通知のChatworkは担当者ごとのルームだけ。
-
-    共通ルームを既定の宛先にすると、Chatworkを登録済みの全テナントで、何も設定して
-    いないのに受付ごとに鳴り始める（従来、受付→Chatworkの経路は存在しなかった）。
-    """
+async def test_共通にも送る設定なら担当者ルームと共通ルームへ送る(tenant, sent_chatwork, sent_push, no_slack):
     await set_staff_list(tenant.id, ["田中太郎"])
     await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": "111"})
     await add_route(tenant.id, "田中太郎", config={"chatwork_room_id": "222"}, include_default=True)
@@ -84,13 +79,24 @@ async def test_共通ルームには送らない(tenant, sent_chatwork, sent_pus
     log = await add_reception(tenant.id, "田中太郎")
     await notify(tenant.id, log)
 
-    assert [room for room, _ in sent_chatwork] == ["222"]
+    assert [room for room, _ in sent_chatwork] == ["222", "111"]
 
 
-async def test_ルート未設定なら何も送らない(tenant, sent_chatwork, sent_push, no_slack):
-    """設定を1件も作っていないテナントの挙動は従来どおり（Chatworkは鳴らない）。"""
+@pytest.mark.parametrize("staff_name", ["田中太郎", ""])
+async def test_担当者またはルート未設定なら共通ルームへ送る(tenant, sent_chatwork, sent_push, no_slack, staff_name):
     await set_staff_list(tenant.id, ["田中太郎"])
     await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": "111"})
+
+    log = await add_reception(tenant.id, staff_name)
+    await notify(tenant.id, log)
+
+    assert [room for room, _ in sent_chatwork] == ["111"]
+
+
+async def test_ルート未設定でもChatwork全体OFFなら送らない(tenant, sent_chatwork, sent_push, no_slack):
+    await set_staff_list(tenant.id, ["田中太郎"])
+    await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": "111"})
+    await set_notification_setting(tenant.id, "channel_enabled_chatwork", {"enabled": False})
 
     log = await add_reception(tenant.id, "田中太郎")
     await notify(tenant.id, log)
@@ -113,12 +119,12 @@ async def test_共通ルームが空でも担当者ルームへ送る(tenant, se
 async def test_同じルームなら二重投稿しない(tenant, sent_chatwork, sent_push, no_slack):
     await set_staff_list(tenant.id, ["田中太郎", "佐藤花子"])
     await set_notification_setting(tenant.id, "chatwork", {"api_token": "tok", "room_id": "111"})
-    await add_route(tenant.id, "田中太郎", config={"chatwork_room_id": "222"})
+    await add_route(tenant.id, "田中太郎", config={"chatwork_room_id": "111"})
 
     log = await add_reception(tenant.id, "田中太郎")
     await notify(tenant.id, log)
 
-    assert [room for room, _ in sent_chatwork] == ["222"]
+    assert [room for room, _ in sent_chatwork] == ["111"]
 
 
 async def test_来訪者の入力でChatwork記法を壊せない(tenant, sent_chatwork, sent_push, no_slack):

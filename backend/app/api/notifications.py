@@ -144,8 +144,8 @@ async def update_chatwork(
     db: AsyncSession = Depends(get_db),
 ):
     # ルームは任意: トークンだけで「連携済」にできる（担当者ごとのルーム指定・
-    # テスト送信はトークンさえあれば使える）。ルームを設定すると、それが**配達の呼び出し
-    # 専用の宛先**になる（受付通知には使われない。common room is delivery-only）。
+    # テスト送信はトークンさえあれば使える）。ルームを設定すると、配達の呼び出しと、
+    # 担当者別の宛先が無い（または共通宛先も使う）受付通知の宛先になる。
     await _upsert_chatwork(user.tenant_id, "chatwork", body, db)
     await notification_health.clear(user.tenant_id, "chatwork")
     return {"ok": True}
@@ -196,7 +196,7 @@ async def update_webhook(
 # kiosk call-staff when unset (see app.api.kiosk). Slack/Chatwork no longer have their
 # own "連携設定"(接続) here — they reuse the shared Slack bot / Chatwork token and only
 # let delivery override the channel/room (Slack: POST /slack/channel with
-# target="slack_delivery"; Chatwork: the common card's room *is* the delivery room,
+# target="slack_delivery"; Chatwork: the common card's room is shared by reception and delivery,
 # see CLAUDE.md「Chatwork の接続設定」)。2026-10-24: 通常の通知先と配達の通知先で
 # それぞれ別にSlack/Chatworkへ連携させていたのを統合した(無駄な二重連携の解消)。
 
@@ -437,8 +437,8 @@ async def _upsert_chatwork(tenant_id: str, type_: str, body: "ChatworkConfig", d
     画面から素直に上書きすると片方だけ直したときに消える）。
 
     ルームは任意: トークンだけで「連携済」として保存できる（担当者ごとのルーム指定・
-    テスト送信はトークンだけで使える）。ルームを設定すると、それが**配達の呼び出し専用の
-    宛先**になる（common room is delivery-only。受付通知には使われない）。
+    テスト送信はトークンだけで使える）。ルームを設定すると、配達の呼び出しに加えて、
+    担当者ごとの通知先が未設定または「共通の通知先にも送る」の受付にも使用する。
     """
     result = await db.execute(
         select(NotificationSetting).where(

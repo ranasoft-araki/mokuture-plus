@@ -1862,7 +1862,7 @@ export default function AdminNotifyPage() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>Chatwork</div>
-              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>API トークンで連携。担当者ごとの受付通知・配達の呼び出しで使う</div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>API トークンで連携。来客の受付通知・担当者ごとの受付通知・配達の呼び出しで使う</div>
             </div>
             <MkPill tone={cwConfigured ? "live" : "off"}>{cwConfigured ? "連携済" : "未連携"}</MkPill>
           </div>
@@ -1886,9 +1886,9 @@ export default function AdminNotifyPage() {
               />
             </Field>
             <Field
-              label="配達の呼び出しの通知先ルーム"
+              label="共通の通知先ルーム"
               hint={
-                "ここで選んだルームへは「配達の呼び出し」だけが届きます（受付の通知先は、下の「担当者ごとの通知先」で担当者ごとに設定します）。" +
+                "担当者ごとの通知先が未設定の受付、「共通の通知先にも送る」が有効な受付、配達の呼び出しがこのルームへ届きます。" +
                 (cwConfigured ? "空欄のままにすると現在の設定を維持します。" : "未設定でも連携・テスト送信はできます。")
               }
             >

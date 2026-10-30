@@ -259,13 +259,8 @@ def slack_send_configs(
 def chatwork_send_rooms(dest: Destinations) -> list[tuple[str, str]]:
     """投稿する Chatwork ルームの (room_id, 宛先ラベル) 一覧。
 
-    **担当者ごとに設定されたルームだけ**を返す。テナント共通の Chatwork ルームは
-    足さない。Slack と違い、受付通知が Chatwork へ流れる経路はこれまで存在せず
-    （共通ルームは「配達の呼び出し」専用だった）、共通ルームを既定の宛先にすると
-    **Chatwork を登録済みの全テナントで、何も設定していないのに受付ごとに鳴り始める**。
-    受付を Chatwork へ流したい担当者にルームを設定する、という明示的な opt-in にする。
-
-    API トークンだけはテナント共通のものを使い回す（担当者ごとに発行させない）。
+    ここでは担当者ごとのルームを重複排除して返す。テナント共通ルームは、通知の
+    ON/OFF と `dest.use_default` を確認できる `reception_notify._notify_chatwork` が加える。
     """
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
