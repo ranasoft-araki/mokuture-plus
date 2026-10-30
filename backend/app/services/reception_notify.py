@@ -347,19 +347,28 @@ async def push_targets(
 async def _notify_chatwork(
     db: AsyncSession, tenant_id: str, log: ReceptionLog, dest: Destinations, escalated_from: str
 ) -> bool | None:
-    """担当者ごとに設定された Chatwork ルームへ投稿する。
+    """担当者ごとのルームと、必要に応じて共通 Chatwork ルームへ投稿する。
 
-    API トークンはテナント共通のものを使い回し、担当者ごとに差し替えるのはルームだけ
-    （Slack と同じ考え方）。**共通ルームへは送らない** — 理由は
-    `staff_routing.chatwork_send_rooms()` を参照。
+    API トークンはテナント共通のものを使い回し、担当者ごとに差し替えるのはルームだけ。
+    `dest.use_default` の受付では、Chatwork通知がONなら共通ルームも宛先に加える。
+    担当者個別ルームは全体スイッチに左右されない（セレクトボックスの指定を優先）。
 
     戻り値は他チャネルと同じ契約: True=1件以上成功 / False=全滅 / None=未設定。
     """
     rooms = staff_routing.chatwork_send_rooms(dest)
-    if not rooms:
-        return None
-    token = await chatwork.load_api_token(db, tenant_id)
+    config = await chatwork.load_config(db, tenant_id)
+    token = (config.get("api_token") or "").strip()
     if not token:
+        return None
+    default_room = (config.get("room_id") or "").strip()
+    if (
+        dest.use_default
+        and default_room
+        and await notification_channels.is_enabled(db, tenant_id, "chatwork")
+        and all(room_id != default_room for room_id, _ in rooms)
+    ):
+        rooms.append((default_room, "既定の通知先"))
+    if not rooms:
         return None
 
     text = chatwork.build_reception_message(

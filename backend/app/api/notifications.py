@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from jose import JWTError
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +22,7 @@ from app.services.crypto import encrypt_dict, decrypt_dict
 from app.services import chatwork as chatwork_service
 from app.services import notification_channels
 from app.services import notification_health
+from app.services import reception_notify
 from app.services.slack import SlackNotifier, SlackOAuthError, SlackApiError
 from app.services.webpush import send_push
 from app.config import settings
@@ -144,8 +145,8 @@ async def update_chatwork(
     db: AsyncSession = Depends(get_db),
 ):
     # ルームは任意: トークンだけで「連携済」にできる（担当者ごとのルーム指定・
-    # テスト送信はトークンさえあれば使える）。ルームを設定すると、それが**配達の呼び出し
-    # 専用の宛先**になる（受付通知には使われない。common room is delivery-only）。
+    # テスト送信はトークンさえあれば使える）。ルームを設定すると、配達の呼び出しと、
+    # 担当者別の宛先が無い（または共通宛先も使う）受付通知の宛先になる。
     await _upsert_chatwork(user.tenant_id, "chatwork", body, db)
     await notification_health.clear(user.tenant_id, "chatwork")
     return {"ok": True}
@@ -196,7 +197,7 @@ async def update_webhook(
 # kiosk call-staff when unset (see app.api.kiosk). Slack/Chatwork no longer have their
 # own "連携設定"(接続) here — they reuse the shared Slack bot / Chatwork token and only
 # let delivery override the channel/room (Slack: POST /slack/channel with
-# target="slack_delivery"; Chatwork: the common card's room *is* the delivery room,
+# target="slack_delivery"; Chatwork: the common card's room is shared by reception and delivery,
 # see CLAUDE.md「Chatwork の接続設定」)。2026-10-24: 通常の通知先と配達の通知先で
 # それぞれ別にSlack/Chatworkへ連携させていたのを統合した(無駄な二重連携の解消)。
 
@@ -437,8 +438,8 @@ async def _upsert_chatwork(tenant_id: str, type_: str, body: "ChatworkConfig", d
     画面から素直に上書きすると片方だけ直したときに消える）。
 
     ルームは任意: トークンだけで「連携済」として保存できる（担当者ごとのルーム指定・
-    テスト送信はトークンだけで使える）。ルームを設定すると、それが**配達の呼び出し専用の
-    宛先**になる（common room is delivery-only。受付通知には使われない）。
+    テスト送信はトークンだけで使える）。ルームを設定すると、配達の呼び出しに加えて、
+    担当者ごとの通知先が未設定または「共通の通知先にも送る」の受付にも使用する。
     """
     result = await db.execute(
         select(NotificationSetting).where(
@@ -834,9 +835,6 @@ async def slack_interactions(
     outcome = await _apply_decision(
         db, log, decision, actor_name=who, actor_user_id=slack_user.get("id"), via="slack"
     )
-    if outcome.applied:
-        background.add_task(reception_notify.fire_decision_notifications, log.tenant_id, log.id)
-
     # 元メッセージを「対応済み」に置換（ボタン除去）。押した人も添える。response_url は30分/5回有効。
     label = _DECISION_JP.get(outcome.state, outcome.state)
     who = outcome.decided_by_name
@@ -854,8 +852,13 @@ async def slack_interactions(
             {"type": "context", "elements": [{"type": "mrkdwn", "text": ctx}]},
         ],
     }
-    # Slack は3秒以内の応答を要求。response_url 更新は背後で送り、即200を返す。
+    # Slack は3秒以内の応答を要求する。元メッセージ更新を最初のバックグラウンド処理に
+    # して、メール・Push・各通知先への送信が長引いても更新を待たせない。
     response_url = payload.get("response_url")
     if response_url:
         background.add_task(_post_slack_response_url, response_url, updated)
-    return {}
+    if outcome.applied:
+        background.add_task(reception_notify.fire_decision_notifications, log.tenant_id, log.id)
+
+    # JSON の `{}` ではなく空の 200 を返し、Slack のインタラクションを明示的に ACK する。
+    return Response(status_code=200)
