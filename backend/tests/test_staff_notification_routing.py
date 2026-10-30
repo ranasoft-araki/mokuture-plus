@@ -36,6 +36,7 @@ def sent_push(monkeypatch):
 
     async def fake_push(**kwargs):
         sent.append(kwargs["endpoint"])
+        return True, ""
 
     monkeypatch.setattr(reception_notify, "send_push", fake_push)
     return sent

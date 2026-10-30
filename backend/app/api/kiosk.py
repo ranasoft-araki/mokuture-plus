@@ -44,6 +44,7 @@ from app.services.webpush import send_push
 from app.services.auth import hash_password, verify_password, create_decision_token
 from app.services import chatwork as chatwork_service
 from app.services import notification_channels
+from app.services import notification_health
 from app.services import events as event_bus
 from app.services import reception_notify
 from app.services import analytics as analytics_service
@@ -1326,7 +1327,14 @@ async def _notify_slack_text(
             actions, dtoken = decision
             blocks = SlackNotifier.build_reception_blocks(text, actions, dtoken)
         # Bot Token(chat.postMessage) と 旧Webhook のどちらの設定でも送れる(webhook はボタン無し)。
-        return bool(await SlackNotifier.send_to_config(config, text, blocks=blocks))
+        ok = bool(await SlackNotifier.send_to_config(config, text, blocks=blocks))
+        await notification_health.record_result(
+            tenant_id,
+            "slack",
+            failed=not ok,
+            target=str(config.get("channel_name") or config.get("channel_id") or "設定済みチャンネル"),
+        )
+        return ok
     except Exception:
         return False
 
@@ -1379,9 +1387,10 @@ async def _notify_push_text(
             return None
 
         any_ok = False
+        failed = False
         for sub in subs:
             try:
-                await send_push(
+                ok, error = await send_push(
                     endpoint=sub.endpoint,
                     p256dh=sub.p256dh,
                     auth=sub.auth_key,
@@ -1394,9 +1403,15 @@ async def _notify_push_text(
                     data=data,
                     actions=actions,
                 )
-                any_ok = True
+                any_ok = any_ok or ok
+                failed = failed or not ok
+                if not ok and notification_health.push_subscription_expired(error):
+                    await notification_health.delete_expired_push_subscription(sub.id)
             except Exception:
-                pass
+                failed = True
+        await notification_health.record_result(
+            tenant_id, "push", failed=failed, target="登録端末"
+        )
         return any_ok
     except Exception:
         return False
@@ -1446,7 +1461,11 @@ async def _notify_chatwork_text(
     room_id = (config.get("room_id") or "").strip()
     if not api_token or not room_id:
         return None
-    return await chatwork_service.send_message(api_token, room_id, text)
+    ok = await chatwork_service.send_message(api_token, room_id, text)
+    await notification_health.record_result(
+        tenant_id, "chatwork", failed=not ok, target=f"ルーム {room_id}"
+    )
+    return ok
 
 
 async def _log_delivery_dropoff(

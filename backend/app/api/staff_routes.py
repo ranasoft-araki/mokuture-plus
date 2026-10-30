@@ -695,7 +695,7 @@ async def test_staff_route(
             sent = 0
             for sub in push_subs:
                 try:
-                    await send_push(
+                    ok, _error = await send_push(
                         endpoint=sub.endpoint, p256dh=sub.p256dh, auth=sub.auth_key,
                         title="通知テスト",
                         body=f"「{body.staff_name}」宛の通知テストです。",
@@ -703,7 +703,8 @@ async def test_staff_route(
                         private_key=private_key, subject=settings.vapid_subject,
                         tag="staff-route-test",
                     )
-                    sent += 1
+                    if ok:
+                        sent += 1
                 except Exception:
                     pass
             results.append({

@@ -21,6 +21,7 @@ from app.services.auth import create_slack_state_token, verify_slack_state_token
 from app.services.crypto import encrypt_dict, decrypt_dict
 from app.services import chatwork as chatwork_service
 from app.services import notification_channels
+from app.services import notification_health
 from app.services.slack import SlackNotifier, SlackOAuthError, SlackApiError
 from app.services.webpush import send_push
 from app.config import settings
@@ -63,6 +64,8 @@ async def get_settings(user: User = Depends(require_roles("admin", "superadmin")
     settings_list = result.scalars().all()
     out = {}
     for s in settings_list:
+        if s.type.startswith("notification_health_"):
+            continue
         try:
             config = decrypt_dict(s.config_json) if s.config_json and s.config_json != "{}" else {}
         except Exception:
@@ -82,6 +85,51 @@ async def get_settings(user: User = Depends(require_roles("admin", "superadmin")
     return out
 
 
+@router.get("/health")
+async def get_notification_health(
+    user: User = Depends(require_roles("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Failures visible in the admin UI plus whether any usable channel exists."""
+    rows = (await db.execute(select(NotificationSetting).where(
+        NotificationSetting.tenant_id == user.tenant_id,
+        NotificationSetting.type.in_(("slack", "chatwork")),
+    ))).scalars().all()
+    configs: dict[str, dict] = {}
+    for row in rows:
+        try:
+            configs[row.type] = decrypt_dict(row.config_json)
+        except Exception:
+            configs[row.type] = {}
+    slack = configs.get("slack", {})
+    chatwork = configs.get("chatwork", {})
+    push_count = len((await db.execute(select(PushSubscription.id).where(
+        PushSubscription.tenant_id == user.tenant_id,
+    ))).scalars().all())
+    enabled = {
+        channel: await notification_channels.is_enabled(db, user.tenant_id, channel)
+        for channel in notification_channels.CHANNELS
+    }
+    configured = {
+        "slack": bool(
+            slack.get("webhook_url")
+            or (slack.get("bot_access_token") and slack.get("channel_id"))
+        ),
+        "chatwork": bool(chatwork.get("api_token")),
+        "push": push_count > 0,
+    }
+    issues = await notification_health.get_issues(db, user.tenant_id)
+    return {
+        "issues": issues,
+        "issue_count": len(issues),
+        "configured": configured,
+        "enabled": enabled,
+        "no_active_channel": not any(
+            configured[channel] and enabled[channel] for channel in notification_channels.CHANNELS
+        ),
+    }
+
+
 # NOTE: 受付用 Slack (type="slack") は OAuth 連携（/slack/oauth/url → /slack/callback）
 # のみで設定する。Webhook URL を手入力/上書きする PUT /settings/slack は廃止した
 # （顧客に Webhook URL を触らせない方針・OAuth バイパス防止）。配達用 slack_delivery も
@@ -99,6 +147,7 @@ async def update_chatwork(
     # テスト送信はトークンさえあれば使える）。ルームを設定すると、それが**配達の呼び出し
     # 専用の宛先**になる（受付通知には使われない。common room is delivery-only）。
     await _upsert_chatwork(user.tenant_id, "chatwork", body, db)
+    await notification_health.clear(user.tenant_id, "chatwork")
     return {"ok": True}
 
 
@@ -190,6 +239,8 @@ async def update_channel_enabled(
         {"enabled": bool(body.enabled)},
         db,
     )
+    if not body.enabled:
+        await notification_health.clear(user.tenant_id, channel)
     return {"ok": True}
 
 
@@ -627,6 +678,7 @@ async def slack_set_channel(
         config["channel_name"] = channel_name
         config["updated_at"] = now
         await _upsert_setting(user.tenant_id, "slack", config, db)
+    await notification_health.clear(user.tenant_id, "slack")
     return {"ok": True, "channel_name": channel_name}
 
 
@@ -645,6 +697,7 @@ async def slack_disconnect(
     )
     await db.commit()
     await _clear_stale_delivery_channel_override(user.tenant_id, db)
+    await notification_health.clear(user.tenant_id, "slack")
     return {"ok": True}
 
 

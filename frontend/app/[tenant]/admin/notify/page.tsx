@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
-import { api, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffPushUser, type StaffRouteTestResult } from "@/lib/api";
+import { api, type NotificationHealth, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffPushUser, type StaffRouteTestResult } from "@/lib/api";
 import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, getClientOsName, matchesVapidKey, type PushStatus } from "@/lib/push";
 import { getAccessToken } from "@/lib/auth";
 
@@ -93,7 +93,7 @@ function SlackMark({ size = 20 }: { size?: number }) {
 }
 
 // ── Push Push Panel ────────────────────────────────────────────────────
-function PushPanel({ authToken, notificationsEnabled, toggleSaving, toggleError, onToggle }: { authToken: string; notificationsEnabled: boolean; toggleSaving: boolean; toggleError?: string; onToggle: (enabled: boolean) => void }) {
+function PushPanel({ authToken, notificationsEnabled, toggleSaving, toggleError, onToggle, onHealthChanged }: { authToken: string; notificationsEnabled: boolean; toggleSaving: boolean; toggleError?: string; onToggle: (enabled: boolean) => void; onHealthChanged: () => void }) {
   const [vapidKey, setVapidKey] = useState<string | null>(null);
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [subscriptions, setSubscriptions] = useState<{ id: string; endpoint: string; display_endpoint: string; os_name: string; created_at: string }[]>([]);
@@ -178,6 +178,7 @@ function PushPanel({ authToken, notificationsEnabled, toggleSaving, toggleError,
       setIsSubscribed(true);
       setPushStatus(getPushStatus());
       await reload();
+      onHealthChanged();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "登録に失敗しました");
     } finally {
@@ -199,6 +200,7 @@ function PushPanel({ authToken, notificationsEnabled, toggleSaving, toggleError,
       }
       setIsSubscribed(false);
       await reload();
+      onHealthChanged();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "登録解除に失敗しました");
     } finally {
@@ -227,6 +229,7 @@ function PushPanel({ authToken, notificationsEnabled, toggleSaving, toggleError,
   const handleDeleteSub = async (endpoint: string) => {
     await api.deletePushSubscription(authToken, endpoint);
     await reload();
+    onHealthChanged();
   };
 
   if (loading) {
@@ -1146,6 +1149,7 @@ export default function AdminNotifyPage() {
   const [pushNotificationsEnabled, setPushNotificationsEnabled] = useState(true);
   const [channelToggleSaving, setChannelToggleSaving] = useState<"" | "slack" | "chatwork" | "push">("");
   const [channelToggleError, setChannelToggleError] = useState<{ channel: "slack" | "chatwork" | "push"; message: string } | null>(null);
+  const [notificationHealth, setNotificationHealth] = useState<NotificationHealth | null>(null);
 
   // 「担当者ごとの通知先」パネルは別フェッチなので、ここでの連携/解除/保存を伝えて
   // 読み直させる合図（単調増加カウンタ。0=初回マウント扱いで無視される）。
@@ -1254,6 +1258,8 @@ export default function AdminNotifyPage() {
     if (!authToken) return;
     try {
       const settings = await api.getNotificationSettings(authToken);
+      const health = await api.getNotificationHealth(authToken).catch(() => null);
+      if (health) setNotificationHealth(health);
       const cw = settings["chatwork"] ?? {};
       const wh = settings["webhook"] ?? {};
       if (cw["api_token"]) setCwConfigured(true);
@@ -1280,6 +1286,13 @@ export default function AdminNotifyPage() {
 
   useEffect(() => { reloadNotificationSettings(); }, [reloadNotificationSettings]);
 
+  const refreshNotificationHealth = useCallback(async () => {
+    try {
+      setNotificationHealth(await api.getNotificationHealth(authToken));
+      window.dispatchEvent(new Event("notification-health-changed"));
+    } catch { /* 通知設定そのものの操作は成功扱いのままにする */ }
+  }, [authToken]);
+
   const handleToggleChannel = async (channel: "slack" | "chatwork" | "push", enabled: boolean) => {
     const setters = {
       slack: setSlackNotificationsEnabled,
@@ -1292,6 +1305,8 @@ export default function AdminNotifyPage() {
     setChannelToggleError(null);
     try {
       await api.updateNotificationChannelEnabled(authToken, channel, enabled);
+      setNotificationHealth(await api.getNotificationHealth(authToken));
+      window.dispatchEvent(new Event("notification-health-changed"));
     } catch (e: unknown) {
       setEnabled(!enabled);
       setChannelToggleError({ channel, message: e instanceof Error ? e.message : "通知設定の保存に失敗しました" });
@@ -1329,6 +1344,7 @@ export default function AdminNotifyPage() {
       setSlackChannels(null);
       setSlackUsers(null);
       await loadSlack();
+      await refreshNotificationHealth();
       bumpStaffRoutesRefresh();
     } catch (e: unknown) {
       setSlackError(e instanceof Error ? e.message : "連携解除に失敗しました");
@@ -1352,6 +1368,7 @@ export default function AdminNotifyPage() {
       setSlackShowPicker(false);
       setSlackChannelId("");
       await loadSlack();
+      await refreshNotificationHealth();
       bumpStaffRoutesRefresh();
     } catch (e: unknown) {
       setSlackError(e instanceof Error ? e.message : "チャンネルの保存に失敗しました");
@@ -1376,6 +1393,7 @@ export default function AdminNotifyPage() {
       setCwConfigured(true);
       setCwApiToken("");
       setCwRoomId("");
+      await refreshNotificationHealth();
       bumpStaffRoutesRefresh();
     } catch (e: unknown) {
       setCwError(e instanceof Error ? e.message : "保存に失敗しました");
@@ -1587,6 +1605,25 @@ export default function AdminNotifyPage() {
       breadcrumb="ホーム / 設定 / 通知"
       subtitle="Slack · Chatwork · プッシュ通知の連携と受信者管理"
     >
+      {notificationHealth?.issues.map((issue) => {
+        const label = issue.channel === "slack" ? "Slack" : issue.channel === "chatwork" ? "Chatwork" : "プッシュ通知";
+        const action = issue.channel === "push"
+          ? "登録端末の通知許可を確認し、必要に応じて端末を登録し直してください。"
+          : "通知先が削除・変更されていないか確認し、通知先を設定し直してください。";
+        return (
+          <div key={issue.channel} style={{ marginBottom: 12, padding: "12px 16px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.3)", borderRadius: 8, color: "#7a5c00", fontSize: 12.5, lineHeight: 1.65 }}>
+            <strong>{label}への通知に失敗しました。</strong> {action}
+            {issue.target && <div style={{ marginTop: 3 }}>通知先：{issue.target}</div>}
+            {issue.failed_at && <div style={{ marginTop: 2, fontSize: 11, opacity: 0.8 }}>検知日時：{new Date(issue.failed_at).toLocaleString("ja-JP")}</div>}
+          </div>
+        );
+      })}
+      {notificationHealth?.no_active_channel && (
+        <div style={{ marginBottom: 16, padding: "12px 16px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.3)", borderRadius: 8, color: "#7a5c00", fontSize: 12.5, lineHeight: 1.65 }}>
+          <strong>通知を受け取れるサービスが設定されていません。</strong><br />
+          Slack、Chatwork、またはプッシュ通知のいずれかを連携し、「通知する」に設定することをおすすめします。このままでも運用は続けられます。
+        </div>
+      )}
       <div className="adm-grid-2" style={{ gap: 20 }}>
         {/* Slack (OAuth: Slackに追加) */}
         <MkCard>
@@ -1868,6 +1905,7 @@ export default function AdminNotifyPage() {
               toggleSaving={channelToggleSaving !== ""}
               toggleError={channelToggleError?.channel === "push" ? channelToggleError.message : undefined}
               onToggle={(enabled) => handleToggleChannel("push", enabled)}
+              onHealthChanged={() => { void refreshNotificationHealth(); }}
             />
           ) : (
             <div style={{ padding: "20px 0", color: "#a8a198", fontSize: 13 }}>認証が必要です。ページを再読み込みしてください。</div>

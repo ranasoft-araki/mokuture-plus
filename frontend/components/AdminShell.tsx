@@ -80,6 +80,24 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
   const router = useRouter();
   const tenant = params.tenant ?? "";
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [notificationIssueCount, setNotificationIssueCount] = useState(0);
+
+  useEffect(() => {
+    const token = getAccessToken();
+    if (!token || !tenant) return;
+    const reload = () => {
+      api.getNotificationHealth(token)
+        .then((health) => setNotificationIssueCount(health.issue_count))
+        .catch(() => { /* 通知状態を取得できなくても画面遷移は妨げない */ });
+    };
+    reload();
+    const timer = window.setInterval(reload, 60_000);
+    window.addEventListener("notification-health-changed", reload);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("notification-health-changed", reload);
+    };
+  }, [tenant, active]);
 
   // ── 審査環境の閲覧専用アカウント（demo1@ranasoft.co.jp 等） ──
   // アクセストークンの ro クレームから判定（SSR一致のため初期 false→マウント後に確定）。
@@ -249,7 +267,15 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
             設定
           </div>
           {settingsNav.map((item) => (
-            <NavItem key={item.id} id={item.id} label={item.label} active={active === item.id} pending={pendingId === item.id} onClick={() => navigate(item.id)} />
+            <NavItem
+              key={item.id}
+              id={item.id}
+              label={item.label}
+              active={active === item.id}
+              pending={pendingId === item.id}
+              onClick={() => navigate(item.id)}
+              badge={item.id === "notify" && notificationIssueCount > 0 ? notificationIssueCount : undefined}
+            />
           ))}
         </nav>
 

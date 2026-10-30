@@ -30,6 +30,7 @@ from app.services import analytics as analytics_service
 from app.services import analytics_link
 from app.services import chatwork
 from app.services import notification_channels
+from app.services import notification_health
 from app.services import email as email_service
 from app.services import staff_routing
 from app.services.crypto import decrypt_dict
@@ -153,6 +154,7 @@ async def _notify_slack(
         return False
 
     any_ok = False
+    failed_labels: list[str] = []
     for config, label in targets:
         # 署名シークレット設定時のみ、受付/電話/お断りの対応ボタン(Block Kit)を付ける。
         # Bot Token 経路のときだけ(webhook はインタラクション不可)。押下は署名トークンで検証。
@@ -169,11 +171,18 @@ async def _notify_slack(
             ok = False
         any_ok = any_ok or bool(ok)
         if not ok:
+            failed_labels.append(label)
             # 受付は失敗させない(best-effort)。Bot Token/Webhook URL は絶対に出さない。
             logger.warning(
                 "Slack reception notification failed (tenant=%s, reception=%s, target=%s)",
                 tenant_id, log.id, label,
             )
+    await notification_health.record_result(
+        tenant_id,
+        "slack",
+        failed=bool(failed_labels),
+        target="、".join(failed_labels),
+    )
     return any_ok
 
 
@@ -246,8 +255,18 @@ async def _notify_chatwork(
         escalated_from=escalated_from or None,
     )
     any_ok = False
-    for room_id, _label in rooms:
-        any_ok = await chatwork.send_message(token, room_id, text) or any_ok
+    failed_labels: list[str] = []
+    for room_id, label in rooms:
+        ok = await chatwork.send_message(token, room_id, text)
+        any_ok = ok or any_ok
+        if not ok:
+            failed_labels.append(label or room_id)
+    await notification_health.record_result(
+        tenant_id,
+        "chatwork",
+        failed=bool(failed_labels),
+        target="、".join(failed_labels),
+    )
     return any_ok
 
 
@@ -294,9 +313,10 @@ async def _notify_push(
 
     data, actions = build_decision_push_extras(tenant_id, log)
     any_ok = False
+    failed = False
     for sub in subs:
         try:
-            await send_push(
+            ok, error = await send_push(
                 endpoint=sub.endpoint,
                 p256dh=sub.p256dh,
                 auth=sub.auth_key,
@@ -310,9 +330,15 @@ async def _notify_push(
                 data=data,
                 actions=actions,
             )
-            any_ok = True
+            any_ok = any_ok or ok
+            failed = failed or not ok
+            if not ok and notification_health.push_subscription_expired(error):
+                await notification_health.delete_expired_push_subscription(sub.id)
         except Exception:
-            pass  # fire-and-forget: 死んだ購読で全体を止めない
+            failed = True  # fire-and-forget: 死んだ購読で全体を止めない
+    await notification_health.record_result(
+        tenant_id, "push", failed=failed, target="登録端末"
+    )
     return any_ok
 
 

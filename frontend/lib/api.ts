@@ -591,6 +591,8 @@ export const api = {
   // Notification settings
   getNotificationSettings: (token: string) =>
     request<Record<string, Record<string, unknown>>>("/notifications/settings", {}, token),
+  getNotificationHealth: (token: string) =>
+    request<NotificationHealth>("/notifications/health", {}, token),
   updateNotificationChannelEnabled: (
     token: string,
     channel: "slack" | "chatwork" | "push",
@@ -1087,6 +1089,14 @@ export interface PushSubscriptionInfo {
   user_id: string | null;
   os_name: string;
   created_at: string;
+}
+
+export interface NotificationHealth {
+  issues: { channel: "slack" | "chatwork" | "push"; failed_at: string; target: string }[];
+  issue_count: number;
+  configured: Record<"slack" | "chatwork" | "push", boolean>;
+  enabled: Record<"slack" | "chatwork" | "push", boolean>;
+  no_active_channel: boolean;
 }
 
 export interface KioskMediaItem {
