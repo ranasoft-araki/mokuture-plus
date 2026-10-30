@@ -714,6 +714,68 @@ function StaffMasterEditor({
   );
 }
 
+function NotificationContinueTimeCard({ authToken }: { authToken: string }) {
+  const [timeoutSec, setTimeoutSec] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    api.getStaffRoutes(authToken)
+      .then((data) => { if (active) setTimeoutSec(data.notification_continue_sec); })
+      .catch((e: unknown) => {
+        if (active) setError(staffRoutesErrorMessage(e, "設定の読み込みに失敗しました"));
+      });
+    return () => { active = false; };
+  }, [authToken]);
+
+  const save = async (value: number) => {
+    const previous = timeoutSec;
+    setTimeoutSec(value);
+    setSaving(true);
+    setError("");
+    try {
+      await api.updateNotificationContinueTime(authToken, value);
+    } catch (e: unknown) {
+      setTimeoutSec(previous);
+      setError(staffRoutesErrorMessage(e, "通知継続時間の保存に失敗しました"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <MkCard style={{ marginBottom: 20 }}>
+      <MkSectionTitle
+        title="通知継続時間"
+        subtitle="応答がない場合に、キオスクを「電話してください」の案内へ切り替えるまでの時間"
+      />
+      {timeoutSec === null ? (
+        <div style={{ padding: "8px 0", color: error ? "#a84238" : "#a8a198", fontSize: 13 }}>
+          {error || "読み込み中…"}
+        </div>
+      ) : (
+        <Field
+          label="応答を待つ時間"
+          hint="担当者が未設定の場合は最初の通知後から、代理通知がある場合は代理への通知後から、この時間だけ応答を待ちます。"
+        >
+          <select
+            value={String(timeoutSec)}
+            disabled={saving}
+            onChange={(e) => save(Number(e.target.value))}
+            style={selectStyle}
+          >
+            {ESCALATE_CHOICES.map((c) => <option key={c.sec} value={c.sec}>{c.label}</option>)}
+          </select>
+        </Field>
+      )}
+      {timeoutSec !== null && error && (
+        <div style={{ marginTop: 10, color: "#a84238", fontSize: 12 }}>{error}</div>
+      )}
+    </MkCard>
+  );
+}
+
 function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; refreshSignal: number }) {
   const [data, setData] = useState<StaffNotificationRoutesResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -727,7 +789,6 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
   const [slackUsers, setSlackUsers] = useState<{ id: string; name: string }[] | null>(null);
   // 解除は取り消せないので2段階にする（Slack連携解除と同じ方式。JSダイアログは使わない）。
   const [confirmClear, setConfirmClear] = useState<string | null>(null);
-  const [savingDefaultTimeout, setSavingDefaultTimeout] = useState(false);
 
   // quiet=true は「読み込み中…」に落とさずデータだけ差し替える。担当者の追加・
   // 並べ替えのたびにパネル全体がアンマウントされ、開いていた編集欄が閉じるのを防ぐ。
@@ -826,19 +887,6 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
     }
   };
 
-  const saveDefaultTimeout = async (timeoutSec: number) => {
-    setSavingDefaultTimeout(true);
-    setError("");
-    try {
-      await api.updateNotificationContinueTime(authToken, timeoutSec);
-      await reload(true);
-    } catch (e: unknown) {
-      setError(staffRoutesErrorMessage(e, "通知継続時間の保存に失敗しました"));
-    } finally {
-      setSavingDefaultTimeout(false);
-    }
-  };
-
   if (loading) {
     return <div style={{ padding: "20px 0", color: "#a8a198", fontSize: 13 }}>読み込み中…</div>;
   }
@@ -864,22 +912,6 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
         onChanged={() => reload(true)}
         onError={setError}
       />
-
-      <div style={{ border: "1px solid #efece5", borderRadius: 9, background: "#fffefb", padding: "14px", marginBottom: 16 }}>
-        <Field
-          label="通知継続時間"
-          hint="担当者が未設定の場合は最初の通知後から、代理通知がある場合は代理への通知後から、この時間だけ応答を待って「電話してください」を表示します。"
-        >
-          <select
-            value={String(data.notification_continue_sec)}
-            disabled={savingDefaultTimeout}
-            onChange={(e) => saveDefaultTimeout(Number(e.target.value))}
-            style={selectStyle}
-          >
-            {ESCALATE_CHOICES.map((c) => <option key={c.sec} value={c.sec}>{c.label}</option>)}
-          </select>
-        </Field>
-      </div>
 
       {names.length === 0 && (
         <div style={{ padding: "16px 18px", background: "#f4f1ea", border: "1px solid #efece5", borderRadius: 8, fontSize: 12.5, color: "#6b6559", lineHeight: 1.8 }}>
@@ -1658,6 +1690,14 @@ export default function AdminNotifyPage() {
           Slack、Chatwork、またはプッシュ通知のいずれかを連携し、「通知する」に設定することをおすすめします。このままでも運用は続けられます。
         </div>
       )}
+      {authToken ? (
+        <NotificationContinueTimeCard authToken={authToken} />
+      ) : (
+        <MkCard style={{ marginBottom: 20 }}>
+          <MkSectionTitle title="通知継続時間" />
+          <div style={{ padding: "8px 0", color: "#a8a198", fontSize: 13 }}>認証が必要です。ページを再読み込みしてください。</div>
+        </MkCard>
+      )}
       <div className="adm-grid-2" style={{ gap: 20 }}>
         {/* Slack (OAuth: Slackに追加) */}
         <MkCard>
@@ -1930,7 +1970,7 @@ export default function AdminNotifyPage() {
         <MkCard style={{ gridColumn: "span 2" }}>
           <MkSectionTitle
             title="プッシュ通知"
-            subtitle="担当者のスマホに、アプリの通知として届けます"
+            subtitle="担当者の端末に、アプリの通知として届けます。通知を受け取りたいパソコンやスマホでこのページにアクセスし、設定してください。"
           />
           {authToken ? (
             <PushPanel
