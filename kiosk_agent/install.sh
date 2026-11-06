@@ -15,20 +15,29 @@ cd "$AGENT_DIR"
 # (Raspberry Pi OS trixie の 3.13 など)では pip がその場で組み立てる。
 # 組み立てには swig と lgpio の C ライブラリが要る。無いと lgpio だけ入らず、
 # 下の段階導入が黙って「ハードはモック」に落ちてロッカーが開かなくなる。
+IS_PI=0
 if grep -qi "raspberry pi" /proc/device-tree/model 2>/dev/null; then
+    IS_PI=1
+fi
+if [ "$IS_PI" = "1" ]; then
     echo "Installing build tools for GPIO (swig / liblgpio-dev)..."
-    sudo apt-get install -y swig liblgpio-dev python3-dev \
-        || echo "  -> apt で入らなかった。GPIO はモックになる可能性がある"
+    # パッケージ一覧が古いと見つからないことがあるので、失敗したら一覧を更新して1回だけやり直す
+    if ! sudo apt-get install -y swig liblgpio-dev python3-dev; then
+        sudo apt-get update || true
+        sudo apt-get install -y swig liblgpio-dev python3-dev \
+            || echo "  -> apt で入らなかった。GPIO はモックになる可能性がある"
+    fi
 fi
 
 python3 -m venv "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip
 
-# 依存の導入。名刺読み取り(card)は任意。入らなくてもキオスク本体は動くので、
-# 段階的に諦めながら進める: rpi+card → card → rpi → 最小。
-# 各試行の出力はログに残す。捨てると「4回とも黙って失敗し、最後の1回だけ素の
-# エラーを吐いて set -e で止まる」状態になり、本当の原因が読めなくなる。
+# 依存の導入。本体(必須)・名刺読み取り(任意)・GPIO(Pi のみ)を別々に入れる。
+# 以前は「rpi+card → card → rpi → 最小」と段階的に諦めていたため、lgpio だけ
+# 失敗しても card が入った時点で成功扱いになり、Pi なのに GPIO 無し(模擬)で進んでいた。
+# 各試行の出力はログに残す。捨てると本当の原因が読めなくなる。
 CARD_DEPS_OK=0
+GPIO_OK=0
 PIP_LOG="$AGENT_DIR/.install-pip.log"
 : > "$PIP_LOG"
 
@@ -37,24 +46,38 @@ try_pip() {   # try_pip <extras表記> ; 成否を終了コードで返す
     "$VENV/bin/pip" install -e "$1" >> "$PIP_LOG" 2>&1
 }
 
-if try_pip ".[rpi,card]"; then
-    CARD_DEPS_OK=1
-elif try_pip ".[card]"; then
-    CARD_DEPS_OK=1
-    echo "  -> GPIO ライブラリが入らなかった。ハードはモックで動く(Pi ならロッカーは開かない)"
-    echo "     原因は $PIP_LOG の lgpio の行を参照(Pi なら swig / liblgpio-dev 不足が多い)"
-elif try_pip ".[rpi]"; then
-    echo "  -> 名刺読み取りの依存(opencv/onnxruntime)が入らなかった"
-elif try_pip "."; then
-    echo "  -> 名刺読み取りの依存が入らなかった"
-else
+if ! try_pip "."; then
     echo ""
-    echo "依存パッケージを導入できなかった。最後の試行の出力(末尾40行):"
+    echo "依存パッケージを導入できなかった。出力(末尾40行):"
     echo "---------------------------------------------------------------"
     tail -40 "$PIP_LOG"
     echo "---------------------------------------------------------------"
     echo "全文: $PIP_LOG"
     exit 1
+fi
+
+if try_pip ".[card]"; then
+    CARD_DEPS_OK=1
+else
+    echo "  -> 名刺読み取りの依存(opencv/onnxruntime)が入らなかった"
+fi
+
+if [ "$IS_PI" = "1" ]; then
+    if try_pip ".[rpi]" && "$VENV/bin/python" -c "import gpiozero, lgpio" >> "$PIP_LOG" 2>&1; then
+        GPIO_OK=1
+        echo "  -> GPIO ready (ドアセンサー・電子錠・人感センサーを実機で使う)"
+    else
+        echo ""
+        echo "!!! GPIO のライブラリ(gpiozero/lgpio)を導入できなかった !!!"
+        echo "!!! このままではドアセンサー・電子錠・人感センサーが動かない(模擬モードで起動する) !!!"
+        echo "---------------------------------------------------------------"
+        tail -20 "$PIP_LOG"
+        echo "---------------------------------------------------------------"
+        echo "全文: $PIP_LOG (Pi なら swig / liblgpio-dev 不足が多い)"
+        echo ""
+    fi
+else
+    echo "  -> Raspberry Pi ではないので GPIO は入れない(ハードは模擬で動く)"
 fi
 
 # 名刺 OCR のモデル取得。導入時のみネットワークを使う(以後は完全オフライン)。
@@ -112,6 +135,13 @@ sudo systemctl restart "$SERVICE_NAME"
 
 echo ""
 echo "=== Install Complete ==="
+if [ "$IS_PI" = "1" ] && [ "$GPIO_OK" != "1" ]; then
+    echo ""
+    echo "!!! 注意: GPIO が入っていないため、ドアセンサー・電子錠・人感センサーは動かない !!!"
+    echo "    原因: $PIP_LOG の「pip install -e \".[rpi]\"」の部分"
+    echo "    確認: キオスク画面の左上と右上を同時にタッチ(または Ctrl+Shift+M)でキオスク設定を開き、"
+    echo "          「デバイスチェック」タブの「センサー・電子錠の接続」が「模擬モード」になっている"
+fi
 echo "Status : sudo systemctl status $SERVICE_NAME"
 echo "Logs   : journalctl -u $SERVICE_NAME -f"
 echo ""

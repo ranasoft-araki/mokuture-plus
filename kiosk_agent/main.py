@@ -20,6 +20,12 @@ import kana_kanji
 import locker_store
 from config import settings
 from gpio import DoorSensor, LockerController, PirSensor
+try:
+    from gpio import gpio_status
+except ImportError:  # OTA で main.py だけ先に新しくなっても起動を止めない
+    def gpio_status() -> dict[str, object]:
+        import gpio as _g
+        return {"hardware": bool(getattr(_g, "_HW", False)), "reason": None}
 from state import clear_device_state, get_device_name, get_device_token, is_registered, save_device_state
 from sync import find_media, heartbeat_loop, sync_loop
 from updater import updater, read_version
@@ -785,7 +791,9 @@ async def health():
         "registered": is_registered(),
         "device_name": get_device_name(),
         "media_dir": str(settings.media_dir),
-        "mock_gpio": settings.mock_gpio,
+        # env の MOCK_GPIO だけでなく、ライブラリが無くて模擬に落ちた場合も true にする
+        "mock_gpio": not gpio_status()["hardware"],
+        "gpio": gpio_status(),
         "watchdog": systemd_watchdog.status(),
         "analytics": device_analytics.status(),
     }
@@ -1182,7 +1190,8 @@ async def device_status():
     return {
         "registered": is_registered(),
         "device_name": get_device_name(),
-        "mock_gpio": settings.mock_gpio,
+        "mock_gpio": not gpio_status()["hardware"],
+        "gpio": gpio_status(),
         "platform": platform.platform(),
         "pir": {
             "pin": settings.pir_pin,

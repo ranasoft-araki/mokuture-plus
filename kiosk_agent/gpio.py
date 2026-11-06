@@ -3,16 +3,26 @@ import asyncio
 import os
 
 _MOCK = os.getenv("MOCK_GPIO", "false").lower() == "true"
+# 模擬になった理由。None=実機の GPIO を使っている。デバイスチェック画面に出す
+# (ライブラリが入らず黙って模擬に落ちると、画面ではドア・電子錠が動かない原因が分からない)。
+_MOCK_REASON: str | None = "env" if _MOCK else None
 
 if not _MOCK:
     try:
         from gpiozero import Button as _BUTTON, LED as _LED, MotionSensor as _PIR  # type: ignore
         _HW = True
-    except ImportError:
+    except ImportError as exc:
         _HW = False
         _MOCK = True
+        _MOCK_REASON = "no_library"
+        print(f"[GPIO] gpiozero を読み込めないため模擬モードで動きます: {exc}")
 else:
     _HW = False
+
+
+def gpio_status() -> dict[str, object]:
+    """実機の GPIO を使っているか。reason: env=MOCK_GPIO=true / no_library=gpiozero が無い。"""
+    return {"hardware": _HW, "reason": _MOCK_REASON}
 
 
 class LockerController:
