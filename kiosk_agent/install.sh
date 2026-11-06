@@ -10,6 +10,17 @@ echo "=== mokuture+ Kiosk Agent Install ==="
 echo "Directory: $AGENT_DIR"
 
 cd "$AGENT_DIR"
+
+# GPIO(lgpio)は Python 3.11/3.12 向けしか配布済みの部品が無く、それ以外
+# (Raspberry Pi OS trixie の 3.13 など)では pip がその場で組み立てる。
+# 組み立てには swig と lgpio の C ライブラリが要る。無いと lgpio だけ入らず、
+# 下の段階導入が黙って「ハードはモック」に落ちてロッカーが開かなくなる。
+if grep -qi "raspberry pi" /proc/device-tree/model 2>/dev/null; then
+    echo "Installing build tools for GPIO (swig / liblgpio-dev)..."
+    sudo apt-get install -y swig liblgpio-dev python3-dev \
+        || echo "  -> apt で入らなかった。GPIO はモックになる可能性がある"
+fi
+
 python3 -m venv "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip
 
@@ -30,7 +41,8 @@ if try_pip ".[rpi,card]"; then
     CARD_DEPS_OK=1
 elif try_pip ".[card]"; then
     CARD_DEPS_OK=1
-    echo "  -> GPIO ライブラリが入らなかった(Pi 以外の環境か)。ハードはモックで動く"
+    echo "  -> GPIO ライブラリが入らなかった。ハードはモックで動く(Pi ならロッカーは開かない)"
+    echo "     原因は $PIP_LOG の lgpio の行を参照(Pi なら swig / liblgpio-dev 不足が多い)"
 elif try_pip ".[rpi]"; then
     echo "  -> 名刺読み取りの依存(opencv/onnxruntime)が入らなかった"
 elif try_pip "."; then
