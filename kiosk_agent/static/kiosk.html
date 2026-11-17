@@ -5343,6 +5343,31 @@ function showKioskSettings() {
       <div style="flex:1;min-width:0;font-size:15px;color:${C.graphite};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(s.subject || "")}</div>
     </div>`;
   }
+  // OS の設定・パッケージ・ライブラリの更新。上の行(画面とプログラム)とは別の仕組みで、
+  // 管理者権限で動く側が署名を確かめてから適用する(agent sysupdate.py が結果を読むだけ)。
+  function sysRowHTML(s) {
+    if (!s || s.state === "unsupported" || s.state === "not_delivered") return "";
+    // 受け取りの途中(一覧だけ先に新しくなった等)は、次の確認で通る。署名の問題とは分けて出す
+    const midway = ["hash_mismatch", "file_missing"].includes(String(s.message || ""));
+    const STEP = { packages: "OS のパッケージ", i2c: "I2C の有効化", i2c_group: "I2C を読む権限",
+      python_base: "基本のライブラリ", python_gpio: "センサー・電子錠のライブラリ",
+      python_distance_sensor: "距離センサーのライブラリ", self_update: "更新の仕組み自体",
+      no_venv: "ライブラリの置き場所が無い" };
+    const steps = String(s.message || "").split(",").map(x => x.trim()).filter(Boolean).map(x => STEP[x] || x).join("、");
+    const v = {
+      ok: { tone: C.mossDk, text: "最新です" },
+      pending: { tone: C.amber, text: "新しい版を受け取りました。10分以内に自動で適用します" },
+      failed: { tone: C.redDk, text: `適用できなかったものがあります（${steps || "原因不明"}）。1時間ごとに自動でやり直します` },
+      rejected: midway
+        ? { tone: C.amber, text: "受け取りの途中です。10分以内にもう一度確かめます" }
+        : { tone: C.redDk, text: "配信されたものの署名を確認できないため、適用していません" },
+      not_installed: { tone: C.amber, text: "この端末はまだ受け取れません。この端末で最新を取り込んでから install.sh を一度だけ実行してください" },
+    }[s.state] || { tone: C.stone, text: "不明" };
+    return `<div style="display:flex;align-items:baseline;gap:14px;padding:8px 0;border-top:1px solid ${C.chalk};min-width:0">
+      <div style="width:120px;flex-shrink:0;font-size:14px;color:${C.stone}">OS の設定・部品</div>
+      <div style="flex:1;min-width:0;font-size:15px;font-weight:600;color:${v.tone};line-height:1.5">${escHtml(v.text)}</div>
+    </div>`;
+  }
   function updBtnHTML(action, label, primary) {
     const dis = !!updBusy;
     return `<button data-upd-action="${action}" ${dis ? "disabled" : ""} style="padding:11px 20px;border-radius:11px;border:2px solid ${primary ? C.moss : C.ash};background:${primary ? C.moss : C.canvas};color:${primary ? C.canvas : C.graphite};font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;flex-shrink:0;opacity:${dis ? .5 : 1}">${label}</button>`;
@@ -5356,6 +5381,7 @@ function showKioskSettings() {
     const line = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
     return dcHead(SVG.upd, 'ソフトウェア更新', 'SOFTWARE UPDATE', 'dc-upd-badge', updBadge(st.tone, st.text)) +
       (u && u.local ? updRowHTML('この端末', u.local) + updRowHTML('配信中', u.remote) : '') +
+      sysRowHTML(u && u.system) +
       `<div style="display:flex;align-items:center;gap:12px;margin-top:8px">
         <div style="flex:1;min-width:0;line-height:1.55">
           <div style="font-size:14px;color:${st.tone === 'red' ? C.redDk : C.graphite};${line}">${escHtml(st.note || "")}</div>
@@ -5471,7 +5497,7 @@ function showKioskSettings() {
   function tofNote(p) {
     const cm = mm => `${Math.round(mm / 10)}cm`;
     const why = {
-      no_library: "距離センサーを読むための部品が入っていません。この端末で install.sh を実行してください",
+      no_library: "距離センサーを読むための部品がまだ入っていません。「ソフトウェア更新」カードの「OS の設定・部品」が「最新です」になると使えます",
       no_device: "距離センサーが見つかりません。配線(VIN・GND・SDA・SCL)と、ラズパイの I2C が有効かを確認してください",
       read_failed: "距離センサーから読めなくなりました。配線のゆるみを確認してください(つなぎ直すと自動で戻ります)",
       wrong_model: "つないだ距離センサーと、この端末の設定(.env の PRESENCE_SENSOR)の機種が合っていません。vl53l0x と vl53l1x を入れ替えてください",

@@ -293,6 +293,19 @@ BUNDLE_FILES = [
     # 経由の取得(_LFS_BUNDLE_PATHS)が必要——raw.githubusercontent.com は LFS ファイルの
     # 実体ではなくポインタ文字列(約130バイト)を返すため。
     "voice_models/vosk-model-en-us-0.22-lgraph.zip",
+    # システム更新(OS の設定・パッケージ・ライブラリ)。配るのはファイルだけで、端末側で
+    # 管理者権限の仕組みが署名(SYSTEM_MANIFEST.sig)を確かめてから実行する。
+    # 並びは kiosk_agent/updater.py の MANAGED_FILES と同じにする。
+    "sysupdate.py",
+    "pyproject.toml",
+    "system/apply.sh",
+    "system/sysupdate-root.sh",
+    "system/mokuture-sysupdate.service",
+    "system/mokuture-sysupdate.timer",
+    "system/PYPROJECT_SHA",
+    "system/SERIAL",
+    "system/SYSTEM_MANIFEST",
+    "system/SYSTEM_MANIFEST.sig",
 ]
 _FORCE_WINDOW_SEC = 7200  # force flag stays active for 2 hours after trigger
 

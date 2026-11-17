@@ -339,10 +339,47 @@ class TofSensor:
             self._thread.join(timeout=1.0)
 
 
+def detect_tof_model(bus: int = 1) -> str | None:
+    """I2C の 0x29 に距離センサーがつながっているかを確かめ、機種名を返す。無ければ None。
+
+    ライブラリを使わず OS の I2C を直接読む(ライブラリがまだ入っていない端末でも、
+    センサーの有無だけは分かるように)。I2C が無効・開発機・模擬モードでは None。
+    """
+    if os.getenv("MOCK_GPIO", "false").lower() == "true":
+        return None
+    try:
+        import fcntl  # Linux だけにある
+
+        fd = os.open(f"/dev/i2c-{bus}", os.O_RDWR)
+    except (ImportError, OSError):
+        return None
+    try:
+        fcntl.ioctl(fd, 0x0703, 0x29)  # I2C_SLAVE: 以後の読み書きの相手を 0x29 にする
+        os.write(fd, b"\xC0")          # VL53L0X の機種番号(レジスタ 0xC0 = 0xEE)
+        if os.read(fd, 1) == b"\xEE":
+            return "vl53l0x"
+        os.write(fd, b"\x01\x0F")      # VL53L1X の機種番号(レジスタ 0x010F = 0xEA)
+        if os.read(fd, 1) == b"\xEA":
+            return "vl53l1x"
+        return None
+    except OSError:                    # 0x29 に応答が無い＝センサーはつながっていない
+        return None
+    finally:
+        os.close(fd)
+
+
 def make_presence_sensor(kind: str, pir_pin: int, threshold_mm: int = 1000,
                          confirm_reads: int = 3, stale_sec: float = 60.0):
-    """設定(PRESENCE_SENSOR)から来訪検知のセンサーを作る。知らない値は PIR として扱う。"""
-    name = (kind or "pir").strip().lower()
+    """設定(PRESENCE_SENSOR)から来訪検知のセンサーを作る。
+
+    auto(既定)は、距離センサーがつながっていればそれを、無ければ人感センサー(PIR)を使う
+    ＝センサーを付け替えた端末で設定を書かなくてよい。知らない値は PIR として扱う。
+    """
+    name = (kind or "auto").strip().lower()
+    if name == "auto":
+        name = detect_tof_model() or "pir"
+        if name != "pir":
+            print(f"[GPIO] 距離センサー({name})を見つけたので、来訪の検知に使います")
     if name in TOF_MODELS:
         return TofSensor(name, threshold_mm, confirm_reads, stale_sec)
     if name != "pir":

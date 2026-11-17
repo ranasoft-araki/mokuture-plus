@@ -23,6 +23,11 @@ import locker_store
 from config import settings
 from gpio import DoorSensor, LockerController, PirSensor
 try:
+    # 起動時に読み込む(起動した時点の「再起動の頼みの印」を覚えるため。sysupdate.py)
+    import sysupdate
+except ImportError:  # OTA で main.py だけ先に新しくなっても起動を止めない
+    sysupdate = None
+try:
     from gpio import gpio_status
 except ImportError:  # OTA で main.py だけ先に新しくなっても起動を止めない
     def gpio_status() -> dict[str, object]:
@@ -439,7 +444,7 @@ locker_ctrl = LockerController(
 try:
     from gpio import make_presence_sensor
     pir = make_presence_sensor(
-        getattr(settings, "presence_sensor", "pir"),
+        getattr(settings, "presence_sensor", "auto"),
         settings.pir_pin,
         threshold_mm=getattr(settings, "tof_threshold_mm", 1000),
         confirm_reads=getattr(settings, "tof_confirm_reads", 3),
@@ -1769,8 +1774,24 @@ async def device_convert(kana: str = "", limit: int = 60):
 async def update_status():
     # ready/force/version は待機画面の自動適用が使う。残りはデバイスチェック画面の
     # 「ソフトウェア更新」用(この端末の版・配信中の版・最後の確認・適用待ち)。
-    return {"ready": updater.is_ready(), "force": updater.is_force(), "version": read_version(),
-            **updater.status()}
+    # system = OS 側の更新(管理者権限で動く別の仕組み)の状態。そちらが再起動を頼んでいる
+    # ときも ready にして、待機画面へ戻ったときに /apply-update で再起動する。
+    return {"ready": updater.is_ready() or _sys_restart_requested(), "force": updater.is_force(),
+            "version": read_version(), **updater.status(), "system": _sys_status()}
+
+
+def _sys_status() -> dict | None:
+    try:
+        return sysupdate.status() if sysupdate else None
+    except Exception:  # 読めない → 画面には出さない
+        return None
+
+
+def _sys_restart_requested() -> bool:
+    try:
+        return bool(sysupdate) and sysupdate.restart_requested()
+    except Exception:
+        return False
 
 
 @app.post("/update-check")
@@ -1783,7 +1804,8 @@ async def update_check():
 
 @app.post("/apply-update")
 async def apply_update():
-    needs_restart = await updater.apply()
+    sys_restart = _sys_restart_requested()   # ライブラリや権限が変わった → 起こし直して読み込む
+    needs_restart = await updater.apply() or sys_restart
     if needs_restart:
         asyncio.create_task(_do_restart())
     return {"ok": True, "restart": needs_restart}

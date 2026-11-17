@@ -131,11 +131,28 @@ MANAGED_FILES = [
     "voice_models/vosk-model-en-us-0.22-lgraph.zip",
     # 端末ごとに現場で調整する設定(voice_input.yaml / staff_readings.yaml)は
     # 上書きしたくないので配信対象に入れない。
+    #
+    # システム更新(OS の設定・パッケージ・ライブラリ)。ここで届くのはファイルだけで、
+    # 実行するのは管理者権限で動く別の仕組み(system/sysupdate-root.sh の写し)。
+    # 署名(SYSTEM_MANIFEST.sig)を確かめられた版しか実行されない。sysupdate.py は
+    # その結果を読んで画面に出す側(main.py が使うので一緒に配る)。
+    # install.sh と公開鍵(system/allowed_signers)は配らない: どちらも人が管理者として
+    # 使うもので、署名が無い。配信で差し替えられると、署名で守っている意味が無くなる。
+    "sysupdate.py",
+    "pyproject.toml",   # ライブラリの一覧。システム更新が pip で入れる
+    "system/apply.sh",
+    "system/sysupdate-root.sh",
+    "system/mokuture-sysupdate.service",
+    "system/mokuture-sysupdate.timer",
+    "system/PYPROJECT_SHA",
+    "system/SERIAL",
+    "system/SYSTEM_MANIFEST",
+    "system/SYSTEM_MANIFEST.sig",
 ]
 
 # Changing these files requires a service restart to take effect.
 RESTART_FILES = {"main.py", "updater.py", "gpio.py", "sync.py", "state.py", "config.py", "locker_store.py",
-                 "analytics.py", "sysinfo.py", "watchdog.py",
+                 "analytics.py", "sysinfo.py", "watchdog.py", "sysupdate.py",
                  # kana_dict.tsv は kana_kanji.py が読み込んで覚えるので、辞書だけ変わっても再起動する。
                  "kana_kanji.py", "kana_dict.tsv"}
 # card/ 配下はすべて Python なので、変更があれば再起動する（下の apply() が判定）。

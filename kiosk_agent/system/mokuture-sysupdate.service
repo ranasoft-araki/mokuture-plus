@@ -1,0 +1,15 @@
+[Unit]
+Description=mokuture+ system update (runs signed tasks as root)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# 動くのは /usr/local/lib に置いた写し(管理者しか書けない)。署名を確かめられた
+# 手順だけを実行する。くわしくは sysupdate-root.sh の先頭。
+ExecStart=/usr/local/lib/mokuture/sysupdate-root.sh
+# apt と pip は回線が遅いと時間がかかる
+TimeoutStartSec=3600
+# 受付の画面の動きを邪魔しないよう、優先度を下げて動かす
+Nice=10
+IOSchedulingClass=idle

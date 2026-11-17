@@ -6,6 +6,12 @@ AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SERVICE_NAME="mokuture-kiosk"
 VENV="$AGENT_DIR/.venv"
 
+if [ "$(id -u)" = "0" ]; then
+    # 管理者として動かすと、エージェントまで管理者で動く設定になる(署名で守れなくなる)。
+    echo "sudo を付けずに、キオスクを動かす利用者で実行してください: bash kiosk_agent/install.sh"
+    exit 1
+fi
+
 echo "=== mokuture+ Kiosk Agent Install ==="
 echo "Directory: $AGENT_DIR"
 
@@ -140,9 +146,58 @@ sed "s|AGENT_DIR|$AGENT_DIR|g; s|VENV|$VENV|g; s|USER|$USER|g" \
     "$AGENT_DIR/mokuture-kiosk.service" \
     | sudo tee /etc/systemd/system/"$SERVICE_NAME".service > /dev/null
 
+# ── システム更新(管理者権限で動く側)を入れる ────────────────────────────
+# OTA はファイルを置き換えるだけで、OS の設定・apt のパッケージ・ライブラリは届けられない。
+# ここで入れる仕組みが 10 分ごとに、配信された system/ の中身を「署名を確かめてから」
+# 管理者権限で実行する。以後は install.sh をやり直さなくても、そうした変更が配信で届く。
+# 動くのは /usr/local/lib に置いた写しで、エージェントの利用者には書き換えられない。
+# 公開鍵(allowed_signers)は、この install.sh を実行した時点のものを信頼する。
+SYSUPDATE_OK=0
+SIGNERS_SRC="$AGENT_DIR/system/allowed_signers"
+SIGNERS_DST=/etc/mokuture/allowed_signers
+if [ ! -f "$AGENT_DIR/system/sysupdate-root.sh" ] || [ ! -f "$SIGNERS_SRC" ]; then
+    echo ""
+    echo "!!! システム更新の仕組みを入れられない(system/ のファイルか公開鍵が無い) !!!"
+    echo "    先に最新を取り込んでからやり直す:"
+    echo "      git fetch && git reset --hard origin/master && bash kiosk_agent/install.sh"
+elif sudo test -f "$SIGNERS_DST" && ! sudo cmp -s "$SIGNERS_SRC" "$SIGNERS_DST" && [ "${SYSUPDATE_REPLACE_KEY:-0}" != "1" ]; then
+    # 公開鍵は「誰の署名なら管理者権限で動かすか」を決める。黙って差し替えない。
+    echo ""
+    echo "!!! この端末に入っている署名の公開鍵が、リポジトリのものと違う。差し替えていない !!!"
+    echo "    入っている鍵: $(sudo cut -d' ' -f3- "$SIGNERS_DST" | cut -c1-60)"
+    echo "    リポジトリ  : $(cut -d' ' -f3- "$SIGNERS_SRC" | cut -c1-60)"
+    echo "    鍵を作り直したのなら: SYSUPDATE_REPLACE_KEY=1 bash kiosk_agent/install.sh"
+    SYSUPDATE_OK=1   # 仕組みは前の鍵のまま動かし続ける
+else
+    # 連番の下限。いまの版より古い署名済みの版を、入れた直後に流されないようにする
+    # (いまの版そのものは通るように 1 つ手前。すでにそれ以上なら下げない)。
+    serial_now=$(tr -cd '0-9' < "$AGENT_DIR/system/SERIAL" 2>/dev/null | head -c 9)
+    floor_seed=$(( 10#${serial_now:-1} - 1 ))
+    floor_have=$(sudo cat /var/lib/mokuture/floor.serial 2>/dev/null | tr -cd '0-9' | head -c 9)
+    if sudo install -d -m 755 /etc/mokuture /usr/local/lib/mokuture /var/lib/mokuture \
+       && sudo install -m 644 "$SIGNERS_SRC" "$SIGNERS_DST" \
+       && { [ "$floor_seed" -le "$(( 10#${floor_have:-0} ))" ] \
+            || echo "$floor_seed" | sudo tee /var/lib/mokuture/floor.serial > /dev/null; } \
+       && printf 'AGENT_DIR=%q\nAGENT_USER=%q\nVENV=%q\n' "$AGENT_DIR" "$USER" "$VENV" \
+            | sudo tee /etc/mokuture/sysupdate.conf > /dev/null \
+       && sudo install -m 755 "$AGENT_DIR/system/sysupdate-root.sh" /usr/local/lib/mokuture/sysupdate-root.sh \
+       && sudo install -m 644 "$AGENT_DIR/system/mokuture-sysupdate.service" /etc/systemd/system/mokuture-sysupdate.service \
+       && sudo install -m 644 "$AGENT_DIR/system/mokuture-sysupdate.timer" /etc/systemd/system/mokuture-sysupdate.timer; then
+        SYSUPDATE_OK=1
+        echo "  -> システム更新の仕組みを入れた。署名の公開鍵: $(cut -d' ' -f3- "$SIGNERS_SRC" | cut -c1-60)"
+    else
+        echo "  -> システム更新の仕組みを入れられなかった(OS の設定などは配信で届かない)"
+    fi
+fi
+
 sudo systemctl daemon-reload
 sudo systemctl enable "$SERVICE_NAME"
 sudo systemctl restart "$SERVICE_NAME"
+if [ "$SYSUPDATE_OK" = "1" ]; then
+    sudo systemctl enable --now mokuture-sysupdate.timer
+    # 1 回目をいま動かす(I2C の有効化など。終わるまで待たない。結果は下の Status で見る)
+    sudo systemctl start --no-block mokuture-sysupdate.service || true
+fi
 
 echo ""
 echo "=== Install Complete ==="
@@ -155,6 +210,13 @@ if [ "$IS_PI" = "1" ] && [ "$GPIO_OK" != "1" ]; then
 fi
 echo "Status : sudo systemctl status $SERVICE_NAME"
 echo "Logs   : journalctl -u $SERVICE_NAME -f"
+if [ "$SYSUPDATE_OK" = "1" ]; then
+    echo ""
+    echo "System update (OS の設定・パッケージ・ライブラリを配信で受け取る仕組み):"
+    echo "  Status : cat /var/lib/mokuture/sysupdate.status"
+    echo "  Logs   : journalctl -u mokuture-sysupdate -n 50   /  cat /var/lib/mokuture/sysupdate.log"
+    echo "  画面   : キオスク設定 → デバイスチェック → 「ソフトウェア更新」の「OS の設定・部品」"
+fi
 echo ""
 echo "Voice command (experimental — 画面を短い言葉で操作する「声で操作する」):"
 echo "  Setup  : bash $AGENT_DIR/scripts/install_voice.sh"

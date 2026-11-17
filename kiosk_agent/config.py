@@ -28,8 +28,9 @@ class Settings(BaseSettings):
 
     # GPIO pin numbers (BCM)
     pir_pin: int = 4
-    # 来訪を検知するセンサー。pir=人感センサー(GPIO・既定) / vl53l0x・vl53l1x=距離センサー(I2C)
-    presence_sensor: str = "pir"
+    # 来訪を検知するセンサー。auto(既定)=距離センサー(I2C)がつながっていればそれ、無ければ
+    # 人感センサー / pir=人感センサー(GPIO)に固定 / vl53l0x・vl53l1x=その距離センサーに固定
+    presence_sensor: str = "auto"
     # 距離センサーのとき: この距離(mm)以内を来訪とみなす
     tof_threshold_mm: int = 1000
     # 距離センサーのとき: 近い(遠い)読みが何回続いたら検知(解除)にするか。読みは 1 秒に 8 回前後
