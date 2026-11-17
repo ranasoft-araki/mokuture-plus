@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
-import { api, type NotificationHealth, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffPushUser, type StaffRouteTestResult } from "@/lib/api";
+import { api, PERMISSION_DENIED_MESSAGE, type NotificationHealth, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffPushUser, type StaffRouteTestResult } from "@/lib/api";
 import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, getClientOsName, matchesVapidKey, type PushStatus } from "@/lib/push";
 import { getAccessToken } from "@/lib/auth";
 
@@ -400,7 +400,8 @@ const ESCALATE_CHOICES = [
 // この設定に必要な権限と具体的な対処を案内する。ほかのエラーは従来の詳細を保つ。
 function staffRoutesErrorMessage(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : "";
-  if (message === "Insufficient permissions") {
+  // lib/api.ts が "Insufficient permissions" を共通の日本語に置き換えたあとの文言で判定する
+  if (message === PERMISSION_DENIED_MESSAGE) {
     return "この設定を変更できるのはテナント管理者です。管理者アカウントでログインし直すか、テナント管理者に設定を依頼してください。";
   }
   return message || fallback;

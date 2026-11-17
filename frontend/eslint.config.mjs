@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Netlify CLI がローカルに残すビルド生成物(.gitignore 済み)。
+    ".netlify/**",
   ]),
 ]);
 

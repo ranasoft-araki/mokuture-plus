@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { api, type TenantStats, type PublicTenantSettings, type ReceptionDailyStats } from "@/lib/api";
-import { getAccessToken, clearTokens, saveTokens } from "@/lib/auth";
+import { getAccessToken, clearTokens, isProxySession } from "@/lib/auth";
 import { AdminShell, MkCard, MkBtn, MkSectionTitle } from "@/components/AdminShell";
 
 export default function DashboardPage() {
@@ -21,7 +21,9 @@ export default function DashboardPage() {
       const s = await api.getTenantStats(token);
       setStats(s);
       // 次回起動の「キャッシュ即描画」用に前回統計を保存
-      try { localStorage.setItem(`mk_stats_${params.tenant}`, JSON.stringify(s)); } catch {}
+      if (!isProxySession()) {
+        try { localStorage.setItem(`mk_stats_${params.tenant}`, JSON.stringify(s)); } catch {}
+      }
     } catch (e) {
       // セッション切れ(refresh失敗)のみログインへ。ネットワーク一時失敗ではキャッシュ表示を維持する。
       const msg = e instanceof Error ? e.message : "";
@@ -44,21 +46,14 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    const proxyAccess = localStorage.getItem("mk_proxy_access");
-    const proxyRefresh = localStorage.getItem("mk_proxy_refresh");
-    const proxyTenant = localStorage.getItem("mk_proxy_tenant");
-    if (proxyAccess && proxyRefresh && proxyTenant === params.tenant) {
-      saveTokens(proxyAccess, proxyRefresh, "admin", true);
-      localStorage.removeItem("mk_proxy_access");
-      localStorage.removeItem("mk_proxy_refresh");
-      localStorage.removeItem("mk_proxy_tenant");
-    }
+    // 代理ログインの受け取りは [tenant]/ProxyLoginHandler が子を描く前に済ませている
     const token = getAccessToken();
     if (!token) { router.push("/login"); return; }
     // キャッシュ即描画(stale-while-revalidate): 前回統計があれば先に見せてから最新化する。
     // 起動時の「読み込み中…」空白＋米国サーバー往復待ちを体感上ゼロにする狙い。
+    // 代理ログインのタブでは使わない(顧客の集計値を運営・代理店の端末に残さない)。
     try {
-      const cached = localStorage.getItem(`mk_stats_${params.tenant}`);
+      const cached = isProxySession() ? null : localStorage.getItem(`mk_stats_${params.tenant}`);
       if (cached) { setStats(JSON.parse(cached)); setLoading(false); }
     } catch {}
     void loadData(token);

@@ -293,7 +293,7 @@ export function AdminShell({ active, title, subtitle, breadcrumb, actions, child
           {/* 閲覧専用アカウント(demo1)ではログアウトを非表示 */}
           {!readOnly && (
             <button
-              onClick={() => { clearTokens(); router.push(getLogoutUrl()); }}
+              onClick={() => { const url = getLogoutUrl(); clearTokens(); router.push(url); }}
               style={{
                 width: "100%", display: "flex", alignItems: "center", gap: 8,
                 padding: "9px 14px", background: "none", border: "none",

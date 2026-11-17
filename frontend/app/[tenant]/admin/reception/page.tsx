@@ -90,6 +90,7 @@ const STATUS_COLOR: Record<string, string> = {
 const METHOD_LABEL: Record<string, string> = {
   form: "フォーム入力",
   qr: "QR読取",
+  appointment: "予約QR",
   delivery: "配達呼出",
   dropoff: "置き配",
 };
@@ -787,11 +788,10 @@ export default function ReceptionLogsPage() {
         >
           <option value="">受付経路: 全て</option>
           <option value="form">フォーム</option>
-          <option value="qr">QR</option>
+          <option value="qr">QR読取</option>
+          <option value="appointment">予約QR</option>
           <option value="delivery">配達呼出</option>
           <option value="dropoff">置き配</option>
-          <option value="phone">電話</option>
-          <option value="other">その他</option>
         </select>
         <select
           value={stateFilter}

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, OperatorTenant } from "@/lib/api";
-import { getAccessToken } from "@/lib/auth";
+import { getAccessToken, openProxyTab, writeProxyHandoff, clearProxyHandoff, PROXY_POPUP_BLOCKED } from "@/lib/auth";
 import { MkCard, MkBtn, MkSectionTitle } from "@/components/AdminShell";
 import { ConfirmModal } from "@/components/ConfirmModal";
 
@@ -15,6 +15,7 @@ export default function ResellerCustomersPage() {
   const [form, setForm] = useState({ name: "", slug: "", admin_email: "", admin_password: "" });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [proxyError, setProxyError] = useState("");
   const [q, setQ] = useState("");
   const [modal, setModal] = useState<{ msg: string; confirmLabel?: string; action: () => Promise<void> } | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -67,11 +68,20 @@ export default function ResellerCustomersPage() {
       msg: `「${customer.name}」の管理画面に代理ログインします。新しいタブで開きます。続行しますか？`,
       confirmLabel: "代理ログイン",
       action: async () => {
-        const result = await api.proxyLoginAsCustomer(token, customer.id);
-        localStorage.setItem("mk_proxy_access", result.access_token);
-        localStorage.setItem("mk_proxy_refresh", result.refresh_token);
-        localStorage.setItem("mk_proxy_tenant", result.tenant_slug);
-        window.open(`/${result.tenant_slug}/admin`, "_blank");
+        // タブは押した直後(await より前)に開く。通信の後に開くとポップアップとして止められる。
+        const w = openProxyTab();
+        if (!w) { clearProxyHandoff(); setProxyError(PROXY_POPUP_BLOCKED); return; }
+        setProxyError("");
+        try {
+          const result = await api.proxyLoginAsCustomer(token, customer.id);
+          // 代理ログインは refresh トークンを使わない(時間が来たらタブを開き直す)
+          writeProxyHandoff(result.access_token, result.tenant_slug);
+          w.location.href = `/${result.tenant_slug}/admin?proxy=1`;
+        } catch (err: unknown) {
+          clearProxyHandoff();
+          try { w.close(); } catch {}
+          setProxyError(err instanceof Error ? err.message : "代理ログインに失敗しました");
+        }
       },
     });
   };
@@ -85,6 +95,12 @@ export default function ResellerCustomersPage() {
           onConfirm={async () => { const action = modal.action; setModal(null); await action(); }}
           onCancel={() => setModal(null)}
         />
+      )}
+      {proxyError && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#f6e0dc", border: "1px solid #a84238", color: "#a84238", fontSize: 13, display: "flex", justifyContent: "space-between", gap: 12 }}>
+          {proxyError}
+          <button onClick={() => setProxyError("")} aria-label="閉じる" style={{ background: "none", border: "none", cursor: "pointer", color: "#a84238" }}>×</button>
+        </div>
       )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <MkSectionTitle title="顧客管理" subtitle={`${customers.length} 顧客テナント`} />

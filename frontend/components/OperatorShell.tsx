@@ -121,7 +121,7 @@ export function OperatorShell({ children, receptionUnread }: { children: ReactNo
           )}
           <div style={{ padding: "4px 12px 12px" }}>
             <button
-              onClick={() => { clearTokens(); router.push(getLogoutUrl()); }}
+              onClick={() => { const url = getLogoutUrl(); clearTokens(); router.push(url); }}
               style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.4)", fontSize: 12.5, fontFamily: FONT_JP, textAlign: "left" as const }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.7)"; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.4)"; }}

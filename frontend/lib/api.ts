@@ -6,14 +6,38 @@ async function _fetch(path: string, init?: RequestInit, token?: string): Promise
   return fetch(`${API_BASE}${path}`, { ...init, headers: { ...headers, ...init?.headers } });
 }
 
+/** request() が投げるエラー。message は画面に出す文言、status は HTTP ステータス。 */
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+// 中央で日本語に置き換える backend のエラー文言
+export const PERMISSION_DENIED_MESSAGE = "この操作を行う権限がありません（管理者のみ）";
+const INVALID_CREDENTIALS_MESSAGE = "ログインIDまたはパスワードが違います";
+const TOO_MANY_REQUESTS_MESSAGE = "試行回数が多すぎます。しばらくしてからやり直してください。";
+const _LOGIN_PATHS = new Set(["/auth/login", "/auth/operator/login", "/auth/reseller/login"]);
+const _HAS_JAPANESE = /[぀-ヿ㐀-鿿]/;
+
 // Singleton: prevents race condition when multiple requests expire simultaneously
-type _RefreshResult = { token: string | null; sessionDead: boolean; role: string | null };
+// proxy=true は代理ログインのタブ(refresh トークンを持たず、時間が来たら終わる)
+type _RefreshResult = { token: string | null; sessionDead: boolean; role: string | null; proxy?: boolean };
 let _pendingRefresh: Promise<_RefreshResult> | null = null;
 
 async function _doRefresh(): Promise<_RefreshResult> {
-  const { getRefreshToken, getRole, refreshSaveTokens, clearTokens } = await import("@/lib/auth");
-  const rt = getRefreshToken();
+  const { getRefreshToken, getRole, refreshSaveTokens, clearTokens, isProxySession, endProxySession } = await import("@/lib/auth");
   const role = getRole();
+  // 代理ログインのタブは更新しない。このタブのトークンだけ消して「有効時間切れ」の案内にする
+  // (運営・代理店自身のログインには触れない)。
+  if (isProxySession()) {
+    endProxySession();
+    return { token: null, sessionDead: true, role, proxy: true };
+  }
+  const rt = getRefreshToken();
   if (!rt) return { token: null, sessionDead: true, role };
 
   let res: Response;
@@ -58,9 +82,15 @@ async function _fetchOrTempFailure(path: string, init?: RequestInit, token?: str
 let _redirecting = false;
 
 /** セッション死亡確定時、役割に応じたログイン画面へ強制的に飛ばす。 */
-function _forceLoginRedirect(role: string | null) {
+function _forceLoginRedirect({ role, proxy }: _RefreshResult) {
   if (typeof window === "undefined" || _redirecting) return;
   _redirecting = true;
+  if (proxy) {
+    // 代理ログインのタブ: ログイン画面へは移らず、読み直して同じタブに「有効時間切れ」の案内を出す
+    // ([tenant]/ProxyLoginHandler が表示する)
+    window.location.reload();
+    return;
+  }
   const dest = role === "operator" ? "/ops-console" : role === "reseller" ? "/partner-portal" : "/login";
   if (window.location.pathname !== dest) {
     // replace: 戻るで死んだページへ戻れないようにする(戻ると _redirecting が立ったままで以後リダイレクトしない)
@@ -107,7 +137,8 @@ function _blockedByReadonly(path: string, method: string | undefined, token: str
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return false;
   if (!_tokenIsReadonly(token)) return false;
   const p = path.split("?")[0];
-  const allowed = p === "/appointments" || p.startsWith("/appointments/");
+  // /events/ticket はデータを変えない(SSE 接続用の短時間チケットを受け取るだけ)
+  const allowed = p === "/appointments" || p.startsWith("/appointments/") || p === "/events/ticket";
   return !allowed;
 }
 
@@ -124,7 +155,7 @@ export async function ensureFreshToken(): Promise<string | null> {
     }
     const result = await _pendingRefresh;
     if (result.token) token = result.token;
-    else if (result.sessionDead) { _forceLoginRedirect(result.role); return null; }
+    else if (result.sessionDead) { _forceLoginRedirect(result); return null; }
   }
   return token;
 }
@@ -155,7 +186,7 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
     if (proactive.token) {
       token = proactive.token;
     } else if (proactive.sessionDead) {
-      _forceLoginRedirect(proactive.role);
+      _forceLoginRedirect(proactive);
       return new Promise<T>(() => {}); // リダイレクト中: 誤ったエラー表示が一瞬でも出ないよう解決させない
     } else {
       // 一時的な失敗: 失効済みトークンで叩いても401→再refreshになるだけなので、ここで止める
@@ -174,7 +205,7 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
     const result = await _pendingRefresh;
     if (!result.token) {
       if (result.sessionDead) {
-        _forceLoginRedirect(result.role);
+        _forceLoginRedirect(result);
         return new Promise<T>(() => {}); // リダイレクト中: 誤ったエラー表示が一瞬でも出ないよう解決させない
       }
       throw new Error(_TEMP_FAILURE);
@@ -190,7 +221,17 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
     } else {
       errorMsg = typeof err.detail === "string" ? err.detail : "Request failed";
     }
-    throw new Error(errorMsg);
+    // backend の英語のエラー文言を日本語にする(画面ごとに訳さなくて済むようここで1回だけ)
+    const p = path.split("?")[0];
+    if (res.status === 403 && (errorMsg === "Insufficient permissions" || errorMsg === "この操作を行う権限がありません")) {
+      errorMsg = PERMISSION_DENIED_MESSAGE;
+    } else if (errorMsg === "Invalid credentials" && _LOGIN_PATHS.has(p)) {
+      errorMsg = INVALID_CREDENTIALS_MESSAGE;
+    } else if (res.status === 429) {
+      // backend が日本語の説明を返していればそれを、無ければ共通の文言を出す
+      errorMsg = typeof err.detail === "string" && _HAS_JAPANESE.test(err.detail) ? err.detail : TOO_MANY_REQUESTS_MESSAGE;
+    }
+    throw new ApiError(errorMsg, res.status);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -343,7 +384,7 @@ export const api = {
     const qs = p.toString();
     const headers: Record<string, string> = { "Content-Type": "application/json", "Authorization": `Bearer ${token}` };
     const res = await fetch(`${API_BASE}/operator/reception/export.csv${qs ? `?${qs}` : ""}`, { headers });
-    if (!res.ok) throw new Error("CSV export failed");
+    if (!res.ok) throw new Error(res.status === 403 ? PERMISSION_DENIED_MESSAGE : "CSV の書き出しに失敗しました。少し待ってからもう一度お試しください。");
     return res.blob();
   },
   emergencyBroadcast: (token: string, message: string, tenant_ids?: string[]) =>
@@ -415,12 +456,16 @@ export const api = {
     const qs = p.toString();
     const headers: Record<string, string> = { "Content-Type": "application/json", "Authorization": `Bearer ${token}` };
     const res = await fetch(`${API_BASE}/reseller/reception/export.csv${qs ? `?${qs}` : ""}`, { headers });
-    if (!res.ok) throw new Error("CSV export failed");
+    if (!res.ok) throw new Error(res.status === 403 ? PERMISSION_DENIED_MESSAGE : "CSV の書き出しに失敗しました。少し待ってからもう一度お試しください。");
     return res.blob();
   },
 
   getTenantStats: (token: string) =>
     request<TenantStats>("/settings/stats", {}, token),
+
+  // SSE(管理画面のニアリアルタイム連動)の接続用チケット。短時間だけ有効なので接続のたびに取り直す。
+  getEventsTicket: (token: string) =>
+    request<{ ticket: string; expires_in: number }>("/events/ticket", { method: "POST" }, token),
 
   // Settings
   getTenantSettings: (token: string) =>
@@ -514,7 +559,7 @@ export const api = {
     request<ReceptionLog>(`/reception/${logId}/decision`, { method: "POST", body: JSON.stringify({ decision }) }, token),
   exportContactsCsv: async (token: string): Promise<Blob> => {
     const res = await _fetch("/reception/contacts.csv", {}, token);
-    if (!res.ok) throw new Error("Export failed");
+    if (!res.ok) throw new Error(res.status === 403 ? PERMISSION_DENIED_MESSAGE : "CSV の書き出しに失敗しました。少し待ってからもう一度お試しください。");
     return res.blob();
   },
   exportReceptionCsv: async (token: string, params?: { q?: string; status?: string; date_from?: string; date_to?: string; method?: string }): Promise<Blob> => {
@@ -525,7 +570,7 @@ export const api = {
     const qs = p.toString();
     const headers: Record<string, string> = { "Content-Type": "application/json", "Authorization": `Bearer ${token}` };
     const res = await fetch(`${API_BASE}/reception/export.csv${qs ? `?${qs}` : ""}`, { headers });
-    if (!res.ok) throw new Error("CSV export failed");
+    if (!res.ok) throw new Error(res.status === 403 ? PERMISSION_DENIED_MESSAGE : "CSV の書き出しに失敗しました。少し待ってからもう一度お試しください。");
     return res.blob();
   },
   deleteReceptionLog: (token: string, logId: string): Promise<void> =>
@@ -754,8 +799,20 @@ export const api = {
     request(`/users/${userId}`, { method: "DELETE" }, token),
   updateUserRole: (token: string, userId: string, role: string) =>
     request<UserListItem>(`/users/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }, token),
-  changePassword: (token: string, currentPassword: string, newPassword: string): Promise<void> =>
-    request(`/users/me/password`, { method: "PATCH", body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }, token),
+  // パスワードを変えると backend はそれまでのトークンを無効にし、新しいトークンを返す。
+  // いまのセッションと同じ保存先(ログイン状態を保持するかどうか)に入れ替えて、ログインを続ける。
+  // 返ってこない(古い backend)ときは従来どおり何もしない。
+  changePassword: async (token: string, currentPassword: string, newPassword: string): Promise<void> => {
+    const res = await request<{ access_token?: string; refresh_token?: string } | undefined>(
+      `/users/me/password`,
+      { method: "PATCH", body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) },
+      token,
+    );
+    if (res && typeof res.access_token === "string" && res.access_token) {
+      const { refreshSaveTokens } = await import("@/lib/auth");
+      refreshSaveTokens(res.access_token, typeof res.refresh_token === "string" ? res.refresh_token : "");
+    }
+  },
   resetUserPassword: (token: string, userId: string, newPassword: string): Promise<void> =>
     request(`/users/${userId}/reset-password`, { method: "POST", body: JSON.stringify({ new_password: newPassword }) }, token),
   getMe: (token: string) =>

@@ -16,8 +16,10 @@ export default async function TenantLayout({
   params: Promise<{ tenant: string }>;
 }) {
   const { tenant } = await params;
+  // fallback に children を置かない: 置くと代理ログインの受け取り(ProxyLoginHandler)を通らずに
+  // 子が描かれ、受け取り前のトークンで通信が走りうる。
   return (
-    <Suspense fallback={<>{children}</>}>
+    <Suspense fallback={null}>
       <ProxyLoginHandler tenant={tenant}>
         {children}
       </ProxyLoginHandler>

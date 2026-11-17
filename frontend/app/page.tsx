@@ -10,9 +10,11 @@
 export const dynamic = "force-static";
 
 // getHomeUrl(lib/auth.ts) と同じ分岐を素の JS で再現する。
+// 空文字は「無い」扱い。代理ログインのタブ(mk_proxy_session=1)は sessionStorage だけを読む。
 const GATE = `(function(){try{
 var ss=window.sessionStorage,ls=window.localStorage;
-var g=function(k){return ss.getItem(k)||ls.getItem(k);};
+var px=ss.getItem('mk_proxy_session')==='1';
+var g=function(k){return ss.getItem(k)||(px?null:ls.getItem(k))||null;};
 var refresh=g('mokuture_refresh'),role=g('mokuture_role'),slug=g('mokuture_slug');
 var dest='/login';
 if(refresh){

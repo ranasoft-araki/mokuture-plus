@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, OperatorTenant } from "@/lib/api";
-import { getAccessToken } from "@/lib/auth";
-import { MkCard, MkBtn, MkSectionTitle } from "@/components/AdminShell";
+import { getAccessToken, openProxyTab, writeProxyHandoff, clearProxyHandoff, PROXY_POPUP_BLOCKED } from "@/lib/auth";
+import { MkCard, MkSectionTitle } from "@/components/AdminShell";
 import { ConfirmModal } from "@/components/ConfirmModal";
 
 // ── Dark operator theme constants ──────────────────────────────────────────
@@ -261,11 +261,17 @@ export default function OperatorTenantsPage() {
       msg: `「${tenant.name}」の管理画面に代理ログインします。新しいタブで開きます。続行しますか？`,
       confirmLabel: "代理ログイン",
       action: async () => {
+        // タブは押した直後(await より前)に開く。通信の後に開くとポップアップとして止められる。
+        const w = openProxyTab();
+        if (!w) { clearProxyHandoff(); setActionError(PROXY_POPUP_BLOCKED); return; }
+        setActionError("");
         try {
           const { access_token, tenant_slug } = await api.proxyLoginAsTenant(token, tenant.id);
-          localStorage.setItem("mk_proxy_access", access_token);
-          window.open(`/${tenant_slug}/admin?proxy=mk_proxy_access`, "_blank");
+          writeProxyHandoff(access_token, tenant_slug);
+          w.location.href = `/${tenant_slug}/admin?proxy=1`;
         } catch (err: unknown) {
+          clearProxyHandoff();
+          try { w.close(); } catch {}
           setActionError(err instanceof Error ? err.message : "代理ログインに失敗しました");
         }
       },

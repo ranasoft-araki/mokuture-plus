@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
+import { AdminShell, MkBtn, MkCard, MkSectionTitle } from "@/components/AdminShell";
 import { ConfirmModal } from "@/components/ConfirmModal";
 import { api, type MeetingRoom, type MeetingRoomCreate } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";

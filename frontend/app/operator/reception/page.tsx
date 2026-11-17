@@ -38,6 +38,9 @@ const SELECT_STYLE: React.CSSProperties = {
 const STATUS_LABEL: Record<string, string> = {
   received: "受付済み",
   notified: "通知済み",
+  accepted: "対応中",
+  phone: "電話案内",
+  declined: "お断り",
   completed: "完了",
   cancelled: "キャンセル",
 };
@@ -45,6 +48,9 @@ const STATUS_LABEL: Record<string, string> = {
 const STATUS_COLOR: Record<string, string> = {
   received: "#f59e0b",
   notified: "#3b82f6",
+  accepted: "#059669",
+  phone: "#0ea5e9",
+  declined: "#ef4444",
   completed: "#10b981",
   cancelled: "#9ca3af",
 };
@@ -52,6 +58,7 @@ const STATUS_COLOR: Record<string, string> = {
 const METHOD_LABEL: Record<string, string> = {
   form: "フォーム入力",
   qr: "QR読取",
+  appointment: "予約QR",
   delivery: "配達呼出",
   dropoff: "置き配",
 };
@@ -69,6 +76,9 @@ function StatusPill({ state }: { state: string | null }) {
 
   if (s === "received") { bg = "rgba(234,179,8,0.15)"; color = "#b45309"; label = "受付済"; }
   else if (s === "notified") { bg = "rgba(59,130,246,0.15)"; color = "#1d4ed8"; label = "通知済"; }
+  else if (s === "accepted") { bg = "rgba(5,150,105,0.15)"; color = "#047857"; label = "対応中"; }
+  else if (s === "phone") { bg = "rgba(14,165,233,0.15)"; color = "#0369a1"; label = "電話案内"; }
+  else if (s === "declined") { bg = "rgba(239,68,68,0.15)"; color = "#b91c1c"; label = "お断り"; }
   else if (s === "completed") { bg = "rgba(74,124,78,0.15)"; color = "#4a7c4e"; label = "完了"; }
   else if (s === "cancelled") { bg = "rgba(168,161,152,0.15)"; color = "#a8a198"; label = "キャンセル"; }
 
@@ -595,9 +605,10 @@ export default function OperatorReceptionPage() {
         >
           <option value="">受付経路: 全て</option>
           <option value="form">フォーム</option>
-          <option value="qr">QR</option>
-          <option value="phone">電話</option>
-          <option value="other">その他</option>
+          <option value="qr">QR読取</option>
+          <option value="appointment">予約QR</option>
+          <option value="delivery">配達呼出</option>
+          <option value="dropoff">置き配</option>
         </select>
         <select
           style={SELECT_STYLE}

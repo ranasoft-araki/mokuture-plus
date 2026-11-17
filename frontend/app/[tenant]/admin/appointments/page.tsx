@@ -531,7 +531,7 @@ function WeekView({ weekStart, rooms, appts, onCellClick, onBlockEdit, onDayBloc
       </div>
 
       {/* Room rows */}
-      {rooms.map((room, ri) => {
+      {rooms.map((room) => {
         const rc = roomColor(room);
         return (
           <div key={room.id} style={{ display: "grid", gridTemplateColumns: `${LABEL_W}px repeat(7, ${WEEK_DAY_W}px)`, borderTop: "1px solid #efece5", minHeight: 80 }}>
