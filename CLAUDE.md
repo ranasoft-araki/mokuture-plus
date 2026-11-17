@@ -28,7 +28,7 @@
 | DB | Neon PostgreSQL (本番) / SQLite (ローカル開発) |
 | Storage | Cloudflare R2 / MinIO (S3 互換、Presigned URL) |
 | 認証 | JWT HS256 (access + refresh) + bcrypt |
-| デプロイ | Frontend → Netlify、Backend → Render (512MB free) |
+| デプロイ | Frontend → Netlify、Backend → Render (starter・oregon。リポジトリ直下の `Dockerfile` を使う) |
 
 ---
 
@@ -45,6 +45,12 @@ cd frontend && npm run dev
 cd kiosk_agent && uv run uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 # ブラウザで http://localhost:8080 を開く (Chromium キオスクモード: chromium-browser --kiosk http://localhost:8080)
 ```
+
+**Windows 開発機でキオスクをまとめて起動**: リポジトリ直下の `kiosk-local.bat` をダブルクリック。
+音声サービス(8181)→キオスク本体(8080)→ブラウザの順に立ち上げる(起動済みのものは飛ばす)。
+終了は「mokuture voice」「mokuture kiosk」の2つの窓を閉じる。`kiosk-local.bat nobrowser` でブラウザを開かない。
+本体は `127.0.0.1` で待ち受ける(同じ PC からだけ開ける)。`uv run` ではなく `.venv` の python を直接使う。
+`.bat` は **CRLF・UTF-8(BOM なし)** で保存する(LF だと `goto` のラベルが効かなくなる)。
 
 ### Kiosk Agent — Raspberry Pi 本番セットアップ
 
@@ -159,7 +165,6 @@ mokuture/
 │   │           └── top|reception|qr|calling|complete/page.tsx ← 各画面 (KioskFlow へリダイレクト)
 │   ├── components/
 │   │   ├── AdminShell.tsx     ← 管理画面レイアウト・サイドバーナビ・共通 UI コンポーネント。審査用デモモード時はサイドバー「来社予定」にQR発行ガイド①バルーンを出す(is_demoを自前fetch+mk_isdemo_{tenant}キャッシュ)。汎用 QrGuideBalloon(createPortal+position:fixedで親overflow非依存に任意要素へ吹き出しを固定)をexport
-│   │   ├── KioskScaler.tsx    ← 1920×1080 キャンバスをビューポートに等比スケール
 │   │   └── PWAInit.tsx        ← PWA Service Worker 登録
 │   └── lib/
 │       ├── api.ts             ← API クライアント・全型定義 (TenantSettings 等)。ensureFreshToken/API_BASE を export(SSE 接続用)
@@ -177,7 +182,7 @@ mokuture/
     ├── sync.py                ← バックエンドとのデータ同期
     ├── state.py               ← デバイス状態管理
     ├── kana_kanji.py          ← かな→漢字 変換(辞書ルックアップ+貪欲分割。GET /device/convert)
-    ├── kana_dict.tsv          ← 同梱かな漢字辞書(受付語彙, SKKより優先)
+    ├── kana_dict.tsv          ← 同梱かな漢字辞書(受付語彙, SKKより優先)。kana_kanji.py とともに OTA の配信対象(2026-11-12 追加。SKK-JISYO.L は配らない)
     └── SKK-JISYO.L            ← 全面かな漢字辞書 約13万語(資産として同梱, .gitattributesでバイナリ扱い)
 ```
 
@@ -226,7 +231,7 @@ mokuture/
 - `GET /operator/reception` — クロステナント受付ログ
 - `POST /operator/tenants/{id}/proxy-login` — 代理ログイン
 - `GET|POST|DELETE|PATCH /users` — テナント内ユーザー管理
-- `POST /operator/tenants/{id}/suspend` — テナント停止/再開
+- `PATCH /operator/tenants/{id}/suspend` — テナント停止/再開
 - `POST /devices/{id}/force-refresh` — デバイス強制更新
 - `GET /reception/export.csv` — 受付ログCSVエクスポート（管理者）
 - `GET /operator/reception/export.csv` — 受付ログCSVエクスポート（運営）
@@ -256,7 +261,7 @@ mokuture/
 - Web Push: スタッフPWAの Service Worker(`public/sw.js`)は受付プッシュ(`kind==="reception_decision"`)に 受付/電話/お断り アクションボタンを表示し、通知タップ(`accept`/`phone`/`decline`)で署名トークン付き `POST /reception/decision` を送る。iOS PWA は通知アクション非対応のため上記アプリ内ボタンがフォールバック。
 - Web Push 通知本体タップ→対応モーダル直起動: プッシュ payload の `data.url` は `/{tenant_id}/admin/reception?respond={log.id}`(`build_decision_push_extras`)。通知**本体**をタップすると受付ログ画面が該当受付の対応モーダル(`RespondModal`: 大型の 受付/電話/お断り ボタン)を自動で開く。SW `notificationclick` は既に受付ログ画面が開いていれば `/admin/reception` サフィックスで捕捉して focus + `postMessage({type:'FOCUS_RECEPTION', logId})`、無ければ `?respond=` 付きURLで `openWindow`。受付ログ画面は マウント時の `?respond=` 読取＋SW message 購読の両経路で `respondId` を立て、手元に無ければ即時リフレッシュしてモーダルを表示。通知アクション非対応端末(iOS PWA)の主要導線。
 - Web Push 置き配通知タップ→**詳細モーダル**直起動: 置き配(dropoff)は応答不要なので対応ボタンは付けず、通知タップで**受付詳細モーダル(`ReceptionDetailModal`)を開き解錠PINを大きく表示**する(受付応答通知が `RespondModal` を開くのと同じ導線)。置き配プッシュの payload は `kind="delivery_dropoff"`/`logId`/`url=/{tenant_id}/admin/reception?detail={log.id}`(`_fire_delivery_notifications` の `dropoff_log_id` 経由。`_log_delivery_dropoff` が受付ログ id を返す)。SW `notificationclick` は `delivery_dropoff` も `/admin/reception` サフィックスで既存タブを捕捉し `postMessage({type:'FOCUS_DETAIL', logId})`、無ければ `?detail=` 付きURLで `openWindow`。受付ログ画面は マウント時の `?detail=` 読取＋SW `FOCUS_DETAIL` 購読で `detailId` を立て、`ReceptionDetailModal` を表示(行クリックの `selectedLog` と同じモーダル。`method==="dropoff"` のとき `purpose` の「解錠PIN: XXXX」を正規表現で抜き出し上部に大きく表示)。
-- ログイン(`login`/`partner-portal`/`ops-console`): 全入力欄に `name`/`id`/`autoComplete`(username / current-password、新規登録時は new-password) を付与し Chrome のパスワード保存/自動入力に対応。`login` の「ログイン状態を保持」チェックは既定ON(localStorage 保存)。アクセストークンは60分(`jwt_access_expire_minutes`)、JWT refresh は 30日(`jwt_refresh_expire_days`)＝この期間ログイン維持。**起動高速化**: `lib/api.ts` はアクセストークンの `exp` を**ローカルで先読み**し、失効(間近)なら叩く前に先に refresh する（ホーム画面ショートカット起動時の「叩く→401→refresh→再叩き」の無駄な往復を削減。米国サーバーへの1往復≈140ms×余分回数を消す）。先読みで漏れた場合は従来どおり401で自動更新。**セッション切れの扱いは `lib/api.ts` に集約**: refresh トークンが無い、または `/auth/refresh` が 401/403 のときだけ「セッションが切れた」と確定し、保存情報を消して役割に合ったログイン画面(`/login`・運営 `/ops-console`・代理店 `/partner-portal`)へ `location.replace` で移る（その通信の Promise は解決させない＝エラーを一瞬も出さない）。通信断・デプロイ中の 5xx ではログアウトさせず「サーバーに接続できません。…」を投げる（**この文言に「セッション」を入れない**＝ダッシュボードはこの語でログアウトさせる）。各画面の catch で `clearTokens()`＋`/login` へ飛ばさないこと（ここに来るのは一時的な失敗だけ）。**ダッシュボード(`admin/page.tsx`)は前回統計を `mk_stats_{tenant}` にキャッシュし stale-while-revalidate で即描画**（起動時の空白待ちを体感ゼロに）。ネットワーク一時失敗ではログアウトせずキャッシュ表示を維持し、真のセッション切れ時のみ `/login` へ。**起動ゲート(`app/page.tsx`=`/`)**: PWAショートカット起動が約10秒かかっていた主因は、ログイン済みでも `/ → /login(Reactをhydrate) → window.location.assign(ハード遷移) → /{tenant}/admin` と「アプリを2回フル起動」していたこと。対策として `/` を **hydration 前に走るインラインscriptの軽量ゲート**(`export const dynamic="force-static"`)にし、localStorageを同期読みしてログイン済みなら **/login を素通りして直接** `/{tenant}/admin`(operator=`/operator`/reseller=`/{slug}/reseller`)へ `location.replace`。**判定分岐は `lib/auth.ts` の `getHomeUrl` と一致させること**(変更時は両方直す)。`/login` の自動リダイレクトも `window.location.assign`→`router.replace`(ソフト遷移)に変更（ハード遷移=iOSパスワード保存目的はログインsubmit直後のみ）。SW(`public/sw.js` `mokuture-v6`)は起動ゲート `/` のみ **cache-first+背景更新**(ゲートはチャンクを実行せず即離脱するので stale でも安全＝起動時のネット往復を消す)、遷移先ページは network-first 維持でチャンク不整合を防ぐ。
+- ログイン(`login`/`partner-portal`/`ops-console`): 全入力欄に `name`/`id`/`autoComplete`(username / current-password、新規登録時は new-password) を付与し Chrome のパスワード保存/自動入力に対応。`login` の「ログイン状態を保持」チェックは既定ON(localStorage 保存)。アクセストークンは60分(`jwt_access_expire_minutes`)、JWT refresh は 30日(`jwt_refresh_expire_days`)＝この期間ログイン維持。**起動高速化**: `lib/api.ts` はアクセストークンの `exp` を**ローカルで先読み**し、失効(間近)なら叩く前に先に refresh する（ホーム画面ショートカット起動時の「叩く→401→refresh→再叩き」の無駄な往復を削減。米国サーバーへの1往復≈140ms×余分回数を消す）。先読みで漏れた場合は従来どおり401で自動更新。**セッション切れの扱いは `lib/api.ts` に集約**: refresh トークンが無い、または `/auth/refresh` が 401/403 のときだけ「セッションが切れた」と確定し、保存情報を消して役割に合ったログイン画面(`/login`・運営 `/ops-console`・代理店 `/partner-portal`)へ `location.replace` で移る（その通信の Promise は解決させない＝エラーを一瞬も出さない）。通信断・デプロイ中の 5xx ではログアウトさせず「サーバーに接続できません。…」を投げる（**この文言に「セッション」を入れない**＝ダッシュボードはこの語でログアウトさせる）。各画面の catch で `clearTokens()`＋`/login` へ飛ばさないこと（ここに来るのは一時的な失敗だけ）。**ダッシュボード(`admin/page.tsx`)は前回統計を `mk_stats_{tenant}` にキャッシュし stale-while-revalidate で即描画**（起動時の空白待ちを体感ゼロに）。ネットワーク一時失敗ではログアウトせずキャッシュ表示を維持し、真のセッション切れ時のみ `/login` へ。**起動ゲート(`app/page.tsx`=`/`)**: PWAショートカット起動が約10秒かかっていた主因は、ログイン済みでも `/ → /login(Reactをhydrate) → window.location.assign(ハード遷移) → /{tenant}/admin` と「アプリを2回フル起動」していたこと。対策として `/` を **hydration 前に走るインラインscriptの軽量ゲート**(`export const dynamic="force-static"`)にし、localStorageを同期読みしてログイン済みなら **/login を素通りして直接** `/{tenant}/admin`(operator=`/operator`/reseller=`/{slug}/reseller`)へ `location.replace`。**判定分岐は `lib/auth.ts` の `getHomeUrl` と一致させること**(変更時は両方直す)。`/login` の自動リダイレクトも `window.location.assign`→`router.replace`(ソフト遷移)に変更（ハード遷移=iOSパスワード保存目的はログインsubmit直後のみ）。SW(`public/sw.js`)は起動ゲート `/` のみ **cache-first+背景更新**(ゲートはチャンクを実行せず即離脱するので stale でも安全＝起動時のネット往復を消す)、遷移先ページは network-first 維持でチャンク不整合を防ぐ。
 - 問い合わせ管理: 管理画面「問い合わせ」(`/{tenant}/admin/inquiries`)で共通フォーム受信を閲覧・既読/対応済み/削除。公開入力ページは `/{tenant}/inquiry`(認証不要, `app/[tenant]/inquiry/page.tsx`)。
 
 ---
@@ -270,9 +275,42 @@ mokuture/
 
 ### 代理ログイン（Proxy Login）
 - 運営は `POST /operator/tenants/{id}/proxy-login` で対象テナントの管理者JWTを取得
-- 発行されるJWTの有効期限は15分（通常の24時間より短い）
-- フロントエンドは一時キー（`mk_proxy_*`）でlocalStorageに保存し、新タブで管理画面を開く
-- 管理画面マウント時にプロキシキーを消費して通常セッションとして引き継ぐ
+- 発行されるJWTの有効期限は15分（通常の60分より短い）
+- 代理店の代理ログイン（`POST /reseller/customers/{id}/proxy-login`）も同じ（15分・refresh なし。応答の `refresh_token` は空文字）
+- **代理ログインの画面は、開いたタブの中だけで完結する**（`lib/auth.ts`）。開く側は受け渡し用の一時キー（`mk_proxy_access` / `mk_proxy_tenant` / `mk_proxy_expires`＝60秒）を localStorage に置き、新しいタブ（`?proxy=1`）の `ProxyLoginHandler` が**子を描画する前に**それを消費して sessionStorage へ移す（`mk_proxy_session=1`）。代理のトークンを localStorage に書かないので、運営・代理店自身のログインは上書きされない。15分で切れたらそのタブに「有効時間が切れました」と出すだけで、ログイン画面へは飛ばさない
+- 別タブはクリック直後に（通信の前に）開いておく。通信のあとに開くとブラウザに止められ、一時キーが残る
+- 代理ログイン中は、顧客の管理者のパスワードを変えられない（トークンの `proxy` クレームで判定・403）
+
+### 権限・認証・通知まわりの決まり（2026-11-13 に一括で入れた。崩さないこと）
+
+**backend**
+- **設定を変える操作は管理者だけ**: 端末（追加・承認・名前変更・強制更新・削除）、基本設定・受付設定・ロゴ、メディア/プレイリスト/スケジュールの書き込み、会議室の書き込み、受付ログの削除と CSV 出力、問い合わせの削除は `require_tenant_admin()`（`middleware/tenant.py`）。スタッフができるのは 閲覧・受付への応答・受付メモ・来社予定の操作・問い合わせの状態変更・自分のプロフィール。**新しい書き込み API を足すときは、スタッフにも許すかを必ず決めてから付ける**
+- **端末 API は承認済みの端末だけ**: `get_kiosk_device` は承認前の端末と停止中テナントを 403 で断る。承認前でも要るもの（状態確認・ハートビート・スケジュール・更新の配信・分析ログの取り込み）だけ `get_kiosk_device_any_status` を使う。**401 は「トークンが無効＝登録し直す」の合図なので、ここで 401 を返さないこと**
+- **端末の再登録**: 登録済みの端末が `POST /kiosk/register` を呼ぶとき、今のトークンを `X-Kiosk-Token` で添えていれば同じトークンを返す。添えていなければ新しいトークンを発行して**承認待ちに戻す**（管理画面で承認し直す）
+- **メールアドレスは全ユーザーで重複不可**（大文字小文字を区別しない。`services/accounts.py`）。DB の一意制約はまだ無い（既存データの確認が先）
+- **パスワードを変えると、それより前に発行したトークンは使えなくなる**（`users.password_changed_at` とトークンの `iat` を比べる）。自分で変えたときは応答に新しいトークンが入り、画面がそれを保存する
+- **ログインは、同じIDで10分に8回失敗すると10分受け付けない**（`services/login_throttle.py`・プロセス内）。メール送信（来社予定QR・テスト送信）はテナントごとに1時間30通まで（`services/mail_quota.py`）。どちらもプロセス内なので、ワーカーを増やすなら置き場所を変える
+- **回数制限の単位にする接続元**は `services/ratelimit.py` の `client_ip` に一本化（Render の背後なので `X-Forwarded-For` を見る。`TRUST_FORWARDED_FOR`）
+- **外へ送る URL（カスタム Webhook）は https かつ公開のホストだけ**（`services/url_safety.py`）。保存時と送信直前の両方で確かめ、送信時にだめなら飛ばして「失敗」に数える（受付の通知全体は止めない）。プッシュの購読先は既知のプッシュサービスのホストだけ
+- **通知文面に入れる来訪者の入力は必ず通知先ごとに無害化する**: Slack は `slack.escape_mrkdwn`、Chatwork は `chatwork.escape_tags`。同じ文字列を使い回さず、通知先ごとに元の値から作る（二重に変換しない）
+- **CSV は `services/csv_safe.py` の `safe_row` を通す**（表計算ソフトで式として解釈される先頭文字を無害化）
+- **設定の取得 API は秘密をそのまま返さない**: カスタム Webhook の URL は `***` で返し、`***` のまま保存されたら元の値を保つ
+- **SSE は使い捨てのチケットでつなぐ**: `POST /events/ticket` → `GET /events/stream?ticket=…`（60秒）。`?token=` は画面と backend の配備がずれる間の移行用で、いずれ外す
+- **本番（SQLite 以外）で JWT・暗号化の鍵が既定値のままなら起動しない**（`main._refuse_insecure_defaults`）
+- **テナントの slug に使えない語**: `login` `operator` `ops-console` `partner-portal` `api` `_next` `admin` `kiosk` `inquiry` `static`
+- **保存先の URL**（ロゴ・メディア・会議室の地図）は自分のストレージのものだけ（`storage.is_own_storage_url`）
+
+**端末エージェント・キオスク画面**
+- **エージェントは端末自身のブラウザからの要求だけ受ける**（ループバック以外は 403。`mokuture-kiosk.service` も 127.0.0.1 で待つ）。別の機器から叩く必要があるときだけ `KIOSK_ALLOW_REMOTE=1` を付け、待ち受けアドレスも変える（サービスファイルは OTA で届かないので、既設の端末は `install.sh` をやり直すまで待ち受けは 0.0.0.0 のまま。その間もエージェント側で断る）
+- **扉が閉まっていない空きロッカーは、預け入れ・置き配で開けない**（一覧では「扉が開いています」と出て選べない・声でも選べない・端末側も 409）。`GET /device/locker-list` の `door_closed` は true=閉 / false=開 / null=分からない。**「開」を信じるのは、その扉で一度でも「閉」を読めたことがあるときだけ**（センサーをつないでいない入力は常に「開」と読めるため。`locker_state.json` の `doors_seen_closed` に覚える。設定画面でロッカーの口数を選び直すと覚えは消える＝センサーが壊れて口が使えなくなったときの戻し方）。受け取り（利用中の口）と全解除は扉の状態にかかわらず開けられる
+- **受け取りは、錠を実際に動かせたときだけ空きに戻す**（`POST /device/locker/{id}/release` が 暗証番号の確認→解錠→記録の消去 を1回で行う。動かせなければ 503 で利用中のまま、画面は「担当者を呼ぶ」を案内）。実機で GPIO が模擬に落ちているときも 503。全解除だけは、錠を動かせなくても記録を消す（動かせなかった扉を `failed` で返す）
+- **保留中の置き配通知は、送れたと確かめてから1件ずつ外す**（先に取り出して空にしない。暗証番号の平文はこの保留にしか無い）。60秒ごとに再送する
+- **暗証番号の数え方**: 10分のうちに5回違えたら、という意味（何日も前の打ち間違いは積み上げない）
+- **暗証番号は口ごとに5回続けて違えると5分受け付けない**（429・メモリ上）
+- **登録し直しで手元のトークンが使えなくなったら、承認待ち画面でも捨てて登録からやり直す**（握りつぶすと、承認されても抜けられない）
+- **錠を「通電のまま」にする操作は30秒で自動的に切れる**
+- **更新（OTA）は、配信対象の一覧にあるパスだけ・取り寄せた中身が配信一覧のハッシュと一致したときだけ適用する**。1つでも食い違えばその回は何も適用しない
+- スタッフ用設定画面は、3分触らなければ待機画面へ戻る（開くときの PIN はまだ無い）
 
 ### ログインページ類似不具合の横断確認
 
@@ -385,7 +423,7 @@ mokuture/
 
 ## API エンドポイント概要
 
-全エンドポイントは `/api/v1` プレフィックス。
+全エンドポイントは `/api` プレフィックス（`config.py` の `api_prefix`。`/v1` は付かない）。
 
 | メソッド | パス | 認証 | 説明 |
 |---|---|---|---|
@@ -492,7 +530,7 @@ mokuture/
 `ST.brand_color`（アクセント）でレンダリングする。テーマビルダー（`buildIdle_XXX` / `*_TEMPLATES` / `FORM_THEMES` / `QR_THEMES` 等）は存在しない。
 
 - `kiosk_style` カラムは DB に残存するが UI からは選択不可（`ALLOWED_KIOSK_STYLES = {"default"}`）。
-- `kioskStyles.ts` は `default`（和モダン）1エントリのみ。
+- `kioskStyles.ts` はどこからも読まれていなかったため 2026-11-12 に削除した。
 
 ### キオスク 日英バイリンガル表示（2026-10-03）
 
@@ -647,7 +685,7 @@ mokuture/
 - **保存しない**。SQLite も一時ファイルも持たない。画像はプロセスメモリ上のセッションのみで、
   確定/取り消し/TTL(180s)のいずれでも破棄。受付に送るのは氏名/会社名/部署だけで、
   メール・電話・住所は確認画面に出すだけで捨てる。ログにも値を出さない。
-- **`/card/*` は既定でループバック限定**(`bind_loopback_only`)。agent 自体は 0.0.0.0 で待つが、名刺だけ絞る。
+- **`/card/*` は既定でループバック限定**(`bind_loopback_only`)。agent 自体もループバック限定になった(2026-11-13)が、名刺だけ絞る。
 - **しきい値はコードに直書きしない**。`card/defaults.py` が唯一の定義で、`card_reader.yaml`(端末ごと・gitignore)
   と環境変数 `CARD_<SECTION>__<KEY>` で上書きする。`card_reader.yaml.example` は既定値と完全一致し、
   ズレると `tests/test_config.py` が落ちる。
@@ -656,10 +694,8 @@ mokuture/
   **日本語モデルの文字セットに `@`/`_`/`〒` が無い**ため、英数字専用モデル(`rec_en.onnx`)で
   CJK を含まない行だけ読み直している。無い場合は復元を試み、特定できなければ**空欄で返す**（作らない）。
 - **モデル(約23MB)と依存パッケージは OTA では配らない**。`install.sh` → `scripts/fetch_ocr_models.py`
-  (SHA-256 照合つき)の担当。OTA が配るのは `card/**.py` のみ。辞書(`card/dictionaries/`)は現場で
-  追記される想定なので**あえて OTA 対象外**（上書きすると消えるため）。**その裏返しとして、
-  リポジトリ側で辞書に語を足しても OTA では実機に届かない**。端末で `git pull` するか
-  該当ファイルを手で置き換える必要がある（辞書は mtime を見るので再起動は不要）。
+  (SHA-256 照合つき)の担当。OTA が配るのは `card/**.py` と辞書(`card/dictionaries/`)。**辞書も OTA で上書きされる**ので、
+  現場で語を足すときは `*.local.*`（例: `surnames.local.tsv`）に書く（そちらは配信しないので消えない）。
 - **辞書は再起動不要**。`card/dictionaries/*.txt|tsv` は mtime を見て読み直す。
 - OTA 対象は agent(`updater.MANAGED_FILES`) と backend(`kiosk.BUNDLE_FILES`) の2箇所にあり、
   ズレると「その端末だけ古いコード」になる。`tests/test_ota_list.py` が並び順まで一致を検証する。
@@ -700,7 +736,11 @@ LFS 管理ファイルは `raw.githubusercontent.com` だとポインタ文字�
   **人が動く・物が動くもの(下部帯の「担当者を呼ぶ」・配達の「呼び出し」・受付の「受付する」・ロッカーの空きの口・
   解錠ガイドの「扉を閉めました」)は、声で選んだときだけ確認(`vcConfirm`「〜しますか？ はい/いいえ」)を挟む**
   (タッチは従来どおり即実行)。「受付する」の確認には入力内容を並べる(設計案 §08 の復唱)。
-  **暗証番号の画面ではマイクを開けない**(帯の「担当者を呼ぶ」もこの画面では声にしない)。キーボード・変換候補も対象外。
+  **暗証番号も声で入れられる**(2026-11-06 利用者の指示。以前はマイクを開けなかった)。**画面の案内は「1桁ずつ、丸が付くのを待って」**(2026-11-17 利用者の指示。続けて言うと頭の桁が `[unk]` に吸われてほぼ入らないため、続けて言う例はやめた / VOICE_COMMAND.md)。数字は 1 つずつでも続けてでも
+  言え(`sequence`・サービスは言われた順に id を返す `vosk_engine.match_sequence`)、**1 語でも怪しければ発話ごと捨てる**
+  (拾える桁だけ拾うと桁が黙って抜ける)。**声で入れた桁だけ丸に数字を出し、4 桁そろったら「この番号でよいか」を確かめる**
+  (設定で聞き違えると荷物を取り出せない)。**どの数字かはログに残さない**(`secret`。メトリクスは `"secret"`・
+  ログは `matched` だけ)。画面に「番号は周りの人にも聞こえます」と出す。キーボード・変換候補は対象外。
   重なり(確認・担当者を呼んだ案内・名刺の読み取り)は `voiceCommandsLayer(画面名, 要素)` で語彙を差し替え、
   要素が描き直しで消えたら語彙も外す。ご用件・部署・アンケートは管理画面で変わる文言なので `spare` 扱いにし、
   `vcFit` がサービスの上限(言い回し16文字・選択肢24個。**1つでも超えると422で画面ごと声が使えなくなる**)からはみ出すぶんを外す。
@@ -748,7 +788,7 @@ LFS 管理ファイルは `raw.githubusercontent.com` だとポインタ文字�
 - **Windows で画面から試すとき**: キオスク本体(`main.py`)は非Linuxでは OTA を止めてあるので起動してよい
   (以前は master の版で未コミットの kiosk.html/voice/*.py を上書きしていた)。本体なしなら
   `http.server --directory static` ＋ `?mock=1&voice=1`(MOCK のまま音声サービスだけ本物)。
-- テストは `kiosk_agent/tests/voice_input/`(146件)。実マイクも実モデルも使わない(`voice_fakes.py` の偽 Vosk・
+- テストは `kiosk_agent/tests/voice_input/`(172件)。実マイクも実モデルも使わない(`voice_fakes.py` の偽 Vosk・
   `capture.BufferStream` のフェイクマイク)。実モデルがある環境では語彙表が発音辞書で書けるかも確かめる。
 
 ### キオスク画面（device 版 `kiosk_agent/static/kiosk.html`）
@@ -780,7 +820,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - **delivery（荷物の配達・Phase3実装済み）**: `showDelivery`。配達方法を選択 — **置き配**(空きロッカーへ施錠。空きが無ければ選択不可。空きロッカー選択→`pulseLocker`でGPIO開錠→「扉を閉めました」→**agent `POST /device/locker/{id}/occupy-delivery`**。**agentがローカルでランダム4桁PINを生成・pbkdf2ハッシュ保存して施錠状態にし、backend `notify-delivery` 経由で「どのロッカーにこのPINで置き配された」を担当者へ通知＋受付ログに記録(`method="dropoff"`)**(オフライン時はキュー→再接続で再送)。配達員にはPINを表示しない。**通知を見逃してもスタッフは管理画面「受付ログ」の置き配行でPINを確認できる**(一時PIN＝受取で無効化のため平文表示)) / **呼び出し**(`/proxy/call-staff`→担当者へ「どの端末から呼び出しか(device.name)」をSlack/WebPush/Webhook/Chatwork通知＋受付ログに記録。**通知に受付/電話ボタンを付け、スタッフが通知から直接「受付」を押すと参ますに遷移できる**。返る `id` で「お待ちください」画面(`showDelivery`内蔵の`wait`ビュー)が `GET /proxy/reception/{id}` を2.5s間隔でポーリングし、スタッフの 受付→`showResultOk`/電話→`showResultPhone` に遷移。90s無応答は電話案内へフォールバック=`showResultPhone`)。置き配ロッカーはPIN付き(`has_pin:true`)＝通常の「利用中」ロッカーとして扱われ、スタッフが通知で受け取ったPINでロッカー画面から解錠して受取。
 - **lockerMode（ロッカー入口・`showLockerMode`）**: ロッカータイルの直後。**手荷物一時保管**(store: 空き=PIN未設定ロッカーのみ→`showLocker("store")`) / **荷物受け取り**(pickup: PIN設定済ロッカーのみ→`showLocker("pickup")`) を選ぶ。戻る→`top`。
 - **locker（ロッカー・`showLocker(mode)`）**: モードでグリッドを絞り込む(一覧は agent `GET /device/locker-list`)。store=`!occupied` のみ表示→`openEmpty`→4桁PIN設定(**agent `POST /device/locker/{id}/occupy`**)。pickup=`occupied && has_pin` のみ表示→4桁PIN入力(**agent `POST /device/locker/{id}/release`**)→照合OKでGPIO開錠。クリックは**絞込後の `shownLockers`** をインデックスする。該当0件は空状態メッセージ。戻る→`lockerMode`(mode時)。**PINは端末(agent)がローカルで pbkdf2 ハッシュ保存・照合＝クラウド往復なし・オフラインでも解錠可**（ローカルファースト。backend へは占有状態を best-effort ミラー）。扉開閉センサーが無いため閉扉は手動ボタン（センサー導入時は自動化可）。
-  - **GPIO設定の注意**: kiosk は `POST /device/locker/{door_number}/open` を叩くため、kiosk_agent の `LOCKER_PINS_JSON` は **door_number(=GPIOピン番号)をキー**にすること。例: `{"17":17,"18":18,"19":19}`。
+  - **GPIO設定の注意**: kiosk は `POST /device/locker/{door_number}/open` を叩くため、kiosk_agent の `LOCKER_PINS_JSON` は **door_number(口の番号 1〜)をキー、GPIOピン(BCM)を値**にすること。既定: `{"1": 14, "2": 15, "3": 18}`(`config.py`・`.env.example`・`install.sh` で同じ)。**`{}` にすると、一覧は口数の設定から作られるので口は表示されるのに、どの口も `/open` が 404 で開けられない**(昔の `.env.example` は `{}` だったので、古い写しの `.env` に残っていることがある)。
   - **ドアセンサー連動の自動施錠 (`main.py` `_open_with_autolock`)**: 電気ストライク(通電ON=解錠 / 無通電OFF=施錠位置)向け。`/device/locker/{id}/open` は該当ロッカーに**ドアセンサーが設定されていれば**、解錠通電→**扉が開いたら即無通電化**(以後は閉扉でラッチが自動施錠)する経路(`{state:"opening", autolock:true}` を即返す=非ブロック)に入る。開錠パルス長や「扉を閉めました」操作のタイミングに依存せず確実に施錠できる。**有効化には `DOOR_PINS_JSON` のキーを door_number(=`LOCKER_PINS_JSON` のキー)と一致**させること。ドアセンサー未設定のロッカーは従来の固定パルス(`LOCKER_PULSE_SEC`)にフォールバック。開錠通電の保持上限は `LOCKER_OPEN_WINDOW_SEC`(既定12s)。
 - **モック方針（実機ハードのみ最小スタブ／バックエンドは常に実経路）**: MOCKは「処理ルートごと本番と分ける」のではなく、**実機でしか動かないハードだけ**を最小限スタブする。バックエンド通信（`/proxy/*`）は開発機でも常に実経路を通す。
   - **ハードのモック（agent 層）**: GPIO(ロッカーリレー/PIR/ドア)・カメラ/マイク状態・音量・WiFi は agent が自動モックする。`main.py` の `_MOCK_DEVICE`(=**非Linux で自動 True**、`MOCK_GPIO=true` でも)と `gpio.py`(`gpiozero` 不在時 `_MOCK=True`)が担当。→ Windows開発機でも `/device/*` は落ちずモック値を返す。
@@ -794,6 +834,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
     - MOCKロッカー: A/C=空き、B=利用中(解錠PIN `1234`)。QR画面の「（MOCK）予約QRを読み取ったことにする」で歓迎画面＋館内マップを確認可。
     - **固定ダミーデータ**: `mockFetch` は管理画面設定を参照せず固定値を返す。`/proxy/appointment/*` は常に「（MOCK）商談ルーム A / 2階」＋組み込みSVG地図＝**管理画面の地図とは一致しない**（仕様。実データ確認は上記の実経路手順で）。
     - **MOCKバッジ**: `showMockBadge()`(`bootMock` で呼ぶ)が上部中央に固定の「MOCK モード…」バッジを常時表示し、ダミー表示だと一目で分かる（`body`直下・`pointer-events:none`で操作を妨げない）。通常起動(実経路)では出ない。
+  - **体験版（開発環境の無い人へ送る用・`kiosk_agent/scripts/build_kiosk_preview.py`）**: `kiosk.html` を読み、jsQR とタップ音を埋め込んだ **1 ファイルの HTML** と `使い方.txt` を `dist/kiosk-preview/`・`dist/mokuture-kiosk-preview.zip`(gitignore 済み)に作る。受け取った人はダブルクリック(file://)で開くだけ。`?mock=1` と違い **MOCK を常に有効・通知も実経路を試さない(どこにも送らない)**。待機画面に「クリックで始まる」案内、QR 代用ボタンを読める大きさに、バッジを「体験版」にする。**`kiosk.html` 本体は書き換えない**(文字列の目印を差し替えた写しを作るだけ)。目印が `kiosk.html` から消える・増えるとスクリプトが止まるので、そのときはスクリプト側の目印を直す。`kiosk.html` を変えたら作り直して送り直す。
 - **reception（フォーム・`showReception`）**: 左=入力フォーム / 右=**画面内蔵の五十音ソフトキーボード**の1画面(OS標準キーボードは使わない)。お名前(必須)/会社名/**部署**/担当者名。**部署**は管理画面「受付設定」の `department_list`(公開設定 `department_list` 配列)が登録されているときだけドロップダウン(`f-dept` select)で表示し、`form.department` にセット。未登録なら部署欄は出さない。担当者とは独立の選択項目で、送信ペイロード `department` と `showCalling` の「部署：」表示に伝搬。キーボードは**列＝行(あ/か/さ…)の五十音表**(`HIRA_ROWS`, null=や・わ行の空きマス)＋コントロール行(撥音**ん**・濁点**゛**・半濁点**゜**・**小**文字・長音**ー**・スペース)。濁点/半濁点/小文字は`modifyLast()`で直前1文字をトグル(ひら・カナ両対応の`DAKUTEN`/`HANDAKU`/`SMALL`マップ)。ひらがな/カタカナ(表を変換)/ABC(`ABC_ROWS`, A→Z)を切替＋「株式会社」「⌫」。**ご用件は5択の選択形式**(チップ: 管理画面 `purpose_list` があればそれ、無ければ既定「ご予約のあるお客様/お打ち合わせ/納品/採用面接/その他」)＋注記「※営業・セールス・勧誘等のご訪問はお受けしておりません」。チップ選択は `form.purpose` 更新＋チップのスタイルのみ差し替え（テキスト入力を再描画しない）。送信→`method:"form"` で `calling`。
   - **漢字変換(かな→漢字)**: 五十音キーボードに「変換」ボタンがあり、入力欄末尾の「読み(かなの連続 `KANA_RUN`)」を漢字候補に変換する。候補は**フローティングの候補パネル**(`kb-cand-pop`)に折り返しグリッドで一括表示(横スクロールにしない。件数表示・太めスクロールバー・背景/「閉じる」/候補タップで確定)。段階変換対応(`やまだ`→山田、続けて`たろう`→太郎=山田太郎)。変換は**agentローカルの `GET /device/convert?kana=…&limit=`**(`kiosk_agent/kana_kanji.py`)で、同梱 `kana_dict.tsv`(約160語:姓名/会社/受付語彙。SKKより優先)＋全面辞書 `SKK-JISYO.L`(約13万語, **資産としてリポジトリ同梱**=commit済み。`.gitattributes` でバイナリ扱い。万一欠けていれば agent 起動時に自動DLする自己修復付き)を辞書ルックアップ＋貪欲分割。**オフライン・OS IME不要**(fcitx5/mozc/squeekboard を入れない。approachがOS非依存)。**本実装は device版 `kiosk.html` のみ**(web版 `KioskFlow.tsx`/`JapaneseKeyboard.tsx` は別実装で未対応)。agent不通時は かな/カナ にフォールバック。上限は API 既定60/最大100、フロントは100要求。実装メモ: `kiosk_agent/IME-EXPERIMENT.md`。
 - **QR読取**: `welcome`(統合)に統合。`parseQR()` は **`appt:<token>` / `name` パラメータ付きURLのみ受付**、未対応/エラーは `pauseScan()` でメッセージ＋クールダウン。`scanLoop` は ≈8fps 間引き、`getUserMedia` は `disposed` フラグで teardown ガード。
@@ -802,7 +843,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - **feedback（受付完了後アンケート・`showFeedback`）**: **お断り(resultDecline)以外のすべての終了パターン**の直後に表示する（受付/電話/歓迎画面/ロッカー完了/配達完了）。`goAfterResult()` が1か所で判定する。3問を1問ずつ・大きなボタンで、**すべて任意回答**。常に「回答せず終了」を出し、1問 20 秒（`FEEDBACK_QUESTION_SEC`）で自動終了する。保存されるのは **質問IDと回答コードだけ**（`clarity`/`confidence`/`assistance`。自由記述は無い）。未回答は `unknown` 扱いで、**行動ログからスタッフ支援の有無を推測しない**。端末単位で止めるには localStorage `kiosk_feedback="off"`。`?mock=1` では出さない。
 - **complete（歓迎画面「お待ちしておりました」）**: 氏名と「様」を同サイズでインライン表示。予約情報を拡大表示。QR受付で行き先（会議室）が確定し、かつその会議室に `map_image_url` が登録されている場合のみ館内マップを表示（`go("calling"/"complete", { name, staff, room, scheduledAt, method })` でデータを伝搬）。
 - **キオスク設定（スタッフ専用・`showKioskSettings`）**: 画面**左上＋右上の同時タッチ**（または `Ctrl+Shift+M`）で開く。上部の**タブで「設定」/「デバイスチェック」を切替**（統合済み）。
-  - **設定タブ**: 音量スライダー＋サウンドON/OFF（タップ音, `/device/volume`）、Wi-Fi（`/device/wifi/networks|connect|toggle`）、**ロッカーの口数(3口/7口)選択**（`/device/locker-config`。増設時に設置者がタッチで切替＝JSON編集不要）、ロッカーの鍵 全解除（`/proxy/lockers/open-all`）、フッター端末名の**5連タップで再登録**。
+  - **設定タブ**: 音量スライダー＋サウンドON/OFF（タップ音, `/device/volume`）、Wi-Fi（`/device/wifi/networks|connect|toggle`）、**ロッカーの口数(3口/7口)選択**（`/device/locker-config`。増設時に設置者がタッチで切替＝JSON編集不要）、ロッカーの鍵 全解除（`/device/lockers/open-all`）、フッター端末名の**5連タップで再登録**。
   - **デバイスチェックタブ**: `getUserMedia` による**カメラ・ライブプレビュー**、Web Audio(AnalyserNode) の**マイク音量レベルメーター**、`GET /device/status`（1.2s ポーリング）に基づく **PIR/ドア/電子錠を緑(ON/正常)・赤(OFF/異常)のトグル表示**（電子錠トグルは `POST /device/locker/{id}/state`、開錠テストは `/pulse`。委譲クリックで捕捉）。旧 device-control の「DEVICE」情報パネルは非表示。カメラ/マイクのストリーム・AudioContext・rAF・ポーリングは画面離脱/タブ切替で確実に停止（**世代トークン `dcGen`** で teardown 後に解決した in-flight `getUserMedia` も解放）。右の列の先頭に **「センサー・電子錠の接続」カード**(GPIO が実機か模擬か。`/device/status` の `gpio: {hardware, reason}`、reason=`env`(MOCK_GPIO=true)/`no_library`(gpiozero が入らない)。**gpio.py は gpiozero を import できないと黙って模擬に落ち、ドアは常に「開放中」・電子錠はトグルの表示だけ変わる**ので、それを画面で分かるようにした。`mock_gpio` も env だけでなく実際の状態を返す)。install.sh は本体→card→(Pi なら)rpi を別々に入れ、Pi で GPIO が入らなければ大きく警告する(以前は rpi が失敗しても card が入れば黙って進んでいた)。カメラの下に **「ソフトウェア更新」カード**(OTA の届き具合。開くたびに `POST /update-check`、以降 10s ごとに `/update-status`。→「キオスク OTA 配信」節)。
   - 旧・独立ページ `static/device-control.html`（`GET /device-control`）はメンテ用に残存（統合により通常運用では不要）。
 - `KioskScaler` 相当の `rescale()` が 1920×1080 固定を `transform: scale()` でフィット。`PublicTenantSettings` は `/proxy/settings` 経由で取得。
@@ -887,7 +928,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - **セキュリティ**: `bot_access_token` / Client Secret / Webhook URL は**ログ出力・画面表示・APIレスポンス一切なし**。`GET /notifications/slack` は team_name/channel_name 等の非機密のみ返す。**env(SLACK_CLIENT_ID/SECRET/REDIRECT_URI)未設定時は機能無効**(`slack_oauth_enabled`)＝ oauth/url は `{enabled:false}`、callback/channels/channel は 404/400。
 - **エラー**: Slack送信失敗でも受付は止めない(best-effort)。失敗は `logger.warning` で残すが**秘密情報は出さない**(exc_infoも付けない)。Bot連携済だがチャンネル未選択の受付は「エラー」ではなく静かにスキップ。テスト通知(`POST /notifications/test/slack`)はチャンネル未選択なら 400 で促す。
 - **受付通知文面**(`SlackNotifier.build_reception_message`): `:bell: 来客がありました` + 会社名/お名前 様/訪問先/時刻(JST)。会社名・訪問先は空なら行を省略（最低=お名前+時刻）。
-- **Slack App設定**: OAuth&Permissions に `SLACK_REDIRECT_URI` を Redirect URL 登録、Bot Token Scopes に `chat:write`/`channels:read`/`groups:read`/`channels:join`。非公開チャンネルへ通知するには事前に Slack で Bot をそのチャンネルへ招待。連携解除(`POST /notifications/slack/disconnect`)は自テナントの設定削除のみ（Slack側App削除まではPhase1では必須にしない）。
+- **Slack App設定**: OAuth&Permissions に `SLACK_REDIRECT_URI` を Redirect URL 登録、Bot Token Scopes に `chat:write`/`channels:read`/`groups:read`/`channels:join`/`im:write`/`users:read`。非公開チャンネルへ通知するには事前に Slack で Bot をそのチャンネルへ招待。連携解除(`POST /notifications/slack/disconnect`)は自テナントの設定削除のみ（Slack側App削除まではPhase1では必須にしない）。
 
 ### Slack 受付通知の対応ボタン（Block Kit + Interactivity）
 受付通知(`_notify_slack`)を **Block Kit 化**し、Slack メッセージ内の 受付/電話/お断り ボタンでスタッフが応答できる。Web Push・管理画面「受付ログ」と同じ `_apply_decision`(冪等)に集約。
@@ -936,7 +977,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - **Webhook ペイロードの変更**: 受付 Webhook に `reception_id` が増え、`created_at` は `iso_z()` の単一 `Z` 形式に揃えた（従来は naive/aware で `...` と `...+00:00` が混在していた）。代理通知では `event` が `reception_escalated` になり `escalated_from`(元の担当者名) が付く。管理画面「カスタムWebhook」のサンプル表示も同じ形に更新済み。
 
 ### DB マイグレーション
-- Alembic 未導入のため、カラム追加は Neon Console または `mcp__Neon__run_sql` で手動 `ALTER TABLE`。
+- Alembic は使っていない。backend の起動時に `app/main.py` が `create_all`（新しいテーブル）と `_ENSURE_COLUMNS`（既存テーブルへの列追加）を自動で流す。列を足すときはモデルに加えて `_ENSURE_COLUMNS` にも書くこと（手作業の `ALTER TABLE` は不要）。
 - SQLAlchemy モデルと DB スキーマを常に同期すること。
 
 ---
@@ -949,10 +990,10 @@ DATABASE_URL=postgresql+asyncpg://...
 JWT_SECRET_KEY=...
 ENCRYPTION_KEY=...           # Fernet key (base64)
 PUBLIC_API_URL=https://mokuture-plus-api.onrender.com/api  # プッシュ通知に埋め込む絶対URL(SWがOK/NG応答をPOSTする先)。既定は本番URL
-STORAGE_ENDPOINT=...         # R2/MinIO endpoint
-STORAGE_ACCESS_KEY=...
-STORAGE_SECRET_KEY=...
-STORAGE_BUCKET=...
+STORAGE_ENDPOINT_URL=...     # R2/MinIO endpoint
+STORAGE_ACCESS_KEY_ID=...
+STORAGE_SECRET_ACCESS_KEY=...
+STORAGE_BUCKET_NAME=...
 STORAGE_PUBLIC_URL=...
 
 # Slack OAuth（「Slackに追加」= Bot Token + chat.postMessage）。3つ揃わないと機能無効（settings.slack_oauth_enabled）。
@@ -1004,11 +1045,13 @@ ANALYTICS_SPOOL_DIR=              # スプールの置き場所(既定 kiosk_age
 
 ### Frontend (.env.local)
 ```
-NEXT_PUBLIC_API_URL=http://localhost:8001/api/v1
+NEXT_PUBLIC_API_URL=http://localhost:8001/api
 ```
 
 ## ルール
-- 修正を行ったら自動でデプロイまで行うこと
+- **日時・日付を DB の列と比べるときは必ず naive な `datetime` を渡す**（`services/timeutil.py` の `utcnow_naive()` / `day_start()`）。文字列（`"2026-11-01"`）や tz 付きの値を渡すと、SQLite のテストは通るのに本番の PostgreSQL では 500 になる。2026-11-12、運営・代理店の統計と日付絞り込みがこの形で壊れていたのを直した。
+- **キオスク画面が端末エージェント経由で backend へ送る項目は、エージェントの受け口（`kiosk_agent/main.py` の `ReceptionBody` など）にも宣言する**。宣言が無い項目は黙って捨てられる（部署と匿名セッションIDが 2026-07-23 から届いていなかった）。
+- 修正を行ったら自動でデプロイまで行うこと（`deploy.sh` / `deploy.bat` は 2026-11-12 に削除した。作業ツリーに他の未コミット作業が混ざっているときは、自分の変更だけをコミットする。master への push は本番と全端末への配信になる）
 - **見たら分かる画面にする（画面の文言を書く・直すたびに確認すること）**: 画面上の文言が別の設定を指すときは、**その画面に実際に表示されている名前で指す**こと（例:「上の「Slack」カードで選んだチャンネル（#xxx）」）。「受付と同じ」「通常の通知先」「共通」のように、**画面のどこにも書かれていない内部の呼び名**（コード上の `slack` 行＝受付用、のような実装側の区別）で指してはいけない。指される側の画面にも、それが何に使われるのかを書く（例: Slack カードの値の見出しを「受付通知の送信先」にし、「配達で別を選ばなければ配達もここへ届く」と明記）。初めて見た利用者が、ほかの画面やマニュアルを見なくても「どこの何のことか」「何に使われるのか」が分かるかどうかで判断する。2026-10-24、通知設定の配達カードで「受付と同じチャンネル」と書いたが、Slack カードのどこにも「受付用」と書かれておらず指摘された。
 - **JavaScriptダイアログ禁止**: `confirm()` / `alert()` / `prompt()` は使用しないこと。確認は独自モーダル、エラーはインライン表示またはトースト通知で実装すること。
 - 常に改修後は回収の「意図」通りに修正出来ているかテストエージェントにチェックしてもらってOKを貰ってから報告をする

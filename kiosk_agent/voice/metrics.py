@@ -46,6 +46,7 @@ _ALLOWED: dict[str, type | tuple[type, ...]] = {
     "result": str,               # success | error
     "accepted": bool,
     # 選ばれた選択肢。画面が決めた固定語彙(「visit」「back」)で、話した言葉そのものではない。
+    # 暗証番号の画面(secret)は数字が id なので書かず、当たったら "secret" とだけ書く。
     "choiceId": (str, type(None)),
     "errorCode": (str, type(None)),
     "stopReason": (str, type(None)),
@@ -171,13 +172,13 @@ def summary() -> dict[str, Any]:
     for r in rows:
         screen = str(r.get("screenId") or "unknown").removeprefix("command-")
         b = by_screen.setdefault(screen, {"attempts": 0, "matched": 0, "unmatched": 0,
-                                          "ambiguous": 0, "embedded": 0, "error": 0})
+                                          "ambiguous": 0, "embedded": 0, "partial": 0, "error": 0})
         b["attempts"] += 1
         code = r.get("errorCode")
         if r.get("choiceId"):
             b["matched"] += 1
             by_choice[str(r["choiceId"])] = by_choice.get(str(r["choiceId"]), 0) + 1
-        elif code in ("unmatched", "ambiguous", "embedded"):
+        elif code in ("unmatched", "ambiguous", "embedded", "partial"):
             b[code] += 1
         else:
             b["error"] += 1

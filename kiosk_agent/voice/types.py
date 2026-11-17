@@ -32,6 +32,8 @@ ERROR_MESSAGES: dict[str, tuple[str, str]] = {
     "ambiguous":        ("もう一度お願いします", "Please say it again"),
     # キーワードが文の一部として言われた(周りの会話を拾った可能性が高い)。
     "embedded":         ("もう一度お願いします", "Please say it again"),
+    # 続けて言う画面(暗証番号)で、1 語でも聞き取りが怪しかったので発話ごと捨てた。
+    "partial":          ("もう一度お願いします", "Please say it again"),
     "no_vocabulary":    ("この画面は声で操作できません", "No voice commands on this screen"),
     "internal":         ("声の操作でエラーが起きました", "Internal error"),
 }
@@ -80,3 +82,6 @@ class CommandMatch:
     reason: str | None
     recognition_ms: int
     words: list[tuple] = field(default_factory=list)
+    # 続けて言われた選択肢を順に(暗証番号の画面・sequence=True のときだけ)。
+    # 外れたら None。reason の partial = 1 語でも怪しかったので発話ごと捨てた。
+    sequence: list[str] | None = None

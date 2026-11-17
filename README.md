@@ -278,7 +278,7 @@ journalctl -u mokuture-kiosk -f   # ログ確認
 必要に応じて手動で登録をトリガーすることもできます:
 
 ```bash
-curl -X POST http://<RPiのIPアドレス>:8080/register
+curl -X POST http://localhost:8080/register   # 端末(Raspberry Pi)の上で実行する。エージェントは端末の外からの要求を受け付けない
 ```
 
 登録成功時のレスポンス（承認待ち）:
@@ -334,7 +334,7 @@ curl -X POST http://<RPiのIPアドレス>:8080/register
 | `SYNC_INTERVAL_SEC` | `60` | コンテンツ同期間隔（秒） |
 | `MOCK_GPIO` | `false` | `true` にすると GPIO をモック動作 |
 | `PIR_PIN` | `4` | PIR センサーの GPIO ピン番号 (BCM) |
-| `LOCKER_PINS_JSON` | `{}` | ロッカーID → GPIO ピンの対応 例: `{"1": 17, "2": 18}` |
+| `LOCKER_PINS_JSON` | `{"1": 14, "2": 15, "3": 18}` | 口の番号(1〜3) → 電子錠リレーの GPIO ピン(BCM)。`{}` にすると画面に口は出るが1つも開けられない。4〜7口目は `main.py` の既定ピンを使う |
 | `ANALYTICS_HEARTBEAT_SEC` | `60` | 端末ハートビート（稼働率の元データ）の間隔 |
 | `ANALYTICS_METRICS_SEC` | `300` | CPU・温度・メモリ等を取得する間隔 |
 | `ANALYTICS_FLUSH_SEC` | `15` | 分析ログのアップロード間隔（失敗時は指数バックオフ） |

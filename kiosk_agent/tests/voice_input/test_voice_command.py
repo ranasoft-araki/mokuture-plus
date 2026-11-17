@@ -268,6 +268,84 @@ def test_聞き直しは低めのしきい値で採る(fake_vosk):
     assert vosk_engine.recognize_command(seg(), LOCKERS, fallback=True).matched == "n2"
 
 
+# ── 続けて言う数字(暗証番号) ─────────────────────────────────────────────────
+# 「いち に さん よん」を言われた順に返す。1 語でも怪しければ発話ごと捨てる。
+
+PIN = ([(f"d{i}", [d]) for i, d in enumerate(["ゼロ", "一", "二", "三", "四", "五", "六", "七", "八", "九"])]
+       + [("del", ["消す"]), ("ok", ["決定"]), ("back", ["戻る"])])
+
+
+def pin_table():
+    return vosk_engine.command_table(PIN)[0]
+
+
+def test_続けて言った数字を言われた順に返す(fake_vosk):
+    words = [("一", 0.9), ("二", 0.8), ("三", 1.0), ("四", 0.95)]
+    assert vosk_engine.match_sequence(words, pin_table(), 0.85) == (["d1", "d2", "d3", "d4"], 0.8, None)
+    # 同じ数字が続いても 1 つにまとめない(「いち いち」は 2 桁)
+    words = [("七", 1.0), ("七", 1.0), ("消す", 1.0), ("決定", 0.9)]
+    assert vosk_engine.match_sequence(words, pin_table(), 0.85)[0] == ["d7", "d7", "del", "ok"]
+
+
+def test_数字の合格ラインは続けて言う画面だけ下げる(fake_vosk):
+    """語彙が数字だけなので 0.55 まで下げても取り違えが増えなかった(合成音声)。"""
+    words = [("一", 0.6), ("二", 0.9)]
+    assert vosk_engine.match_sequence(words, pin_table(), 0.85)[0] == ["d1", "d2"]
+    assert vosk_engine.match_command(words[:1], pin_table(), 0.85)[0] is None   # ほかの画面の物差しでは落ちる
+    # 数字でない言葉は下げない
+    assert vosk_engine.match_sequence([("決定", 0.6)], pin_table(), 0.85)[0] is None
+
+
+def test_1語でも怪しければ発話ごと捨てる(fake_vosk):
+    """拾える桁だけ拾うと、桁が黙って抜けたまま番号が入る(「いち に なな ろく」→「なな ろく」の実測)。"""
+    # 合格ラインに届かない数字が途中にある
+    words = [("一", 0.9), ("二", 0.4), ("三", 0.9)]
+    assert vosk_engine.match_sequence(words, pin_table(), 0.85) == (None, None, "partial")
+    # 頭の桁が [unk] に吸われた
+    words = [("[unk]", 0.8, 0.0, 0.5), ("七", 0.9, 0.5, 0.8), ("六", 1.0, 0.8, 1.1)]
+    assert vosk_engine.match_sequence(words, pin_table(), 0.85)[2] == "partial"
+    # 最後の桁が [unk] に吸われた
+    words = [("七", 0.9, 0.0, 0.3), ("六", 1.0, 0.3, 0.6), ("[unk]", 0.8, 0.6, 0.8)]
+    assert vosk_engine.match_sequence(words, pin_table(), 0.85)[2] == "partial"
+    # 雑談(「三人います」→「[unk] 二 ます」)
+    words = [("[unk]", 1.0, 0.0, 0.3), ("二", 0.95, 0.3, 0.5), ("ます", 1.0, 0.5, 0.8)]
+    assert vosk_engine.match_sequence(words, pin_table(), 0.85)[2] == "partial"
+    assert vosk_engine.match_sequence([("[unk]", 1.0)], pin_table(), 0.85) == (None, None, "unmatched")
+
+
+def test_続けて言う画面でも言い添えは許す(fake_vosk):
+    words = [("五", 0.9), ("で", 1.0), ("お", 1.0), ("願い", 1.0), ("し", 1.0), ("ます", 1.0)]
+    assert vosk_engine.match_sequence(words, pin_table(), 0.85)[0] == ["d5"]
+
+
+def test_言い添えの句のかけらは許さない(fake_vosk):
+    """「お 願い し ます」を語にばらして許すと、四を「し」と聞いたときに 4 桁目が黙って消える。"""
+    assert vosk_engine.match_sequence([("一", 0.9), ("二", 0.9), ("三", 0.9), ("し", 0.9)],
+                                      pin_table(), 0.85)[2] == "partial"
+    assert vosk_engine.match_sequence([("一", 0.9), ("ます", 0.9), ("三", 0.9)], pin_table(), 0.85)[2] == "partial"
+    # 「二」がある画面では同じ音の言い添え「に」も許さない(語彙にも入れていない)
+    assert vosk_engine.match_sequence([("一", 0.9), ("に", 0.9), ("三", 0.9)], pin_table(), 0.85)[2] == "partial"
+
+
+def test_数字でない言葉の前のえーとは許す(fake_vosk):
+    """「えーと、もどる」。頭の [unk] に数字が吸われていても「もどる」の意味は変わらない。"""
+    words = [("[unk]", 1.0, 0.0, 0.42), ("戻る", 1.0, 0.45, 0.9)]
+    assert vosk_engine.match_sequence(words, pin_table(), 0.85)[0] == ["back"]
+    words = [("[unk]", 1.0, 0.0, 0.42), ("一", 1.0, 0.45, 0.9)]
+    assert vosk_engine.match_sequence(words, pin_table(), 0.85)[2] == "partial"
+    # 数字が後ろにあるときも許さない(頭の [unk] が吸われた数字なら「消す」が消す桁がずれる)
+    words = [("[unk]", 1.0, 0.0, 0.42), ("消す", 1.0, 0.45, 0.8), ("一", 1.0, 0.8, 1.0)]
+    assert vosk_engine.match_sequence(words, pin_table(), 0.85)[2] == "partial"
+
+
+def test_続けて言う画面は聞き直さず並びで返す(fake_vosk):
+    FakeRecognizer.words = [("一", 0.9), ("二", 0.9)]
+    FakeRecognizer.free_words = [("九", 0.9)]
+    r = vosk_engine.recognize_command(seg(), PIN, sequence=True, fallback=True)
+    assert r.sequence == ["d1", "d2"] and r.matched is None
+    assert all(x.grammar is not None for x in fake_vosk), "通常の認識器で聞き直している"
+
+
 # ── API ───────────────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -286,8 +364,10 @@ def heard(monkeypatch, fake_vosk):
 
     def fake(segment, choices, min_conf=None, **kw):
         state["calls"].append(choices)
+        state.setdefault("kw", []).append(kw)
         m = state["match"]
-        return CommandMatch(m.matched, m.confidence, m.reason, m.recognition_ms, list(m.words))
+        return CommandMatch(m.matched, m.confidence, m.reason, m.recognition_ms, list(m.words),
+                            sequence=list(m.sequence) if m.sequence else None)
 
     monkeypatch.setattr(vosk_engine, "recognize_command", fake)
     return state
@@ -322,6 +402,15 @@ def test_statusに声で操作できるかが出る(client, fake_vosk, feed):
     feed(silence(100))
     s = client.get("/voice/status").json()
     assert s["features"]["command"] is True and s["command"]["available"] is True
+
+
+def test_statusに暗証番号を声で入れられる版かが出る(client, fake_vosk, feed):
+    """画面だけ OTA で新しくなり、サービスが古い版のままだと secret が効かず数字がログに残る。
+    画面はこれが true のときだけ暗証番号の画面でマイクを開ける。"""
+    feed(silence(100))
+    assert client.get("/voice/status").json()["features"]["sequence"] is True
+    settings.cfg()["command"]["enabled"] = False
+    assert client.get("/voice/status").json()["features"]["sequence"] is False
 
 
 def test_voskが無ければ声で操作できない(client, feed, monkeypatch):
@@ -369,6 +458,58 @@ def test_実験ログには画面と選択肢のidだけを残す(client, heard,
     assert len(rows) == 1
     assert rows[0]["screenId"] == "command-top" and rows[0]["choiceId"] == "locker"
     assert "ロッカー" not in json.dumps(rows, ensure_ascii=False)
+
+
+def pin_body(**kw):
+    b = {"screen": "lockerPin", "choices": [{"id": cid, "phrases": ps} for cid, ps in PIN],
+         "sequence": True, "secret": True}
+    b.update(kw)
+    return b
+
+
+def test_暗証番号の数字は並びで返しログには残さない(client, heard, feed, caplog):
+    """選択肢の id が数字そのものなので、実験ログにもサービスのログにも書くと暗証番号が端末に残る。"""
+    heard["match"] = CommandMatch(None, 0.9, None, 40, words=[("一", 0.9)], sequence=["d1", "d2", "d3", "d4"])
+    feed(room(200) + tone(500) + silence(900))
+    sid = start(client)
+    with caplog.at_level("INFO"):
+        assert client.post(f"/voice/session/{sid}/command", json=pin_body()).status_code == 200
+        s = wait_for(client, sid)
+    assert s["phase"] == "done" and s["command"]["sequence"] == ["d1", "d2", "d3", "d4"]
+    assert heard["kw"][0]["sequence"] is True
+    rows = command_rows()
+    assert len(rows) == 1 and rows[0]["choiceId"] == "secret" and rows[0]["accepted"] is True
+    # サービスのログだけを見る。乱数のセッション id(httpx のログ・sessionId)には「d1」が混ざりうるので外す。
+    voice_log = "\n".join(r.getMessage() for r in caplog.records if r.name.startswith("voice"))
+    assert "lockerPin: matched" in voice_log
+    fixed = [{k: v for k, v in r.items() if k not in ("sessionId", "timestamp")} for r in rows]
+    dumped = json.dumps(fixed, ensure_ascii=False) + voice_log
+    assert not re.search(r"d[0-9]", dumped), "暗証番号の数字がログに残っている"
+    assert "一" not in dumped
+
+
+def test_続けて言う画面は画面がsecretを付け忘れても数字を記録しない(client, heard, feed):
+    """続けて言う画面は暗証番号だけ。画面側の付け忘れで暗証番号がログに残らないよう二重にしておく。"""
+    heard["match"] = CommandMatch(None, 0.9, None, 40, sequence=["d1", "ok"])
+    feed(room(200) + tone(500) + silence(900))
+    sid = start(client)
+    client.post(f"/voice/session/{sid}/command", json=pin_body(secret=False))
+    wait_for(client, sid)
+    assert command_rows()[0]["choiceId"] == "secret"
+
+
+def test_続けて言う画面は録音を長めに取る(client, heard, feed, monkeypatch):
+    """4 桁を区切って言うと 3 秒を超え、最後の桁が切れた(合成音声・話速 -3)。"""
+    from voice import vad
+    seen = []
+    real = vad.record_utterance
+    monkeypatch.setattr(vad, "record_utterance", lambda *a, **kw: seen.append(kw["max_record_sec"]) or real(*a, **kw))
+    for b in (pin_body(), body()):
+        feed(room(200) + tone(500) + silence(900))
+        sid = start(client)
+        client.post(f"/voice/session/{sid}/command", json=b)
+        wait_for(client, sid)
+    assert seen == [float(settings.get("command.sequence_max_record_sec")), float(settings.get("command.max_record_sec"))]
 
 
 def test_話しかけられなかった窓は記録しない(client, heard, feed):
@@ -423,7 +564,8 @@ def test_集計は画面ごとの当たりと外れ方():
     s = metrics.summary()
     assert s["attempts"] == 3 and s["voice_sessions"] == 1 and s["by_choice"] == {"visit": 1}
     assert s["by_screen"]["top"] == {"attempts": 3, "matched": 1, "unmatched": 1, "ambiguous": 1,
-                                     "embedded": 0, "error": 0, "matched_rate": 0.3333}
+                                     "embedded": 0, "partial": 0, "error": 0,
+                                     "matched_rate": 0.3333}
 
 
 # ── kiosk.html の語彙表 ───────────────────────────────────────────────────────

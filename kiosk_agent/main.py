@@ -1,10 +1,12 @@
 """mokuture+ Local Kiosk Device Agent"""
 import asyncio
+import ipaddress
 import os
 import platform
 import re
 import socket
 import subprocess
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,7 +14,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 import analytics as analytics_mod
@@ -444,6 +446,7 @@ doors = {
 def _apply_locker_count(count: int) -> None:
     """選択された口数に合わせて GPIO コントローラ（リレー/ドアセンサー）を作り直す。"""
     global locker_ctrl, doors
+    _cancel_all_state_timers()   # 作り直す前の錠に向けた自動の通電OFFを残さない
     try:
         locker_ctrl.close()
     except Exception:
@@ -463,11 +466,59 @@ def _apply_locker_count(count: int) -> None:
     }
 
 
+def _gpio_unintended_mock() -> bool:
+    """実機(Linux)なのに GPIO が模擬に落ちているか(gpiozero が読み込めない等)。
+
+    開発機(非Linux)と MOCK_GPIO=true は意図した模擬なので False。この状態では電子錠を
+    動かせないのに、模擬は「動かした」と答えてしまう。"""
+    return not _MOCK_DEVICE and not bool(gpio_status().get("hardware"))
+
+
+def _door_closed(door_number) -> bool | None:
+    """扉センサーの読み。True=閉 / False=開 / None=分からない。
+
+    None になるのは、その扉にセンサーが設定されていないときと、センサーが実機の GPIO で
+    読めていないとき(開発機・MOCK_GPIO・実機で模擬に落ちた場合)。模擬の DoorSensor は
+    設定済みの扉を常に「開」(False)と答えるので、そのまま使うと全ロッカーが使えなくなる。"""
+    if not bool(gpio_status().get("hardware")):
+        return None
+    if door_number is None:
+        return None
+    sensor = doors.get(str(door_number))
+    if sensor is None or not sensor.configured:
+        return None
+    try:
+        value = sensor.is_closed
+    except Exception:
+        return None
+    if not isinstance(value, bool):
+        return None
+    if value:
+        locker_store.mark_door_seen_closed(door_number)
+        return True
+    # 「開」は、その扉で一度でも「閉」を読めたことがあるときだけ信じる。センサーを
+    # つないでいない入力はずっと「開」と読めるので、真に受けると全部の口が使えなくなる。
+    try:
+        seen = int(door_number) in locker_store.doors_seen_closed()
+    except (TypeError, ValueError):
+        seen = False
+    return False if seen else None
+
+
 def _configured_door_numbers() -> list[int]:
     """ロッカー台帳の口数（＝置き配で使える口数）を返す。設置者が選んだ口数（3 or 7）を
     そのまま台帳のドア番号 [1..N] にする。GPIO の物理検出では口数を自動判定できないため、
     キオスク設定画面のタッチ選択（locker_store に永続化）を真実の源とする。"""
     return list(range(1, _current_locker_count() + 1))
+
+
+def _doors_without_lock() -> list[int]:
+    """いまの口数のうち、電子錠のつなぎ先(LOCKER_PINS_JSON)が登録されていない口の番号。
+
+    台帳は口数から作るので、つなぎ先が無い口も来訪者の画面には「空き」で出て、タッチすると
+    /open が 404 で開けられない(古い .env の LOCKER_PINS_JSON={} など)。設定画面と
+    デバイスチェックに原因を出すために返す。"""
+    return [n for n in _configured_door_numbers() if not locker_ctrl.is_configured(str(n))]
 
 # ── ドアセンサー連動の自動施錠 ──────────────────────────────────────────────────
 # 電気ストライク(通電ON=解錠 / 無通電OFF=施錠位置)向け。解錠通電後、扉が開いたら即無通電に
@@ -497,8 +548,11 @@ def _spawn(coro):
     return task
 
 
-async def _open_with_autolock(locker_id: str, door: DoorSensor) -> None:
-    locker_ctrl.set_state(locker_id, True)   # 解錠(通電)
+async def _open_with_autolock(locker_id: str, door: DoorSensor, *, energized: bool = False) -> None:
+    """解錠(通電)し、扉が開いたら(または上限時間で)無通電へ戻す。
+    energized=True は呼び出し側が通電まで済ませて成否を確かめた場合(_drive_unlock)。"""
+    if not energized:
+        locker_ctrl.set_state(locker_id, True)   # 解錠(通電)
     waited = 0.0
     try:
         while waited < _OPEN_WINDOW_SEC:
@@ -511,6 +565,130 @@ async def _open_with_autolock(locker_id: str, door: DoorSensor) -> None:
             waited += 0.15
     finally:
         locker_ctrl.set_state(locker_id, False)  # 無通電=施錠位置(閉扉で自動施錠)
+
+
+_LOCK_DRIVE_FAILED = "電子錠を動かせませんでした。担当者にお知らせください。"
+
+
+async def _drive_unlock(locker_id: str) -> dict | None:
+    """電子錠を解錠側へ動かす。動かせたら {state, autolock}、動かせなければ None。
+
+    「動かせなかった」に含めるもの: 錠が構成されていない・リレー操作の失敗・実機で GPIO が
+    模擬に落ちている(模擬は成功と答えるが錠は動いていない)。開発機・MOCK_GPIO の模擬は成功扱い。
+    扉センサーがある口は、通電の成否をここで確かめてから「開いたら無通電へ戻す」見張りを裏で回す。"""
+    lid = str(locker_id)
+    if not locker_ctrl.is_configured(lid) or _gpio_unintended_mock():
+        return None
+    _cancel_state_timer(lid)
+    door = doors.get(lid)
+    if door is not None and door.configured:
+        try:
+            ok = locker_ctrl.set_state(lid, True)
+        except Exception as e:
+            print(f"[locker] unlock {lid} failed: {e}")
+            ok = False
+        if not ok:
+            return None
+        _spawn(_open_with_autolock(lid, door, energized=True))
+        return {"state": "opening", "autolock": True}
+    # センサーの無い口: 固定パルス。通電の成否だけここで確かめ、戻すのは裏で行う
+    # (パルスが終わるまで待って返すと、画面の「扉を押して開けてください」が錠の戻った後に出る)。
+    try:
+        ok = locker_ctrl.set_state(lid, True)
+    except Exception as e:
+        print(f"[locker] unlock {lid} failed: {e}")
+        ok = False
+    if not ok:
+        return None
+    _spawn(_pulse_off_later(lid))
+    return {"state": "opened", "autolock": False}
+
+
+async def _pulse_off_later(locker_id: str) -> None:
+    try:
+        await asyncio.sleep(max(0.0, float(settings.locker_pulse_sec)))
+    finally:
+        try:
+            locker_ctrl.set_state(locker_id, False)
+        except Exception as e:
+            print(f"[locker] relock {locker_id} failed: {e}")
+
+
+# ── 「錠を通電したままにする」(デバイスチェックのトグル)の自動 OFF ──────────────
+# 電気ストライクは通電しっぱなしだと解錠のまま・コイルも熱を持つ。押し忘れや誤操作の ON が
+# 残らないよう、ON から一定時間で自動的に OFF に戻す。ON を押し直すと数え直し、OFF で取り消す。
+_STATE_ON_MAX_SEC = 30.0
+_state_off_tasks: dict[str, asyncio.Task] = {}
+
+
+def _cancel_state_timer(locker_id: str) -> None:
+    task = _state_off_tasks.pop(str(locker_id), None)
+    if task is not None and not task.done():
+        task.cancel()
+
+
+def _cancel_all_state_timers() -> None:
+    for lid in list(_state_off_tasks):
+        _cancel_state_timer(lid)
+
+
+async def _state_auto_off(locker_id: str) -> None:
+    lid = str(locker_id)
+    try:
+        await asyncio.sleep(_STATE_ON_MAX_SEC)
+        try:
+            locker_ctrl.set_state(lid, False)
+        except Exception as e:
+            print(f"[locker] auto-off {lid} failed: {e}")
+    finally:
+        if _state_off_tasks.get(lid) is asyncio.current_task():
+            _state_off_tasks.pop(lid, None)
+
+
+def _start_state_timer(locker_id: str) -> None:
+    lid = str(locker_id)
+    _cancel_state_timer(lid)
+    _state_off_tasks[lid] = _spawn(_state_auto_off(lid))
+
+
+# ── ロッカー操作の直列化と、暗証番号の試行回数 ──────────────────────────────
+# 占有・受け取り・全解除は await をまたぐ(照合は別スレッド・錠の駆動も待つ)ので、同じ口を
+# 2 つの操作が同時に触らないよう 1 本のロックで順番にする(locker_store の RLock は同じ
+# イベントループ上のコルーチン同士を止めない)。
+_locker_op_lock = asyncio.Lock()
+# 暗証番号の総当たりを防ぐ。口ごとに続けて 5 回違えば 5 分受け付けない(合えば数え直し)。
+# メモリだけに持つ(再起動で消える)。
+_PIN_MAX_FAILS = 5
+_PIN_LOCKOUT_SEC = 300.0
+_PIN_FAIL_WINDOW_SEC = 600.0   # この時間のうちに _PIN_MAX_FAILS 回違えたら受け付けを止める
+_pin_failures: dict[str, dict] = {}
+_PIN_LOCKED_DETAIL = "暗証番号を続けて間違えたため、このロッカーはしばらく受け付けません。担当者にお知らせいただくか、時間をおいてお試しください。"
+
+
+def _pin_locked_remaining(locker_id: str) -> float:
+    st = _pin_failures.get(str(locker_id))
+    if not st or not st.get("until"):
+        return 0.0
+    left = st["until"] - time.monotonic()
+    if left <= 0:
+        _pin_failures.pop(str(locker_id), None)   # 期限が過ぎたら数え直し
+        return 0.0
+    return left
+
+
+def _pin_record_failure(locker_id: str) -> bool:
+    """違う暗証番号を 1 回数える。上限に達したら True(以後しばらく受け付けない)。"""
+    now = time.monotonic()
+    st = _pin_failures.setdefault(str(locker_id), {"count": 0, "until": 0.0, "first": now})
+    # 「続けて」違えた回数だけを数える。何日も前の打ち間違いまで積み上げない。
+    if now - st.get("first", now) > _PIN_FAIL_WINDOW_SEC:
+        st["count"] = 0
+        st["first"] = now
+    st["count"] += 1
+    if st["count"] >= _PIN_MAX_FAILS:
+        st["until"] = time.monotonic() + _PIN_LOCKOUT_SEC
+        return True
+    return False
 
 
 # 名刺読み取り（QR無し来訪者の受付フォーム自動入力）。
@@ -543,6 +721,7 @@ async def lifespan(app: FastAPI):
     update_task = asyncio.create_task(updater.run())
     heartbeat_task = asyncio.create_task(heartbeat_loop())
     watchdog_task = asyncio.create_task(systemd_watchdog.run())
+    pending_notify_task = asyncio.create_task(_pending_notify_loop())
     # 分析ログ: 起動/再起動の判定を先に済ませてから、アップローダとメトリクス採取を回す。
     await device_analytics.on_startup()
     analytics_tasks = [
@@ -573,9 +752,11 @@ async def lifespan(app: FastAPI):
     update_task.cancel()
     heartbeat_task.cancel()
     watchdog_task.cancel()
+    pending_notify_task.cancel()
     warmup_task.cancel()
     for t in card_tasks:
         t.cancel()
+    _cancel_all_state_timers()
     locker_ctrl.close()
     pir.close()
     for door in doors.values():
@@ -584,11 +765,44 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="mokuture+ Kiosk Agent", lifespan=lifespan)
 
+
+# ── 端末の中からだけ受け付ける ──────────────────────────────────────────────────
+# このエージェントの利用者は、同じ端末で動くキオスク画面(Chromium)だけ。ロッカー・Wi-Fi・
+# 登録などの操作には認証が無いので、端末の外からの要求は受け付けない(card/api.py の
+# _require_local と同じ判定)。保守で別の機器から触る必要があるときだけ、.env に
+# KIOSK_ALLOW_REMOTE=1 を書いて明示的に開ける(待ち受けアドレスも合わせて変える必要がある)。
+def _remote_allowed() -> bool:
+    return os.getenv("KIOSK_ALLOW_REMOTE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _is_loopback_client(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    mapped = getattr(addr, "ipv4_mapped", None)   # ::ffff:127.0.0.1 の表記
+    if mapped is not None:
+        addr = mapped
+    return addr.is_loopback
+
+
+@app.middleware("http")
+async def _local_only(request: Request, call_next):
+    if not _remote_allowed() and not _is_loopback_client(request):
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    return await call_next(request)
+
+
+# CORS はキオスク画面のオリジン(この端末の 8080)だけ。画面は同じオリジンから配信されるので
+# 本来は不要だが、localhost と 127.0.0.1 の表記ゆれで別オリジン扱いになっても通るようにする。
+# 音声サービス(127.0.0.1:8181)は画面から呼ばれる側で、このエージェントは呼ばない。
+_LOCAL_ORIGINS = [f"http://localhost:{settings.port}", f"http://127.0.0.1:{settings.port}"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_LOCAL_ORIGINS,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Kiosk-Token"],
 )
 
 if card_router is not None:
@@ -602,6 +816,11 @@ class ReceptionBody(BaseModel):
     staff: str = ""
     method: str = "form"
     appointment_id: str | None = None
+    # ここに無い項目は pydantic が黙って捨てるので、キオスク画面が送り backend が受け取る
+    # 項目はすべて宣言する(以前は部署と、通知の成否を書き戻すための匿名セッションIDが
+    # backend へ届いていなかった)。
+    department: str | None = None
+    analytics_session_id: str | None = None
 
 
 class LockerPinBody(BaseModel):
@@ -610,6 +829,7 @@ class LockerPinBody(BaseModel):
 
 class CallStaffBody(BaseModel):
     message: str | None = None
+    analytics_session_id: str | None = None
 
 
 class LockerStateBody(BaseModel):
@@ -723,8 +943,16 @@ async def register_device():
             if name:
                 save_device_state(existing_token, name)
             return {"status": status, "device_name": name or get_device_name(), "device_token": existing_token}
-        # status is None = トークンが無効(401) → 保存状態を破棄して新規登録に進む
+        # status is None = トークンが無効(401) → 新規登録に進む
 
+    # 手元にトークンがあれば添える。backend は、いまのトークンを添えた再登録にだけ同じトークンを
+    # 返し、添えていない再登録には新しいトークンを発行して承認待ちに戻す(ハードウェア ID だけで
+    # 既存端末のトークンを渡さないため)。返ってきたトークンは常に保存し直し、status が pending なら
+    # キオスク画面が初回登録と同じく承認待ち画面を出す。
+    headers = {}
+    current_token = get_device_token()
+    if current_token:
+        headers["X-Kiosk-Token"] = current_token
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.post(
@@ -734,6 +962,7 @@ async def register_device():
                     "device_name": get_device_name() or _hostname(),
                     "hardware_id": _hardware_id(),
                 },
+                headers=headers,
                 timeout=15,
             )
             resp.raise_for_status()
@@ -1208,6 +1437,7 @@ async def device_status():
         "microphone": microphone,
         "relays": locker_ctrl.status(),
         "lockers": locker_ctrl.status(),
+        "locks_missing": _doors_without_lock(),
     }
 
 
@@ -1229,21 +1459,29 @@ async def list_device_lockers():
     return {"lockers": locker_ctrl.status()}
 
 
+_DOOR_OPEN_DETAIL = "扉が開いているため、このロッカーは使えません。別のロッカーをお選びください。"
+
+
 @app.post("/device/locker/{locker_id}/open")
 async def open_locker(locker_id: str):
+    """扉の錠を開ける(locker_id = 扉番号)。手荷物の預け入れ・置き配で空きの口を開けるときに使う。
+
+    **空きの口で、扉センサーが「開」を示しているときは開けない(409)。** 預け入れや置き配の
+    途中で画面が待機に戻ると、扉が開いたまま・未登録のまま「空き」に残る(誰かの荷物が
+    入っているかもしれない)。その口を次の人に渡さないため。利用中の口(受け取り)は扉の
+    状態にかかわらず開けられる。センサーが無い・読めない(None)ときは従来どおり開ける。"""
     lid = str(locker_id)
     if not locker_ctrl.is_configured(lid):
         raise HTTPException(status_code=404, detail=f"Locker {locker_id} not configured")
-    door = doors.get(lid)
-    if door is not None and door.configured:
-        # ドアセンサー連動: 解錠→扉が開いたら即施錠位置へ→閉扉で自動施錠(パルス長非依存)
-        _spawn(_open_with_autolock(lid, door))
-        return {"locker_id": lid, "state": "opening", "autolock": True}
-    # フォールバック: ドアセンサー未設定なら従来の固定パルス
-    ok = await locker_ctrl.open(lid)
-    if not ok:
-        raise HTTPException(status_code=404, detail=f"Locker {locker_id} not configured")
-    return {"locker_id": lid, "state": "opened", "autolock": False}
+    async with _locker_op_lock:
+        if not locker_store.door_occupied(lid) and _door_closed(lid) is False:
+            raise HTTPException(status_code=409, detail=_DOOR_OPEN_DETAIL)
+        # ドアセンサー連動: 解錠→扉が開いたら即施錠位置へ→閉扉で自動施錠(パルス長非依存)。
+        # センサー未設定なら従来の固定パルス。
+        driven = await _drive_unlock(lid)
+    if driven is None:
+        raise HTTPException(status_code=503, detail=_LOCK_DRIVE_FAILED)
+    return {"locker_id": lid, **driven}
 
 
 @app.post("/device/locker/{locker_id}/pulse")
@@ -1256,12 +1494,20 @@ async def pulse_locker_default(locker_id: str):
 
 @app.post("/device/locker/{locker_id}/state")
 async def set_locker_state(locker_id: str, body: LockerStateBody):
-    ok = locker_ctrl.set_state(locker_id, body.on)
+    """錠の通電を直接 ON/OFF する(デバイスチェックのトグル・キオスクの「扉を閉めました」の施錠)。
+    ON は _STATE_ON_MAX_SEC 秒で自動的に OFF へ戻す(押し直すと数え直し、OFF で取り消し)。"""
+    lid = str(locker_id)
+    ok = locker_ctrl.set_state(lid, body.on)
     if not ok:
         raise HTTPException(status_code=404, detail=f"Locker {locker_id} not configured")
+    if body.on:
+        _start_state_timer(lid)
+    else:
+        _cancel_state_timer(lid)
     return {
-        "locker_id": str(locker_id),
-        "on": locker_ctrl.is_on(locker_id),
+        "locker_id": lid,
+        "on": locker_ctrl.is_on(lid),
+        "auto_off_sec": _STATE_ON_MAX_SEC if body.on else None,
     }
 
 
@@ -1310,23 +1556,55 @@ async def _relay_delivery_notify(item: dict) -> bool:
         return False
 
 
+_flush_notify_lock = asyncio.Lock()
+
+
 async def _flush_pending_notify() -> None:
-    """オフライン中に貯めた置き配通知を再送する。"""
-    pending = locker_store.take_pending_notify()
-    if not pending:
-        return
-    failed = [item for item in pending if not await _relay_delivery_notify(item)]
-    if failed:
-        locker_store.requeue_notify(failed)
+    """オフライン中に貯めた置き配通知を再送する。
+
+    保留は**送れたと確かめてから 1 件ずつ外す**。先に取り出して空にすると、送信の途中で
+    エージェントが止まったとき(更新の適用は os._exit で即終了する・電源断)に失う。
+    暗証番号の平文はこの保留にしか無いので、失うと担当者には二度と届かない。
+    止まり方によっては同じ通知がもう一度届くことはあるが、届かないよりよい。"""
+    if _flush_notify_lock.locked():
+        return   # 別の再送が進行中(定期の再送とロッカー一覧からの再送が重なったとき)
+    async with _flush_notify_lock:
+        for item in locker_store.peek_pending_notify():
+            if await _relay_delivery_notify(item):
+                locker_store.remove_pending_notify(item)
+
+
+_PENDING_NOTIFY_INTERVAL_SEC = 60
+
+
+async def _pending_notify_loop() -> None:
+    """保留中の置き配通知を、通信が戻りしだい送る。
+
+    以前はロッカー一覧(GET /device/locker-list)を開いたときにしか再送していなかったので、
+    通信断のあいだに置き配があると、次に誰かがロッカー画面を開くまで担当者へ暗証番号が
+    届かなかった。
+    """
+    while True:
+        await asyncio.sleep(_PENDING_NOTIFY_INTERVAL_SEC)
+        try:
+            await _flush_pending_notify()
+        except Exception as e:
+            print(f"[locker] pending notify flush failed: {e}")
 
 
 @app.get("/device/locker-list")
 async def device_locker_list():
     """kiosk グリッド用: 端末のドア構成から台帳を生成し、ローカル状態を返す。
-    保留中の置き配通知も flush する。完全オフラインでも成立（backend 非依存）。"""
+    保留中の置き配通知の再送も試みるが、**結果は待たない**(通信断のとき、保留1件ごとに
+    最大10秒この一覧が返らなくなるため)。完全オフラインでも成立（backend 非依存）。"""
     locker_store.ensure_local_roster(_configured_door_numbers())
-    await _flush_pending_notify()
-    return locker_store.snapshot()
+    _spawn(_flush_pending_notify())
+    snap = locker_store.snapshot()
+    # 扉センサーの読み(True=閉 / False=開 / None=分からない)。空きで False の口は、画面が
+    # 選べなくする(/device/locker/{id}/open も 409 で断る)。None は従来どおり選べる。
+    for item in snap.get("lockers", []):
+        item["door_closed"] = _door_closed(item.get("door_number"))
+    return snap
 
 
 @app.get("/device/locker-config")
@@ -1335,6 +1613,9 @@ async def get_locker_config():
     return {
         "count": _current_locker_count(),
         "options": [{"count": c} for c in LOCKER_COUNTS],
+        # 設置者がこの画面で口数を選んだか。false のあいだは count は推定値(既定3口)。
+        "chosen": locker_store.get_locker_count() in LOCKER_COUNTS,
+        "locks_missing": _doors_without_lock(),
     }
 
 
@@ -1371,7 +1652,9 @@ async def device_locker_occupy(locker_id: str, body: LockerPinBody):
     if not re.fullmatch(r"\d{4}", body.pin or ""):
         raise HTTPException(status_code=422, detail="pin must be exactly 4 digits")
     try:
-        result = locker_store.occupy(locker_id, body.pin, kind="store")
+        async with _locker_op_lock:
+            # pbkdf2 は重い(数十〜百ms)ので、イベントループの外で計算する。
+            result = await asyncio.to_thread(locker_store.occupy, locker_id, body.pin, "store")
     except locker_store.LockerError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
     _spawn(_mirror_locker_state())
@@ -1383,7 +1666,8 @@ async def device_locker_occupy_delivery(locker_id: str):
     """置き配: ローカルでランダム4桁PINを生成・保存し、通知は backend 経由で発火する
     （平文PINは通知にのみ使用）。オフライン時は通知をキューして再接続時に送る。"""
     try:
-        result = locker_store.occupy_delivery(locker_id)
+        async with _locker_op_lock:
+            result = await asyncio.to_thread(locker_store.occupy_delivery, locker_id)
     except locker_store.LockerError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
     item = {"id": str(locker_id), "pin": result["pin"], "label": result["name"], "device": get_device_name()}
@@ -1399,21 +1683,59 @@ async def device_locker_occupy_delivery(locker_id: str):
 
 @app.post("/device/locker/{locker_id}/release")
 async def device_locker_release(locker_id: str, body: LockerPinBody):
-    """受け取り: 端末ローカルで PIN 照合して解錠状態にする（クラウド往復なし・オフライン可）。"""
-    try:
-        result = locker_store.release(locker_id, body.pin)
-    except locker_store.LockerError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail)
+    """受け取り: 端末ローカルで PIN 照合 → 錠を動かす → 動いたときだけ空きに戻す
+    （クラウド往復なし・オフライン可）。
+
+    以前は照合と同時に空きへ戻し、錠は画面が別に開けていた。錠が動かなかった(GPIO が
+    模擬に落ちている等)ときも画面は「解錠しました」と出し、お荷物は「空き」のロッカーに
+    閉じ込められた。いまは錠を動かせなければ 503 を返し、利用中のまま残す。
+    応答の unlocked=true は「錠もここで動かした」印(古いエージェントには無いので、画面は
+    これが無いときだけ自分で /open を叩く)。
+
+    暗証番号は口ごとに続けて _PIN_MAX_FAILS 回違えると _PIN_LOCKOUT_SEC 秒受け付けない(429)。"""
+    lid = str(locker_id)
+    async with _locker_op_lock:
+        if _pin_locked_remaining(lid) > 0:
+            raise HTTPException(status_code=429, detail=_PIN_LOCKED_DETAIL)
+        try:
+            # pbkdf2 は重い(数十〜百ms)ので、イベントループの外で照合する。
+            found = await asyncio.to_thread(locker_store.verify_pin, lid, body.pin)
+        except locker_store.LockerError as e:
+            if e.status == 403 and _pin_record_failure(lid):
+                raise HTTPException(status_code=429, detail=_PIN_LOCKED_DETAIL)
+            raise HTTPException(status_code=e.status, detail=e.detail)
+        _pin_failures.pop(lid, None)   # 合ったら数え直し
+        door = found.get("door_number")
+        driven = await _drive_unlock(str(door)) if door is not None else None
+        if driven is None:
+            raise HTTPException(status_code=503, detail=_LOCK_DRIVE_FAILED)
+        try:
+            result = locker_store.clear(lid)
+        except locker_store.LockerError as e:
+            raise HTTPException(status_code=e.status, detail=e.detail)
     _spawn(_mirror_locker_state())
-    return result
+    return {**result, "unlocked": True, "autolock": driven.get("autolock", False)}
 
 
 @app.post("/device/lockers/open-all")
 async def device_lockers_open_all():
-    """全ロッカーのローカル状態をリセット（緊急・メンテ用）。GPIO 解錠は kiosk が実施。"""
-    result = locker_store.release_all()
+    """全ロッカーのローカル状態をリセットし、全部の錠を開ける（緊急・メンテ用）。
+
+    扉センサーの状態にかかわらず開ける(扉が少し開いたまま利用中の口も取り出せるように)。
+    錠はここで動かす(driven=true)。古いエージェントには driven が無く、画面が 1 口ずつ
+    /open を叩く。動かせなかった扉は failed に入れて返す。
+    実機で GPIO が模擬に落ちているときは錠を 1 つも動かせない。それでも**記録は消す**
+    (全部の扉を failed で返す)。ここまで断ると、その端末では利用中の口を暗証番号でも
+    スタッフの操作でも空きに戻せなくなる。扉は鍵で開けてもらう。"""
+    mocked = _gpio_unintended_mock()
+    async with _locker_op_lock:
+        result = locker_store.release_all()
+        failed: list = []
+        for dn in result.get("door_numbers", []):
+            if mocked or await _drive_unlock(str(dn)) is None:
+                failed.append(dn)
     _spawn(_mirror_locker_state())
-    return result
+    return {**result, "driven": True, "failed": failed}
 
 
 @app.get("/device/pir")
@@ -1531,4 +1853,5 @@ async def device_wifi_toggle(body: WifiToggleBody):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=settings.port, reload=False)
+    # 端末の中(キオスク画面)からだけ使う。外から触る必要があるときは KIOSK_ALLOW_REMOTE を参照。
+    uvicorn.run("main:app", host="127.0.0.1", port=settings.port, reload=False)

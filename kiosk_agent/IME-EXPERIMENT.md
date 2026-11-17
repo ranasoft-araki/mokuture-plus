@@ -55,7 +55,8 @@ EUC-JP/UTF-8 どちらでも読める。送り仮名ありエントリは自動�
 事前ロード（`kana_kanji.warmup` を lifespan で呼ぶ）するので初回変換も待たされない。
 
 - **リポジトリに同梱（資産として commit 済み・約4.5MB）**。`.gitattributes` で `-text -diff`
-  （EUC-JP を改行変換で壊さない・diff 肥大化防止）のバイナリ扱い。OTA でそのまま Pi に届く。
+  （EUC-JP を改行変換で壊さない・diff 肥大化防止）のバイナリ扱い。OTA の配信対象には入れていない（導入時の `git clone` で入る。
+  OTA で配るのは `kana_kanji.py` と `kana_dict.tsv`）。
 - **自己修復**: 万一ファイルが欠けている環境では agent 起動時(`ensure_dict`)に自動 DL
   （`skk-dev.github.io/dict/SKK-JISYO.L.gz`）、`install.sh` も未取得なら DL する。取得失敗
   （オフライン）時のみ同梱 `kana_dict.tsv`(約160語)にフォールバック。

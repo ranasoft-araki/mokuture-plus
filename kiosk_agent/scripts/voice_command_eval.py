@@ -63,9 +63,34 @@ SCREENS: dict[str, list[str]] = {
     "notice": ["notice.close"],
     "confirm": ["confirm.yes", "confirm.no"],
     "result": ["result.done", "common.home"],
+    # 暗証番号(帯は slim = 戻る・担当者を呼ぶ)。数字は続けて言える(sequence)。
+    "lockerPin": [f"pin.d{i}" for i in range(10)] + ["pin.del", "pin.ok", "common.back",
+                                                      "common.wait", "common.restart", "common.call"],
 }
 # 番号で選ぶ画面。語彙を絞って外れたら通常の認識で聞き直す(本番と同じ)。
 FALLBACK_SCREENS = {"locker"}
+# 続けて言われた選択肢を順に受け付ける画面(本番と同じ vosk_engine.match_sequence で判定)。
+# 正解は id を "+" でつないだもの(「いち に さん よん」→ d1+d2+d3+d4)。
+SEQUENCE_SCREENS = {"lockerPin"}
+# 続けて言う画面で、単語のほかに測る 4 桁の並び(乱数は固定)。
+PIN_READ = {"d0": "ゼロ", "d1": "いち", "d2": "に", "d3": "さん", "d4": "よん",
+            "d5": "ご", "d6": "ろく", "d7": "なな", "d8": "はち", "d9": "きゅう"}
+PIN_READ_EN = {"d0": "zero", "d1": "one", "d2": "two", "d3": "three", "d4": "four",
+               "d5": "five", "d6": "six", "d7": "seven", "d8": "eight", "d9": "nine"}
+
+
+def pin_sequences(lang: str, n: int = 20) -> list[tuple[str, str]]:
+    """(読み上げる文, 正解)。区切って言う(「いち、に、…」)のと続けて言うのを半分ずつ。"""
+    import random
+    rnd = random.Random(7)
+    read = PIN_READ_EN if lang == "en" else PIN_READ
+    out = []
+    for _ in range(n):
+        ks = [rnd.choice(sorted(read)) for _ in range(4)]
+        sep = ", " if lang == "en" else "、"
+        out.append((sep.join(read[k] for k in ks), "+".join(ks)))
+        out.append(((" " if lang == "en" else "").join(read[k] for k in ks), "+".join(ks)))
+    return out
 
 # 誰も話しかけていないときに聞こえそうなもの。受付のそばの雑談・電話・独り言。
 LOBBY = [
@@ -150,8 +175,11 @@ $s.Dispose()
     return out
 
 
-def utterances(path: Path, rate: int) -> list:
-    """本番と同じ VAD で発話を切り出す(長い録音なら複数)。"""
+def utterances(path: Path, rate: int, max_sec: float | None = None) -> list:
+    """本番と同じ VAD で発話を切り出す(長い録音なら複数)。
+
+    max_sec = 録音の上限。続けて言う画面は本番と同じ command.sequence_max_record_sec。
+    """
     pcm = capture.read_wav_as_pcm(path, rate)
     # 窓が開いてから話し始めるまでの間を模して、頭に無音を足す。
     pcm = b"\x00\x00" * int(rate * 0.4) + pcm + b"\x00\x00" * int(rate * 1.0)
@@ -163,7 +191,7 @@ def utterances(path: Path, rate: int) -> list:
     while stream._pos < len(pcm):  # noqa: SLF001 — 計測用に位置を直接見る
         seg = vad.record_utterance(
             stream,
-            max_record_sec=float(ccfg["max_record_sec"]),
+            max_record_sec=float(max_sec or ccfg["max_record_sec"]),
             silence_sec=float(ccfg["silence_sec"]),
             start_timeout_sec=2.0,
             now=clock,
@@ -175,11 +203,15 @@ def utterances(path: Path, rate: int) -> list:
 
 # ── 採点 ──────────────────────────────────────────────────────────────────────
 
-def decode(seg, choices, fallback: bool, lang: str = "ja") -> tuple[list, int, str | None]:
+def decode(seg, choices, fallback: bool, lang: str = "ja", sequence: bool = False) -> tuple[list, int, str | None]:
     """語の並びと認識時間。しきい値は後で振るので、ここでは 0 で当てる。
 
     番号の画面は聞き直しを含めた本番どおりの判定を 3 つ目に返す(しきい値は振らない)。
+    続けて言う画面も本番どおりの判定(id を "+" でつなぐ)を 3 つ目に返す。
     """
+    if sequence:
+        m = vosk_engine.recognize_command(seg, choices, lang=lang, sequence=True)
+        return m.words, m.recognition_ms, ("+".join(m.sequence) if m.sequence else None)
     if fallback:
         m = vosk_engine.recognize_command(seg, choices, lang=lang, fallback=True)
         return m.words, m.recognition_ms, m.matched
@@ -237,13 +269,17 @@ def main() -> int:
             return list(dict.fromkeys(list(say or []) + ([label] if label else [])))
         pos_texts = {v.format(p=p) for s in screens for k in SCREENS[s] if k in vocab
                      for p in spoken(k) for v in variants}
-        wavs = synth_many(sorted(pos_texts | set(lobby)), args.rate, lang)
+        pin_texts = {t for t, _ in pin_sequences(lang)} if any(s in SEQUENCE_SCREENS for s in screens) else set()
+        wavs = synth_many(sorted(pos_texts | set(lobby) | pin_texts), args.rate, lang)
         for s in screens:
             for k in SCREENS[s]:
                 for p in spoken(k):
                     for v in variants:
                         t = v.format(p=p)
                         cases.append((s, wire_id(k), t, wavs[t]))
+            if s in SEQUENCE_SCREENS:
+                for t, want in pin_sequences(lang):
+                    cases.append((s, want, t, wavs[t]))
             for t in lobby:
                 cases.append((s, None, t, wavs[t]))
     if args.wav_dir:
@@ -259,14 +295,15 @@ def main() -> int:
     started = time.monotonic()
     results = []       # (screen, want, name, [(words, ms)])
     first_ms: dict[str, int] = {}
-    seg_cache: dict[Path, list] = {}
+    seg_cache: dict[tuple[Path, float | None], list] = {}
     for screen, want, name, path in cases:
-        if path not in seg_cache:
-            seg_cache[path] = utterances(path, rate)
+        max_sec = float(settings.get("command.sequence_max_record_sec")) if screen in SEQUENCE_SCREENS else None
+        if (path, max_sec) not in seg_cache:
+            seg_cache[(path, max_sec)] = utterances(path, rate, max_sec)
         choices = choices_for(screen, vocab, lang)
         decoded = []
-        for seg in seg_cache[path]:
-            words, ms, fixed = decode(seg, choices, screen in FALLBACK_SCREENS, lang)
+        for seg in seg_cache[(path, max_sec)]:
+            words, ms, fixed = decode(seg, choices, screen in FALLBACK_SCREENS, lang, screen in SEQUENCE_SCREENS)
             first_ms.setdefault(screen, ms)
             decoded.append((words, ms, fixed))
         results.append((screen, want, name, choices, decoded))
@@ -283,8 +320,11 @@ def main() -> int:
             for screen, want, name, choices, decoded in results:
                 if screen != s:
                     continue
-                got = [fixed if screen in FALLBACK_SCREENS else judge(w, choices, floor, lang) for w, _, fixed in decoded]
+                got = [fixed if screen in FALLBACK_SCREENS | SEQUENCE_SCREENS else judge(w, choices, floor, lang)
+                       for w, _, fixed in decoded]
                 got = [g for g in got if g]
+                if screen in SEQUENCE_SCREENS and len(got) > 1:
+                    got = ["+".join(got)]   # 録音が途中で切れて 2 つに分かれた(画面では続けて入る)
                 if want is None:
                     c["neg"] += 1
                     if got:

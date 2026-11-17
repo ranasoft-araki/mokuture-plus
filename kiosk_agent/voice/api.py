@@ -80,6 +80,12 @@ class CommandBody(BaseModel):
     window_sec: float | None = Field(default=None, ge=1.0, le=30.0)
     # 番号で選ぶ画面(ロッカー)。語彙を絞って外れたら通常の認識で聞き直す。
     fallback: bool = False
+    # 続けて言われた選択肢を順に受け付ける画面(暗証番号の「いち に さん よん」)。
+    # 結果は command.sequence。録音の上限は command.sequence_max_record_sec。
+    sequence: bool = False
+    # どの選択肢が言われたかを実験ログにもサービスのログにも残さない画面(暗証番号)。
+    # 選択肢の id が数字そのものなので、残すと暗証番号が端末に残る。
+    secret: bool = False
     # この1回の聞き取りの言語。表示言語(タッチ切替)に追従するだけで、発話での
     # 自動判定はしない。省略時は日本語(旧バージョンのキオスク画面との互換)。
     lang: str = Field(default="ja", pattern=r"^(ja|en)$")
@@ -129,6 +135,10 @@ async def voice_status(request: Request):
         "features": {
             # false の端末では画面に「声で操作する」を出さない。
             "command": enabled and mic_ok and command_ok,
+            # 続けて言う(sequence)・ログに残さない(secret)を知っている版か。暗証番号の画面は
+            # これが true のときだけ声にする。OTA 直後は画面だけ新しく、サービスが古いまま
+            # (起こし直し待ち)のことがあり、古い版は secret を知らずに数字をログへ書くため。
+            "sequence": enabled and mic_ok and command_ok,
         },
         "command": {
             "available": command_ok,
@@ -167,8 +177,8 @@ async def voice_session_start(request: Request):
 async def voice_command(sid: str, body: CommandBody, request: Request):
     """画面の選択肢のどれが言われたかを 1 回だけ聞く。すぐ返るので state をポーリングする。
 
-    結果は state の `command`(matched / confidence / reason)。**認識した言葉そのものは
-    返さない。** 話しかけられずに窓が閉じたら phase=error・error_code=no_speech で、
+    結果は state の `command`(matched / confidence / reason。sequence の画面は sequence)。
+    **認識した言葉そのものは返さない。** 話しかけられずに窓が閉じたら phase=error・error_code=no_speech で、
     画面は黙って開け直してよい。
 
     同じセッションで前の画面の聞き取りが走っていたら、畳んでから開け直す。
@@ -183,7 +193,10 @@ async def voice_command(sid: str, body: CommandBody, request: Request):
     try:
         # 前の聞き取りを畳むのを待つことがある(最大 2 秒)ので、イベントループを塞がない。
         await run_in_threadpool(session.listen_command, choices, screen=body.screen,
-                                window_sec=body.window_sec, fallback=body.fallback, lang=body.lang)
+                                window_sec=body.window_sec, fallback=body.fallback, lang=body.lang,
+                                # 続けて言う画面は暗証番号だけなので、画面が secret を付け忘れても
+                                # 数字をログに書かない(二重の網)。
+                                sequence=body.sequence, secret=body.secret or body.sequence)
     except session_mod.Busy:
         raise HTTPException(status_code=409, detail="already listening")
     return session.state()

@@ -68,7 +68,7 @@ class Session:
     # ── 操作 ──────────────────────────────────────────────────────────────
     def listen_command(self, choices: list[tuple[str, list[str]]], *, screen: str,
                        window_sec: float | None = None, fallback: bool = False,
-                       lang: str = "ja") -> None:
+                       lang: str = "ja", sequence: bool = False, secret: bool = False) -> None:
         """画面の選択肢のどれが言われたかを 1 回だけ聞く。すぐ返り、進行は state() で見る。
 
         画面が切り替わったら、前の画面の語彙で聞いている途中でも**畳んでから**開け直す
@@ -77,6 +77,8 @@ class Session:
         lang は**この1回の聞き取りだけ**の言語(表示言語の切替えに追従するだけで、セッション
         自体は言語を持たない。タッチで言語を切り替えた直後でもセッションを張り直さずに
         済む)。
+        sequence=True は続けて言われた選択肢を順に返す画面(暗証番号)。secret=True の画面は
+        どの選択肢が言われたかを実験ログにもサービスのログにも書かない(id が数字そのもの)。
         """
         with self._lock:
             worker = self._worker if self.busy() else None
@@ -98,7 +100,8 @@ class Session:
             self.command = None
             self.touch()
             self._worker = threading.Thread(
-                target=self._run_command, args=(list(choices), screen, window_sec, fallback, lang),
+                target=self._run_command,
+                args=(list(choices), screen, window_sec, fallback, lang, sequence, secret),
                 name="voice-command", daemon=True,
             )
             self._worker.start()
@@ -116,7 +119,8 @@ class Session:
 
     # ── 本体 ──────────────────────────────────────────────────────────────
     def _run_command(self, choices: list[tuple[str, list[str]]], screen: str,
-                     window_sec: float | None, fallback: bool, lang: str = "ja") -> None:
+                     window_sec: float | None, fallback: bool, lang: str = "ja",
+                     sequence: bool = False, secret: bool = False) -> None:
         """キーワード 1 回ぶん。録って、画面の語彙だけで decode し、選択肢を決める。
 
         **話しかけられなかった窓は記録しない。** 画面が選択を待っている間は窓を開け
@@ -138,9 +142,12 @@ class Session:
 
             self.phase = "listening"
             try:
+                # 暗証番号を区切って言うと 3 秒を超える(最後の桁が切れる)。
+                max_rec = float((ccfg.get("sequence_max_record_sec") if sequence else None)
+                                or ccfg.get("max_record_sec") or 3.0)
                 seg = vad.record_utterance(
                     stream,
-                    max_record_sec=float(ccfg.get("max_record_sec") or 3.0),
+                    max_record_sec=max_rec,
                     silence_sec=float(ccfg.get("silence_sec") or 0.7),
                     start_timeout_sec=float(window_sec or ccfg.get("window_sec") or 8.0),
                     on_level=self._on_level,
@@ -170,7 +177,8 @@ class Session:
                     self.phase = "cancelled"
                     return
                 try:
-                    match = vosk_engine.recognize_command(seg, choices, lang=lang, fallback=fallback)
+                    match = vosk_engine.recognize_command(seg, choices, lang=lang, fallback=fallback,
+                                                          sequence=sequence)
                 except vosk_engine.EngineUnavailable as e:
                     self._fail("engine_unavailable", screen_id, model, str(e))
                     return
@@ -189,6 +197,14 @@ class Session:
             self.command = match
             self.error_code = match.reason
             self.phase = "done"
+            accepted = match.matched is not None or bool(match.sequence)
+            if secret:
+                # 暗証番号の画面。どれが言われたか(=数字)は書かない。当たったかどうかだけ。
+                choice_id = "secret" if accepted else None
+            elif match.sequence:
+                choice_id = "+".join(match.sequence)[:64]
+            else:
+                choice_id = match.matched
             metrics.record({
                 "sessionId": self.id,
                 "screenId": screen_id,
@@ -197,15 +213,17 @@ class Session:
                 "audioDurationMs": seg.total_ms,
                 "recognitionDurationMs": match.recognition_ms,
                 "totalMs": total_ms,
-                "result": "success" if match.matched else "error",
-                "accepted": match.matched is not None,
-                "choiceId": match.matched,
+                "result": "success" if accepted else "error",
+                "accepted": accepted,
+                "choiceId": choice_id,
                 "errorCode": match.reason,
                 "stopReason": seg.stop_reason,
             })
             # 選択肢の id は画面が決めた固定語彙(「visit」「back」)なので出してよい。
+            # secret の画面は当たったかどうかだけ(暗証番号をジャーナルに残さない)。
             log.info("[voice] command %s: %s (%dms / 音声 %dms)", screen,
-                     match.matched or match.reason, match.recognition_ms, seg.total_ms)
+                     ("matched" if accepted else match.reason) if secret else (choice_id or match.reason),
+                     match.recognition_ms, seg.total_ms)
         except Exception:
             log.exception("[voice] キーワードのワーカーが落ちました")
             self.phase = "error"
@@ -246,6 +264,7 @@ def _command_payload(c: CommandMatch) -> dict:
     # 認識した語(words)は入れない。画面が要るのは「どれが選ばれたか」だけ。
     return {
         "matched": c.matched,
+        "sequence": list(c.sequence) if c.sequence else None,
         "confidence": c.confidence,
         "reason": c.reason,
         "recognition_ms": c.recognition_ms,

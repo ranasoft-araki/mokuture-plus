@@ -17,7 +17,6 @@ button{font-family:inherit}
 
 @keyframes fade-in{from{opacity:0}to{opacity:1}}
 @keyframes ring-expand{0%{transform:scale(1);opacity:.4}100%{transform:scale(2.2);opacity:0}}
-@keyframes cursor-blink{0%,100%{opacity:1}50%{opacity:0}}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes check-draw{to{stroke-dashoffset:0}}
 @keyframes scan-line{0%{top:4px}100%{top:calc(100% - 4px)}}
@@ -25,8 +24,6 @@ button{font-family:inherit}
 @keyframes dot-bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
 @keyframes scale-in{from{transform:scale(.7);opacity:0}to{transform:scale(1);opacity:1}}
 @keyframes slide-in-up{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
-@keyframes fade-out{from{opacity:1}to{opacity:0}}
-@keyframes pop-in{from{opacity:0;transform:scale(0.85)}to{opacity:1;transform:scale(1)}}
 @keyframes water-ring{0%{transform:scale(0);opacity:0}12%{opacity:.5}100%{transform:scale(1);opacity:0}}
 @keyframes water-splash{0%{transform:scale(.2);opacity:.4}100%{transform:scale(1.6);opacity:0}}
 @keyframes line-draw{from{transform:scaleX(0)}to{transform:scaleX(1)}}
@@ -587,7 +584,9 @@ async function deviceFetch(method, path, body) {
   });
   if (!r.ok) {
     const e = await r.json().catch(() => ({ detail: r.statusText }));
-    throw new Error(e.detail ?? "Request failed");
+    // 呼び出し側が状態コードで分けられるように持たせる(409=扉が開いている / 429=暗証番号の
+    // 試行回数の上限 / 503=錠を動かせない)。message は従来どおり agent の detail。
+    throw Object.assign(new Error(e.detail ?? "Request failed"), { status: r.status });
   }
   return r.status === 204 ? null : r.json();
 }
@@ -604,14 +603,27 @@ async function deviceConvert(kana, limit) {
 }
 // ロッカーのGPIO開錠(ローカルエージェント)。MOCK時はダミー。
 // 非ok(404=口数変更で未構成 等)を握りつぶして成功扱いにしない＝呼び出し側で開錠失敗を検知できる。
+// status: 409=空きの口なのに扉が開いている(使わせない) / 503=錠を動かせない / 0=エージェントに届かない。
 async function pulseLocker(door) {
   if (MOCK) { await new Promise(r => setTimeout(r, 120)); return { ok: true }; }
   try {
     const r = await fetch(`/device/locker/${encodeURIComponent(door)}/open`, { method: "POST" });
-    if (!r.ok) return { ok: false };
+    if (!r.ok) return { ok: false, status: r.status };
     return await r.json();
-  } catch { return { ok: false }; }
+  } catch { return { ok: false, status: 0 }; }
 }
+// 空きの口のうち、扉センサーが「開」を示しているもの。預け入れ・置き配では選ばせない
+// (前の人の途中で画面が戻り、扉が開いたまま・未登録で残った口かもしれない)。
+// door_closed が null(センサー無し・読めない)や古いエージェント(項目なし)は従来どおり選べる。
+const lockerDoorOpen = l => !!l && !l.occupied && l.door_closed === false;
+const lockerUsableFree = l => !!l && !l.occupied && l.door_closed !== false;
+// ロッカーの操作が失敗したときの案内(日英)。
+const LOCKER_MSG = {
+  doorOpen: { ja: "このロッカーは扉が開いているため使えません。別のロッカーをお選びください。", en: "This locker's door is open, so it can't be used. Please choose another locker." },
+  openFailed: { ja: "ロッカーを開けられませんでした。お手数ですが「担当者を呼ぶ」を押してください。", en: "The locker could not be opened. Please tap “Call staff”." },
+  unlockFailed: { ja: "解錠できませんでした。お荷物はロッカーに入ったままです。お手数ですが「担当者を呼ぶ」を押してください。", en: "The locker could not be unlocked. Your item is still inside. Please tap “Call staff”." },
+  tooMany: { ja: "暗証番号を続けて間違えたため、しばらく受け付けません。「担当者を呼ぶ」を押すか、時間をおいてお試しください。", en: "Too many incorrect PINs. Please tap “Call staff” or try again later." },
+};
 
 async function forceLockLocker(door) {
   if (MOCK) return { ok: true };
@@ -688,7 +700,8 @@ function fmtClock() {
 }
 function pad(n) { return String(n).padStart(2, "0"); }
 function escHtml(s) {
-  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  // ' も逃がす(属性を ' で囲む箇所に外部の値を入れても属性を抜けられないように)。
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 }
 
 // ─── SVG icons ───────────────────────────────────────────────────────────────
@@ -719,9 +732,6 @@ const ICO = {
 //   右上「やめる」  = 待機画面へ
 // 以前は右上が「最初の画面に戻る」で、左の「← 戻る」と字面も形も似ていて役割を
 // 見分けられなかった。短くし、塗りを外して(戻る=面、やめる=線)見た目でも分ける。
-function backBtnHtml(id) {
-  return `<button id="${id}" style="display:inline-flex;align-items:center;gap:14px;padding:24px 52px;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:999px;font-size:32px;font-weight:600;color:${T.sub};cursor:pointer;white-space:nowrap">← 戻る</button>`;
-}
 function homeBtnHtml(id) {
   return `<button id="${id}" style="display:inline-flex;align-items:center;gap:12px;padding:22px 40px;background:transparent;border:2px solid ${T.border};border-radius:999px;color:${T.muted};cursor:pointer;white-space:nowrap">${ICO.home}${bi("やめる", "Cancel", { big: "28px", small: "15px", bigWeight: "600" })}</button>`;
 }
@@ -791,7 +801,6 @@ function bindHomeBtn(id, reason = "cancelled") {
 // opts.extra   : 画面固有のボタン HTML（受付フォームの「名刺で入力」など）を挟む
 // opts.slim    : 高さを詰めた版。到達線の下が狭い画面（暗証番号）で使う
 // opts.call    : "担当者を呼ぶ" を出すか（既定 true）
-const BAND_H = 132, BAND_SLIM_H = 100;
 function bottomBandHtml(opts = {}) {
   const slim = !!opts.slim;
   const h = slim ? 74 : 92;
@@ -869,8 +878,8 @@ function showBandCallNotice(title, titleEn, sub, subEn, busy) {
     ${busy ? "" : `<button id="band-call-ok" style="margin-top:38px;min-height:96px;padding:0 70px;background:${T.dark};border:none;border-radius:18px;color:#fff;cursor:pointer;font-family:inherit">${bi("閉じる", "Close", { big: "30px", small: "17px", bigWeight: "700" })}</button>`}
   </div>`;
   sc.appendChild(el);
-  // マイクを開けない画面(暗証番号)の上では声にしない。重なりの語彙は下の画面より優先されるので、
-  // ここで登録すると暗証番号の画面でマイクが開いてしまう。タッチの「閉じる」はどの画面でも効かせる。
+  // マイクを開けない画面(語彙の無い画面)の上では声にしない。重なりの語彙は下の画面より優先されるので、
+  // ここで登録するとその画面でマイクが開いてしまう。タッチの「閉じる」はどの画面でも効かせる。
   const voice = busy || !(VCMD.base && VCMD.base.items.length) ? null : voiceCommandsLayer("notice", el);
   _bandCallVoice = voice;
   document.getElementById("band-call-ok")?.addEventListener("click", () => {
@@ -1082,7 +1091,15 @@ function showPending(deviceName, errMsg) {
       } else if (s?.device_name && s.device_name !== name) {
         showPending(s.device_name);  // 承認前に端末名が変わったら反映
       }
-    } catch {}
+    } catch (e) {
+      // 手元のトークンがもう使えない(登録し直しで作り直された等)。握りつぶすと、管理画面で
+      // 承認されてもこの画面から抜けられない。捨てて登録からやり直す(起動時と同じ扱い)。
+      if (e && e.message === "Invalid kiosk token") {
+        clearInterval(_pendingPoll); _pendingPoll = null;
+        localStorage.removeItem(TOKEN_KEY);
+        boot();
+      }
+    }
   }, 4000);
 }
 
@@ -1843,7 +1860,7 @@ ${errBanner}
       scanning = true; refreshCam(); scanLoop();
       initCardScan();   // 名刺の待ち受け。失敗しても QR はこのまま動く
     } catch {
-      if (!disposed) { errMsg = "カメラを起動できませんでした。ご予約のない方は「こちら」からお進みください。"; render(); }
+      if (!disposed) { errMsg = `カメラを起動できませんでした。「${welcomeCopy("kiosk_welcome_form_label", "画面で入力して受付する")}」からお進みください。`; render(); }
     }
   }
 
@@ -2139,7 +2156,10 @@ function showLocker(mode) {
   const token = localStorage.getItem(TOKEN_KEY);
   let lockers = [], available = 0, shownLockers = [];
   let view = "loading";      // loading | grid | openwait | pinset | pininput | result | error
+  // pinSrc[i] = その桁をどう入れたか("touch" | "voice")。声で入れた桁だけ丸の中に数字を出す。
+  let pinSrc = [];
   let sel = null, pin = "", err = "", busy = false, resultTitle = "", resultSub = "", resultTitleEn = "", resultSubEn = "";
+  let notice = null;         // 一覧の上に出す案内 {ja, en}(扉が開いていた・開けられなかった)
   let resultGuide = false;   // result 画面で扉ガイド(どの扉を開けるか)を出すか=解錠(受取)成功時のみ
   let idleId, resultTimer = null, lastView = "loading";
   let doorWatchId = null, doorOpenedSinceWait = false, doorAutoAdvancing = false;
@@ -2166,7 +2186,8 @@ function showLocker(mode) {
     doorOpenedSinceWait = false;
     doorAutoAdvancing = false;
   }
-  CLEANUPS.push(() => { clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); stopDoorWatch(); });
+  let disposed = false;      // 画面を離れた(錠の応答を待つ間に離れたら描かない)
+  CLEANUPS.push(() => { disposed = true; clearTimeout(idleId); if (resultTimer) clearTimeout(resultTimer); stopDoorWatch(); });
 
   async function getSelectedDoorClosedState() {
     if (!sel) return null;
@@ -2199,7 +2220,7 @@ function showLocker(mode) {
           doorAutoAdvancing = true;
           stopDoorWatch();
           await forceLockLocker(sel.door_number);
-          pin = "";
+          pin = ""; pinSrc = [];
           err = "";
           view = "pinset";
           render();
@@ -2232,14 +2253,17 @@ function showLocker(mode) {
                    : lockers;
       const gridTitle = isStore ? "手荷物一時保管" : isPickup ? "荷物受け取り" : "ロッカー";
       const gridTitleEn = isStore ? "Store your belongings" : isPickup ? "Pick up your item" : "Lockers";
+      // 扉が開いている空きの口は選べない。選べる口が 1 つも無ければ「空きがありません」にする。
+      const usableCount = shownLockers.filter(lockerUsableFree).length;
       const counter = isPickup
         ? bi("お預かり中", "Held", { big: "26px", small: "16px", gap: "10px", wrap: "align-items:center;display:inline-flex" }) + ` <b style="font-size:34px;color:${LOCKER_AMBER}">${shownLockers.length}</b>`
-        : bi("空き", "Available", { big: "26px", small: "16px", gap: "10px", wrap: "align-items:center;display:inline-flex" }) + ` <b style="font-size:34px;color:${bc}">${isStore ? shownLockers.length : available}</b> / ${bi("全", "Total", { big: "26px", small: "16px", gap: "6px", wrap: "align-items:center;display:inline-flex" })} ${lockers.length}`;
+        : bi("空き", "Available", { big: "26px", small: "16px", gap: "10px", wrap: "align-items:center;display:inline-flex" }) + ` <b style="font-size:34px;color:${bc}">${isStore ? usableCount : available}</b> / ${bi("全", "Total", { big: "26px", small: "16px", gap: "6px", wrap: "align-items:center;display:inline-flex" })} ${lockers.length}`;
       const emptyMsg = isStore ? "現在ご利用いただける空きロッカーがありません"
                      : isPickup ? "お預かり中のお荷物が見つかりません" : "ロッカーがありません";
       const emptyMsgEn = isStore ? "No empty lockers are available right now"
                      : isPickup ? "No items found" : "No lockers";
-      const body = shownLockers.length === 0
+      const noticeHtml = notice ? `<div style="margin:16px 80px 0;padding:14px 26px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.3);border-radius:12px;color:${T.urgent}">${bi(escHtml(notice.ja), escHtml(notice.en), { big: "26px", small: "18px", bigWeight: "600", dir: "column", align: "flex-start", gap: "4px" })}</div>` : "";
+      const body = shownLockers.length === 0 || (isStore && usableCount === 0)
         ? `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
           ${bi(emptyMsg, emptyMsgEn, { big: "40px", small: "24px", bigColor: T.ink, smallColor: T.sub, bigWeight: "600", dir: "column", align: "center", gap: "8px" })}
           ${bi("「← 戻る」でお戻りください", "Tap “← Back” to return", { big: "24px", small: "16px", bigColor: T.sub, smallColor: T.muted, dir: "column", align: "center", gap: "4px" })}
@@ -2248,16 +2272,18 @@ function showLocker(mode) {
     ${shownLockers.map((l, i) => {
       const used = l.occupied;
       const delivery = mode === "all" && used && !l.has_pin;   // 旧・置き配(PIN無し)は all モードのみ考慮
-      const accent = used ? LOCKER_AMBER : bc;
-      const stateJa = delivery ? "配達保管中" : (used ? "利用中" : "空き");
-      const stateEn = delivery ? "Held for pickup" : (used ? "In use" : "Available");
-      const cta = delivery ? "スタッフが対応します" : (used ? "暗証番号で解錠 →" : "タッチして開ける →");
-      const ctaEn = delivery ? "Staff will assist you" : (used ? "Enter PIN to unlock →" : "Touch to open →");
+      const doorOpen = lockerDoorOpen(l);                      // 扉が開いたままの空きの口(選べない)
+      const blocked = delivery || doorOpen;
+      const accent = doorOpen ? T.muted : used ? LOCKER_AMBER : bc;
+      const stateJa = doorOpen ? "扉が開いています" : delivery ? "配達保管中" : (used ? "利用中" : "空き");
+      const stateEn = doorOpen ? "Door open" : delivery ? "Held for pickup" : (used ? "In use" : "Available");
+      const cta = doorOpen ? "使用できません" : delivery ? "スタッフが対応します" : (used ? "暗証番号で解錠 →" : "タッチして開ける →");
+      const ctaEn = doorOpen ? "Not available" : delivery ? "Staff will assist you" : (used ? "Enter PIN to unlock →" : "Touch to open →");
       // 口数は 3 口 / 7 口 で変わる。**縦積みの順番＝実物の段の順番**なので並べ替えない。
       // 行が増えても崩れないよう、口数で寸法だけ落とす。
       const big = shownLockers.length <= 3;
       const doorH = lockerDoorHeightMm(l, shownLockers);
-      return `<button data-li="${i}" ${delivery ? "disabled" : ""} style="position:relative;display:flex;align-items:center;gap:${big ? 34 : 22}px;width:100%;flex:1;min-height:0;background:${used ? "#faf2e6" : "#eef4ee"};border:3px solid ${accent};border-radius:${big ? 24 : 16}px;padding:0 ${big ? 48 : 32}px;cursor:${delivery ? "not-allowed" : "pointer"};opacity:${delivery ? .6 : 1};text-align:left">
+      return `<button data-li="${i}" ${blocked ? "disabled" : ""} style="position:relative;display:flex;align-items:center;gap:${big ? 34 : 22}px;width:100%;flex:1;min-height:0;background:${doorOpen ? T.panel : used ? "#faf2e6" : "#eef4ee"};border:3px solid ${accent};border-radius:${big ? 24 : 16}px;padding:0 ${big ? 48 : 32}px;cursor:${blocked ? "not-allowed" : "pointer"};opacity:${blocked ? .6 : 1};text-align:left">
         <div style="width:${big ? 74 : 50}px;height:${big ? 74 : 50}px;flex-shrink:0;border-radius:50%;background:${accent};color:#fff;display:flex;align-items:center;justify-content:center;font-size:${big ? 38 : 27}px;font-weight:700">${i + 1}</div>
         <div style="width:${big ? 100 : 46}px;height:${big ? 132 : 60}px;border-radius:${big ? 12 : 8}px;background:${T.canvas};border:3px solid ${accent};position:relative;flex-shrink:0"><div style="position:absolute;top:50%;right:${big ? 14 : 7}px;transform:translateY(-50%);width:${big ? 9 : 6}px;height:${big ? 44 : 20}px;border-radius:5px;background:${accent}"></div></div>
         <div style="flex:1;min-width:0"><div style="font-size:${big ? 56 : 34}px;font-weight:700;color:${T.ink};letter-spacing:-1px">${escHtml(l.name)}</div>
@@ -2277,6 +2303,7 @@ function showLocker(mode) {
     <div>${bi(gridTitle, gridTitleEn, { big: "54px", small: "34px", bigColor: T.ink, smallColor: T.muted, bigWeight: "600", dir: "column", align: "flex-start", gap: "4px", wrap: "letter-spacing:-1.5px" })}</div>
     <div style="font-size:26px;color:${T.sub}">${counter}</div>
   </div>
+  ${noticeHtml}
   ${body}`);
     } else if (view === "openwait") {
       // 手荷物預け(保管)の開錠も受取と同じ「取っ手を押して開けて」の全画面ガイドに統一。
@@ -2307,7 +2334,15 @@ function showLocker(mode) {
       }
     } else { // pinset | pininput
       const isSet = view === "pinset";
-      const dots = Array.from({ length: 4 }, (_, i) => `<div style="width:30px;height:30px;border-radius:50%;border:2px solid ${i < pin.length ? bc : T.borderStrong};background:${i < pin.length ? bc : "transparent"}"></div>`).join("");
+      // 声で入れた桁は丸の中に数字を出す。声は聞き違いがあり、丸だけでは本人が確かめられない
+      // (設定で聞き違えると荷物を取り出せなくなる)。番号は声に出した時点で周りに聞こえている。
+      // タッチで入れた桁は従来どおり丸だけ。
+      const anyVoice = pinSrc.includes("voice");
+      const dotPx = anyVoice ? 56 : 30;
+      const dots = Array.from({ length: 4 }, (_, i) => {
+        const on = i < pin.length, shown = on && pinSrc[i] === "voice";
+        return `<div style="width:${dotPx}px;height:${dotPx}px;border-radius:50%;border:2px solid ${on ? bc : T.borderStrong};background:${on ? bc : "transparent"};color:#fff;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:700;font-family:'JetBrains Mono',monospace">${shown ? escHtml(pin[i]) : ""}</div>`;
+      }).join("");
       // **スマホ型の 3 列×4 段をやめ、6 列×2 段にする。** 縦 372px→238px になり、
       // 座位の到達範囲（画面の下 1/3）にキーパッド全体が収まる。画面は横に 1920px
       // 余っていて縦だけが足りないので、足りない方向に積み上げない。
@@ -2321,10 +2356,11 @@ function showLocker(mode) {
         ${bi(isSet ? "暗証番号を設定してください" : "暗証番号を入力してください", isSet ? "Set a PIN" : "Enter your PIN",
           { big: "46px", small: "22px", bigColor: T.ink, smallColor: T.muted, bigWeight: "600", dir: "column", align: "center", gap: "4px", wrap: "letter-spacing:-1px" })}
         <div style="font-size:22px;color:${T.muted};margin-top:6px">${escHtml(sel.name)} ・ 4桁 (4 digits)</div>
-        <div style="display:flex;gap:22px;justify-content:center;margin-top:18px">${dots}</div>
+        <div style="display:flex;gap:22px;justify-content:center;align-items:center;margin-top:18px">${dots}</div>
+        ${pinVoiceAvailable() ? `<div style="font-size:20px;color:${T.muted};margin-top:12px">${escHtml(LANG === "en" ? "You can also say the digits. Say one digit at a time and wait for its circle to fill. People nearby can hear them." : "声でも入力できます。1桁ずつ、丸が付くのを待って言ってください。番号は周りの人にも聞こえます")}</div>` : ""}
       </div>
       <div style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:0 80px">
-        ${err ? `<div style="padding:12px 24px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.3);border-radius:10px;color:${T.urgent};font-size:24px">${escHtml(err)}</div>` : ""}
+        ${err ? `<div style="padding:12px 24px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.3);border-radius:10px;color:${T.urgent};font-size:24px">${typeof err === "object" ? bi(escHtml(err.ja), escHtml(err.en), { big: "24px", small: "17px", dir: "column", align: "center", gap: "4px" }) : escHtml(err)}</div>` : ""}
       </div>
       <div style="flex:none;display:flex;justify-content:center;padding:0 80px 12px">
         <div style="display:grid;grid-template-columns:repeat(6,200px);gap:14px">${padHtml}</div>
@@ -2339,7 +2375,7 @@ function showLocker(mode) {
     // 間違えただけの人がモード選択からやり直しになっていた。
     bindBottomBand({
       onBack: () => {
-        if (view === "pininput" || view === "pinset") { pin = ""; err = ""; sel = null; view = "grid"; render(); return; }
+        if (view === "pininput" || view === "pinset") { pin = ""; pinSrc = []; err = ""; sel = null; notice = null; view = "grid"; render(); load(); return; }   // 扉の状態が変わっているかもしれないので一覧を取り直す
         cleanup(); go(mode === "all" ? "top" : "lockerMode");
       },
     });
@@ -2350,10 +2386,11 @@ function showLocker(mode) {
     if (view === "grid") {
       const doors = document.getElementById("lk-doors");
       if (doors) doors.addEventListener("click", e => {
-        const btn = e.target.closest("[data-li]"); if (!btn || btn.disabled) return;  // 配達保管中(disabled)は無視
+        const btn = e.target.closest("[data-li]"); if (!btn || btn.disabled || busy) return;  // 配達保管中・扉が開いている口(disabled)は無視
         resetIdle();
+        notice = null;
         sel = shownLockers[+btn.dataset.li];
-        if (sel.occupied) { pin = ""; err = ""; view = "pininput"; render(); }  // 利用中(PIN有)=荷物受け取り
+        if (sel.occupied) { pin = ""; pinSrc = []; err = ""; view = "pininput"; render(); }  // 利用中(PIN有)=荷物受け取り
         else { openEmpty(); }                                                    // 空き=手荷物一時保管(PIN設定)
       });
     } else if (view === "openwait") {
@@ -2362,7 +2399,7 @@ function showLocker(mode) {
         resetIdle();
         stopDoorWatch();
         await forceLockLocker(sel.door_number);
-        pin = "";
+        pin = ""; pinSrc = [];
         err = "";
         view = "pinset";
         render();
@@ -2395,9 +2432,19 @@ function showLocker(mode) {
       sc.querySelectorAll("[data-pk]").forEach(b => b.addEventListener("click", () => handleKey(b.dataset.pk)));
     }
     // 口は番号(いちばん〜ななばん)で選べる。空きの口は選ぶと錠が開くので、声で選んだときだけ
-    // 確認を挟む(vcLockerItems)。**暗証番号の画面ではマイクを開けない**(ロビーで番号を読み上げさせない)。
+    // 確認を挟む(vcLockerItems)。
+    // 暗証番号は 2026-11-06 利用者の指示で声でも入れられるようにした(以前はマイクを開けなかった)。
+    // 数字は続けて言われても受け付ける(sequence)が、**案内は「1桁ずつ」**。続けて言うと頭の桁が
+    // 聞き取れない語に吸われ、発話ごと捨てられてほぼ入らない(2026-11-17 合成音声で「いち に さん よん」が
+    // 不明・三・四。1桁ずつなら 4 桁とも通った)。どの数字かは音声サービスのログに残さない(secret)。
     if (view === "pinset" || view === "pininput") {
-      voiceCommands("lockerPin", [], { common: false, note: "暗証番号は画面で入力してください" });
+      if (pinVoiceAvailable()) {
+        voiceCommands("lockerPin", pinVoiceItems(),
+                      { onActivity: resetIdle, sequence: true, secret: true, note: "数字を1桁ずつ話すと入力できます" });
+      } else {
+        // 音声サービスが古い版(起こし直し待ち)。数字がログに残らないよう、従来どおりマイクを開けない。
+        voiceCommands("lockerPin", [], { common: false, note: "暗証番号は画面で入力してください" });
+      }
     } else if (view === "openwait") {
       // 「扉を閉めました」は錠をかけて暗証番号の設定へ進むので、声のときだけ確認を挟む。
       voiceCommands("lockerDoor", [
@@ -2416,25 +2463,75 @@ function showLocker(mode) {
     }
   }
 
-  function handleKey(k) {
+  // via = "touch" | "voice"。声のときは 4 桁そろった時点(と「けってい」)で、入った番号を
+  // 見せて「この番号でよいか」を確かめる(confirmPinByVoice)。タッチは従来どおり決定で即送る。
+  function handleKey(k, via = "touch") {
     if (busy) return;
     resetIdle();
     // 入力開始だけを記録する（押された数字は渡さない。ロガー側でも [data-pk] は除外）。
-    if (!pin) AN.inputStarted("locker_pin", "touch");
-    if (k === "⌫") { pin = pin.slice(0, -1); err = ""; render(); }
-    else if (k === "→") { if (pin.length === 4) submitPin(); }
-    else if (pin.length < 4) { pin += k; err = ""; render(); }  // 4桁入力後は「決定」待ち
+    if (!pin) AN.inputStarted("locker_pin", via);
+    if (via === "touch") vcRelisten();   // 押しながらつぶやいた数字が二重に入らないように
+    if (k === "⌫") { pin = pin.slice(0, -1); pinSrc = pinSrc.slice(0, pin.length); err = ""; render(); }
+    else if (k === "→") { if (pin.length === 4) { if (via === "voice") confirmPinByVoice(); else submitPin(); } }
+    else if (pin.length < 4) {   // 4桁入力後は「決定」待ち
+      pin += k; pinSrc = [...pinSrc.slice(0, pin.length - 1), via]; err = ""; render();
+      if (via === "voice" && pin.length === 4) confirmPinByVoice();
+    }
+  }
+
+  // 暗証番号の画面の声の選択肢。数字・消す・決定は続けて言える(seq)。数字は帯に聞こえた言葉を
+  // 出さない(mask)。数字のボタンには札を付けない(10 個並ぶと読めない。言い方は画面の一文で伝える)。
+  // 押す先は描き直しで作り直されるので要素でなくセレクタで渡す。
+  function pinVoiceItems() {
+    const digit = d => ({ ...vcItem(`pin.d${d}`, `[data-pk="${d}"]`, () => handleKey(d, "voice")),
+                          seq: true, mask: true, badge: false, hint: false });
+    return [
+      ..."0123456789".split("").map(digit),
+      { ...vcItem("pin.del", '[data-pk="⌫"]', () => handleKey("⌫", "voice")), seq: true },
+      { ...vcItem("pin.ok", '[data-pk="→"]', () => handleKey("→", "voice")), seq: true },
+    ];
+  }
+
+  // 声で入れた暗証番号を確かめる。番号(声で入れた桁は数字・タッチの桁は「●」)を見せて、
+  // はい=送る / いいえ=消して入れ直す。設定(pinset)で聞き違いのまま預けると取り出せなくなるので必ず挟む。
+  // 受け取り(pininput)は錠が開くので、ほかの「物が動く」操作と同じく声のときは確かめる。
+  function confirmPinByVoice() {
+    if (busy || pin.length !== 4) return;
+    const isSet = view === "pinset";
+    const shown = pin.split("").map((d, i) => pinSrc[i] === "voice" ? d : "●").join(" ");
+    vcConfirm({
+      title: isSet ? `暗証番号を「${shown}」にしますか？` : `「${shown}」で開けますか？`,
+      sub: isSet ? "「はい」でこの番号を設定します。「いいえ」で入れ直します"
+                 : "「はい」で扉の錠が開きます。「いいえ」で入れ直します",
+      onOk: () => { if (!busy && pin.length === 4 && (view === "pinset" || view === "pininput")) submitPin(); },
+      onNo: () => { if (busy) return; pin = ""; pinSrc = []; err = ""; render(); },
+      onActivity: resetIdle,
+    });
   }
 
   async function openEmpty() {
-    // 空きロッカー: GPIOで開錠 → 荷物投入待ち
-    pulseLocker(sel.door_number).catch(() => {});
+    // 空きロッカー: GPIOで開錠 → 荷物投入待ち。
+    // 開けられたかを確かめてから「解錠しました」を出す。扉が開いたままの口(409)は使わせず、
+    // 一覧を取り直して案内する。扉センサーの無い口は固定パルスの間(既定1秒)だけ待つ。
+    if (busy) return;
+    busy = true;
+    const r = await pulseLocker(sel.door_number);
+    busy = false;
+    if (disposed || view !== "grid") return;   // 待つ間に画面を離れた
+    if (!r || r.ok === false) {
+      AN.apiError("locker_open_failed", { fieldId: "locker_select" });
+      notice = r && r.status === 409 ? LOCKER_MSG.doorOpen : LOCKER_MSG.openFailed;
+      sel = null;
+      await load();
+      return;
+    }
     doorOpenedSinceWait = false;
     doorAutoAdvancing = false;
     view = "openwait"; render();
   }
 
   async function submitPin() {
+    const via = pinSrc.includes("voice") ? "voice" : "touch";
     busy = true; render();
     try {
       if (view === "pinset") {
@@ -2445,23 +2542,33 @@ function showLocker(mode) {
         resultTitle = "お預け完了"; resultSub = "暗証番号を設定しました。お受け取りの際に入力してください。";
         resultTitleEn = "Stored"; resultSubEn = "Your PIN has been set. Enter it when you come back to pick up your item.";
       } else {
+        // エージェントが照合→解錠→空きに戻すまでを一度に行い、解錠できなければ 503 で利用中のまま
+        // 残す(下の catch で案内)。unlocked が無いのは古いエージェント(錠を動かさない)なので、
+        // そのときだけ従来どおりここで開ける。
         const r = await devicePost(`/device/locker/${encodeURIComponent(sel.id)}/release`, { pin });
-        await pulseLocker((r && r.door_number) || sel.door_number);
+        if (!(r && r.unlocked === true)) await pulseLocker((r && r.door_number) || sel.door_number);
         resultGuide = true;
         resultTitle = "解錠しました"; resultSub = `${sel.name} の扉が開きました。扉の右側を押して開け、お荷物をお受け取りください。`;
       }
-      AN.inputCompleted("locker_pin", "touch");
+      AN.inputCompleted("locker_pin", via);
       AN.errorRecovered("locker_pin");   // 番号違いのあとに通ったら「修正完了」として残る
       busy = false; view = "result"; render();
     } catch (e) {
-      busy = false; pin = "";
+      busy = false; pin = ""; pinSrc = [];
       const msg = e && e.message ? e.message : "";
+      const status = e && e.status;
       // 記録するのはエラーコードだけ（入力された暗証番号は渡さない）。
-      AN.validationError("locker_pin",
-        msg === "invalid pin" ? "pin_mismatch"
+      if (status === 503) AN.apiError("locker_open_failed", { fieldId: "locker_pin" });
+      else AN.validationError("locker_pin",
+        status === 429 ? "pin_invalid"
+        : msg === "invalid pin" ? "pin_mismatch"
         : msg === "already occupied" ? "locker_occupied"
         : msg === "not occupied" ? "no_locker_available" : "unknown");
-      err = msg === "invalid pin" ? "暗証番号が違います。もう一度お試しください。"
+      // 429(続けて間違えた)・503(錠を動かせない)は日英の案内。どちらも「担当者を呼ぶ」へ誘導する
+      // (下部の帯にある)。暗証番号の画面のまま、入れ直しもできる。
+      err = status === 429 ? LOCKER_MSG.tooMany
+          : status === 503 ? LOCKER_MSG.unlockFailed
+          : msg === "invalid pin" ? "暗証番号が違います。もう一度お試しください。"
           : msg === "already occupied" ? "このロッカーは使用中です。"
           : msg === "not occupied" ? "このロッカーは空いています。"
           : ("処理に失敗しました：" + (msg || "もう一度お試しください"));
@@ -2472,8 +2579,10 @@ function showLocker(mode) {
   async function load() {
     try {
       const r = await deviceGet("/device/locker-list");
+      if (disposed) return;
       lockers = r.lockers || [];
-      available = r.available_count ?? lockers.filter(l => !l.occupied).length;
+      // 扉が開いたままの空きの口は数えない(選べないため)。
+      available = lockers.filter(lockerUsableFree).length;
       view = "grid"; render();
     } catch (e) {
       err = e && e.message ? e.message : ""; view = "error"; render();
@@ -2524,6 +2633,7 @@ function showDelivery() {
   let lockers = [], available = 0;
   let view = "loading";  // loading | choose | pick | openwait | sending | result | error
   let sel = null, err = "", resultTitle = "", resultSub = "", resultTitleEn = "", resultSubEn = "";
+  let notice = null, opening = false, disposed = false;   // notice = ロッカー選択の上に出す案内 {ja, en}
   let idleId, resultTimer = null, callId = null, callNotificationTimeoutSec = null, lastView = "loading";
   let countId = null, idleLeft = ST.kiosk_idle_timeout_sec;
   const paintIdle = () => paintIdleMeter("dl-idle", idleLeft, ST.kiosk_idle_timeout_sec);
@@ -2540,7 +2650,7 @@ function showDelivery() {
       paintIdle();
     }, 1000);
   }
-  CLEANUPS.push(() => { clearTimeout(idleId); clearInterval(countId); if (resultTimer) clearTimeout(resultTimer); });
+  CLEANUPS.push(() => { disposed = true; clearTimeout(idleId); clearInterval(countId); if (resultTimer) clearTimeout(resultTimer); });
 
   // 他の画面と同じく、押すものは下部の常設帯へ。上端は待機メーターだけ。
   const shell = (inner) => `<div style="width:1920px;height:1080px;background:${T.bg};display:flex;flex-direction:column;font-family:'Noto Sans JP',Inter,system-ui,sans-serif">
@@ -2561,6 +2671,7 @@ function showDelivery() {
       const noLocker = available <= 0;
       sc.innerHTML = shell(`
   <div style="padding:14px 80px 0;flex-shrink:0">${bi("配達方法をお選びください", "Please choose a delivery method", { big: "58px", small: "36px", bigColor: T.ink, smallColor: T.muted, bigWeight: "600", dir: "column", align: "flex-start", gap: "6px", wrap: "letter-spacing:-1.5px" })}</div>
+  ${notice ? `<div style="margin:14px 80px 0;padding:14px 26px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.3);border-radius:12px;color:${T.urgent}">${bi(escHtml(notice.ja), escHtml(notice.en), { big: "26px", small: "18px", bigWeight: "600", dir: "column", align: "flex-start", gap: "4px" })}</div>` : ""}
   <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:44px;padding:0 80px;min-height:0">
     <button id="dl-locker" ${noLocker ? "disabled" : ""} style="width:620px;height:520px;border-radius:32px;border:3px solid ${noLocker ? T.border : bc};background:${noLocker ? T.panel : "#eef4ee"};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;cursor:${noLocker ? "not-allowed" : "pointer"};opacity:${noLocker ? .55 : 1};text-align:center;padding:0 40px">
       <div style="width:150px;height:150px;border-radius:34px;background:${noLocker ? T.border : bc + "22"};color:${noLocker ? T.muted : bc};display:flex;align-items:center;justify-content:center"><div style="transform:scale(2.3)">${ICO.locker}</div></div>
@@ -2579,14 +2690,19 @@ function showDelivery() {
     } else if (view === "pick") {
       sc.innerHTML = shell(`
   <div style="padding:14px 80px 0;flex-shrink:0">${bi("ロッカーをお選びください", "Please choose a locker", { big: "52px", small: "22px", bigColor: T.ink, smallColor: T.muted, bigWeight: "600", dir: "column", align: "flex-start", gap: "4px", wrap: "letter-spacing:-1.2px" })}</div>
+  ${notice ? `<div style="margin:14px 80px 0;padding:14px 26px;background:${T.urgentBg};border:1px solid rgba(168,66,56,.3);border-radius:12px;color:${T.urgent}">${bi(escHtml(notice.ja), escHtml(notice.en), { big: "26px", small: "18px", bigWeight: "600", dir: "column", align: "flex-start", gap: "4px" })}</div>` : ""}
   <div id="dl-doors" style="flex:1;display:flex;flex-direction:column;gap:16px;padding:20px 80px 36px;min-height:0">
     ${lockers.map((l, i) => {
-      const used = l.occupied, accent = used ? LOCKER_AMBER : bc;
-      return `<button data-li="${i}" ${used ? "disabled" : ""} style="position:relative;display:flex;align-items:center;gap:40px;width:100%;flex:1;min-height:0;background:${used ? "#f4f1ea" : "#eef4ee"};border:3px solid ${accent};border-radius:22px;padding:0 52px;cursor:${used ? "not-allowed" : "pointer"};opacity:${used ? .55 : 1};text-align:left">
+      // 扉が開いたままの空きの口も選べない(前の人の途中で残った口かもしれない)。
+      const used = l.occupied, doorOpen = lockerDoorOpen(l), blocked = used || doorOpen;
+      const accent = doorOpen ? T.muted : used ? LOCKER_AMBER : bc;
+      const stateJa = doorOpen ? "扉が開いています" : used ? "利用中" : "空き";
+      const stateEn = doorOpen ? "Door open" : used ? "In use" : "Available";
+      return `<button data-li="${i}" ${blocked ? "disabled" : ""} style="position:relative;display:flex;align-items:center;gap:40px;width:100%;flex:1;min-height:0;background:${blocked ? "#f4f1ea" : "#eef4ee"};border:3px solid ${accent};border-radius:22px;padding:0 52px;cursor:${blocked ? "not-allowed" : "pointer"};opacity:${blocked ? .55 : 1};text-align:left">
         <div style="width:104px;height:140px;border-radius:12px;background:${T.canvas};border:3px solid ${accent};position:relative;flex-shrink:0"><div style="position:absolute;top:50%;right:14px;transform:translateY(-50%);width:9px;height:46px;border-radius:5px;background:${accent}"></div></div>
         <div style="flex:1"><div style="font-size:54px;font-weight:700;color:${T.ink}">${escHtml(l.name)}</div>
-          <div style="margin-top:10px;display:inline-block;padding:6px 18px;border-radius:999px;background:${accent};color:#fff">${bi(used ? "利用中" : "空き", used ? "In use" : "Available", { big: "24px", small: "16px", bigWeight: "600", gap: "8px" })}</div></div>
-        <div style="color:${accent};font-weight:600;flex-shrink:0">${used ? `<span style="font-size:24px">—</span>` : bi("このロッカーに入れる →", "Put item here →", { big: "24px", small: "16px", bigWeight: "600", dir: "column", align: "flex-end", gap: "1px" })}</div>
+          <div style="margin-top:10px;display:inline-block;padding:6px 18px;border-radius:999px;background:${accent};color:#fff">${bi(stateJa, stateEn, { big: "24px", small: "16px", bigWeight: "600", gap: "8px" })}</div></div>
+        <div style="color:${accent};font-weight:600;flex-shrink:0">${doorOpen ? bi("使用できません", "Not available", { big: "24px", small: "16px", bigWeight: "600", dir: "column", align: "flex-end", gap: "1px" }) : used ? `<span style="font-size:24px">—</span>` : bi("このロッカーに入れる →", "Put item here →", { big: "24px", small: "16px", bigWeight: "600", dir: "column", align: "flex-end", gap: "1px" })}</div>
       </button>`;
     }).join("")}
   </div>`);
@@ -2623,7 +2739,7 @@ function showDelivery() {
 
     bindBottomBand({
       onBack: () => {
-        if (view === "pick" || view === "openwait") { view = "choose"; render(); }
+        if (view === "pick" || view === "openwait") { notice = null; view = "choose"; render(); }
         else { cleanup(); go("top"); }
       },
     });
@@ -2632,12 +2748,12 @@ function showDelivery() {
 
     if (view === "choose") {
       const lk = document.getElementById("dl-locker");
-      if (lk && available > 0) lk.addEventListener("click", () => { resetIdle(); view = "pick"; render(); });
-      document.getElementById("dl-call").addEventListener("click", () => { resetIdle(); callStaff(); });
+      if (lk && available > 0) lk.addEventListener("click", () => { resetIdle(); notice = null; view = "pick"; render(); });
+      document.getElementById("dl-call").addEventListener("click", () => { resetIdle(); notice = null; callStaff(); });
     } else if (view === "pick") {
       document.getElementById("dl-doors").addEventListener("click", e => {
-        const btn = e.target.closest("[data-li]"); if (!btn || btn.disabled) return;
-        resetIdle(); sel = lockers[+btn.dataset.li]; openForDelivery();
+        const btn = e.target.closest("[data-li]"); if (!btn || btn.disabled || opening) return;
+        resetIdle(); notice = null; sel = lockers[+btn.dataset.li]; openForDelivery();
       });
     } else if (view === "openwait") {
       document.getElementById("dl-lock").addEventListener("click", () => { resetIdle(); lockDelivery(); });
@@ -2712,9 +2828,20 @@ function showDelivery() {
   }
 
   async function openForDelivery() {
-    // 開錠パルス(GPIO)は待たずに即「扉が開きました」へ。await すると開錠パルス長(LOCKER_PULSE_SEC)
-    // が経過するまで画面が固まる。通常ロッカーの openEmpty と挙動を揃える。
-    pulseLocker(sel.door_number).catch(() => {});
+    // 開けられたかを確かめてから「解錠しました」へ(通常ロッカーの openEmpty と同じ)。扉が
+    // 開いたままの口(409)は使わせず、一覧を取り直して案内する。扉センサーの無い口だけは
+    // 開錠パルス長(LOCKER_PULSE_SEC・既定1秒)のあいだ待つ。
+    opening = true;
+    const r = await pulseLocker(sel.door_number);
+    opening = false;
+    if (disposed || view !== "pick") return;   // 待つ間に画面を離れた
+    if (!r || r.ok === false) {
+      AN.apiError("locker_open_failed", { fieldId: "delivery_method" });
+      notice = r && r.status === 409 ? LOCKER_MSG.doorOpen : LOCKER_MSG.openFailed;
+      sel = null;
+      await load("pick");
+      return;
+    }
     view = "openwait"; render();
   }
   async function lockDelivery() {
@@ -2748,12 +2875,14 @@ function showDelivery() {
     }
   }
 
-  async function load() {
+  async function load(next = "choose") {
     try {
       const r = await deviceGet("/device/locker-list");
+      if (disposed) return;
       lockers = r.lockers || [];
-      available = r.available_count ?? lockers.filter(l => !l.occupied).length;
-      view = "choose"; render();
+      // 扉が開いたままの空きの口は数えない(選べないため)。0 なら「置き配」は選べない。
+      available = lockers.filter(lockerUsableFree).length;
+      view = next === "pick" && available > 0 ? "pick" : "choose"; render();
     } catch (e) {
       err = (e && e.message) || ""; view = "error"; render();
     }
@@ -3316,8 +3445,11 @@ function stopKioskAudio() {
 // 人が動く・物が動くもの(受付の送信・担当者を呼ぶ・配達の呼び出し・ロッカーの口・扉を閉めました)は、
 // 声で選んだときだけ「〜しますか？ はい/いいえ」の確認(vcConfirm)を挟む。雑談の誤爆で通知が
 // 飛んだり錠が動いたりしないように(設計案 §08「復唱→はい」)。タッチで押したときは従来どおりすぐ動く。
-// 声にしないのは 暗証番号(この画面ではマイクを開けない＝ロビーで番号を読み上げさせない)と、
-// 文字を打つキーボード(受付フォームの五十音・変換候補)だけ。
+// 声にしないのは 文字を打つキーボード(受付フォームの五十音・変換候補)だけ。
+// 暗証番号は 2026-11-06 利用者の指示で声でも入れられるようにした(以前はマイクを開けなかった)。
+// 数字は 1 つずつでも続けてでも言える(opts.sequence)。どの数字が言われたかはログに残さない
+// (opts.secret)。声で入れた桁だけ丸の中に数字を出し、4 桁そろったら「この番号でよいか」を確かめる
+// (声は聞き違いがあり、丸だけでは本人が確かめられない。設定で聞き違えると荷物を取り出せなくなる)。
 //
 // 各画面は描画のあとに voiceCommands(画面名, 選択肢) で「いま受け付ける言葉」を登録する。
 // 選択肢の target に要素を渡すと、当たったときにその要素を押したのと同じことが起き、
@@ -3332,6 +3464,8 @@ function stopKioskAudio() {
 // - 番号は語彙を絞ると「一番」しか当たらない(「二番」は数字が発話頭の雑音に吸われて「番」だけが
 //   残る)。ロッカーは口数が 7 まで増えるので番号で選ばせ、その画面だけ音声サービスが通常の認識で
 //   聞き直す(voiceCommands の opts.fallback)。ご用件の番号札は言葉のほうを頼りにする
+// - 暗証番号の数字(pin.*)は**1 字の漢数字**で書く(「に」と書くと助詞の言い添えと同じ音になる)。
+//   続けて言う画面では 1 語でも怪しければ発話ごと捨てる(voice/vosk_engine.match_sequence)
 // - label は札に出す言葉。**読み仮名(ひらがな)で書く**(「預ける」「置き配」は読みに迷う)。
 //   カタカナ語(ロッカー・キーボード)はそのまま。label どおりに言えば say のどれかに当たること
 // sayEn/labelEn = 英語モード(LANG==="en")で使う語彙。英語は最初から単語間にスペースが
@@ -3367,7 +3501,19 @@ const VOICE_VOCAB = {
   "locker.n7":           { "say": ["七番", "七番のロッカー"], "label": "ななばん", "sayEn": ["seven", "locker seven"], "labelEn": "seven" },
   "confirm.yes":         { "say": ["はい", "開ける"], "label": "はい", "sayEn": ["yes", "open"], "labelEn": "yes" },
   "confirm.no":          { "say": ["いいえ", "やめる"], "label": "いいえ", "sayEn": ["no", "cancel"], "labelEn": "no" },
-  "feedback.skip":       { "say": ["回答せず終了", "スキップ"], "label": "スキップ", "sayEn": ["skip"], "labelEn": "skip" }
+  "feedback.skip":       { "say": ["回答せず終了", "スキップ"], "label": "スキップ", "sayEn": ["skip"], "labelEn": "skip" },
+  "pin.d0":              { "say": ["ゼロ"], "label": "ゼロ", "sayEn": ["zero"], "labelEn": "zero" },
+  "pin.d1":              { "say": ["一"], "label": "いち", "sayEn": ["one"], "labelEn": "one" },
+  "pin.d2":              { "say": ["二"], "label": "に", "sayEn": ["two"], "labelEn": "two" },
+  "pin.d3":              { "say": ["三"], "label": "さん", "sayEn": ["three"], "labelEn": "three" },
+  "pin.d4":              { "say": ["四"], "label": "よん", "sayEn": ["four"], "labelEn": "four" },
+  "pin.d5":              { "say": ["五"], "label": "ご", "sayEn": ["five"], "labelEn": "five" },
+  "pin.d6":              { "say": ["六"], "label": "ろく", "sayEn": ["six"], "labelEn": "six" },
+  "pin.d7":              { "say": ["七"], "label": "なな", "sayEn": ["seven"], "labelEn": "seven" },
+  "pin.d8":              { "say": ["八"], "label": "はち", "sayEn": ["eight"], "labelEn": "eight" },
+  "pin.d9":              { "say": ["九"], "label": "きゅう", "sayEn": ["nine"], "labelEn": "nine" },
+  "pin.del":             { "say": ["消す"], "label": "けす", "sayEn": ["delete"], "labelEn": "delete" },
+  "pin.ok":              { "say": ["決定"], "label": "けってい", "sayEn": ["enter"], "labelEn": "enter" }
 };
 /* VOICE_VOCAB:END */
 
@@ -3383,6 +3529,7 @@ const VCMD = {
   running: false,     // サービス側で聞き取りが走っているはず
   notBefore: 0,       // この時刻までは開け直さない(タップ音・画面遷移を拾わない)
   kickTimer: null, pollTimer: null,
+  seqTimer: null,     // vcFireSeq の押すまでの待ち。タッチで押されたら止める(順番が入れ替わる・二重に入る)
   phase: "off",       // off | arming | listening | speaking | recognizing | heard
   level: 0, bars: [0, 0, 0, 0, 0, 0, 0, 0],
   heard: "",          // 当たった言葉(一瞬だけ出す)
@@ -3393,7 +3540,7 @@ const VCMD = {
   autoHoldUntil: 0,   // マイクが使えなかったとき、しばらく自動で入らない(毎回失敗を繰り返さない)
 };
 
-// 自動で音声モードに入ってよいか。待機画面・語彙の無い画面(暗証番号など)・上に案内が出ている間は入らない。
+// 自動で音声モードに入ってよいか。待機画面・語彙の無い画面(呼び出し中など)・上に案内が出ている間は入らない。
 function vcAutoWanted() {
   if (VCMD.on || VCMD.optOut || Date.now() < VCMD.autoHoldUntil) return false;
   if (!voiceCommandAvailable() || VOICE.status.command?.auto_start === false) return false;
@@ -3485,7 +3632,10 @@ function vcFit(items) {
 // 話しかけられるたびに呼ぶ(話すほうがタッチより遅いので、黙って待機へ落とさない)。
 // opts.note = 帯に出す一言(「受付する」は画面を押す、など声でできないことの案内)。
 // 共通語(もどる/やめる/まって/さいしょから)は、押す先が画面にあるものだけを足す。
-// opts.common === false の画面(暗証番号など)は共通語も入れない = マイクを開けない。
+// opts.common === false の画面は共通語も入れない(items も空ならマイクを開けない)。
+// opts.sequence = 続けて言われた選択肢を順に受け付ける(暗証番号)。続けて言ってよいのは
+// item.seq が true のものだけ(数字・消す・決定)。「もどる」などは単独で言われたときだけ動かす。
+// opts.secret = どれが言われたかを音声サービスのログに残さない・帯にも言葉を出さない(暗証番号)。
 function voiceCommands(screen, items, opts = {}) {
   const list = (items || []).filter(Boolean)
     // 押せない要素(空きロッカーが無いときの「置き配」など)は語彙に入れない。
@@ -3550,7 +3700,7 @@ function vcApply() {
     vcStopPoll();
     if (VCMD.on) {
       if (key) vcKick();
-      // 語彙が空になった(暗証番号・呼び出し中など)。次の画面が同じ tick で登録することが
+      // 語彙が空になった(呼び出し中など)。次の画面が同じ tick で登録することが
       // 多いので、少し待ってからまだ空なら止める(止めた直後に開け直す往復を避ける)。
       else setTimeout(() => { if (!VCMD.key) vcHalt(); }, 0);
     }
@@ -3566,11 +3716,27 @@ function vcKick() {
   VCMD.kickTimer = setTimeout(vcListen, Math.max(0, VCMD.notBefore - Date.now()));
 }
 
+// 暗証番号を声で入れられるか。音声サービスが sequence/secret を知っている版のときだけ
+// (古い版は secret を知らず、どの数字が言われたかをログへ書いてしまう)。
+function pinVoiceAvailable() {
+  return voiceCommandAvailable() && !!(VOICE.status.features && VOICE.status.features.sequence);
+}
+
+// タッチで押されたら、いま聞いている発話は捨てて聞き直す。暗証番号を押しながら
+// 数字をつぶやくと、押した数字と声の数字が二重に入るため。
+function vcRelisten() {
+  if (!VCMD.on || !VCMD.key) return;
+  vcHalt();
+  VCMD.notBefore = Math.max(VCMD.notBefore, Date.now() + 400);
+  vcKick();
+}
+
 function vcStopPoll() { if (VCMD.pollTimer) { clearInterval(VCMD.pollTimer); VCMD.pollTimer = null; } }
 
 // 聞き取りを止める(サービスへ取り消しを送る)。音声モードは抜けない。
 function vcHalt() {
   clearTimeout(VCMD.kickTimer); VCMD.kickTimer = null;
+  clearTimeout(VCMD.seqTimer); VCMD.seqTimer = null;
   VCMD.gen++;
   vcStopPoll();
   // 走っているか分からない(開け直しの依頼が行き違っている)こともあるので、必ず送る。
@@ -3594,6 +3760,8 @@ async function vcListen() {
       screen: act.screen,
       choices: act.items.map(it => ({ id: it.id, phrases: it.say })),
       fallback: !!(act.opts && act.opts.fallback),
+      sequence: !!(act.opts && act.opts.sequence),
+      secret: !!(act.opts && act.opts.secret),
       lang: LANG,
     });
   } catch (e) {
@@ -3606,7 +3774,7 @@ async function vcListen() {
     return;
   }
   if (gen !== VCMD.gen) {
-    // 依頼している間に画面が変わった。次の画面が語彙を持たない(暗証番号など)なら、
+    // 依頼している間に画面が変わった。次の画面が語彙を持たない(呼び出し中など)なら、
     // いま開けたマイクをすぐ閉じる(持っていれば次の依頼がサービス側で畳む)。
     if (!VCMD.on || !VCMD.key) voiceApi("POST", `/voice/session/${VCMD.sid}/cancel`).catch(() => {});
     return;
@@ -3643,7 +3811,12 @@ function vcPoll(gen) {
     if (s.phase === "done" && s.command) {
       VCMD.failures = 0;
       activity();
-      if (s.command.matched) { vcFire(s.command.matched); return; }
+      if (act && act.opts && act.opts.sequence) {
+        // 古い音声サービス(sequence を知らない)は matched で返すので、1 つの並びとして扱う。
+        const seq = Array.isArray(s.command.sequence) ? s.command.sequence
+                  : (s.command.matched ? [s.command.matched] : []);
+        if (seq.length && vcFireSeq(seq)) return;
+      } else if (s.command.matched) { vcFire(s.command.matched); return; }
       // どれにも当たらなかった。**画面は動かさない。**「もう一度お願いします」は語彙ごとに
       // 1 回だけ出す(何度も出すと、周りの会話を拾うたびに画面が騒がしくなる)。
       if (VCMD.missKey !== VCMD.key) { VCMD.missKey = VCMD.key; VCMD.missUntil = Date.now() + 2600; }
@@ -3708,6 +3881,45 @@ function vcFire(id) {
     // 画面が変わらなかった(「まって」など)ときは、同じ語彙で開け直す。
     if (VCMD.key === keyAtFire) vcKick();
   }, 260);
+}
+
+// 続けて言われた選択肢(暗証番号の「いち に さん よん」)を、言われた順に押す。
+// 続けて言ってよいのは item.seq のもの(数字・消す・決定)だけで、「もどる」などがほかの言葉と
+// 一緒に言われたら何もしない(言い直してもらう)。1 つだけなら vcFire と同じ。
+// 帯には何と聞こえたかを出さない(item.mask の言葉は「●」)。ボタンも光らせない(どの数字かが見える)。
+// 戻り値 false = 何もしなかった(呼び出し側が「もう一度お願いします」を出す)。
+function vcFireSeq(ids) {
+  const act = vcActive();
+  if (!act || vcBlocked()) return false;
+  const items = ids.map(id => act.items.find(i => i.id === id));
+  if (!items.length || items.some(it => !it)) return false;
+  if (items.length === 1 && !items[0].seq) { vcFire(ids[0]); return true; }
+  if (items.some(it => !it.seq)) return false;
+  VCMD.heard = items.map(it => it.mask ? "●" : it.label).join(" ");
+  VCMD.phase = "heard";
+  vcPaint();
+  playPon();
+  anEnsureSession("voice");
+  VCMD.notBefore = Date.now() + 700;
+  // 入ったら、次に聞き取れなかったときも「もう一度お願いします」を出す(暗証番号の画面は
+  // 桁が進んでも語彙が変わらないので、語彙ごとに 1 回の決まりだと 2 回目から黙ってしまう)。
+  VCMD.missKey = "";
+  const keyAtFire = VCMD.key;
+  clearTimeout(VCMD.seqTimer);
+  VCMD.seqTimer = setTimeout(() => {
+    VCMD.seqTimer = null;
+    VCMD.heard = "";
+    VCMD.phase = "listening";
+    if (!VCMD.on || VCMD.key !== keyAtFire) { vcPaint(); return; }
+    for (const it of items) {
+      try { if (it.run) it.run(); } catch {}
+      // 4 桁そろって確認が出た等、画面が変わったら残りは押さない。
+      if (VCMD.key !== keyAtFire) break;
+    }
+    vcPaint();
+    if (VCMD.key === keyAtFire) vcKick();
+  }, 260);
+  return true;
 }
 
 // auto: 画面が出たので自動で入った(来訪者は押していない)。
@@ -3795,7 +4007,7 @@ function vcStatusText() {
   return ["お話しください", note];
 }
 
-// 赤点が点いている = いまマイクが開いている。**開けていない画面(暗証番号など)では消す。**
+// 赤点が点いている = いまマイクが開いている。**開けていない画面(呼び出し中など)では消す。**
 function vcMicOpen() {
   const act = vcActive();
   return VCMD.on && !!(act && act.items.length) &&
@@ -3929,7 +4141,10 @@ function vcPaint() {
 // 受け取り(利用中の口)は暗証番号の画面へ進むだけなので確認しない。
 function vcLockerItems(rowsSel, list, onActivity) {
   const rows = Array.from(document.querySelectorAll(`${rowsSel} [data-li]`)).slice(0, 7);
+  // 押せない口(扉が開いたままの空きの口・利用中で選べない口)は声の選択肢に入れない。
+  // 番号(i)は上からの位置のままにする(「にばん」が画面の 2 番目を指すように)。
   return rows.map((row, i) => {
+    if (row.disabled) return null;
     const l = list[+row.dataset.li];
     const again = () => document.querySelector(`${rowsSel} [data-li="${row.dataset.li}"]`);
     if (!l || l.occupied) return vcItem(`locker.n${i + 1}`, row);
@@ -3939,7 +4154,7 @@ function vcLockerItems(rowsSel, list, onActivity) {
       onOk: () => { const el = again(); if (el && !el.disabled) el.click(); },
       onActivity,
     }));
-  });
+  }).filter(Boolean);
 }
 
 // 解錠ガイドの「扉を閉めました」。押すと錠をかけて次へ進む(物が動く)ので、声のときだけ確認を挟む。
@@ -3955,7 +4170,8 @@ function vcDoorClosedItem(target, sub, onActivity) {
 
 // 声で選んだ操作のうち、物が動くもの(ロッカーの解錠)の前に出す確認。はい/いいえは声でも押せる。
 // ボタンの文字は札(話す言葉)と同じにする。違うと「やめる」ボタンに「いいえ」の札が付いて迷う。
-function vcConfirm({ title, sub, okLabel = "はい", noLabel = "いいえ", onOk, onActivity }) {
+// onNo = 「いいえ」で閉じたあとにすること(暗証番号の確認では入れ直すために番号を消す)。
+function vcConfirm({ title, sub, okLabel = "はい", noLabel = "いいえ", onOk, onNo, onActivity }) {
   document.getElementById("vc-confirm")?.remove();
   const el = document.createElement("div");
   el.id = "vc-confirm";
@@ -3975,7 +4191,7 @@ function vcConfirm({ title, sub, okLabel = "はい", noLabel = "いいえ", onOk
   let closed = false;
   const close = () => { if (closed) return; closed = true; el.remove(); layer.pop(); };
   el.querySelector("#vc-cf-ok").addEventListener("click", () => { close(); onOk(); });
-  el.querySelector("#vc-cf-no").addEventListener("click", close);
+  el.querySelector("#vc-cf-no").addEventListener("click", () => { close(); if (onNo) onNo(); });
   layer.set([vcItem("confirm.yes", "#vc-cf-ok"), vcItem("confirm.no", "#vc-cf-no")], { onActivity });
   CLEANUPS.push(close);
 }
@@ -4015,8 +4231,7 @@ function showReception(initPurpose, initCard, from) {
   // 訪問先部署。管理画面「受付設定」で登録された部署のみ選択肢に出す。未登録なら部署欄は表示しない。
   const DEPARTMENT_LIST = Array.isArray(ST.department_list) ? ST.department_list.filter(Boolean) : [];
   // ご用件は選択形式。管理画面の来訪目的リストがあればそれを、無ければ既定の5択を使う。
-  const PURPOSE_OPTIONS = PURPOSE_LIST.length ? PURPOSE_LIST
-    : ["ご予約のあるお客様", "お打ち合わせ", "納品", "採用面接", "その他"];
+  const PURPOSE_OPTIONS = PURPOSE_LIST.length ? PURPOSE_LIST : BI_PURPOSE_DEFAULT_JA;
   const chipStyle = (sel) => `padding:16px 24px;border-radius:14px;border:2px solid ${sel ? bc : T.borderStrong};background:${sel ? bc : T.canvas};color:${sel ? "#fff" : T.ink};font-size:26px;font-weight:600;cursor:pointer;font-family:inherit;min-height:60px;display:flex;align-items:center;justify-content:center`;
   let submitting = false, errMsg = "";
   let cardNote = "";          // 名刺/音声から入力したときの案内(1行)
@@ -4352,7 +4567,7 @@ function showReception(initPurpose, initCard, from) {
       </button>
     </div>
     <!-- 右側：キーボード -->
-    <div id="kb-pane" style="display:flex;flex-direction:column;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:12px;padding:14px;overflow:hidden;font-size:0">${buildKeyboardHtml()}</div>
+    <div id="kb-pane" data-noev style="display:flex;flex-direction:column;background:${T.canvas};border:2px solid ${T.borderStrong};border-radius:12px;padding:14px;overflow:hidden;font-size:0">${buildKeyboardHtml()}</div>
   </div>
   <div style="padding:8px 40px 10px;display:flex;align-items:center;color:${T.muted};font-size:16px;flex-shrink:0">
     ${bi("右のキーボードで入力してください", "Use the keyboard on the right", { big: "16px", small: "13px", gap: "10px" })}
@@ -4964,6 +5179,10 @@ function showSuspended() {
 function showKioskSettings() {
   CURRENT_SCREEN = "kiosk-settings";
   cleanup();
+  // 設定画面は go() を通らずに開く。来訪者の匿名セッションが開いたままだと、スタッフの
+  // 操作(Wi-Fi パスワードの打鍵の回数など)がその来訪者の行動として記録されてしまうので、
+  // ここで閉じる。画面全体にも data-noev を付けて記録の対象から外してある。
+  try { if (AN.isActive()) AN.endSession(AN_END_REASON || "abandoned"); AN_END_REASON = null; } catch {}
 
   const C = {
     canvas:"#fffefb", paper:"#f5f3ee", chalk:"#e8e4dc", ash:"#d4cfc7",
@@ -5261,6 +5480,13 @@ function showKioskSettings() {
       note: `GPIO のライブラリ(gpiozero/lgpio)が入っていないため、${parts}は実際の配線を読み書きしていません(ドアは常に「開放中」と出ます)。端末の mokuture-plus フォルダで git fetch && git reset --hard origin/master を実行し、続けて bash kiosk_agent/install.sh を実行してください。直らないときの原因は kiosk_agent/.install-pip.log に出ます` };
   }
 
+  // 来訪者の画面には出ているのに、電子錠のつなぎ先が登録されていない口の案内
+  // (「ロッカーの口数」カードとデバイスチェックで共通)。古い .env の LOCKER_PINS_JSON={} など。
+  function locksMissingText(list) {
+    if (!list || !list.length) return "";
+    return `ロッカー ${list.join("・")}番は、電子錠のつなぎ先が登録されていないため開けられません(受付画面には「空き」と表示されます)。この端末の設定ファイル kiosk_agent/.env の LOCKER_PINS_JSON に、口の番号と電子錠のピン番号を書いてから端末を再起動してください。標準の配線は {"1": 14, "2": 15, "3": 18} です`;
+  }
+
   function updateDevicesUI(status) {
     const gv = gpioView(status);
     const gb = document.getElementById("dc-gpio-badge");
@@ -5277,7 +5503,9 @@ function showKioskSettings() {
     const rl = document.getElementById("dc-relaylist");
     if (rl) {
       const relays = status.relays || status.lockers || [];
-      rl.innerHTML = relays.length ? relays.map(relayRowHTML).join('') : `<div style="color:${C.stone};font-size:15px">リレー設定がありません</div>`;
+      const miss = locksMissingText(status.locks_missing);
+      const missHTML = miss ? `<div style="color:${C.redDk};font-size:15px;line-height:1.6;margin-bottom:10px">${miss}</div>` : '';
+      rl.innerHTML = missHTML + (relays.length ? relays.map(relayRowHTML).join('') : (miss ? '' : `<div style="color:${C.stone};font-size:15px">リレー設定がありません</div>`));
     }
   }
 
@@ -5414,6 +5642,23 @@ function showKioskSettings() {
   }
   CLEANUPS.push(stopDeviceCheck);
 
+  // 無操作で待機画面へ戻す。スタッフが開いたまま離れると、来訪者が Wi-Fi・ロッカーの全解除・
+  // 登録解除に触れてしまう。タッチ・クリック・キー入力のたびに数え直す(画面の作り直しでは消えない
+  // よう document に付け、画面を離れるときに CLEANUPS で外す)。
+  const KS_IDLE_MS = 3 * 60 * 1000;
+  let ksIdleId = null;
+  const ksIdleReset = () => {
+    clearTimeout(ksIdleId);
+    ksIdleId = setTimeout(() => { if (CURRENT_SCREEN === "kiosk-settings") { stopDeviceCheck(); go("idle"); } }, KS_IDLE_MS);
+  };
+  const KS_IDLE_EVENTS = ["pointerdown", "click", "keydown", "touchstart"];
+  KS_IDLE_EVENTS.forEach(ev => document.addEventListener(ev, ksIdleReset, { capture: true, passive: true }));
+  CLEANUPS.push(() => {
+    clearTimeout(ksIdleId);
+    KS_IDLE_EVENTS.forEach(ev => document.removeEventListener(ev, ksIdleReset, { capture: true }));
+  });
+  ksIdleReset();
+
   // 電子錠トグル/開錠テストは innerHTML 再描画で作り直されるため、sc への委譲で捕捉する
   onSc("click", (e) => {
     const el = e.target.closest("[data-relay-action]");
@@ -5490,7 +5735,7 @@ function showKioskSettings() {
   function render() {
     const isDev = activeTab === "devices";
     sc.innerHTML = `
-<div id="ks-root" style="width:1920px;height:1080px;background:${C.canvas};display:flex;flex-direction:column;font-family:Inter,'Noto Sans JP',system-ui,sans-serif;user-select:none">
+<div id="ks-root" data-noev style="width:1920px;height:1080px;background:${C.canvas};display:flex;flex-direction:column;font-family:Inter,'Noto Sans JP',system-ui,sans-serif;user-select:none">
 
   <div style="padding:32px 80px 0;display:flex;align-items:center;gap:20px">
     <div>
@@ -5613,6 +5858,7 @@ function showKioskSettings() {
   function lockerConfigCardHTML() {
     const cur  = lockerCfg && lockerCfg.count;
     const opts = (lockerCfg && lockerCfg.options) || [{count:3}, {count:7}];
+    const lockMiss = locksMissingText(lockerCfg && lockerCfg.locks_missing);
     const btns = opts.map(o => {
       const active = o.count === cur;
       return `<button data-lcount="${o.count}" style="flex:1;display:flex;align-items:center;justify-content:center;gap:10px;padding:24px 0;border-radius:16px;border:2px solid ${active?C.moss:C.ash};background:${active?C.mossSoft:C.canvas};color:${active?C.mossDk:C.ink};font-size:30px;font-weight:700;cursor:pointer;font-family:inherit">${o.count}口${active?SVG.check:''}</button>`;
@@ -5628,7 +5874,8 @@ function showKioskSettings() {
         </div>
       </div>
       <div style="display:flex;gap:16px">${btns}</div>
-      <div id="ks-lcount-msg" style="font-size:14px;color:${C.graphite};min-height:20px;margin-top:12px">${settingsInitLoading ? "設定を読み込み中..." : ""}</div>
+      <div id="ks-lcount-msg" style="font-size:14px;color:${C.graphite};min-height:20px;margin-top:12px">${settingsInitLoading ? "設定を読み込み中..." : (lockerCfg && lockerCfg.chosen === false ? `口数はまだ選ばれていません。いまは${cur}口として動いています。設置したロッカーに合わせて選んでください` : "")}</div>
+      ${lockMiss ? `<div style="font-size:14px;color:${C.redDk};line-height:1.6;margin-top:8px">${lockMiss}</div>` : ''}
     </div>
   </div>`;
   }
@@ -5922,7 +6169,19 @@ function showKioskSettings() {
       try {
         const r = await devicePost("/device/lockers/open-all");
         const doors = (r && r.door_numbers) || [];
-        for (const d of doors) { await pulseLocker(d); }
+        // 新しいエージェントは錠まで動かして driven=true と、動かせなかった扉(failed)を返す。
+        // 古いエージェントは状態を消すだけなので、ここで 1 口ずつ開ける。
+        let failed = Array.isArray(r && r.failed) ? r.failed : [];
+        if (!(r && r.driven === true)) {
+          failed = [];
+          for (const d of doors) { const p = await pulseLocker(d); if (!p || p.ok === false) failed.push(d); }
+        }
+        if (failed.length) {
+          msg.style.color = "#c0392b";
+          msg.textContent = `利用状態はリセットしました。${failed.join("・")}番の錠を動かせませんでした（配線・電子錠を確認してください）。`;
+          ok.disabled = false; ok.textContent = "もう一度";
+          return;
+        }
         msg.style.color = "#2e5c32";
         msg.textContent = `全 ${r && r.count != null ? r.count : doors.length} 台を解錠しました。`;
         ok.textContent = "完了";
@@ -6282,8 +6541,12 @@ async function boot() {
   try {
     CFG = await apiGet("/config");
   } catch (e) {
-    sc.innerHTML = `<div style="width:1920px;height:1080px;background:#0a0806;display:flex;align-items:center;justify-content:center"><div style="color:#f88;font-size:16px;text-align:center">エージェントに接続できません<br>${escHtml(e.message)}</div></div>`;
-    rescale(); return;
+    sc.innerHTML = `<div style="width:1920px;height:1080px;background:#0a0806;display:flex;align-items:center;justify-content:center"><div style="color:#f88;font-size:16px;text-align:center">エージェントに接続できません<br>${escHtml(e.message)}<br>5秒後にもう一度つなぎます</div></div>`;
+    rescale();
+    // エージェントの再起動(OTA 適用直後など)と重なっただけのことがあるので、つながるまで試す。
+    // 試さないと、この画面のまま誰かが再読み込みするまで受付できない。
+    setTimeout(() => boot(), 5000);
+    return;
   }
 
   // 実機でしか動かないハード(GPIO/PIR/カメラ/音量/WiFi)は agent 側で自動モックされる

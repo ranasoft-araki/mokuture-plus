@@ -93,8 +93,8 @@ _PHRASE_MAX = 16
 
 # 数字の語(上の 5)。合格ラインを command.number_min_conf まで下げる。言語ごと。
 _NUMERAL_WORDS: dict[str, frozenset[str]] = {
-    "ja": frozenset("一二三四五六七八九十") | {"一番"},
-    "en": frozenset({"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"}),
+    "ja": frozenset("一二三四五六七八九十") | {"一番", "ゼロ"},
+    "en": frozenset({"zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"}),
 }
 # 選択肢の語と同じ音の言い添え。並べると信頼度が割れる(上の 2)ので、その語が選択肢に
 # あるときは言い添えから外す(ロッカーの「二 番」と言い添えの「に」)。言語ごと。
@@ -478,6 +478,50 @@ def match_command(words: list[tuple], table: list[tuple[str, tuple[str, ...]]], 
     return cid, round(max(c for _, _, i, c in kept if i == cid), 3), None
 
 
+def match_sequence(words: list[tuple], table: list[tuple[str, tuple[str, ...]]], min_conf: float, *,
+                   number_min_conf: float | None = None,
+                   lang: str = "ja") -> tuple[list[str] | None, float | None, str | None]:
+    """1 発話に続けて言われた選択肢を、言われた順に返す(暗証番号の「いち に さん よん」)。
+
+    (選択肢 id の並び, いちばん低い信頼度, 外れた理由)。
+
+    **1 語でも怪しければ発話ごと捨てる**(partial)。拾える語だけ拾うと、桁が黙って
+    抜けたまま番号が入る(合成音声の実測で「いち に なな ろく」の頭 2 桁が [unk] に
+    吸われ「なな ろく」だけが残った)。だから選択肢にも言い添えにも当たらない語が
+    1 つでもあれば([unk]・合格ラインに届かない数字)、前後どこにあっても捨てて言い直して
+    もらう。「えーと、いち」も捨てる(頭の [unk] が吸われた数字かどうか見分けられない)。
+    ただし最初に当たった語が数字でなければ(「えーと、もどる」「えーと、けってい」)、頭の
+    [unk] はほかの画面と同じく command.leading_unk_sec まで許す(吸われた数字があっても、
+    その後ろの「もどる」「けってい」の意味は変わらない)。
+    数字の合格ラインは command.sequence_number_min_conf(暗証番号は数字だけの語彙なので、
+    ほかの画面より下げても取り違えが増えなかった / defaults.py)。
+    """
+    if number_min_conf is None:
+        number_min_conf = float(settings.get("command.sequence_number_min_conf"))
+    numeral_words = _NUMERAL_WORDS.get(lang, frozenset())
+    kept = sorted(_find_phrases(words, table, min_conf, number_min_conf, numeral_words))
+    if not kept:
+        return None, None, "unmatched"
+    covered = {i for lo, hi, _, _ in kept for i in range(lo, hi)}
+    # 言い添えは**句がまるごと続けて出たときだけ**許す。語にばらして許すと、「お 願い し ます」の
+    # 「し」だけが返ったとき(四を「し」と言った等)に桁が黙って抜ける。選択肢と同じ音の言い添え
+    # (「二」がある画面の「に」)は語彙にも入れていないので、ここでも許さない。
+    choice_words = {w for _, t in table for w in t}
+    same_sound = _SAME_SOUND.get(lang, {})
+    filler_table = [("_filler", t) for t in _filler_seqs(lang)
+                    if not (len(t) == 1 and same_sound.get(t[0]) in choice_words)]
+    filled = {i for lo, hi, _, _ in _find_phrases(words, filler_table, 0.0) for i in range(lo, hi)}
+    first = kept[0][0]
+    # 頭の [unk] を許すのは、発話に数字が 1 つも無いときだけ(「えーと、もどる」)。
+    # 「[unk] 消す 一」の [unk] が吸われた数字なら、「消す」が消す桁がずれる。
+    lead_ok = (not any(w[0] in numeral_words for w in words)
+               and _unknown_sec(words, 0, first) < float(settings.get("command.leading_unk_sec")))
+    if any(i not in covered and i not in filled and not (lead_ok and i < first and w[0] == "[unk]")
+           for i, w in enumerate(words)):
+        return None, None, "partial"
+    return [k[2] for k in kept], round(min(k[3] for k in kept), 3), None
+
+
 def _as_unknown(lang: str, words: list[tuple], table: list[tuple[str, tuple[str, ...]]]) -> list[tuple]:
     """通常の認識の結果のうち、選択肢にも言い添えにも無い語を [unk] に置き換える。
 
@@ -521,12 +565,15 @@ def _decode(rec, pcm: bytes) -> list[tuple]:
 
 def recognize_command(seg: AudioSegment, choices: list[tuple[str, list[str]]],
                       min_conf: float | None = None, *, lang: str = "ja",
-                      fallback: bool = False) -> CommandMatch:
+                      fallback: bool = False, sequence: bool = False) -> CommandMatch:
     """画面の選択肢の語彙だけで 1 発話を decode し、どの選択肢かを返す。
 
     lang は表示言語(LANG)に追従するだけで、発話から自動判定はしない。
     fallback=True の画面(番号で選ぶロッカー)は、語彙を絞って外れたときだけ通常の認識で
     聞き直す(上の 3)。聞き直しの結果も同じ照合(続けて現れたか・文の一部でないか)に通す。
+    sequence=True の画面(暗証番号)は、続けて言われた選択肢を順に `sequence` へ返す
+    (match_sequence)。matched は使わない。聞き直しはしない(通常の認識で聞き直すと
+    取り違えが増えた。実測は VOICE_COMMAND.md)。
 
     認識した語そのもの(words)は調整用のスクリプトのためだけに持たせる。画面へも
     ログへも出さない(来訪者が何を話したかは残さない)。
@@ -561,6 +608,11 @@ def recognize_command(seg: AudioSegment, choices: list[tuple[str, list[str]]],
                     rec.Reset()
             except Exception:
                 pass
+    if sequence:
+        seq, conf, reason = match_sequence(words, table, floor, lang=lang)
+        return CommandMatch(matched=None, confidence=conf, reason=reason,
+                            recognition_ms=int((time.monotonic() - started) * 1000), words=words,
+                            sequence=seq)
     matched, conf, reason = match_command(words, table, floor, lang=lang)
 
     if matched is None and reason != "ambiguous" and fallback:

@@ -3,9 +3,12 @@
 Flow:
   1. On startup (after 15 s) and every NORMAL_INTERVAL seconds, fetch bundle manifest
      (also on demand: POST /update-check from the device-check screen).
-  2. Hash the files on disk against the manifest; download the ones that differ to
-     STAGING_DIR. (Compared by content, not by the recorded version, so a device whose
-     files were reverted behind OTA's back is detected and repaired.)
+  2. Hash the files on disk against the manifest; download the ones that differ to a
+     fresh per-attempt staging directory (tempfile, under STAGING_DIR if set). (Compared
+     by content, not by the recorded version, so a device whose files were reverted
+     behind OTA's back is detected and repaired.) Only paths listed in MANAGED_FILES are
+     considered, and every downloaded file must match the manifest hash, otherwise the
+     whole attempt is discarded.
   3. Set self.pending so /update-status reports ready=True.
   4. kiosk.html polls /update-status; when screen is idle (or force=True), calls
      POST /apply-update which triggers this module's apply().
@@ -17,14 +20,16 @@ the backend) and .bundle_info.json (the commit it came from and when it was appl
 shown on the device-check screen). Both are per-device and gitignored.
 """
 
+import ast
 import asyncio
 import hashlib
 import json
 import logging
 import os
 import shutil
+import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import httpx
 
@@ -34,7 +39,10 @@ from state import get_device_token
 log = logging.getLogger(__name__)
 
 _APP_DIR    = Path(__file__).parent
-STAGING_DIR = Path("/tmp/mokuture-staging")
+# 取り寄せたファイルの一時置き場の親。None ならシステムの一時ディレクトリ。
+# 取り寄せ 1 回ごとに tempfile で新しいディレクトリを作る(決まった名前の共有フォルダに
+# 書くと、前の取り寄せの残りや別の取り寄せと混ざりうる)。
+STAGING_DIR: Path | None = None
 _VERSION_FILE = _APP_DIR / ".bundle_version"
 _INFO_FILE    = _APP_DIR / ".bundle_info.json"
 
@@ -43,6 +51,8 @@ MANAGED_FILES = [
     "static/kiosk.html",
     "static/analytics.js",   # 行動ログ(匿名)のロガー。kiosk.html が <script> で読む(再起動不要)
     "static/tap.mp3",   # タップ操作音の音源(バイナリ)。再起動不要でコピーのみ
+    "static/jsqr.min.js",          # QR 読み取り。kiosk.html が /jsqr.min.js で読む
+    "static/device-control.html",  # /device-control の操作パネル
     "main.py",
     "updater.py",
     "gpio.py",
@@ -55,6 +65,10 @@ MANAGED_FILES = [
     "analytics.py",
     "sysinfo.py",
     "watchdog.py",
+    # かな漢字変換(GET /device/convert)。main.py が起動時に import するので必ず一緒に配る。
+    # 全面辞書 SKK-JISYO.L(4.5MB)は中身を変えないので配らない(導入時の git clone で入る)。
+    "kana_kanji.py",
+    "kana_dict.tsv",
     # 名刺読み取り(QR無し来訪者の受付フォーム自動入力)。Python の変更は再起動が要る。
     # 依存パッケージ(opencv/onnxruntime)と OCR モデルは OTA では配れない(サイズと
     # ビルドの都合)。それらは install.sh / scripts/fetch_ocr_models.py の担当で、
@@ -92,9 +106,6 @@ MANAGED_FILES = [
     "card/ocr/base.py",
     "card/ocr/paddle_onnx.py",
     "card/ocr/tesseract.py",
-    # 辞書は運用中に現場で追記されうる。OTA で上書きされると消えてしまうため
-    # 配信対象に入れない(初期セットは install / git pull で入る)。
-    #
     # 声で操作する(実験導入)。**別プロセス**(mokuture-voice.service / 127.0.0.1:8181)で
     # 動くが、コードはここに置いてあるので OTA で配れる。エージェント本体の再起動では
     # 音声サービスは新しいコードにならないため、音声サービス側が自分のソースの
@@ -116,7 +127,7 @@ MANAGED_FILES = [
     # 入っている版を無言で上書きしたくないため)。英語は新規機能で未導入の端末が大半な
     # ので、OTA で自動的に届けて手作業のインストールを不要にする。Git LFS 管理
     # (.gitattributes の voice_models/*.zip)。backend 側は zip のまま配り、展開は
-    # 端末の voice/server.py 起動時(fetch_voice_models.extract_vosk)に任せる。
+    # 端末の音声サービス(voice/vosk_engine.py の _ensure_extracted)に任せる。
     "voice_models/vosk-model-en-us-0.22-lgraph.zip",
     # 端末ごとに現場で調整する設定(voice_input.yaml / staff_readings.yaml)は
     # 上書きしたくないので配信対象に入れない。
@@ -124,7 +135,9 @@ MANAGED_FILES = [
 
 # Changing these files requires a service restart to take effect.
 RESTART_FILES = {"main.py", "updater.py", "gpio.py", "sync.py", "state.py", "config.py", "locker_store.py",
-                 "analytics.py", "sysinfo.py", "watchdog.py"}
+                 "analytics.py", "sysinfo.py", "watchdog.py",
+                 # kana_dict.tsv は kana_kanji.py が読み込んで覚えるので、辞書だけ変わっても再起動する。
+                 "kana_kanji.py", "kana_dict.tsv"}
 # card/ 配下はすべて Python なので、変更があれば再起動する（下の apply() が判定）。
 # voice/ は別プロセスなので**ここには入れない**。エージェントを再起動しても音声
 # サービスは入れ替わらず、音声サービス側が自分で気づいて再起動する。
@@ -198,6 +211,96 @@ def _diff(files: list[dict]) -> list[str]:
     return [f["path"] for f in files if _local_hash(f["path"]) != f["hash"]]
 
 
+def _content_hash(data: bytes) -> str:
+    """manifest の hash と同じ算法(backend の _collect_bundle と同じ sha256 の先頭16桁)。"""
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+def _is_safe_rel(rel: object) -> bool:
+    """アプリのディレクトリの中を指す相対パスか(絶対パス・.. ・ドライブ指定などは不可)。"""
+    if not isinstance(rel, str) or not rel or "\\" in rel or "\x00" in rel:
+        return False
+    parts = rel.split("/")   # PurePosixPath は "./" や "//" を黙って畳むので、文字列のまま見る
+    if PurePosixPath(rel).is_absolute() or any(part in ("", ".", "..") for part in parts) or ":" in parts[0]:
+        return False
+    try:
+        (_APP_DIR / rel).resolve().relative_to(_APP_DIR.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+def _accepted_files(files: object, allowed: set[str]) -> list[dict]:
+    """manifest の一覧から、配信対象(allowed)に完全一致し安全なパスの項目だけを残す。
+    それ以外(.env・端末ごとの状態ファイル・アプリの外など)は取り寄せも書き込みもしない。"""
+    out: list[dict] = []
+    for f in files if isinstance(files, list) else []:
+        if not isinstance(f, dict):
+            continue
+        rel, h = f.get("path"), f.get("hash")
+        if rel in allowed and isinstance(h, str) and h and _is_safe_rel(rel):
+            out.append(f)
+    return out
+
+
+def _managed_files_in(source: bytes) -> list[str]:
+    """届いた updater.py の MANAGED_FILES(文字列のリスト)を、実行せずに読み取る。
+
+    配信対象を増やした版では、新しい main.py が import するファイルが「いま動いている古い
+    updater の MANAGED_FILES」には無い。古い一覧だけで絞ると、そのファイルを取り寄せずに
+    main.py だけ入れ替えて、起動できなくなる。同じ配信で届いた(ハッシュ照合済みの)
+    updater.py の一覧も配信対象として認める。読み取れなければ空。"""
+    try:
+        tree = ast.parse(source.decode("utf-8"))
+    except (UnicodeDecodeError, SyntaxError, ValueError):
+        return []
+    for node in tree.body:
+        targets: list = []
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        if any(isinstance(t, ast.Name) and t.id == "MANAGED_FILES" for t in targets):
+            try:
+                items = ast.literal_eval(value)
+            except (ValueError, SyntaxError):
+                return []
+            return [x for x in items if isinstance(x, str)] if isinstance(items, list) else []
+    return []
+
+
+def _drop_staging(pending: dict | None) -> None:
+    """適用待ちの版の一時ディレクトリを消す。"""
+    path = (pending or {}).get("_staging")
+    if path:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _staging_parent() -> Path:
+    return Path(STAGING_DIR) if STAGING_DIR is not None else Path(tempfile.gettempdir()) / "mokuture-staging"
+
+
+def _new_staging_dir(keep: str | None = None) -> Path:
+    """取り寄せ1回ぶんの一時ディレクトリを作る。
+
+    置き場所は決まった親の下にまとめ、作る前に**前の回の残りを消す**(keep=いま適用待ちの
+    版は残す)。取り寄せの途中でエージェントが止められたり、適用前に再起動したりすると
+    一時ディレクトリが残る。声の英語モデルが入ると1回で約130MBあり、/tmp がメモリ上に
+    ある端末ではそのままメモリを食い続ける。"""
+    parent = _staging_parent()
+    parent.mkdir(parents=True, exist_ok=True)
+    keep_path = Path(keep).resolve() if keep else None
+    for child in parent.iterdir():
+        try:
+            if keep_path is not None and child.resolve() == keep_path:
+                continue
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+        except OSError:
+            pass
+    return Path(tempfile.mkdtemp(prefix="attempt-", dir=str(parent)))
+
+
 def ota_enabled() -> bool:
     # 端末は Raspberry Pi(Linux)だけ。Windows などの開発機で本体を起動すると、master の版と
     # 違う手元のファイル(未コミットの kiosk.html や voice/*.py)を取り寄せ、待機画面へ戻った
@@ -221,7 +324,8 @@ class BundleUpdater:
     # ── Public state ──────────────────────────────────────────────────────────
 
     def is_ready(self) -> bool:
-        return self._pending is not None
+        # 次の版を取り寄せている間(ロック中)は「適用できる」と見せない(待機画面が適用を頼んで待たされないように)。
+        return self._pending is not None and not self._lock.locked()
 
     def is_force(self) -> bool:
         return self._pending is not None and bool(self._pending.get("force"))
@@ -308,7 +412,13 @@ class BundleUpdater:
         manifest = resp.json()
         remote_ver = manifest["version"]
         force = manifest.get("force", False)
-        files = manifest.get("files") or []
+        raw_files = manifest.get("files") or []
+        # 配信対象(MANAGED_FILES)に完全一致するパスだけを扱う。それ以外は比べも取り寄せもしない。
+        files = _accepted_files(raw_files, set(MANAGED_FILES))
+        ignored = [f.get("path") if isinstance(f, dict) else f for f in raw_files
+                   if not (isinstance(f, dict) and f in files)]
+        if ignored:
+            log.warning(f"[updater] ignoring {len(ignored)} manifest path(s) outside MANAGED_FILES: {ignored[:10]}")
         self._remote = {"version": remote_ver, "source": manifest.get("source"), "files": len(files)}
         if not files:
             # 配信元が空。実際に起きた(Render のイメージに kiosk_agent が無く、全端末が長期間
@@ -328,34 +438,55 @@ class BundleUpdater:
             _note_installed(remote_ver, manifest.get("source"), just_applied=False)
             async with self._lock:
                 if self._pending is not None:
+                    old = self._pending
                     self._pending = None
-                    shutil.rmtree(STAGING_DIR, ignore_errors=True)
+                    _drop_staging(old)
             return
 
+        # 取り寄せ〜適用待ちにするまでを、適用(apply)と同じロックの中で行う。適用が取り寄せの
+        # 途中のファイルを写すことがないように(適用は取り寄せが終わるまで待つ)。
         async with self._lock:
             if self._pending is not None and self._pending.get("version") == remote_ver:
                 # 取り寄せ済みで適用待ち。force の切り替わりだけ反映する。
                 self._pending = {**self._pending, "force": force}
                 return
 
-        if not self.enabled:
-            return
+            if not self.enabled:
+                return
 
-        log.info(f"[updater] new version {remote_ver} (current: {read_version()}, {len(mismatch)} file(s) differ)")
-        await self._download(manifest, token, mismatch)
+            log.info(f"[updater] new version {remote_ver} (current: {read_version()}, {len(mismatch)} file(s) differ)")
+            await self._download_locked(manifest, raw_files, files, token, mismatch)
 
-    async def _download(self, manifest: dict, token: str, rels: list[str]) -> None:
-        STAGING_DIR.mkdir(parents=True, exist_ok=True)
+    async def _download_locked(self, manifest: dict, raw_files: list, files: list[dict],
+                               token: str, rels: list[str]) -> None:
+        """違うファイルを新しい一時ディレクトリへ取り寄せ、manifest のハッシュと照合する。
+        1 つでも取り寄せ失敗・ハッシュ不一致があれば、何も適用待ちにせず一時ディレクトリごと捨てる。
+        self._lock を持った状態で呼ぶこと。"""
+        staging = _new_staging_dir(keep=(self._pending or {}).get("_staging"))
         changed: list[str] = []
+        files = list(files)
+        rels = list(rels)
+        # updater.py が変わるなら先に取り寄せる(新しい配信対象の一覧を読むため。_managed_files_in)。
+        if "updater.py" in rels:
+            rels.remove("updater.py")
+            rels.insert(0, "updater.py")
         # ファイルごとの既定 60 秒は声の英語モデル(130MB)には短すぎる(弱い回線だと
         # 間に合わない)。manifest の size からおおよその下限を見積もる(1Mbps 想定=
         # 1秒あたり約125KB。実際の回線はもっと速いことが多いので、これは余裕を持った下限)。
-        sizes = {f["path"]: f.get("size", 0) for f in (manifest.get("files") or [])}
+        info = {f["path"]: f for f in files}
+
+        def fail(message: str) -> None:
+            shutil.rmtree(staging, ignore_errors=True)
+            self._error = message
 
         async with httpx.AsyncClient() as client:
-            for rel in rels:
+            i = 0
+            while i < len(rels):
+                rel = rels[i]
+                i += 1
                 log.info(f"[updater] downloading {rel}")
-                timeout = max(60, int(sizes.get(rel, 0) / 125_000) + 30)
+                size = info[rel].get("size", 0)
+                timeout = max(60, int((size if isinstance(size, (int, float)) else 0) / 125_000) + 30)
                 try:
                     r = await client.get(
                         f"{settings.remote_api_url}/kiosk/bundle/file/{rel}",
@@ -365,23 +496,48 @@ class BundleUpdater:
                     r.raise_for_status()
                 except Exception as e:
                     log.error(f"[updater] download failed {rel}: {e}")
-                    shutil.rmtree(STAGING_DIR, ignore_errors=True)
-                    self._error = f"取り寄せに失敗しました（{rel}）"
+                    fail(f"取り寄せに失敗しました（{rel}）")
                     return  # abort staging; retry next cycle
 
-                dest = STAGING_DIR / rel
+                data = r.content
+                if _content_hash(data) != info[rel]["hash"]:
+                    # 途中で切れた・中身が差し替わった(配信元の更新と重なった等)。この回は何も
+                    # 適用しない(一部だけ新しい版が混ざらないように)。次の確認で取り寄せ直す。
+                    log.error(f"[updater] hash mismatch {rel}: expected {info[rel]['hash']}, "
+                              f"got {_content_hash(data)} — discarding this update attempt")
+                    fail(f"取り寄せたファイルが配信元と一致しません（{rel}）")
+                    return
+
+                dest = staging / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(r.content)
+                dest.write_bytes(data)
                 changed.append(rel)
 
+                if rel == "updater.py":
+                    # 新しい updater.py が配信対象に足したファイルも、同じ配信で一緒に届ける。
+                    known = {f["path"] for f in files}
+                    extra = [f for f in _accepted_files(raw_files, set(_managed_files_in(data)))
+                             if f["path"] not in known]
+                    if extra:
+                        files.extend(extra)
+                        info.update({f["path"]: f for f in extra})
+                        rels.extend(await asyncio.to_thread(_diff, extra))
+
         log.info(f"[updater] staged {len(changed)} file(s): {changed}")
-        async with self._lock:
-            self._pending = {**manifest, "_changed": changed}
+        old = self._pending
+        self._pending = {**manifest, "files": files, "_changed": changed, "_staging": str(staging)}
+        if old is not None:
+            _drop_staging(old)
 
     # ── Apply ─────────────────────────────────────────────────────────────────
 
     async def apply(self) -> bool:
-        """Copy staged files to app dir.  Returns True if a service restart is needed."""
+        """Copy staged files to app dir.  Returns True if a service restart is needed.
+
+        取り寄せ中(ロック中)なら何もせず False を返す。取り寄せは大きいファイルで数分かかり、
+        待たせると待機画面が来訪者の操作中に再読み込みしてしまう。取り寄せ終わったあとの次の機会に適用する。"""
+        if self._lock.locked():
+            return False
         async with self._lock:
             if self._pending is None:
                 return False
@@ -389,10 +545,13 @@ class BundleUpdater:
             changed      = self._pending.get("_changed", [])
             version      = self._pending["version"]
             files        = self._pending.get("files", [])
+            staging      = Path(self._pending.get("_staging") or "")
             needs_restart = False
 
             for rel in changed:
-                src = STAGING_DIR / rel
+                if not _is_safe_rel(rel):
+                    continue
+                src = staging / rel
                 dst = _APP_DIR / rel
                 if not src.exists():
                     continue
@@ -409,8 +568,9 @@ class BundleUpdater:
                     needs_restart = True
 
             _note_installed(version, self._pending.get("source"), just_applied=True)
+            old = self._pending
             self._pending = None
-            shutil.rmtree(STAGING_DIR, ignore_errors=True)
+            _drop_staging(old)
 
         # 書き込めたかを中身で確かめ直す(画面の「最新です」を記録ではなく実物で出すため)。
         self._mismatch = await asyncio.to_thread(_diff, files)

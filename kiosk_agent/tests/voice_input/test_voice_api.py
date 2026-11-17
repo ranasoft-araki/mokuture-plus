@@ -38,7 +38,7 @@ def test_status_shape(client, fake_vosk, feed):
     feed(silence(100))
     s = client.get("/voice/status").json()
     assert s["available"] is True
-    assert s["features"] == {"command": True}
+    assert s["features"] == {"command": True, "sequence": True}
     assert s["engine"]["engine"] == "vosk" and s["engine"]["grammar"] is True
     assert s["timing"]["poll_interval_ms"] > 0
 

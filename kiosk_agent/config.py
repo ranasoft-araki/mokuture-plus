@@ -5,7 +5,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # extra="ignore": 同じ .env には、ここで宣言していない設定(ANALYTICS_* / LOCKER_OPEN_* /
+    # KIOSK_OTA_DISABLE / KANA_DICT_EXTRA / VOICE_*__* / CARD_*__* ― それぞれのモジュールが
+    # os.getenv 等で読む)も書く。既定の extra="forbid" だと、それらを1行書いただけで
+    # エージェントが起動しなくなる。
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     tenant_slug: str = ""
     remote_api_url: str = "https://mokuture-plus-api.onrender.com/api"

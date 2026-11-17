@@ -110,7 +110,13 @@ def set_locker_count(count: int) -> None:
     with _lock:
         data = _load()
         data["locker_count"] = int(count)
+        # 口数を選び直したら、扉センサーの「閉を読めたことがある」の覚えも捨てる。
+        # 壊れたセンサーがずっと「開」と答えて口が使えなくなったとき、設定画面で口数を
+        # 選び直せば元に戻せる(doors_seen_closed 参照)。
+        data["doors_seen_closed"] = []
         _save(data)
+    global _seen_closed_cache
+    _seen_closed_cache = set()
 
 
 # ── 台帳生成（端末のドア構成が権威。占有/PIN は保持） ──────────────────────
@@ -215,24 +221,39 @@ def occupy_delivery(locker_id: str) -> dict:
         }
 
 
-def release(locker_id: str, pin: str) -> dict:
-    """ローカルで PIN 照合して解錠状態にする（クラウド不要）。"""
+def verify_pin(locker_id: str, pin: str) -> dict:
+    """PIN を照合するだけで、状態は変えない。合っていれば {"door_number"} を返す。
+
+    受け取りは「照合 → 錠を動かす → 動いたときだけ空きに戻す」の順で行う(main.py)。
+    照合と同時に空きへ戻すと、錠が動かなかったときにお荷物が「空き」のロッカーに
+    閉じ込められる。pbkdf2 は重いので、呼び出し側はイベントループの外(to_thread)で呼ぶ。"""
     lid = str(locker_id)
     with _lock:
-        data = _load()
-        e = data["lockers"].get(lid)
+        e = _load()["lockers"].get(lid)
         if e is None:
             raise LockerError(404, "Locker not found")
         if not e.get("occupied"):
             raise LockerError(409, "not occupied")
         salt_hex = e.get("pin_salt") or ""
         stored = e.get("pin_hash") or ""
-        ok = False
-        if salt_hex and stored:
-            calc = _hash_pin(pin, bytes.fromhex(salt_hex))
-            ok = hmac.compare_digest(calc, stored)
-        if not ok:
-            raise LockerError(403, "invalid pin")
+        door = e.get("door_number")
+    ok = False
+    if salt_hex and stored:
+        calc = _hash_pin(pin, bytes.fromhex(salt_hex))
+        ok = hmac.compare_digest(calc, stored)
+    if not ok:
+        raise LockerError(403, "invalid pin")
+    return {"door_number": door}
+
+
+def clear(locker_id: str) -> dict:
+    """利用中の記録と PIN を消して空きに戻す(錠を動かせたあとに呼ぶ)。"""
+    lid = str(locker_id)
+    with _lock:
+        data = _load()
+        e = data["lockers"].get(lid)
+        if e is None:
+            raise LockerError(404, "Locker not found")
         door = e.get("door_number")
         e["occupied"] = False
         e["pin_salt"] = None
@@ -241,6 +262,64 @@ def release(locker_id: str, pin: str) -> dict:
         e["kind"] = None
         _save(data)
         return {"ok": True, "door_number": door}
+
+
+def release(locker_id: str, pin: str) -> dict:
+    """ローカルで PIN 照合して解錠状態にする（クラウド不要）。錠は動かさない。
+    受け取りの経路(main.py)は verify_pin → 錠を動かす → clear の順で行う。"""
+    verify_pin(locker_id, pin)
+    return clear(locker_id)
+
+
+def door_occupied(door_number) -> bool:
+    """その扉(door_number)を使っている利用中のロッカーがあるか。旧台帳(id≠door_number)も見る。"""
+    try:
+        dn = int(door_number)
+    except (TypeError, ValueError):
+        return False
+    with _lock:
+        return any(
+            e.get("occupied") and e.get("door_number") == dn
+            for e in _load()["lockers"].values()
+        )
+
+
+# ── 扉センサーが「閉」を示したことがある扉 ─────────────────────────────────────
+# センサーをつないでいない入力は、プルアップでずっと「開」と読める。それを真に受けると
+# 「扉が開いている口は開けない」の決まりで全部の口が使えなくなる。そこで、一度でも「閉」を
+# 読めた扉だけを「センサーが働いている」と見なし、その扉の「開」だけを信じる。
+_seen_closed_cache: set[int] | None = None
+
+
+def doors_seen_closed() -> set[int]:
+    global _seen_closed_cache
+    if _seen_closed_cache is None:
+        with _lock:
+            raw = _load().get("doors_seen_closed") or []
+        seen: set[int] = set()
+        for v in raw:
+            try:
+                seen.add(int(v))
+            except (TypeError, ValueError):
+                pass
+        _seen_closed_cache = seen
+    return _seen_closed_cache
+
+
+def mark_door_seen_closed(door_number) -> None:
+    try:
+        dn = int(door_number)
+    except (TypeError, ValueError):
+        return
+    seen = doors_seen_closed()
+    if dn in seen:
+        return
+    with _lock:
+        data = _load()
+        merged = sorted({*seen, dn})
+        data["doors_seen_closed"] = merged
+        _save(data)
+        seen.add(dn)
 
 
 def release_all() -> dict:
@@ -287,6 +366,23 @@ def enqueue_notify(item: dict) -> None:
         data = _load()
         data["pending_notify"].append(item)
         _save(data)
+
+
+def peek_pending_notify() -> list[dict]:
+    """保留通知を**消さずに**読む。送れたものだけ remove_pending_notify で外す。"""
+    with _lock:
+        return list(_load().get("pending_notify") or [])
+
+
+def remove_pending_notify(item: dict) -> None:
+    """送れた保留通知を 1 件外す(同じ中身が複数あれば先頭の 1 件だけ)。"""
+    with _lock:
+        data = _load()
+        pending = list(data.get("pending_notify") or [])
+        if item in pending:
+            pending.remove(item)
+            data["pending_notify"] = pending
+            _save(data)
 
 
 def take_pending_notify() -> list[dict]:
