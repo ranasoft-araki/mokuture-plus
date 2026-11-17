@@ -5422,7 +5422,8 @@ function showKioskSettings() {
         )}
         ${dcCard(
           dcHead(SVG.motion, '人感センサー', 'MOTION / PIR', 'dc-pir-badge', stBadge(false, '検知', '待機')) +
-          `<div style="font-size:13px;color:${C.stone}">センサーの前で手を動かすと「検知」に変わります</div>`
+          `<div id="dc-pir-dist" style="display:none;margin:2px 0 10px"></div>` +
+          `<div id="dc-pir-note" style="font-size:13px;color:${C.stone};line-height:1.6">センサーの前で手を動かすと「検知」に変わります</div>`
         )}
         ${dcCard(
           `<div style="font-size:20px;font-weight:600;color:${C.sumi};margin-bottom:14px">ドアセンサー<span style="font-size:11px;color:${C.stone};letter-spacing:2.5px;margin-left:10px;font-family:ui-monospace,monospace">DOOR</span></div>
@@ -5465,6 +5466,42 @@ function showKioskSettings() {
     </div>`;
   }
 
+  // 距離センサー(来訪の検知を PRESENCE_SENSOR で距離センサーにした端末)の説明文。
+  // 設置場所でしきい値を合わせられるよう、いまの距離をそのまま見せる。
+  function tofNote(p) {
+    const cm = mm => `${Math.round(mm / 10)}cm`;
+    const why = {
+      no_library: "距離センサーを読むための部品が入っていません。この端末で install.sh を実行してください",
+      no_device: "距離センサーが見つかりません。配線(VIN・GND・SDA・SCL)と、ラズパイの I2C が有効かを確認してください",
+      read_failed: "距離センサーから読めなくなりました。配線のゆるみを確認してください(つなぎ直すと自動で戻ります)",
+      wrong_model: "つないだ距離センサーと、この端末の設定(.env の PRESENCE_SENSOR)の機種が合っていません。vl53l0x と vl53l1x を入れ替えてください",
+      mock: "模擬モードのため、距離センサーは読んでいません",
+    }[p.error];
+    if (why) return { bad: p.error !== "mock", text: why };
+    if (p.suppressed) return { bad: false, text: "同じ場所に物があり続けているため、離れるまで検知を止めています" };
+    return { bad: false, text: `${cm(p.threshold_mm)} 以内に近づくと「検知」に変わります` };
+  }
+  // センサーが検知している距離を大きく出す。棒は右端が「検知する距離の 2 倍」で、
+  // まん中の線が検知する距離(TOF_THRESHOLD_MM)。線より左まで縮めば検知。
+  function tofDistHTML(p) {
+    const d = p.distance_mm, th = p.threshold_mm || 1000, max = th * 2;
+    const near = d != null && d <= th;
+    const value = d == null
+      ? `<span style="font-size:22px;font-weight:600;color:${C.stone}">範囲内に何もありません</span>`
+      : `<span style="font-size:44px;font-weight:700;color:${near ? C.mossDk : C.sumi};font-variant-numeric:tabular-nums;line-height:1">${Math.round(d / 10)}</span><span style="font-size:18px;font-weight:600;color:${C.graphite};margin-left:6px">cm</span>`;
+    const pct = d == null ? 100 : Math.min(100, d / max * 100);
+    return `<div style="display:flex;align-items:baseline;gap:14px;min-height:48px">
+        <span style="font-size:13px;color:${C.stone}">検知している距離</span>${value}
+      </div>
+      <div style="position:relative;height:14px;border-radius:7px;background:${C.chalk};margin-top:8px">
+        <div style="position:absolute;left:0;top:0;bottom:0;width:${pct}%;border-radius:7px;background:${d == null ? "transparent" : near ? C.moss : C.ash};transition:width .3s"></div>
+        <div style="position:absolute;left:50%;top:-5px;bottom:-5px;width:2px;background:${C.graphite}"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:${C.stone};margin-top:6px;font-variant-numeric:tabular-nums">
+        <span>0cm</span><span>検知する距離 ${Math.round(th / 10)}cm</span><span>${Math.round(max / 10)}cm</span>
+      </div>`;
+  }
+
   // 実機の GPIO か模擬か。gpiozero が入らず黙って模擬に落ちると、ドアは常に「開放中」、
   // 電子錠のトグルは表示だけ変わってリレーは動かない＝画面だけでは原因が分からないため明示する。
   function gpioView(status) {
@@ -5495,6 +5532,13 @@ function showKioskSettings() {
     if (gn) { gn.textContent = gv.note; gn.style.color = gv.tone === "red" ? C.redDk : C.stone; }
     const pir = document.getElementById("dc-pir-badge");
     if (pir) pir.innerHTML = stBadge(!!(status.pir && status.pir.motion_detected), '検知', '待機');
+    const pn = document.getElementById("dc-pir-note");
+    if (pn && status.pir && status.pir.kind === "tof") {
+      const pv = tofNote(status.pir);
+      pn.textContent = pv.text; pn.style.color = pv.bad ? C.redDk : C.stone;
+      const pd = document.getElementById("dc-pir-dist");
+      if (pd) { pd.style.display = pv.bad || status.pir.error ? "none" : "block"; pd.innerHTML = tofDistHTML(status.pir); }
+    }
     const dl = document.getElementById("dc-doorlist");
     if (dl) {
       const doors = status.doors || [];

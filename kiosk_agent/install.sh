@@ -76,6 +76,17 @@ if [ "$IS_PI" = "1" ]; then
         echo "全文: $PIP_LOG (Pi なら swig / liblgpio-dev 不足が多い)"
         echo ""
     fi
+    # 距離センサー(I2C)で来訪を検知する端末向け。.env の PRESENCE_SENSOR が
+    # vl53l0x / vl53l1x のときだけ使う。人感センサー(PIR)の端末では入らなくても困らない。
+    if try_pip ".[tof]" && "$VENV/bin/python" -c "import board, adafruit_vl53l0x, adafruit_vl53l1x" >> "$PIP_LOG" 2>&1; then
+        echo "  -> 距離センサー(VL53L0X / VL53L1X)を読む準備ができた"
+    else
+        echo "  -> 距離センサー用の部品が入らなかった(人感センサー PIR の端末なら影響なし。原因は $PIP_LOG)"
+    fi
+    # 距離センサーは I2C(GPIO2=SDA / GPIO3=SCL)でつなぐ。既定では無効なので有効にする。
+    if command -v raspi-config >/dev/null 2>&1; then
+        sudo raspi-config nonint do_i2c 0 || echo "  -> I2C を有効にできなかった(sudo raspi-config で手動で有効にする)"
+    fi
 else
     echo "  -> Raspberry Pi ではないので GPIO は入れない(ハードは模擬で動く)"
 fi

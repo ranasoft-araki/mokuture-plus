@@ -21,6 +21,16 @@ rpi = [
     "gpiozero>=2.0",
     "lgpio",
 ]
+# 来訪の検知を距離センサー(I2C の VL53L0X / VL53L1X)で行う端末だけが使う
+# (.env の PRESENCE_SENSOR)。入っていなくても人感センサー(PIR)の端末は従来どおり動く。
+tof = [
+    "adafruit-blinka",
+    # Blinka 10 以降は Raspberry Pi のピンを gpiod で扱うが、依存として宣言していない。
+    # 無いと `import board` が失敗し、距離センサーが「部品が入っていません」のままになる。
+    "gpiod",
+    "adafruit-circuitpython-vl53l0x",
+    "adafruit-circuitpython-vl53l1x",
+]
 # 名刺読み取り（QR無し来訪者の受付フォーム自動入力）。
 # 入っていない端末でもキオスク本体は従来どおり起動し、名刺の導線だけが出なくなる。
 # opencv は Raspberry Pi OS では apt の python3-opencv を使うほうが速く入る

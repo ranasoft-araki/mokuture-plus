@@ -28,6 +28,14 @@ class Settings(BaseSettings):
 
     # GPIO pin numbers (BCM)
     pir_pin: int = 4
+    # 来訪を検知するセンサー。pir=人感センサー(GPIO・既定) / vl53l0x・vl53l1x=距離センサー(I2C)
+    presence_sensor: str = "pir"
+    # 距離センサーのとき: この距離(mm)以内を来訪とみなす
+    tof_threshold_mm: int = 1000
+    # 距離センサーのとき: 近い(遠い)読みが何回続いたら検知(解除)にするか。読みは 1 秒に 8 回前後
+    tof_confirm_reads: int = 3
+    # 距離センサーのとき: 近いままがこの秒数続いたら、離れるまで検知を止める(置かれた物で起き続けない)
+    tof_stale_sec: float = 60.0
     door_pin: int | None = None
     # JSON string: {"1": 12, "2": 16, "3": 26}  (door_id -> GPIO pin)
     door_pins_json: str = '{"1": 12, "2": 16, "3": 26}'

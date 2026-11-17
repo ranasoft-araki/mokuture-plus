@@ -436,7 +436,17 @@ locker_ctrl = LockerController(
     _locker_pins_for(DEFAULT_LOCKER_COUNT),
     default_pulse_sec=settings.locker_pulse_sec,
 )
-pir = PirSensor(settings.pir_pin)
+try:
+    from gpio import make_presence_sensor
+    pir = make_presence_sensor(
+        getattr(settings, "presence_sensor", "pir"),
+        settings.pir_pin,
+        threshold_mm=getattr(settings, "tof_threshold_mm", 1000),
+        confirm_reads=getattr(settings, "tof_confirm_reads", 3),
+        stale_sec=getattr(settings, "tof_stale_sec", 60.0),
+    )
+except ImportError:  # OTA で main.py だけ先に新しくなっても起動を止めない
+    pir = PirSensor(settings.pir_pin)
 doors = {
     door_id: DoorSensor(pin)
     for door_id, pin in sorted(_door_pins_for(DEFAULT_LOCKER_COUNT).items(), key=lambda item: item[0])
@@ -1425,6 +1435,8 @@ async def device_status():
         "pir": {
             "pin": settings.pir_pin,
             "motion_detected": pir.motion_detected,
+            # kind=pir|tof。距離センサーのときは いまの距離・しきい値・読めない理由 も返す
+            **(pir.info() if hasattr(pir, "info") else {"kind": "pir"}),
         },
         "door": door_items[0] if door_items else {
             "door_id": "1",
