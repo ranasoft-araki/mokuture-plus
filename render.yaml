@@ -2,7 +2,10 @@ services:
   - type: web
     name: mokuture-plus-api
     runtime: docker
-    dockerfilePath: ./backend/Dockerfile
+    # 本番の Render はリポジトリ直下の Dockerfile を、直下をコンテキストにして使っている
+    # (2026-11-12 に Render のサービス設定で確認)。backend/Dockerfile はローカル用。
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /health
     region: oregon
     # NOTE: 本番は starter（コールドスタート回避のため有料化済み）。free に戻すと 15分無アクセスで

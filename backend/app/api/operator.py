@@ -9,15 +9,16 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-from app.config import settings as app_settings
 from app.database import get_db
 from app.middleware.tenant import require_operator
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.device import Device
 from app.models.reception import ReceptionLog
-from app.services.auth import hash_password, create_access_token, create_refresh_token
-from app.services.timeutil import iso_z
+from app.services import accounts
+from app.services.auth import create_proxy_access_token, hash_password_async
+from app.services.csv_safe import safe_row
+from app.services.timeutil import day_start, iso_z, to_naive_utc, utcnow_naive
 
 router = APIRouter(prefix="/operator", tags=["operator"])
 
@@ -45,7 +46,7 @@ async def get_operator_reception_daily_stats(
             func.date(ReceptionLog.created_at).label("day"),
             func.count().label("cnt"),
         )
-        .where(ReceptionLog.created_at >= str(dates[0]))
+        .where(ReceptionLog.created_at >= day_start(dates[0]))
         .group_by("day")
         .order_by("day")
     )
@@ -65,7 +66,8 @@ async def get_operator_stats(
     device_count = (await db.execute(select(func.count()).select_from(Device))).scalar()
     reception_count = (await db.execute(select(func.count()).select_from(ReceptionLog))).scalar()
 
-    online_cutoff = datetime.now(timezone.utc) - timedelta(minutes=3)
+    # DB の日時列は naive-UTC。tz 付きの値を渡すと PostgreSQL(asyncpg)では 500 になる。
+    online_cutoff = utcnow_naive() - timedelta(minutes=3)
     online_device_count = (await db.execute(
         select(func.count()).select_from(Device).where(Device.last_seen_at >= online_cutoff)
     )).scalar()
@@ -96,7 +98,7 @@ async def get_operator_stats(
         )
     )).scalar()
 
-    today_start_dt = datetime(today_utc.year, today_utc.month, today_utc.day, tzinfo=timezone.utc)
+    today_start_dt = day_start(today_utc)
     reception_today_unread = (await db.execute(
         select(func.count()).select_from(ReceptionLog).where(
             ReceptionLog.state == "received",
@@ -211,7 +213,7 @@ class CreateTenantRequest(BaseModel):
         import re
         if not re.match(r"^[a-z0-9\-]{3,64}$", v):
             raise ValueError("Slug must be 3-64 lowercase alphanumeric or hyphens")
-        return v
+        return accounts.check_slug_not_reserved(v)
 
 
 @router.post("/tenants", status_code=status.HTTP_201_CREATED)
@@ -224,9 +226,9 @@ async def create_tenant(
     if existing_slug.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Tenant slug already taken")
 
-    existing_email = await db.execute(select(User).where(User.email == body.admin_email))
-    if existing_email.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Admin email already in use")
+    # メールアドレスはログイン ID。どのテナントのユーザーとも重ねない(大文字小文字は区別しない)。
+    if await accounts.email_in_use(db, body.admin_email):
+        raise HTTPException(status_code=409, detail=accounts.EMAIL_TAKEN_DETAIL)
 
     if body.reseller_id:
         reseller = await db.execute(select(Tenant).where(Tenant.id == body.reseller_id, Tenant.is_reseller == True))
@@ -239,8 +241,8 @@ async def create_tenant(
 
     user = User(
         tenant_id=tenant.id,
-        email=body.admin_email,
-        hashed_password=hash_password(body.admin_password),
+        email=accounts.normalize_email(body.admin_email),
+        hashed_password=await hash_password_async(body.admin_password),
         role="admin",
     )
     db.add(user)
@@ -359,7 +361,7 @@ async def delete_tenant(
         )
 
     # Safety guard: block if reception logs exist in the last 30 days
-    cutoff_30d = datetime.now(timezone.utc) - timedelta(days=30)
+    cutoff_30d = utcnow_naive() - timedelta(days=30)
     log_count = (await db.execute(
         select(func.count()).select_from(ReceptionLog).where(
             ReceptionLog.tenant_id == tenant_id,
@@ -388,24 +390,17 @@ async def proxy_login(
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     user_result = await db.execute(
-        select(User).where(User.tenant_id == tenant_id, User.role == "admin").limit(1)
+        select(User)
+        .where(User.tenant_id == tenant_id, User.role == "admin")
+        .order_by(User.created_at, User.id)
+        .limit(1)
     )
-    admin_user = user_result.scalar_one_or_none()
+    admin_user = user_result.scalars().first()
     if not admin_user:
         raise HTTPException(status_code=404, detail="このテナントに管理者ユーザーがいません")
 
-    from app.config import settings as _settings
-    expire = datetime.now(timezone.utc) + timedelta(minutes=15)
-    payload = {
-        "sub": admin_user.id,
-        "tenant_id": tenant_id,
-        "role": "admin",
-        "exp": expire,
-        "type": "access",
-        "proxy": True,
-    }
-    from jose import jwt as _jwt
-    short_token = _jwt.encode(payload, _settings.jwt_secret_key, algorithm=_settings.jwt_algorithm)
+    # 15分で切れるトークンのみ(refresh は出さない)。代理店の代理ログインも同じ関数を使う。
+    short_token = create_proxy_access_token(tenant_id, admin_user.id)
 
     return {
         "access_token": short_token,
@@ -472,7 +467,7 @@ class CreateResellerRequest(BaseModel):
         import re
         if not re.match(r"^[a-z0-9\-]{3,64}$", v):
             raise ValueError("Slug must be 3-64 lowercase alphanumeric or hyphens")
-        return v
+        return accounts.check_slug_not_reserved(v)
 
 
 @router.post("/resellers", status_code=status.HTTP_201_CREATED)
@@ -485,9 +480,9 @@ async def create_reseller(
     if existing_slug.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Slug already taken")
 
-    existing_email = await db.execute(select(User).where(User.email == body.admin_email))
-    if existing_email.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Admin email already in use")
+    # メールアドレスはログイン ID。どのテナントのユーザーとも重ねない(大文字小文字は区別しない)。
+    if await accounts.email_in_use(db, body.admin_email):
+        raise HTTPException(status_code=409, detail=accounts.EMAIL_TAKEN_DETAIL)
 
     tenant = Tenant(slug=body.slug, name=body.name, is_reseller=True)
     db.add(tenant)
@@ -495,8 +490,8 @@ async def create_reseller(
 
     user = User(
         tenant_id=tenant.id,
-        email=body.admin_email,
-        hashed_password=hash_password(body.admin_password),
+        email=accounts.normalize_email(body.admin_email),
+        hashed_password=await hash_password_async(body.admin_password),
         role="reseller",
     )
     db.add(user)
@@ -655,16 +650,15 @@ async def create_operator_user(
     if not tenant_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    existing = await db.execute(
-        select(User).where(User.email == body.email, User.tenant_id == body.tenant_id)
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Email already exists in this tenant")
+    # 以前はテナント内だけで重複を見ていたが、ログインはメールアドレスだけで行うので
+    # 別テナントと重なるとログインできる人が決まらなくなる。全ユーザーを通して見る。
+    if await accounts.email_in_use(db, body.email):
+        raise HTTPException(status_code=409, detail=accounts.EMAIL_TAKEN_DETAIL)
 
     new_user = User(
         tenant_id=body.tenant_id,
-        email=body.email,
-        hashed_password=hash_password(body.password),
+        email=accounts.normalize_email(body.email),
+        hashed_password=await hash_password_async(body.password),
         role=body.role,
     )
     db.add(new_user)
@@ -694,7 +688,8 @@ async def list_all_devices(
 ):
     import math
 
-    online_cutoff = datetime.now(timezone.utc) - timedelta(minutes=3)
+    # DB の日時列は naive-UTC。tz 付きの値を渡すと PostgreSQL(asyncpg)では 500 になる。
+    online_cutoff = utcnow_naive() - timedelta(minutes=3)
 
     # Build joined query so we can fetch tenant + reseller names
     tenant_alias = Tenant.__table__.alias("t")
@@ -744,7 +739,7 @@ async def list_all_devices(
         t_name = row[1]
         r_name = row[2]
         is_online = (
-            d.last_seen_at is not None and d.last_seen_at >= online_cutoff
+            d.last_seen_at is not None and to_naive_utc(d.last_seen_at) >= online_cutoff
         )
         items.append({
             "id": d.id,
@@ -792,8 +787,8 @@ async def list_operator_reception(
     q: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     method: Optional[str] = Query(None),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
     offset: int = Query(0),
     limit: int = Query(100),
     _: User = Depends(require_operator()),
@@ -815,10 +810,12 @@ async def list_operator_reception(
         stmt = stmt.where(ReceptionLog.state == status)
     if method:
         stmt = stmt.where(ReceptionLog.method == method)
+    # 日付は datetime にしてから比べる。文字列のまま渡すと PostgreSQL では
+    # 「timestamp >= varchar」の演算子が無く 500 になる(SQLite では通るので気付きにくい)。
     if date_from:
-        stmt = stmt.where(ReceptionLog.created_at >= date_from)
+        stmt = stmt.where(ReceptionLog.created_at >= day_start(date_from))
     if date_to:
-        stmt = stmt.where(ReceptionLog.created_at <= date_to + " 23:59:59")
+        stmt = stmt.where(ReceptionLog.created_at < day_start(date_to + timedelta(days=1)))
     stmt = stmt.order_by(ReceptionLog.created_at.desc()).offset(offset).limit(limit)
     result = await db.execute(stmt)
     rows = result.all()
@@ -915,8 +912,8 @@ async def export_operator_reception_csv(
     reseller_id: Optional[str] = Query(None),
     q: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
     _: User = Depends(require_operator()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -934,10 +931,12 @@ async def export_operator_reception_csv(
         )
     if status:
         stmt = stmt.where(ReceptionLog.state == status)
+    # 日付は datetime にしてから比べる。文字列のまま渡すと PostgreSQL では
+    # 「timestamp >= varchar」の演算子が無く 500 になる(SQLite では通るので気付きにくい)。
     if date_from:
-        stmt = stmt.where(ReceptionLog.created_at >= date_from)
+        stmt = stmt.where(ReceptionLog.created_at >= day_start(date_from))
     if date_to:
-        stmt = stmt.where(ReceptionLog.created_at <= date_to + " 23:59:59")
+        stmt = stmt.where(ReceptionLog.created_at < day_start(date_to + timedelta(days=1)))
     stmt = stmt.order_by(ReceptionLog.created_at.desc())
     result = await db.execute(stmt)
     rows = result.all()
@@ -947,7 +946,7 @@ async def export_operator_reception_csv(
     writer = csv.writer(output)
     writer.writerow(["日時", "テナント名", "訪問者名", "会社名", "部署", "担当者", "目的", "受付方法", "ステータス", "スタッフメモ"])
     for log, tenant_name in rows:
-        writer.writerow([
+        writer.writerow(safe_row([
             log.created_at.isoformat() if log.created_at else "",
             tenant_name,
             log.visitor_name,
@@ -958,7 +957,7 @@ async def export_operator_reception_csv(
             log.method or "",
             log.state or "",
             log.staff_notes or "",
-        ])
+        ]))
     output.seek(0)
 
     filename = f"reception_{datetime.today().strftime('%Y-%m-%d')}.csv"

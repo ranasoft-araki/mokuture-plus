@@ -17,7 +17,7 @@ def _client(admin):
 def test_登録したOSを端末一覧に返す(admin):
     with _client(admin) as client:
         response = client.post("/api/notifications/push/subscribe", json={
-            "endpoint": "https://push.example/device-1",
+            "endpoint": "https://fcm.googleapis.com/fcm/send/device-1",
             "p256dh": "key",
             "auth": "auth",
             "os_name": "Windows",
@@ -31,7 +31,7 @@ def test_登録したOSを端末一覧に返す(admin):
 def test_OS未登録の既存端末は不明と表示する(admin):
     with _client(admin) as client:
         response = client.post("/api/notifications/push/subscribe", json={
-            "endpoint": "https://push.example/legacy-device",
+            "endpoint": "https://fcm.googleapis.com/fcm/send/legacy-device",
             "p256dh": "key",
             "auth": "auth",
         })
@@ -44,7 +44,7 @@ def test_OS未登録の既存端末は不明と表示する(admin):
 def test_再登録時にOSを更新する(admin):
     with _client(admin) as client:
         body = {
-            "endpoint": "https://push.example/device-2",
+            "endpoint": "https://fcm.googleapis.com/fcm/send/device-2",
             "p256dh": "old-key",
             "auth": "old-auth",
         }

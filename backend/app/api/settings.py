@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
 from app.database import get_db
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import get_current_user, require_roles, require_tenant_admin
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.device import Device
@@ -313,7 +313,8 @@ async def get_tenant_stats(
 @router.patch("", response_model=TenantSettingsOut)
 async def patch_settings(
     body: TenantSettingsPatch,
-    user: User = Depends(get_current_user),
+    # 代理店も自分のテナントの名前・色をここで保存する(代理店画面の「設定」)。
+    user: User = Depends(require_roles("admin", "superadmin", "reseller")),
     db: AsyncSession = Depends(get_db),
 ):
     tenant = await _get_tenant(user, db)
@@ -397,7 +398,7 @@ async def get_public_settings(tenant_slug: str, db: AsyncSession = Depends(get_d
 @router.post("/logo-upload-url")
 async def logo_upload_url(
     body: LogoUploadUrlRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
 ):
     if body.mime_type not in {"image/jpeg", "image/png", "image/svg+xml"}:
         raise HTTPException(status_code=422, detail="Logo must be JPEG, PNG, or SVG")
@@ -411,12 +412,11 @@ async def logo_upload_url(
 @router.patch("/logo", response_model=TenantSettingsOut)
 async def confirm_logo(
     body: LogoUrlPatch,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    allowed = app_settings.storage_public_url.rstrip("/")
-    if not body.logo_url.startswith(allowed):
-        raise HTTPException(status_code=422, detail="logo_url must originate from configured storage")
+    if not storage.is_own_storage_url(body.logo_url):
+        raise HTTPException(status_code=422, detail="アップロードしたロゴ画像の URL を指定してください")
     tenant = await _get_tenant(user, db)
     tenant.logo_url = body.logo_url
     await db.commit()
@@ -425,7 +425,7 @@ async def confirm_logo(
 
 @router.delete("/logo", response_model=TenantSettingsOut)
 async def delete_logo(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     tenant = await _get_tenant(user, db)
@@ -436,7 +436,7 @@ async def delete_logo(
 
 @router.post("/kiosk-force-push")
 async def kiosk_force_push(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     """Set force_update_at on the tenant — all devices will urgently apply the next update."""

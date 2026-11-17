@@ -36,7 +36,8 @@ from app.services import email as email_service
 from app.services import staff_routing
 from app.services.crypto import decrypt_dict
 from app.services.honorific import with_honorific
-from app.services.slack import SlackNotifier
+from app.services import url_safety
+from app.services.slack import SlackNotifier, escape_mrkdwn
 from app.services.staff_routing import Destinations
 from app.services.timeutil import format_jst, iso_z
 from app.services.webpush import send_push
@@ -145,13 +146,18 @@ async def fire_decision_notifications(tenant_id: str, log_id: str) -> None:
             expired = getattr(log, "decided_via", None) == "kiosk_timeout"
             actor = (log.decided_by_name or "担当者").strip()
             label = _DECISION_LABELS[log.state]
-            if expired:
-                text = (
-                    "⌛ 対応時間切れのため、キオスクを電話案内に切り替えました。\n"
-                    f"{with_honorific(log.visitor_name)}（{log.company or '—'}）"
-                )
-            else:
-                text = f"✅ {actor}さんが対応済みです（{label}）\n{with_honorific(log.visitor_name)}（{log.company or '—'}）"
+
+            # 本文には来訪者の入力(氏名・会社名)と応答者の名前が入る。Slack と Chatwork は
+            # それぞれの記法として働く文字があるので、送り先ごとに無害化した本文を作る。
+            def build_text(esc) -> str:
+                who = f"{esc(with_honorific(log.visitor_name))}（{esc(log.company or '—')}）"
+                if expired:
+                    return "⌛ 対応時間切れのため、キオスクを電話案内に切り替えました。\n" + who
+                return f"✅ {esc(actor)}さんが対応済みです（{label}）\n{who}"
+
+            text = build_text(lambda v: v)
+            slack_text = build_text(escape_mrkdwn)
+            chatwork_text = build_text(chatwork.escape_tags)
 
             default_slack = await staff_routing.load_default_slack_config(db, tenant_id)
             slack_enabled = await notification_channels.is_enabled(db, tenant_id, "slack")
@@ -164,7 +170,7 @@ async def fire_decision_notifications(tenant_id: str, log_id: str) -> None:
                     slack_targets[key] = config
             for config in slack_targets.values():
                 try:
-                    await SlackNotifier.send_to_config(config, text)
+                    await SlackNotifier.send_to_config(config, slack_text)
                 except Exception:
                     pass
 
@@ -205,7 +211,7 @@ async def fire_decision_notifications(tenant_id: str, log_id: str) -> None:
                     rooms.update(room_id for room_id, _ in staff_routing.chatwork_send_rooms(dest))
                 for room_id in rooms:
                     try:
-                        await chatwork.send_message(token, room_id, text)
+                        await chatwork.send_message(token, room_id, chatwork_text)
                     except Exception:
                         pass
 
@@ -510,9 +516,14 @@ def build_webhook_payload(tenant_id: str, log: ReceptionLog, escalated_from: str
 
 
 async def _post_webhook(url: str, payload: dict) -> bool:
-    """送信できたら True。best-effort なので例外は握りつぶす（URL はログに出さない）。"""
+    """送信できたら True。best-effort なので例外は握りつぶす（URL はログに出さない）。
+
+    送る直前にも宛先を確かめ、外へ送ってよい宛先でなければ送らずに失敗とする。
+    転送(リダイレクト)には従わない＝確かめた宛先以外へは送らない。"""
+    if not await url_safety.is_public_url(url):
+        return False
     try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, follow_redirects=False) as client:
             resp = await client.post(url, json=payload)
         return resp.status_code < 400
     except Exception:

@@ -3,6 +3,8 @@
 The VAPID key pair is one system-wide pair (VAPID_PRIVATE_KEY / VAPID_PUBLIC_KEY env)
 shared by every tenant. Regenerating it invalidates every subscription everywhere.
 """
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,10 +14,12 @@ from app.database import get_db
 from app.middleware.tenant import require_roles
 from app.models.notification import PushSubscription
 from app.models.user import User
+from app.services.url_safety import is_allowed_push_endpoint
 from app.services.webpush import send_push
 from app.config import settings
 
 router = APIRouter(prefix="/notifications/push", tags=["push"])
+logger = logging.getLogger(__name__)
 
 _NOT_CONFIGURED = "プッシュ通知が使えない状態です。運営にお問い合わせください。"
 _KNOWN_OS_NAMES = {"Windows", "macOS", "iOS", "Android", "Linux", "ChromeOS"}
@@ -56,7 +60,17 @@ async def subscribe(
     user: User = Depends(require_roles("admin", "superadmin")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Register a push subscription for the current user (upsert by endpoint)."""
+    """Register a push subscription for the current user (upsert by endpoint).
+
+    送信先はブラウザの配信サービス(FCM / Apple / Mozilla / Windows)のものだけ受け付ける
+    (サーバーから任意の宛先へ送らせないため)。
+    同じ送信先が既にあれば、テナントとユーザーをいまの利用者へ付け替える。ブラウザを別の
+    テナントのアカウントで使い始めたとき、前のテナントの受付通知が届き続けないように。"""
+    if not is_allowed_push_endpoint(body.endpoint):
+        raise HTTPException(
+            status_code=400,
+            detail="このブラウザの通知の登録先は使用できません。別のブラウザでお試しください。",
+        )
     result = await db.execute(
         select(PushSubscription).where(PushSubscription.endpoint == body.endpoint)
     )
@@ -64,6 +78,7 @@ async def subscribe(
     if existing:
         existing.p256dh = body.p256dh
         existing.auth_key = body.auth
+        existing.tenant_id = user.tenant_id
         existing.user_id = user.id
         existing.os_name = _normalized_os_name(body.os_name)
     else:
@@ -157,5 +172,10 @@ async def test_push(
             errors.append(err)
 
     if sent == 0 and errors:
-        raise HTTPException(status_code=500, detail=f"プッシュ送信失敗: {errors[0]}")
+        # 配信サービスの応答本文は画面に返さない(詳細はサーバーのログにだけ残す)。
+        logger.warning("test push failed (tenant=%s): %s", user.tenant_id, errors[0][:200])
+        raise HTTPException(
+            status_code=502,
+            detail="プッシュ通知を送信できませんでした。端末の登録をやり直してからお試しください。",
+        )
     return {"sent": sent, "total": len(subs)}

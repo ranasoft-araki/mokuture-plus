@@ -36,6 +36,7 @@ from app.services import chatwork as chatwork_service
 from app.services.escalation import PENDING_STATES
 from app.services import reception_notify, staff_routing
 from app.services import email as email_service
+from app.services import mail_quota, url_safety
 from app.services.crypto import encrypt_dict
 from app.services.slack import SlackApiError, SlackNotifier
 from app.services.webpush import send_push
@@ -306,6 +307,13 @@ async def upsert_staff_route(
         emails = staff_routing.validate_emails(body.email)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+    # Webhook を新しく指定したときは、外へ送ってよい宛先か確かめる(None=変更しない / ""=解除)。
+    if body.webhook_url:
+        try:
+            await url_safety.validate_public_url(body.webhook_url)
+        except url_safety.UnsafeUrlError as e:
+            raise HTTPException(status_code=400, detail=f"Webhook URL: {e}")
 
     existing_route = await staff_routing.get_route(db, user.tenant_id, body.staff_name)
     existing_config = route_config(existing_route)
@@ -667,6 +675,10 @@ async def test_staff_route(
         dest = await staff_routing.resolve_primary(db, user.tenant_id, body.staff_name)
         escalated_from = ""
 
+    # テスト送信のメールも、画面から送るメールの回数制限に数える(送る前に枠を確保する)。
+    if dest.emails and settings.smtp_enabled:
+        mail_quota.consume(user.tenant_id, len(dest.emails))
+
     sample = ReceptionLog(
         id="test-" + uuid.uuid4().hex[:8],
         tenant_id=user.tenant_id,
@@ -752,12 +764,14 @@ async def test_staff_route(
         payload = reception_notify.build_webhook_payload(user.tenant_id, sample, escalated_from)
         payload["test"] = True
         ok = False
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                res = await client.post(url, json=payload)
-            ok = res.status_code < 400
-        except Exception:
-            ok = False
+        if await url_safety.is_public_url(url):
+            try:
+                # 転送(リダイレクト)には従わない＝確かめた宛先以外へは送らない。
+                async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+                    res = await client.post(url, json=payload)
+                ok = res.status_code < 400
+            except Exception:
+                ok = False
         results.append({"channel": "webhook", "target": "Webhook", "ok": ok})
 
     if dest.emails:
@@ -793,7 +807,9 @@ async def test_staff_route(
                 )
                 row = {"channel": "email", "target": addr, "ok": bool(ok)}
                 if not ok:
-                    row["error"] = (err or "送信に失敗しました")[:200]
+                    # メールサーバーの応答は画面に返さない(詳細はサーバーのログにだけ残す)。
+                    logger.warning("staff route test email failed (tenant=%s): %s", user.tenant_id, (err or "")[:200])
+                    row["error"] = "送信に失敗しました"
                 results.append(row)
 
     if not results:

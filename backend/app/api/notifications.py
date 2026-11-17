@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import time
 from datetime import datetime, timezone
 from urllib.parse import parse_qs
@@ -23,12 +24,28 @@ from app.services import chatwork as chatwork_service
 from app.services import notification_channels
 from app.services import notification_health
 from app.services import reception_notify
-from app.services.slack import SlackNotifier, SlackOAuthError, SlackApiError
+from app.services import url_safety
+from app.services.slack import SlackNotifier, SlackOAuthError, SlackApiError, escape_mrkdwn
 from app.services.webpush import send_push
 from app.config import settings
 import httpx
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
+logger = logging.getLogger(__name__)
+
+# 秘密の値を画面へ返すときの伏せ字。画面がこの値のまま保存してきたら「変更しない」と扱う。
+_MASK = "***"
+
+# GET /settings で画面へ返す設定の種類(これ以外の行は返さない)。
+_VISIBLE_SETTING_TYPES = {
+    "slack", "slack_delivery",
+    "chatwork", "chatwork_delivery",
+    "webhook", "webhook_delivery",
+    "push_delivery",
+    *(notification_channels.setting_type(c) for c in notification_channels.CHANNELS),
+}
+
+_PUSH_TEST_FAILED = "プッシュ通知を送信できませんでした。端末の登録をやり直してからお試しください。"
 
 # Reception test-notification text (作業指示 §5). Kept distinct from the delivery test.
 _SLACK_TEST_MESSAGE = ":bell: mokuture のSlack通知テストです\n\nこのチャンネルに受付通知が送信されます。"
@@ -65,7 +82,7 @@ async def get_settings(user: User = Depends(require_roles("admin", "superadmin")
     settings_list = result.scalars().all()
     out = {}
     for s in settings_list:
-        if s.type.startswith("notification_health_"):
+        if s.type not in _VISIBLE_SETTING_TYPES:
             continue
         try:
             config = decrypt_dict(s.config_json) if s.config_json and s.config_json != "{}" else {}
@@ -81,7 +98,10 @@ async def get_settings(user: User = Depends(require_roles("admin", "superadmin")
             config.pop("bot_access_token", None)  # never expose the bot token
             config.pop("bot_token", None)         # legacy field name, just in case
         if s.type.startswith("chatwork") and "api_token" in config:
-            config["api_token"] = "***"
+            config["api_token"] = _MASK
+        # カスタム Webhook の URL も秘密(知っていれば誰でも送れる)。有無だけ分かる伏せ字にする。
+        if s.type in ("webhook", "webhook_delivery") and config.get("webhook_url"):
+            config["webhook_url"] = _MASK
         out[s.type] = config
     return out
 
@@ -182,13 +202,30 @@ async def chatwork_rooms(
     return {"rooms": rooms}
 
 
+async def _save_webhook(tenant_id: str, type_: str, raw_url: str, db: AsyncSession) -> None:
+    """カスタム Webhook の URL を保存する。
+
+    - 伏せ字(`***`)のまま送られてきたら変更しない(画面は URL を持っていないため)
+    - 空なら解除
+    - それ以外は外へ送ってよい宛先か確かめてから保存する(駄目なら 400)"""
+    url = (raw_url or "").strip()
+    if url == _MASK:
+        return
+    if url:
+        try:
+            await url_safety.validate_public_url(url)
+        except url_safety.UnsafeUrlError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    await _upsert_setting(tenant_id, type_, {"webhook_url": url}, db)
+
+
 @router.put("/settings/webhook")
 async def update_webhook(
     body: WebhookConfig,
     user: User = Depends(require_roles("admin", "superadmin")),
     db: AsyncSession = Depends(get_db),
 ):
-    await _upsert_setting(user.tenant_id, "webhook", {"webhook_url": body.webhook_url}, db)
+    await _save_webhook(user.tenant_id, "webhook", body.webhook_url, db)
     return {"ok": True}
 
 
@@ -207,7 +244,7 @@ async def update_webhook_delivery(
     user: User = Depends(require_roles("admin", "superadmin")),
     db: AsyncSession = Depends(get_db),
 ):
-    await _upsert_setting(user.tenant_id, "webhook_delivery", {"webhook_url": body.webhook_url}, db)
+    await _save_webhook(user.tenant_id, "webhook_delivery", body.webhook_url, db)
     return {"ok": True}
 
 
@@ -362,7 +399,9 @@ async def _run_test_push_delivery(tenant_id: str, db: AsyncSession) -> dict:
             errors.append(err)
 
     if sent == 0 and errors:
-        raise HTTPException(status_code=500, detail=f"プッシュ送信失敗: {errors[0]}")
+        # 配信サービスの応答本文は画面に返さない(詳細はサーバーのログにだけ残す)。
+        logger.warning("delivery test push failed (tenant=%s): %s", tenant_id, errors[0][:200])
+        raise HTTPException(status_code=502, detail=_PUSH_TEST_FAILED)
     return {"ok": sent > 0, "sent": sent, "total": len(subs)}
 
 
@@ -373,7 +412,12 @@ async def _run_test_webhook(tenant_id: str, type_: str, db: AsyncSession) -> dic
     if not webhook_url:
         raise HTTPException(status_code=400, detail="Webhook URL missing")
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        await url_safety.validate_public_url(webhook_url)
+    except url_safety.UnsafeUrlError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        # 転送(リダイレクト)には従わない＝確かめた宛先以外へは送らない。
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
             res = await client.post(
                 webhook_url,
                 json={
@@ -842,7 +886,7 @@ async def slack_interactions(
     ctx = (
         "⌛ 対応時間切れです。キオスクは電話案内に切り替わりました。"
         if outcome.decision_expired
-        else f"✅ 対応済み：*{label}*" + (f"（{who}）" if who else "")
+        else f"✅ 対応済み：*{label}*" + (f"（{escape_mrkdwn(who)}）" if who else "")
     )
     updated = {
         "replace_original": True,

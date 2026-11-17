@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import get_current_user, require_tenant_admin
 from app.models.device import Device
 from app.models.content import Playlist
 from app.models.user import User
@@ -57,7 +57,7 @@ async def list_devices(user: User = Depends(get_current_user), db: AsyncSession 
 @router.post("", status_code=201)
 async def create_device(
     body: DeviceCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     """管理者が端末を手動追加する（承認済み active として作成）。
@@ -81,7 +81,7 @@ async def create_device(
 @router.post("/{device_id}/approve", response_model=DeviceOut)
 async def approve_device(
     device_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     """承認待ち端末を承認して起動可能（active）にする。"""
@@ -100,7 +100,7 @@ async def approve_device(
 @router.post("/{device_id}/force-refresh")
 async def force_refresh_device(
     device_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -124,7 +124,7 @@ class UpdateDeviceRequest(BaseModel):
 async def update_device(
     device_id: str,
     body: UpdateDeviceRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     new_name: str | None = None
@@ -150,7 +150,7 @@ async def update_device(
 @router.delete("/{device_id}", status_code=204)
 async def delete_device(
     device_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(

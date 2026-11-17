@@ -1,6 +1,6 @@
 """Cloudflare R2 / MinIO S3-compatible storage service."""
 import uuid
-from datetime import datetime
+from functools import lru_cache
 
 import boto3
 from botocore.config import Config
@@ -17,6 +17,9 @@ ALLOWED_EXTENSIONS = {".mp4", ".jpg", ".jpeg", ".png", ".svg"}
 MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
 
 
+# クライアントは1つを使い回す(作るたびに設定の読み込みが走り、署名付きURLを1本作るより
+# ずっと重い。キオスクのスケジュール取得は端末ごとに毎分、メディアの数だけここを通る)。
+@lru_cache(maxsize=1)
 def _s3_client():
     return boto3.client(
         "s3",
@@ -45,6 +48,19 @@ def validate_upload(filename: str, mime_type: str) -> None:
         raise ValueError(f"Unsupported MIME type: {mime_type}")
     if ext not in ALLOWED_EXTENSIONS:
         raise ValueError(f"Unsupported file extension: {ext}")
+
+
+def is_own_storage_url(url: str | None) -> bool:
+    """この環境の保存先(`STORAGE_PUBLIC_URL` の配下)の URL か。
+
+    画面から受け取ったロゴ・メディア・館内マップの URL は、ここでアップロードした
+    ものだけを登録させる(よそのサイトの画像や URL を登録させない)。
+    `https://cdn.example.com` が `https://cdn.example.com.other/...` にも前方一致しないよう、
+    末尾の `/` までを含めて比べる。"""
+    base = (settings.storage_public_url or "").rstrip("/")
+    if not base or not url:
+        return False
+    return url.startswith(base + "/")
 
 
 def generate_presigned_upload_url(tenant_id: str, filename: str, mime_type: str) -> dict:

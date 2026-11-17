@@ -8,7 +8,7 @@ timestamptz として作られており、asyncpg が **aware(tz付き)** な da
 
 `iso_z` は aware / naive のどちらでも、単一の `Z` を持つ正しい UTC ISO 文字列にそろえる。
 """
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 _JST = timezone(timedelta(hours=9))
 
@@ -43,6 +43,15 @@ def to_naive_utc(dt: datetime | None) -> datetime | None:
 def utcnow_naive() -> datetime:
     """書き込み用の現在時刻(naive-UTC)。DB の日時列は naive-UTC で統一する。"""
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def day_start(day: date) -> datetime:
+    """その日の 0:00(naive)。日付で絞り込むときの境目に使う。
+
+    DB の日時列と比べる値は必ず naive な datetime にする。文字列や tz 付きの値を渡すと、
+    SQLite では通るのに PostgreSQL(asyncpg)では 500 になる。
+    """
+    return datetime.combine(day, time.min)
 
 
 def format_jst(when: datetime | None) -> str:

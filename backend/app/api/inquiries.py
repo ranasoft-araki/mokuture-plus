@@ -9,18 +9,18 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
 from slowapi import Limiter
-from slowapi.util import get_remote_address
+from app.services.ratelimit import client_ip
 from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import get_current_user, require_tenant_admin
 from app.models.inquiry import Inquiry
 from app.models.tenant import Tenant
 from app.models.user import User
 
 router = APIRouter(prefix="/inquiries", tags=["inquiries"])
-_limiter = Limiter(key_func=get_remote_address)
+_limiter = Limiter(key_func=client_ip)
 
 _ALLOWED_STATES = {"new", "read", "archived"}
 
@@ -151,7 +151,7 @@ async def update_inquiry(
 @router.delete("/{inquiry_id}", status_code=204)
 async def delete_inquiry(
     inquiry_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Inquiry).where(Inquiry.id == inquiry_id))

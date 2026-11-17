@@ -5,10 +5,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 from sqlalchemy import inspect, select, text
 
-from app.config import settings
+from app.config import insecure_default_secrets, settings
+from app.services.ratelimit import client_ip
 from app.database import engine, Base, AsyncSessionLocal
 from app.api import api_router
 from app.middleware.readonly import ReadOnlyGuardMiddleware
@@ -22,6 +22,10 @@ from app.services.analytics import run_analytics_sweeper_loop
 _ENSURE_COLUMNS = {
     "meeting_rooms": {
         "map_image_url": "VARCHAR(512)",
+    },
+    "users": {
+        # パスワード変更時刻。これより前に発行されたトークンを無効にする。既存行は NULL。
+        "password_changed_at": "TIMESTAMP",
     },
     "tenants": {
         # 受付通知で「電話(対応不可)」応答時にキオスクへ表示する電話番号、
@@ -168,10 +172,19 @@ async def _seed_demo_master_data() -> None:
                 # デモ管理者アカウントを現デモテナントへ確実に再リンク（孤児化＝tenant_id が
                 # 削除済みテナントを指す状態を修復。会議室作成等の書込 500 の原因を除去）。
                 # get_current_user は毎回 DB のユーザー行を読むので再ログイン不要で即反映される。
+                # 付け替えるのは「このデモテナントの所属」か「所属先テナントが既に存在しない
+                # (孤児)」ユーザーだけ。別の実在テナントに所属するユーザーは、たとえ同じ
+                # メールアドレスでも動かさない。tenant_id が NULL は運営アカウントなので触らない。
                 admin_email = _DEMO_ADMIN_EMAILS.get(t.slug)
                 if admin_email:
+                    existing_tenant_ids = select(Tenant.id)
                     admins = (await db.execute(
-                        select(User).where(User.email == admin_email)
+                        select(User).where(
+                            User.email == admin_email,
+                            User.tenant_id.is_not(None),
+                            (User.tenant_id == t.id) | User.tenant_id.not_in(existing_tenant_ids),
+                            User.role.not_in(("operator", "reseller")),
+                        )
                     )).scalars().all()
                     for u in admins:
                         if u.tenant_id != t.id or u.role != "admin":
@@ -215,8 +228,22 @@ async def _seed_demo_master_data() -> None:
         pass
 
 
+def _refuse_insecure_defaults() -> None:
+    """SQLite 以外(本番の PostgreSQL 等)で秘密設定が既定値のままなら起動しない。
+
+    既定値は公開リポジトリに載っているので、そのまま動かすとトークンを誰でも作れてしまう。
+    開発・テストの SQLite では従来どおり既定値で起動できる。"""
+    bad = insecure_default_secrets(settings)
+    if bad:
+        raise RuntimeError(
+            "起動を中止しました: " + ", ".join(bad)
+            + " が既定値のままです。環境変数に推測できない値を設定してください。"
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _refuse_insecure_defaults()
     # Create all tables on startup (dev only; use Alembic for production)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -237,7 +264,7 @@ async def lifespan(app: FastAPI):
             await analytics_task
 
 
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=client_ip)
 
 app = FastAPI(
     title="mokuture+ API",

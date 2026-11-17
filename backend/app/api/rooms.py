@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import get_current_user, require_tenant_admin
 from app.models.room import MeetingRoom
 from app.models.user import User
 from app.services import storage
@@ -61,6 +61,21 @@ class MapUploadUrlRequest(BaseModel):
     mime_type: str
 
 
+_MAP_URL_DETAIL = "館内マップはアップロードした画像の URL を指定してください"
+
+
+def _check_map_url(url: str | None, current: str | None = None) -> str | None:
+    """館内マップの URL はこの環境の保存先へアップロードしたものだけ(キオスクで表示するため)。
+
+    空なら解除。登録済みの値をそのまま送り返してきた場合は(以前の保存先の値でも)通す。"""
+    url = (url or "").strip() or None
+    if url is None or url == current:
+        return url
+    if not storage.is_own_storage_url(url):
+        raise HTTPException(status_code=422, detail=_MAP_URL_DETAIL)
+    return url
+
+
 def _out(room: MeetingRoom) -> MeetingRoomResponse:
     return MeetingRoomResponse(
         id=room.id,
@@ -105,7 +120,7 @@ async def list_rooms(
 @router.post("", status_code=201, response_model=MeetingRoomResponse)
 async def create_room(
     body: MeetingRoomCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     room = MeetingRoom(
@@ -114,7 +129,7 @@ async def create_room(
         location=body.location,
         capacity=body.capacity,
         color=body.color,
-        map_image_url=body.map_image_url,
+        map_image_url=_check_map_url(body.map_image_url),
         description=body.description,
     )
     db.add(room)
@@ -127,7 +142,7 @@ async def create_room(
 async def update_room(
     room_id: str,
     body: MeetingRoomUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     room = await _get_room(room_id, user.tenant_id, db)
@@ -145,7 +160,7 @@ async def update_room(
         room.color = body.color
     if "map_image_url" in body.model_fields_set:
         # allow clearing by passing null/empty
-        room.map_image_url = body.map_image_url or None
+        room.map_image_url = _check_map_url(body.map_image_url, room.map_image_url)
     if body.description is not None:
         room.description = body.description
     if body.is_active is not None:
@@ -159,7 +174,7 @@ async def update_room(
 @router.delete("/{room_id}", status_code=204)
 async def delete_room(
     room_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     room = await _get_room(room_id, user.tenant_id, db)
@@ -170,7 +185,7 @@ async def delete_room(
 @router.post("/map-upload-url")
 async def map_upload_url(
     body: MapUploadUrlRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
 ):
     """Presigned PUT URL for a meeting-room floor-map image (mirrors /settings/logo-upload-url)."""
     if body.mime_type not in {"image/jpeg", "image/png", "image/svg+xml"}:

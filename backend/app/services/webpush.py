@@ -43,6 +43,8 @@ def _send_sync(
         data=json.dumps(payload),
         vapid_private_key=vapid,
         vapid_claims={"sub": subject},
+        # 既定は無期限。応答しない送信先があるとスレッドを握ったままになる。
+        timeout=10,
     )
 
 

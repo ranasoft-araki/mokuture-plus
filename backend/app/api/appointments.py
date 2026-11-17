@@ -1,4 +1,5 @@
 """Visitor appointment management — admin JWT required."""
+import logging
 import re
 from datetime import datetime
 from html import escape
@@ -17,9 +18,11 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.visitor_appointment import VisitorAppointment
 from app.services import email as email_service
+from app.services import mail_quota
 from app.services.honorific import with_honorific
 
 router = APIRouter(prefix="/appointments", tags=["appointments"])
+logger = logging.getLogger(__name__)
 
 # 簡易メール形式チェック(email-validator を新規依存にしないための最小限)。
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -461,6 +464,9 @@ async def send_appointment_email(
     tenant_name = tenant.name if tenant else settings.app_name
     brand_color = tenant.brand_color if tenant else "#4a7c4e"
 
+    # 宛先を自由に指定できるので、テナントごとに1時間あたりの通数を制限する(送る前に枠を確保)。
+    mail_quota.consume(user.tenant_id, 1)
+
     qr_png = email_service.build_appointment_qr_png(appt.token)
     subject, text, html = _build_appointment_email(tenant_name, brand_color, appt, room)
 
@@ -481,5 +487,7 @@ async def send_appointment_email(
         attachments=[(f"QR_{appt.token[:8]}.png", qr_png, "image", "png")],
     )
     if not ok:
-        raise HTTPException(status_code=502, detail=f"メール送信に失敗しました: {err}")
+        # メールサーバーの応答は画面に返さない(詳細はサーバーのログにだけ残す)。
+        logger.warning("appointment email failed (tenant=%s): %s", user.tenant_id, (err or "")[:200])
+        raise HTTPException(status_code=502, detail="メール送信に失敗しました。宛先を確認して、しばらくしてからお試しください。")
     return {"ok": True, "sent_to": body.email}

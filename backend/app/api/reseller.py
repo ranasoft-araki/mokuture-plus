@@ -15,8 +15,10 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.device import Device
 from app.models.reception import ReceptionLog
-from app.services.auth import hash_password, create_access_token, create_refresh_token
-from app.services.timeutil import iso_z
+from app.services import accounts
+from app.services.auth import create_proxy_access_token, hash_password_async
+from app.services.csv_safe import safe_row
+from app.services.timeutil import day_start, iso_z
 
 router = APIRouter(prefix="/reseller", tags=["reseller"])
 
@@ -230,7 +232,7 @@ class CreateCustomerRequest(BaseModel):
         import re
         if not re.match(r"^[a-z0-9\-]{3,64}$", v):
             raise ValueError("Slug must be 3-64 lowercase alphanumeric or hyphens")
-        return v
+        return accounts.check_slug_not_reserved(v)
 
 
 @router.post("/customers", status_code=status.HTTP_201_CREATED)
@@ -244,6 +246,9 @@ async def create_customer(
     existing = await db.execute(select(Tenant).where(Tenant.slug == body.slug))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Tenant slug already taken")
+    # メールアドレスはログイン ID。どのテナントのユーザーとも重ねない(大文字小文字は区別しない)。
+    if await accounts.email_in_use(db, body.admin_email):
+        raise HTTPException(status_code=409, detail=accounts.EMAIL_TAKEN_DETAIL)
 
     tenant = Tenant(slug=body.slug, name=body.name, reseller_id=reseller_tid)
     db.add(tenant)
@@ -251,8 +256,8 @@ async def create_customer(
 
     user = User(
         tenant_id=tenant.id,
-        email=body.admin_email,
-        hashed_password=hash_password(body.admin_password),
+        email=accounts.normalize_email(body.admin_email),
+        hashed_password=await hash_password_async(body.admin_password),
         role="admin",
     )
     db.add(user)
@@ -292,16 +297,20 @@ async def reseller_proxy_login(
     if tenant.reseller_id != reseller_tid:
         raise HTTPException(status_code=403, detail="Access forbidden")
     user_result = await db.execute(
-        select(User).where(User.tenant_id == tenant_id, User.role == "admin").limit(1)
+        select(User)
+        .where(User.tenant_id == tenant_id, User.role == "admin")
+        .order_by(User.created_at, User.id)
+        .limit(1)
     )
-    admin_user = user_result.scalar_one_or_none()
+    admin_user = user_result.scalars().first()
     if not admin_user:
         raise HTTPException(status_code=404, detail="No admin user found for this tenant")
-    access_token = create_access_token(tenant_id=tenant_id, user_id=admin_user.id, role="admin")
-    refresh_token = create_refresh_token(tenant_id=tenant_id, user_id=admin_user.id)
+    # 運営の代理ログインと同じ: 15分で切れるトークンのみ。refresh は出さない
+    # (画面が読むキーを保つため空文字で返す)。
+    access_token = create_proxy_access_token(tenant_id, admin_user.id)
     return {
         "access_token": access_token,
-        "refresh_token": refresh_token,
+        "refresh_token": "",
         "tenant_slug": tenant.slug,
         "role": "admin",
     }
@@ -382,8 +391,8 @@ async def list_reseller_reception(
     q: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     method: Optional[str] = Query(None),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
     offset: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     current_user: User = Depends(require_reseller_or_operator()),
@@ -417,10 +426,12 @@ async def list_reseller_reception(
         stmt = stmt.where(ReceptionLog.state == status)
     if method:
         stmt = stmt.where(ReceptionLog.method == method)
+    # 日付は datetime にしてから比べる。文字列のまま渡すと PostgreSQL では
+    # 「timestamp >= varchar」の演算子が無く 500 になる(SQLite では通るので気付きにくい)。
     if date_from:
-        stmt = stmt.where(ReceptionLog.created_at >= date_from)
+        stmt = stmt.where(ReceptionLog.created_at >= day_start(date_from))
     if date_to:
-        stmt = stmt.where(ReceptionLog.created_at <= date_to + " 23:59:59")
+        stmt = stmt.where(ReceptionLog.created_at < day_start(date_to + timedelta(days=1)))
     stmt = stmt.order_by(ReceptionLog.created_at.desc()).offset(offset).limit(limit)
     result = await db.execute(stmt)
     rows = result.all()
@@ -447,8 +458,8 @@ async def export_reseller_reception_csv(
     tenant_id: Optional[str] = Query(None),
     q: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
     current_user: User = Depends(require_reseller_or_operator()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -490,10 +501,12 @@ async def export_reseller_reception_csv(
         )
     if status:
         stmt = stmt.where(ReceptionLog.state == status)
+    # 日付は datetime にしてから比べる。文字列のまま渡すと PostgreSQL では
+    # 「timestamp >= varchar」の演算子が無く 500 になる(SQLite では通るので気付きにくい)。
     if date_from:
-        stmt = stmt.where(ReceptionLog.created_at >= date_from)
+        stmt = stmt.where(ReceptionLog.created_at >= day_start(date_from))
     if date_to:
-        stmt = stmt.where(ReceptionLog.created_at <= date_to + " 23:59:59")
+        stmt = stmt.where(ReceptionLog.created_at < day_start(date_to + timedelta(days=1)))
     stmt = stmt.order_by(ReceptionLog.created_at.desc())
     result = await db.execute(stmt)
     rows = result.all()
@@ -501,9 +514,9 @@ async def export_reseller_reception_csv(
     output = io.StringIO()
     output.write("﻿")
     writer = csv.writer(output)
-    writer.writerow(["日時", "テナント名", "訪問者名", "会社名", "担当者", "目的", "受付方法", "ステータス", "スタッフメモ"])
+    writer.writerow(["日時", "テナント名", "訪問者名", "会社名", "部署", "担当者", "目的", "受付方法", "ステータス", "スタッフメモ"])
     for log, tenant_name in rows:
-        writer.writerow([
+        writer.writerow(safe_row([
             log.created_at.isoformat() if log.created_at else "",
             tenant_name,
             log.visitor_name,
@@ -514,7 +527,7 @@ async def export_reseller_reception_csv(
             log.method or "",
             log.state or "",
             log.staff_notes or "",
-        ])
+        ]))
     output.seek(0)
 
     filename = f"reception_{datetime.today().strftime('%Y-%m-%d')}.csv"

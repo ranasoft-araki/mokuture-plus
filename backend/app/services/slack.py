@@ -42,6 +42,16 @@ _SCOPE = "chat:write,channels:read,groups:read,channels:join,im:write,users:read
 _HTTP_TIMEOUT = 10.0
 
 
+def escape_mrkdwn(value: str | None) -> str:
+    """Slack の本文(mrkdwn)で制御文字として働く `&` `<` `>` を文字として表示させる。
+
+    来訪者がキオスクで入力した氏名・会社名などをそのまま本文に入れると、`<...>` が
+    リンクやメンション(`<!channel>` 等)として解釈される。Slack 公式の書式どおり
+    `&amp;` `&lt;` `&gt;` に置き換える(`&` を最初に置き換えて二重にしない)。
+    素の入力値に1回だけかけること(組み立て済みの本文にかけ直さない)。"""
+    return (value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 class SlackOAuthError(Exception):
     """Raised when the Slack OAuth code exchange fails."""
 
@@ -386,19 +396,21 @@ class SlackNotifier:
 
         `escalated_from` を渡すと代理通知(応答が無いときのエスカレーション)の文面になる
         — 見出しを「応答がありません」に変え、末尾で元の訪問先担当者名を示す。"""
+        # 入力された値はすべて escape_mrkdwn を通す(リンク・メンションとして解釈させない)。
+        esc = escape_mrkdwn
         head = ":warning: 受付に応答がありません（代理通知）" if escalated_from else ":bell: 来客がありました"
         lines = [head, ""]
         if (company or "").strip():
-            lines.append(f"会社名：{company.strip()}")
-        lines.append(f"お名前：{with_honorific(visitor_name)}")
+            lines.append(f"会社名：{esc(company.strip())}")
+        lines.append(f"お名前：{esc(with_honorific(visitor_name))}")
         if (department or "").strip():
-            lines.append(f"訪問先部署：{department.strip()}")
+            lines.append(f"訪問先部署：{esc(department.strip())}")
         if (host_name or "").strip():
-            lines.append(f"訪問先：{host_name.strip()}")
+            lines.append(f"訪問先：{esc(host_name.strip())}")
         lines.append(f"時刻：{format_jst(when)}")
         lines.append("")
         if escalated_from:
-            lines.append(f"「{escalated_from}」宛の受付に応答がありません。代わりに対応をお願いします。")
+            lines.append(f"「{esc(escalated_from)}」宛の受付に応答がありません。代わりに対応をお願いします。")
         else:
             lines.append("対応をお願いします。")
         return "\n".join(lines)

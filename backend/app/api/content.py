@@ -1,19 +1,17 @@
 import re
-import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, update
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import get_current_user, require_tenant_admin
 from app.models.content import Media, Playlist, PlaylistItem, Schedule
 from app.models.user import User
 from app.services import storage
-from app.config import settings
 
 router = APIRouter(prefix="/content", tags=["content"])
 
@@ -39,10 +37,9 @@ class MediaCreate(BaseModel):
     @field_validator("url")
     @classmethod
     def url_must_be_storage_origin(cls, v: str) -> str:
-        # Only allow URLs from the configured storage public URL to prevent arbitrary URL injection
-        allowed = settings.storage_public_url.rstrip("/")
-        if not v.startswith(allowed):
-            raise ValueError(f"URL must originate from configured storage ({allowed})")
+        # この環境の保存先へアップロードした URL だけを登録させる(よその URL を配信させない)。
+        if not storage.is_own_storage_url(v):
+            raise ValueError("アップロードしたファイルの URL を指定してください")
         return v
 
     @field_validator("mime_type")
@@ -66,41 +63,11 @@ class MediaOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-@router.post("/media/upload", response_model=MediaOut, status_code=201)
-async def upload_media(
-    file: UploadFile = File(...),
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    data = await file.read()
-    if len(data) > storage.MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="ファイルサイズが大きすぎます（最大500MB）")
-    try:
-        result = storage.upload_file(
-            user.tenant_id,
-            file.filename or "upload",
-            file.content_type or "application/octet-stream",
-            data,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    media = Media(
-        id=result["media_id"],
-        tenant_id=user.tenant_id,
-        filename=file.filename or "upload",
-        mime_type=file.content_type or "application/octet-stream",
-        url=result["public_url"],
-        size_bytes=len(data),
-    )
-    db.add(media)
-    await db.commit()
-    await db.refresh(media)
-    return _media_out(media)
-
-
+# メディアの登録は「署名付き URL へブラウザから直接アップロード → POST /media で登録」の
+# 経路だけ。ファイル本体をこの API が受け取る経路は呼び出し元が無く、大きなファイルを
+# メモリへ読み込むので削除した。
 @router.post("/media/upload-url")
-async def get_upload_url(body: UploadUrlRequest, user: User = Depends(get_current_user)):
+async def get_upload_url(body: UploadUrlRequest, user: User = Depends(require_tenant_admin())):
     try:
         return storage.generate_presigned_upload_url(user.tenant_id, body.filename, body.mime_type)
     except ValueError as e:
@@ -112,7 +79,7 @@ async def get_upload_url(body: UploadUrlRequest, user: User = Depends(get_curren
 @router.post("/media", response_model=MediaOut, status_code=201)
 async def register_media(
     body: MediaCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     media = Media(
@@ -148,7 +115,7 @@ async def list_media(
 @router.delete("/media/{media_id}", status_code=204)
 async def delete_media(
     media_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -234,7 +201,7 @@ class PlaylistOut(BaseModel):
 @router.post("/playlists", response_model=PlaylistOut, status_code=201)
 async def create_playlist(
     body: PlaylistCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     pl = Playlist(
@@ -291,7 +258,7 @@ async def list_playlists(
 async def update_playlist(
     playlist_id: str,
     body: PlaylistUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -318,7 +285,7 @@ async def update_playlist(
 @router.delete("/playlists/{playlist_id}", status_code=204)
 async def delete_playlist(
     playlist_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -335,7 +302,7 @@ async def delete_playlist(
 async def update_playlist_items(
     playlist_id: str,
     items: list[PlaylistItemIn],
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -374,7 +341,7 @@ class ReorderItemsRequest(BaseModel):
 async def reorder_playlist_items(
     playlist_id: str,
     body: ReorderItemsRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     # Verify playlist belongs to this tenant
@@ -434,7 +401,7 @@ class ScheduleCreate(BaseModel):
 @router.post("/schedules", status_code=201)
 async def create_schedule(
     body: ScheduleCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     # Verify playlist belongs to this tenant
@@ -472,7 +439,7 @@ async def list_schedules(
 @router.delete("/schedules/{schedule_id}", status_code=204)
 async def delete_schedule(
     schedule_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(

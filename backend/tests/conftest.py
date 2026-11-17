@@ -76,6 +76,38 @@ async def fresh_db():
         await conn.run_sync(Base.metadata.drop_all)
 
 
+@pytest.fixture(autouse=True)
+def _reset_in_process_limits():
+    """ログイン失敗の回数・メール送信回数はプロセス内に持つので、テストごとに空にする。"""
+    from app.services import login_throttle, mail_quota
+
+    login_throttle.clear_all()
+    mail_quota.clear_all()
+    yield
+    login_throttle.clear_all()
+    mail_quota.clear_all()
+
+
+# 外へ送る URL の確認で引く名前解決の答え(テストでは外の DNS を引かない)。
+# ここに無いホスト名は公開アドレスに解決されたものとして扱う。
+FAKE_DNS: dict[str, list[str]] = {
+    "internal.example.test": ["10.0.0.5"],
+    "metadata.example.test": ["169.254.169.254"],
+    "loop.example.test": ["127.0.0.1"],
+    "mapped.example.test": ["::ffff:10.0.0.1"],
+}
+
+
+@pytest.fixture(autouse=True)
+def _fake_dns(monkeypatch):
+    from app.services import url_safety
+
+    def fake_resolve(host: str, port: int) -> list[str]:
+        return FAKE_DNS.get(host, ["93.184.216.34"])
+
+    monkeypatch.setattr(url_safety, "_resolve", fake_resolve)
+
+
 @pytest.fixture
 async def client():
     """app 全体へ ASGI で入るクライアント。"""

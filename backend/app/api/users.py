@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from jose import JWTError
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
@@ -9,11 +10,28 @@ from app.database import get_db
 from app.middleware.tenant import get_current_user
 from app.models.staff_route import StaffNotificationRoute
 from app.models.user import User
-from app.services.auth import hash_password, verify_password
+from app.services import accounts
+from app.services.auth import (
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    hash_password_async,
+    is_readonly_account,
+    verify_password_async,
+)
+from app.services.timeutil import utcnow_naive
 
 router = APIRouter(prefix="/users", tags=["users"])
 
 _ALLOWED_ROLES = {"admin", "staff"}
+# ユーザー管理(追加・削除・権限変更・パスワード再設定)ができるロール。
+_MANAGER_ROLES = ("admin", "superadmin")
+_ADMIN_REQUIRED = "この操作は管理者のみ行えます"
+
+
+def _password_changed_now():
+    """パスワード変更時刻。トークンの iat(秒)と比べるので秒に切り捨てて保存する。"""
+    return utcnow_naive().replace(microsecond=0)
 
 
 class UserListItem(BaseModel):
@@ -94,19 +112,19 @@ async def create_user(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin role required")
+    if user.role not in _MANAGER_ROLES:
+        raise HTTPException(status_code=403, detail=_ADMIN_REQUIRED)
     if body.role not in _ALLOWED_ROLES:
         raise HTTPException(status_code=400, detail="Role must be 'admin' or 'staff'")
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    existing = await db.execute(select(User).where(User.email == body.email))
-    if existing.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail="Email already exists")
+    # メールアドレスはログイン ID。どのテナントのユーザーとも重ねない(大文字小文字は区別しない)。
+    if await accounts.email_in_use(db, body.email):
+        raise HTTPException(status_code=409, detail=accounts.EMAIL_TAKEN_DETAIL)
     new_user = User(
         tenant_id=user.tenant_id,
-        email=body.email,
-        hashed_password=hash_password(body.password),
+        email=accounts.normalize_email(body.email),
+        hashed_password=await hash_password_async(body.password),
         role=body.role,
     )
     db.add(new_user)
@@ -121,8 +139,8 @@ async def delete_user(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin role required")
+    if user.role not in _MANAGER_ROLES:
+        raise HTTPException(status_code=403, detail=_ADMIN_REQUIRED)
     if user_id == user.id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
     result = await db.execute(select(User).where(User.id == user_id))
@@ -144,19 +162,56 @@ async def delete_user(
     await db.commit()
 
 
+_PROXY_PASSWORD_DETAIL = "代理ログイン中は管理者のパスワードを変更できません。ご本人がログインして変更してください"
+
+
+def _is_proxy_request(request: Request) -> bool:
+    """代理ログイン(運営・代理店が顧客の管理者として入っている)のトークンか。"""
+    auth = request.headers.get("authorization") or ""
+    if not auth.lower().startswith("bearer "):
+        return False
+    try:
+        return decode_token(auth.split(" ", 1)[1].strip()).get("proxy") is True
+    except JWTError:
+        return False
+
+
 @router.patch("/me/password")
 async def change_own_password(
     body: ChangePasswordRequest,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if not verify_password(body.current_password, user.hashed_password):
+    """自分のパスワードを変更する。
+
+    変更より前に発行されたトークン(他の端末のログイン)は使えなくなる。変更した本人の
+    画面がログアウトされないよう、新しいトークンを返す(フロントはこれに差し替える)。
+
+    代理ログイン(運営・代理店が顧客の管理者として入っている)では変更させない。
+    顧客の管理者本人のパスワードであり、変えると本人の全端末がログアウトされるため。"""
+    if _is_proxy_request(request):
+        raise HTTPException(status_code=403, detail=_PROXY_PASSWORD_DETAIL)
+    if not await verify_password_async(body.current_password, user.hashed_password):
         raise HTTPException(status_code=400, detail="現在のパスワードが正しくありません")
     if len(body.new_password) < 8:
-        raise HTTPException(status_code=422, detail="New password must be at least 8 characters")
-    user.hashed_password = hash_password(body.new_password)
+        raise HTTPException(status_code=422, detail="新しいパスワードは8文字以上にしてください")
+    changed_at = _password_changed_now()
+    user.hashed_password = await hash_password_async(body.new_password)
+    user.password_changed_at = changed_at
     await db.commit()
-    return {"message": "パスワードを変更しました"}
+    tenant_id = user.tenant_id or ""
+    access = create_access_token(
+        tenant_id, user.id, user.role,
+        readonly=is_readonly_account(user.email), issued_at=changed_at,
+    )
+    refresh = create_refresh_token(tenant_id, user.id, issued_at=changed_at)
+    return {
+        "message": "パスワードを変更しました",
+        "access_token": access,
+        "refresh_token": refresh,
+        "token_type": "bearer",
+    }
 
 
 @router.patch("/{user_id}", response_model=UserListItem)
@@ -166,8 +221,8 @@ async def update_user_role(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin role required")
+    if user.role not in _MANAGER_ROLES:
+        raise HTTPException(status_code=403, detail=_ADMIN_REQUIRED)
     if body.role not in _ALLOWED_ROLES:
         raise HTTPException(status_code=400, detail="Role must be 'admin' or 'staff'")
     result = await db.execute(select(User).where(User.id == user_id))
@@ -184,18 +239,25 @@ async def update_user_role(
 async def reset_user_password(
     user_id: str,
     body: ResetPasswordRequest,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin role required")
+    if user.role not in _MANAGER_ROLES:
+        raise HTTPException(status_code=403, detail=_ADMIN_REQUIRED)
     if len(body.new_password) < 8:
         raise HTTPException(status_code=422, detail="New password must be at least 8 characters")
     result = await db.execute(select(User).where(User.id == user_id))
     target = result.scalar_one_or_none()
     if target is None or target.tenant_id != user.tenant_id:
         raise HTTPException(status_code=403, detail="User not found in your tenant")
-    target.hashed_password = hash_password(body.new_password)
+    # 代理ログインでは顧客の管理者(自分自身を含む)のパスワードは再設定させない
+    # (PATCH /users/me/password と同じ理由)。スタッフの再設定は従来どおりできる。
+    if _is_proxy_request(request) and (target.id == user.id or target.role in _MANAGER_ROLES):
+        raise HTTPException(status_code=403, detail=_PROXY_PASSWORD_DETAIL)
+    target.hashed_password = await hash_password_async(body.new_password)
+    # 再設定前のログイン(その人の全端末)を無効にする。
+    target.password_changed_at = _password_changed_now()
     await db.commit()
     return {"message": "パスワードをリセットしました"}
 

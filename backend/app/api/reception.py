@@ -11,13 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete, update
 
 from app.database import get_db
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import get_current_user, require_tenant_admin
 from app.models.reception import ReceptionLog
 from app.models.user import User
 from app.services.auth import create_decision_token, decode_token
 from app.services import events as event_bus
 from app.services import reception_notify
 from app.services.timeutil import iso_z
+from app.services.csv_safe import safe_row
 from app.config import settings
 
 router = APIRouter(prefix="/reception", tags=["reception"])
@@ -251,7 +252,7 @@ async def list_reception(
 
 @router.get("/contacts.csv")
 async def export_contacts_csv(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -271,12 +272,12 @@ async def export_contacts_csv(
     writer = csv.writer(output)
     writer.writerow(["氏名", "会社名", "来訪回数", "最終来訪日"])
     for row in rows:
-        writer.writerow([
+        writer.writerow(safe_row([
             row.visitor_name,
             row.company or "",
             row.visit_count,
             row.last_visit.strftime("%Y-%m-%d") if row.last_visit else "",
-        ])
+        ]))
 
     return StreamingResponse(
         io.BytesIO(output.getvalue().encode("utf-8-sig")),
@@ -290,7 +291,7 @@ async def export_reception_csv(
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
     method: str | None = Query(None),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     q = select(ReceptionLog).where(ReceptionLog.tenant_id == user.tenant_id).order_by(ReceptionLog.created_at.desc())
@@ -308,7 +309,7 @@ async def export_reception_csv(
     writer = csv.writer(output)
     writer.writerow(["日時", "訪問者名", "会社名", "部署", "担当者", "目的", "受付方法", "ステータス", "スタッフメモ"])
     for r in logs:
-        writer.writerow([
+        writer.writerow(safe_row([
             r.created_at.isoformat() if r.created_at else "",
             r.visitor_name,
             r.company or "",
@@ -318,7 +319,7 @@ async def export_reception_csv(
             r.method,
             r.state,
             r.staff_notes or "",
-        ])
+        ]))
     output.seek(0)
 
     filename = f"reception_{datetime.today().strftime('%Y-%m-%d')}.csv"
@@ -453,7 +454,7 @@ class BulkDeleteRequest(BaseModel):
 @router.delete("/bulk", status_code=200)
 async def bulk_delete_reception(
     body: BulkDeleteRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     if not body.ids:
@@ -473,7 +474,7 @@ async def bulk_delete_reception(
 @router.delete("/{log_id}", status_code=204)
 async def delete_reception(
     log_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(

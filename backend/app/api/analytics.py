@@ -19,11 +19,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.kiosk import get_kiosk_device
+# 分析ログは承認待ち・停止中の端末からも届く(稼働率の計算に使う)ので、承認状態は問わない。
+from app.api.kiosk import get_kiosk_device_any_status as get_kiosk_device
+from app.services.ratelimit import client_ip
 from app.database import get_db
 from app.middleware.tenant import require_operator
 from app.models.analytics import DeviceEvent, DeviceMetric, ReceptionEvent, ReceptionSession
@@ -37,7 +38,7 @@ from app.services.timeutil import iso_z
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 # 参照系(運営)は IP 単位で十分。
-_limiter = Limiter(key_func=get_remote_address)
+_limiter = Limiter(key_func=client_ip)
 
 
 def _device_key(request: Request) -> str:
@@ -48,7 +49,7 @@ def _device_key(request: Request) -> str:
     """
     token = request.headers.get("X-Kiosk-Token")
     if not token:
-        return get_remote_address(request)
+        return client_ip(request)
     return "dev:" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:32]
 
 

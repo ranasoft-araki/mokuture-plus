@@ -7,9 +7,11 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.models.user import User
-from app.services.auth import decode_token
+from app.services.auth import decode_token, token_predates_password_change
 
 bearer = HTTPBearer()
+
+PASSWORD_CHANGED_DETAIL = "パスワードが変更されたため、もう一度ログインしてください"
 
 
 async def get_current_user(
@@ -33,6 +35,9 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    # パスワード変更より前に発行されたトークン(他の端末のログイン等)は使えなくする。
+    if token_predates_password_change(payload, user):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=PASSWORD_CHANGED_DETAIL)
     return user
 
 
@@ -40,9 +45,16 @@ def require_roles(*roles: str):
     """Dependency factory: ensure current user has one of the given roles."""
     async def check(user: User = Depends(get_current_user)) -> User:
         if user.role not in roles:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="この操作を行う権限がありません")
         return user
     return check
+
+
+def require_tenant_admin():
+    """テナント管理者(admin / superadmin)のみ。スタッフ(staff)は閲覧と日常の受付対応だけ。
+
+    運営・代理店の代理ログインはテナントの admin ユーザーとして入るのでここを通る。"""
+    return require_roles("admin", "superadmin")
 
 
 def require_admin():

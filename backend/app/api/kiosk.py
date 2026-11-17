@@ -23,7 +23,6 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
@@ -43,7 +42,10 @@ from app.services.slack import SlackNotifier
 from app.services.storage import generate_presigned_get_url
 from app.services.crypto import decrypt_dict
 from app.services.webpush import send_push
-from app.services.auth import hash_password, verify_password, create_decision_token
+from app.services.auth import hash_password_async, verify_password_async, create_decision_token
+from app.services.ratelimit import client_ip
+from app.services.slack import escape_mrkdwn
+from app.services import url_safety
 from app.services import chatwork as chatwork_service
 from app.services import notification_channels
 from app.services import notification_health
@@ -51,6 +53,7 @@ from app.services import events as event_bus
 from app.services import reception_notify
 from app.services import analytics as analytics_service
 from app.services import analytics_link
+from app.services.timeutil import to_naive_utc
 from app.config import settings
 
 _PIN_RE = re.compile(r"^\d{4}$")
@@ -156,7 +159,7 @@ def _mirror_int(v) -> int | None:
 
 
 router = APIRouter(prefix="/kiosk", tags=["kiosk"])
-_limiter = Limiter(key_func=get_remote_address)
+_limiter = Limiter(key_func=client_ip)
 
 _ALLOWED_METHODS = {"form", "qr", "appointment"}
 
@@ -216,6 +219,8 @@ BUNDLE_FILES = [
     "static/kiosk.html",
     "static/analytics.js",  # 行動ログ(匿名)のロガー。kiosk.html が script タグで読み込む
     "static/tap.mp3",   # タップ操作音の音源(木琴C6の単音。VSQ plus+のフリー効果音を加工)。kiosk.html が /tap.mp3 で再生
+    "static/jsqr.min.js",          # QR 読み取り。kiosk.html が /jsqr.min.js で読む
+    "static/device-control.html",  # /device-control の操作パネル
     "main.py",
     "updater.py",
     "gpio.py",
@@ -228,6 +233,9 @@ BUNDLE_FILES = [
     "analytics.py",
     "sysinfo.py",
     "watchdog.py",
+    # かな漢字変換。main.py が起動時に import するので必ず一緒に配る(SKK-JISYO.L は配らない)。
+    "kana_kanji.py",
+    "kana_dict.tsv",
     # 名刺読み取り(QR無し来訪の受付フォーム自動入力)。agent の updater.MANAGED_FILES と
     # 同じ並びにしておくこと(片方だけ足すと、その端末だけ古いコードのまま動く)。
     # 依存パッケージと OCR モデルは OTA では配らない(install.sh / fetch_ocr_models.py の担当)。
@@ -461,15 +469,42 @@ class RegisterRequest(BaseModel):
 _DEFAULT_DEVICE_NAME = "新しい端末"
 
 
+def _reregister_existing(existing: Device, presented_token: str | None) -> dict:
+    """(tenant_slug, hardware_id) が既存端末に一致したときの応答を決める。
+
+    - その端末の**現在のトークン**を `X-Kiosk-Token` で示した呼び出し → 従来どおりそのまま返す
+    - 示さない呼び出し → トークンを作り直し、承認待ち(pending)へ戻す
+      (テナントの識別子とハードウェア ID は推測できうるので、それだけで使えるトークンを
+      渡さない。新しいトークンは管理画面で承認し直すまで受付などに使えない)"""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    existing.last_seen_at = now
+    if presented_token and secrets.compare_digest(presented_token, existing.token or ""):
+        return {
+            "device_token": existing.token,
+            "device_name": existing.name,
+            "status": existing.status or "active",
+        }
+    existing.token = secrets.token_hex(32)
+    existing.status = "pending"
+    existing.online_since = None
+    return {"device_token": existing.token, "device_name": existing.name, "status": "pending"}
+
+
 @router.post("/register")
 @_limiter.limit("20/minute")
-async def register_device(request: Request, body: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register_device(
+    request: Request,
+    body: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+    x_kiosk_token: str | None = Header(default=None, alias="X-Kiosk-Token"),
+):
     """端末の自己登録（PIN 不要）。承認待ち(status=pending)の Device を作成し、
     デバイストークンを返す。端末はトークンで status をポーリングし、管理画面で
     承認(active)されると起動する。
 
-    (tenant_slug, hardware_id) が既存端末に一致する場合は再作成せず、その端末の
-    トークンと現在の status を返す（再起動・キャッシュ消去での重複登録を防ぐ）。"""
+    (tenant_slug, hardware_id) が既存端末に一致する場合は再作成しない（重複登録を防ぐ）。
+    その端末の現在のトークンを `X-Kiosk-Token` で示せば同じトークンと status を返し、
+    示さなければトークンを作り直して承認待ちに戻す(`_reregister_existing`)。"""
     tenant_result = await db.execute(select(Tenant).where(Tenant.slug == body.tenant_slug))
     tenant = tenant_result.scalar_one_or_none()
     if tenant is None:
@@ -485,13 +520,9 @@ async def register_device(request: Request, body: RegisterRequest, db: AsyncSess
         )
         existing = existing_result.scalar_one_or_none()
         if existing is not None:
-            existing.last_seen_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            out = _reregister_existing(existing, x_kiosk_token)
             await db.commit()
-            return {
-                "device_token": existing.token,
-                "device_name": existing.name,
-                "status": existing.status or "active",
-            }
+            return out
 
     name = (body.device_name or "").strip() or _DEFAULT_DEVICE_NAME
     if len(name) > 100:
@@ -521,20 +552,34 @@ async def register_device(request: Request, body: RegisterRequest, db: AsyncSess
             )
             existing = existing_result.scalar_one_or_none()
             if existing is not None:
-                return {
-                    "device_token": existing.token,
-                    "device_name": existing.name,
-                    "status": existing.status or "active",
-                }
+                # ここへ来るのは、同じ端末からの登録が同時に2つ走り、もう一方が先に行を作った
+                # とき。作られたばかりの承認待ちの行はそのまま返す(作り直すと、先に返した
+                # ほうのトークンが無効になり、端末がどちらを覚えたかで承認待ちから抜けられない)。
+                created = to_naive_utc(existing.created_at)
+                just_created = (
+                    existing.status == "pending"
+                    and created is not None
+                    and (datetime.now(timezone.utc).replace(tzinfo=None) - created) < timedelta(seconds=30)
+                )
+                if just_created:
+                    return {"device_token": existing.token, "device_name": existing.name, "status": existing.status}
+                out = _reregister_existing(existing, x_kiosk_token)
+                await db.commit()
+                return out
         raise
     await db.refresh(device)
     return {"device_token": device.token, "device_name": device.name, "status": device.status}
 
 
-async def get_kiosk_device(
+async def get_kiosk_device_any_status(
     x_kiosk_token: str = Header(alias="X-Kiosk-Token"),
     db: AsyncSession = Depends(get_db),
 ) -> tuple[Tenant, Device]:
+    """デバイストークンで端末とテナントを確定する(承認状態・テナント停止は問わない)。
+
+    承認待ち・停止中の端末でも必要なもの(承認状態のポーリング・生存確認・スケジュール
+    (承認待ち/停止中の応答を自分で返す)・ソフトウェア更新・分析ログ)だけがこちらを使う。
+    受付・呼び出し・ロッカー等は `get_kiosk_device`(承認済み・停止していないこと)を使う。"""
     result = await db.execute(select(Device).where(Device.token == x_kiosk_token))
     device = result.scalar_one_or_none()
     if device is None:
@@ -561,6 +606,24 @@ async def get_kiosk_device(
     return tenant, device
 
 
+async def get_kiosk_device(
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device_any_status),
+) -> tuple[Tenant, Device]:
+    """承認済み(active)で、テナントが停止していない端末だけを通す。
+
+    承認待ちの端末のトークンは、管理画面で承認されるまで受付・通知・ロッカー等に使えない。
+    401 ではなく 403 にする(端末側は 401 を「トークンが無効＝登録し直す」と扱うため)。"""
+    tenant, device = ctx
+    if (device.status or "active") != "active":
+        raise HTTPException(
+            status_code=403,
+            detail="この端末はまだ承認されていません。管理画面「キオスク端末」で承認してください",
+        )
+    if getattr(tenant, "is_suspended", False):
+        raise HTTPException(status_code=403, detail="このテナントは現在停止中です")
+    return tenant, device
+
+
 class HeartbeatBody(BaseModel):
     version: str | None = None
     ip: str | None = None
@@ -569,7 +632,7 @@ class HeartbeatBody(BaseModel):
 @router.post("/heartbeat", status_code=200)
 async def kiosk_heartbeat(
     body: HeartbeatBody | None = None,
-    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device_any_status),
     db: AsyncSession = Depends(get_db),
 ):
     """軽量生存確認。last_seen_at/online_since は get_kiosk_device が更新する。
@@ -591,7 +654,7 @@ async def kiosk_heartbeat(
 
 
 @router.get("/status")
-async def kiosk_status(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device)):
+async def kiosk_status(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device_any_status)):
     """承認状態の軽量ポーリング用。承認待ち画面がこれを見て active になったら起動する。
     get_kiosk_device が last_seen_at を更新するので、承認待ち端末も管理画面で「稼働中」に見える。"""
     tenant, device = ctx
@@ -599,7 +662,7 @@ async def kiosk_status(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device)):
 
 
 @router.get("/schedule")
-async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device), db: AsyncSession = Depends(get_db)):
+async def kiosk_schedule(ctx: tuple[Tenant, Device] = Depends(get_kiosk_device_any_status), db: AsyncSession = Depends(get_db)):
     """Return the current scheduled playlist with embedded media data."""
     tenant, device = ctx
 
@@ -1016,7 +1079,9 @@ async def kiosk_call_staff(
     event_bus.publish(tenant.id, {"type": "reception"})
 
     title = "配達の呼び出し"
-    text = f"🔔 配達の呼び出し\n「{device_label}」から呼び出しがあります。{message or ''}"
+    text = _DeliveryText(
+        lambda esc: f"🔔 配達の呼び出し\n「{esc(device_label)}」から呼び出しがあります。{esc(message or '')}"
+    )
 
     # 通知タップで該当受付の対応モーダル(受付/電話)を直接開かせる。
     push_url = f"/{tenant.id}/admin/reception?respond={log.id}"
@@ -1124,7 +1189,7 @@ async def kiosk_occupy_locker(
     locker = await _get_kiosk_locker(locker_id, tenant.id, db)
     if locker.occupied:
         raise HTTPException(status_code=409, detail="already occupied")
-    locker.pin_hash = hash_password(body.pin)
+    locker.pin_hash = await hash_password_async(body.pin)
     locker.occupied = True
     locker.occupied_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
@@ -1148,7 +1213,7 @@ async def kiosk_occupy_locker_delivery(
     if locker.occupied:
         raise HTTPException(status_code=409, detail="already occupied")
     pin = _generate_delivery_pin()
-    locker.pin_hash = hash_password(pin)
+    locker.pin_hash = await hash_password_async(pin)
     locker.occupied = True
     locker.occupied_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
@@ -1157,12 +1222,7 @@ async def kiosk_occupy_locker_delivery(
     door_number = locker.door_number  # ORM属性はここで退避（下の _log_delivery_dropoff が rollback すると失効するため）
     device_label = device.name or "受付端末"
     title = "置き配のお知らせ"
-    text = (
-        f"📦 置き配がありました\n"
-        f"「{locker_label}」に置き配されました。\n"
-        f"解錠パスワード: {pin}\n"
-        f"(受付端末: {device_label})"
-    )
+    text = _DeliveryText(lambda esc: _dropoff_text(esc, locker_label, pin, device_label))
 
     # 通知を見逃しても後からPINを確認できるよう受付ログにも残す（best-effort）
     dropoff_log_id = await _log_delivery_dropoff(db, tenant.id, locker_label, pin, device_label)
@@ -1207,7 +1267,7 @@ async def kiosk_release_locker(
         locker.occupied_at = None
         await db.commit()
         return {"ok": True, "door_number": locker.door_number}
-    if not verify_password(body.pin or "", locker.pin_hash):
+    if not await verify_password_async(body.pin or "", locker.pin_hash):
         raise HTTPException(status_code=403, detail="invalid pin")
     locker.pin_hash = None
     locker.occupied = False
@@ -1248,12 +1308,7 @@ async def kiosk_notify_delivery(
     except (TypeError, ValueError):
         door_number = locker_id
     title = "置き配のお知らせ"
-    text = (
-        f"📦 置き配がありました\n"
-        f"「{locker_label}」に置き配されました。\n"
-        f"解錠パスワード: {pin}\n"
-        f"(受付端末: {device_label})"
-    )
+    text = _DeliveryText(lambda esc: _dropoff_text(esc, locker_label, pin, device_label))
     # 通知を見逃しても後からPINを確認できるよう受付ログにも残す（best-effort）
     dropoff_log_id = await _log_delivery_dropoff(db, tenant.id, locker_label, pin, device_label)
     background.add_task(
@@ -1327,10 +1382,51 @@ async def kiosk_mirror_lockers(
     return {"ok": True, "updated": len(items)}
 
 
+def _plain(value: str) -> str:
+    return value
+
+
+class _DeliveryText:
+    """配達通知の本文を、送り先ごとの書式で組み立てる。
+
+    端末から届く値(ロッカー名・端末名・用件)を本文に入れる。Slack と Chatwork には
+    それぞれの記法として働く文字があるので、送り先ごとに無害化してから入れる
+    (Web Push は記法が無いのでそのまま)。"""
+
+    def __init__(self, build):
+        self._build = build
+
+    @property
+    def plain(self) -> str:
+        return self._build(_plain)
+
+    @property
+    def slack(self) -> str:
+        return self._build(escape_mrkdwn)
+
+    @property
+    def chatwork(self) -> str:
+        return self._build(chatwork_service.escape_tags)
+
+
+def _dropoff_text(esc, locker_label: str, pin: str, device_label: str) -> str:
+    return (
+        f"📦 置き配がありました\n"
+        f"「{esc(locker_label)}」に置き配されました。\n"
+        f"解錠パスワード: {esc(pin)}\n"
+        f"(受付端末: {esc(device_label)})"
+    )
+
+
 async def _send_webhook(url: str, data: dict) -> bool:
-    """best-effort な Webhook POST。送信できたら True（URL はログに出さない）。"""
+    """best-effort な Webhook POST。送信できたら True（URL はログに出さない）。
+
+    送る直前にも宛先を確かめる(保存後に名前解決の結果が変わることがあるため)。
+    転送(リダイレクト)には従わない＝確かめた宛先以外へは送らない。"""
+    if not await url_safety.is_public_url(url):
+        return False
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
             resp = await client.post(url, json=data)
         return resp.status_code < 400
     except Exception:
@@ -1586,7 +1682,7 @@ async def _log_delivery_dropoff(
 
 
 async def _fire_delivery_notifications(
-    tenant_id: str, title: str, text: str, webhook_payload: dict, push_url: str | None = None,
+    tenant_id: str, title: str, text: "_DeliveryText | str", webhook_payload: dict, push_url: str | None = None,
     decision_log: "ReceptionLog | None" = None, dropoff_log_id: str | None = None,
 ) -> None:
     """置き配/呼び出しの通知を新しいDBセッションで並行送信する（BackgroundTasks 用）。
@@ -1603,6 +1699,9 @@ async def _fire_delivery_notifications(
     ``dropoff_log_id`` を渡すと（置き配）、応答ボタンは付けず、代わりに Web Push へ
     `kind=delivery_dropoff` / `logId` を載せる。通知本体タップで受付ログ画面の詳細モーダル
     （解錠PINを大きく表示）を直接開かせる（受付応答通知が対応モーダルを開くのと同じ導線）。"""
+    if not isinstance(text, _DeliveryText):
+        raw = text
+        text = _DeliveryText(lambda esc: esc(raw))
     slack_decision = None
     push_data = None
     push_actions = None
@@ -1622,15 +1721,15 @@ async def _fire_delivery_notifications(
     try:
         async with AsyncSessionLocal() as db:
             tasks = [
-                _notify_slack_text(tenant_id, text, db, decision=slack_decision),
+                _notify_slack_text(tenant_id, text.slack, db, decision=slack_decision),
                 _notify_webhook_event(tenant_id, webhook_payload, db, types=("webhook_delivery", "webhook")),
-                _notify_chatwork_text(tenant_id, text, db, types=("chatwork_delivery", "chatwork")),
+                _notify_chatwork_text(tenant_id, text.chatwork, db, types=("chatwork_delivery", "chatwork")),
             ]
             channels = ["slack", "webhook", "chatwork"]
             if await _push_delivery_enabled(tenant_id, db):
                 channels.append("push")
                 tasks.append(_notify_push_text(
-                    tenant_id, title, text, tenant_id, db, push_url,
+                    tenant_id, title, text.plain, tenant_id, db, push_url,
                     data=push_data, actions=push_actions, tag=push_tag,
                 ))
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1675,7 +1774,7 @@ async def _record_delivery_analytics(
 
 @router.get("/bundle/manifest")
 async def kiosk_bundle_manifest(
-    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device_any_status),
     db: AsyncSession = Depends(get_db),
 ):
     """Return current bundle version + per-file hashes. Device uses this to detect changes."""
@@ -1685,7 +1784,8 @@ async def kiosk_bundle_manifest(
     force = False
     fat = getattr(tenant, "kiosk_force_update_at", None)
     if fat is not None:
-        diff = (now - fat).total_seconds()
+        # 本番の一部の列は timestamptz で、tz 付きで読み戻ることがある(naive と引き算できない)。
+        diff = (now - to_naive_utc(fat)).total_seconds()
         force = 0 <= diff <= _FORCE_WINDOW_SEC
 
     (version, files), source = await asyncio.gather(_collect_bundle(), _bundle_source())
@@ -1699,7 +1799,7 @@ async def kiosk_bundle_manifest(
 @router.get("/bundle/file/{file_path:path}")
 async def kiosk_bundle_file(
     file_path: str,
-    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device),
+    ctx: tuple[Tenant, Device] = Depends(get_kiosk_device_any_status),
 ):
     """Download a single bundle file. Path must be in BUNDLE_FILES whitelist."""
     if file_path not in BUNDLE_FILES:

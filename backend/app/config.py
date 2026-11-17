@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # CORS
     allowed_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
+    # レート制限の接続元 IP を X-Forwarded-For から取るか(services/ratelimit.py)。
+    # 本番はロードバランサの背後なので True。プロキシを挟まない構成では False にする。
+    trust_forwarded_for: bool = True
+
     # VAPID for Web Push
     vapid_private_key: str = ""
     vapid_public_key: str = ""
@@ -47,7 +51,8 @@ class Settings(BaseSettings):
     # Slack OAuth (Bot Token + chat.postMessage). Lets a tenant admin connect Slack from
     # the admin panel ("Slackに追加") instead of pasting a token by hand; the channel is
     # chosen afterward in the UI. Bot Token Scopes: chat:write, channels:read, groups:read,
-    # channels:join. Feature is DISABLED unless all three are set (see slack_oauth_enabled).
+    # channels:join, im:write, users:read (see services/slack.py _SCOPE).
+    # Feature is DISABLED unless all three are set (see slack_oauth_enabled).
     # SLACK_REDIRECT_URI must exactly match a Redirect URL registered on the Slack App,
     # e.g. https://mokuture-plus-api.onrender.com/api/notifications/slack/callback
     slack_client_id: str = ""
@@ -91,6 +96,22 @@ class Settings(BaseSettings):
     @property
     def smtp_enabled(self) -> bool:
         return bool(self.smtp_host and self.smtp_username and self.smtp_password)
+
+
+def insecure_default_secrets(s: "Settings") -> list[str]:
+    """SQLite 以外の DB なのに既定値のままの秘密設定の名前を返す(空なら問題なし)。
+
+    既定値はリポジトリに載っているので、そのまま本番で動かすとトークンの署名や
+    保存した秘密情報の暗号化が意味を持たなくなる。開発・テストの SQLite は対象外。"""
+    if (s.database_url or "").startswith("sqlite"):
+        return []
+    bad = []
+    for name, env in (("jwt_secret_key", "JWT_SECRET_KEY"), ("encryption_key", "ENCRYPTION_KEY")):
+        value = getattr(s, name) or ""
+        # 既定値そのもの・空・`.env.example` の書きかけ(change-me...)のまま
+        if value == Settings.model_fields[name].default or not value or value.startswith("change-me"):
+            bad.append(env)
+    return bad
 
 
 settings = Settings()
