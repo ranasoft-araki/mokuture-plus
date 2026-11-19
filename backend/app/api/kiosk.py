@@ -298,10 +298,17 @@ BUNDLE_FILES = [
     # 並びは kiosk_agent/updater.py の MANAGED_FILES と同じにする。
     "sysupdate.py",
     "pyproject.toml",
+    # 遠隔ログインの常駐(別プロセス mokuture-tunnel.service)。受け口の設定と運営の公開鍵は下の system/。
+    "tunnel_agent.py",
     "system/apply.sh",
     "system/sysupdate-root.sh",
     "system/mokuture-sysupdate.service",
     "system/mokuture-sysupdate.timer",
+    "system/mokuture-tunnel.service",
+    "system/mokuture-tunnel-sshd.socket",
+    "system/mokuture-tunnel-sshd-at.service",
+    "system/tunnel_sshd_config",
+    "system/operator_keys",
     "system/PYPROJECT_SHA",
     "system/SERIAL",
     "system/SYSTEM_MANIFEST",

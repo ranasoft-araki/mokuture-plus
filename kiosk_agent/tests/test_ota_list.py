@@ -77,16 +77,27 @@ def test_Pythonの変更は再起動扱いになる():
     再起動しても入れ替わらない。代わりに音声サービスが自分のソースの変化を見て
     自ら終了し、systemd に起こし直してもらう。例外にする以上、その仕組みが実際に
     在ることを下の test で確かめる。
+
+    遠隔ログインの常駐(tunnel_agent.py)も同じ理由で例外(別プロセス mokuture-tunnel.service)。
     """
     import updater
     for rel in _managed():
         if rel.endswith(".py"):
             name = Path(rel).name
             top = Path(rel).parts[0]
-            if top == "voice":
+            if top == "voice" or rel == "tunnel_agent.py":
                 continue
             assert name in updater.RESTART_FILES or top in updater._RESTART_DIRS, \
                 f"{rel} を更新しても再起動されない"
+
+
+def test_遠隔ログインの常駐は自分でソース更新に気づいて再起動する():
+    """例外にした以上、その仕組みが在ること。開いている最中は起動し直さない(運営の接続を切らない)。"""
+    src = (AGENT_DIR / "tunnel_agent.py").read_text(encoding="utf-8")
+    assert "_source_hash() != started_hash" in src
+    assert "not tunnel.running() and not wanted" in src
+    unit = (AGENT_DIR / "system" / "mokuture-tunnel.service").read_text(encoding="utf-8")
+    assert "Restart=always" in unit
 
 
 def test_音声サービスは自分でソース更新に気づいて再起動する():

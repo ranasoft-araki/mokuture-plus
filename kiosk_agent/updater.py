@@ -140,10 +140,20 @@ MANAGED_FILES = [
     # 使うもので、署名が無い。配信で差し替えられると、署名で守っている意味が無くなる。
     "sysupdate.py",
     "pyproject.toml",   # ライブラリの一覧。システム更新が pip で入れる
+    # 遠隔ログイン(運営が、必要なときだけ端末へ SSH で入る)の常駐。**別プロセス**
+    # (mokuture-tunnel.service)で、標準ライブラリだけで動く。RESTART_FILES には入れない
+    # (本体を再起動しても入れ替わらない。常駐が自分のファイルの変化に気づいて起動し直す)。
+    # 受け口の設定と運営の公開鍵は下の system/ で、署名を確かめてから置かれる。
+    "tunnel_agent.py",
     "system/apply.sh",
     "system/sysupdate-root.sh",
     "system/mokuture-sysupdate.service",
     "system/mokuture-sysupdate.timer",
+    "system/mokuture-tunnel.service",
+    "system/mokuture-tunnel-sshd.socket",
+    "system/mokuture-tunnel-sshd-at.service",
+    "system/tunnel_sshd_config",
+    "system/operator_keys",
     "system/PYPROJECT_SHA",
     "system/SERIAL",
     "system/SYSTEM_MANIFEST",

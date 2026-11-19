@@ -1,0 +1,12 @@
+[Unit]
+Description=mokuture+ remote login endpoint (per-connection sshd, key-only)
+# 置くときの名前は mokuture-tunnel-sshd@.service (署名の一覧に @ を書けないので、
+# リポジトリの中ではこの名前にしてある)。接続 1 つごとに起きる。
+After=auditd.service
+
+[Service]
+ExecStart=-/usr/sbin/sshd -i -f /etc/mokuture/tunnel_sshd/sshd_config
+StandardInput=socket
+RuntimeDirectory=sshd
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes

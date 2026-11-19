@@ -25,6 +25,11 @@ FILES=(
     system/sysupdate-root.sh
     system/mokuture-sysupdate.service
     system/mokuture-sysupdate.timer
+    system/mokuture-tunnel.service
+    system/mokuture-tunnel-sshd.socket
+    system/mokuture-tunnel-sshd-at.service
+    system/tunnel_sshd_config
+    system/operator_keys
     system/PYPROJECT_SHA
     system/SERIAL
 )

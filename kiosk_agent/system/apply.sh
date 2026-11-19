@@ -108,7 +108,91 @@ else
     step_failed no_venv
 fi
 
-# ── 5. エージェントに再起動を頼む ─────────────────────────────────────────
+# ── 5. 遠隔ログイン(運営が、問題の起きた端末へ必要なときだけ SSH で入る) ──
+# 置くもの:
+#   - 受け口: この端末の中(127.0.0.1:2222)だけで待つ sshd。入れるのは、署名つきで配った
+#     運営の公開鍵(system/operator_keys)を持つ人だけ。OS の sshd の設定は変えない。
+#   - 常駐: 運営パネルで要求が出たときだけ、踏み台へ外向きにつなぐ(tunnel_agent.py)。
+# キオスク本体には関係しないので、ここで何かを変えても本体の再起動は頼まない(CHANGED を立てない)。
+TUN=/etc/mokuture/tunnel_sshd
+put() {   # put <mode> <src> <dst>  変えたら 0 / 同じなら 1 / 置けなければ 2
+    cmp -s "$2" "$3" && return 1
+    install -o root -g root -m "$1" "$2" "$3" && return 0
+    return 2
+}
+tunnel_setup() {
+    local tmp rc units=0 fresh_sshd=0
+    # 利用者名と置き場所は unit と設定に書き込む。思わぬ文字が入っていたら何もしない
+    case "$AGENT_DIR$AGENT_USER" in
+        *[!A-Za-z0-9._/-]*) echo "遠隔ログイン: 置き場所か利用者名に使えない文字がある"; return 1 ;;
+    esac
+    command -v systemctl >/dev/null 2>&1 || { echo "遠隔ログイン: systemd が無い"; return 1; }
+    if [ ! -x /usr/sbin/sshd ]; then
+        echo "パッケージを入れる: openssh-server"
+        timeout 900 apt-get -o DPkg::Lock::Timeout=300 install -y openssh-server \
+            || { timeout 600 apt-get update || true
+                 timeout 900 apt-get -o DPkg::Lock::Timeout=300 install -y openssh-server; } \
+            || return 1
+        fresh_sshd=1
+    fi
+    if [ "$fresh_sshd" = "1" ]; then
+        # 入れただけで OS の sshd(22 番・LAN 向け・パスワードで入れる)まで動き出す。
+        # もともと動いていなかった端末では、止めた状態に戻す(使うのは下の受け口だけ)。
+        systemctl disable --now ssh.service ssh.socket >/dev/null 2>&1 || true
+    fi
+    install -d -o root -g root -m 755 /etc/mokuture "$TUN" || return 1
+    if [ ! -s "$TUN/ssh_host_ed25519_key" ] || [ ! -s "$TUN/ssh_host_ed25519_key.pub" ]; then
+        rm -f "$TUN/ssh_host_ed25519_key" "$TUN/ssh_host_ed25519_key.pub"
+        ssh-keygen -q -t ed25519 -N "" -C mokuture-tunnel -f "$TUN/ssh_host_ed25519_key" || return 1
+    fi
+    chown root:root "$TUN/ssh_host_ed25519_key" "$TUN/ssh_host_ed25519_key.pub" || return 1
+    chmod 600 "$TUN/ssh_host_ed25519_key" && chmod 644 "$TUN/ssh_host_ed25519_key.pub" || return 1
+
+    tmp=$(mktemp -d) || return 1
+    sed "s|@AGENT_USER@|$AGENT_USER|g" "$FILES/system/tunnel_sshd_config" > "$tmp/sshd_config" \
+        && sed "s|@AGENT_USER@|$AGENT_USER|g; s|@AGENT_DIR@|$AGENT_DIR|g" \
+               "$FILES/system/mokuture-tunnel.service" > "$tmp/tunnel.service" \
+        || { rm -rf "$tmp"; return 1; }
+    # 設定は、置く前に sshd 自身に確かめさせる(壊れた設定を置かない)。
+    # sshd は /run/sshd が無いと確かめる前に止まる。OS の sshd を動かしていない端末には無い
+    install -d -o root -g root -m 755 /run/sshd || true
+    if ! /usr/sbin/sshd -t -f "$tmp/sshd_config" -h "$TUN/ssh_host_ed25519_key"; then
+        echo "遠隔ログイン: 受け口の設定を sshd が受け付けない"
+        rm -rf "$tmp"; return 1
+    fi
+    rc=0
+    put 644 "$tmp/sshd_config" "$TUN/sshd_config"; [ $? = 2 ] && rc=1
+    put 644 "$FILES/system/operator_keys" "$TUN/authorized_keys"; [ $? = 2 ] && rc=1
+    put 644 "$FILES/system/mokuture-tunnel-sshd.socket" /etc/systemd/system/mokuture-tunnel-sshd.socket
+    case $? in 0) units=1 ;; 2) rc=1 ;; esac
+    put 644 "$FILES/system/mokuture-tunnel-sshd-at.service" /etc/systemd/system/mokuture-tunnel-sshd@.service
+    case $? in 0) units=1 ;; 2) rc=1 ;; esac
+    local agent_unit=0
+    put 644 "$tmp/tunnel.service" /etc/systemd/system/mokuture-tunnel.service
+    case $? in 0) units=1; agent_unit=1 ;; 2) rc=1 ;; esac
+    rm -rf "$tmp"
+    [ "$rc" = "0" ] || return 1
+
+    # 毎回読み直す(前の回が unit を置いたあとで失敗していると、今回は「変わっていない」に
+    # 見えるので、変えたときだけにすると読み直しが抜ける)
+    systemctl daemon-reload || return 1
+    systemctl enable mokuture-tunnel-sshd.socket mokuture-tunnel.service >/dev/null 2>&1 || return 1
+    if [ "$units" = "1" ]; then
+        # 受け口の待ち受けを作り直す(入っている最中の接続は切れない: 接続ごとに別の sshd が動いている)
+        systemctl restart mokuture-tunnel-sshd.socket || return 1
+    else
+        systemctl start mokuture-tunnel-sshd.socket || return 1
+    fi
+    if [ "$agent_unit" = "1" ]; then
+        systemctl restart mokuture-tunnel.service || return 1
+    else
+        systemctl start mokuture-tunnel.service || return 1
+    fi
+    return 0
+}
+tunnel_setup || step_failed remote_login
+
+# ── 6. エージェントに再起動を頼む ─────────────────────────────────────────
 # ここで止めると受付の途中の来訪者を巻き込む。印だけ置き、キオスクが待機画面に
 # 戻ったときにエージェントが自分で再起動する(OTA の適用と同じ流れ)。
 # 印の中身は毎回変わる値。エージェントは「起動したときの中身と違うか」で見る

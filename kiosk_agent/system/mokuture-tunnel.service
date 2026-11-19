@@ -1,0 +1,23 @@
+[Unit]
+Description=mokuture+ remote login helper (opens a reverse SSH tunnel only when the operator asks)
+# キオスク本体(mokuture-kiosk)とは独立させる。本体が起動しなくなった端末にこそ
+# 入りたいので、本体の不具合や再起動に巻き込まれないようにする。
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@AGENT_USER@
+WorkingDirectory=@AGENT_DIR@
+# 仮想環境は使わない(標準ライブラリだけで動く。仮想環境が壊れていても動かせるように)。
+ExecStart=/usr/bin/python3 @AGENT_DIR@/tunnel_agent.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -11,3 +11,6 @@ kiosk_agent/voice_models/*.zip filter=lfs diff=lfs merge=lfs -text
 kiosk_agent/system/** text eol=lf
 kiosk_agent/install.sh text eol=lf
 kiosk_agent/scripts/sign_system.sh text eol=lf
+
+# 遠隔ログインの踏み台(VPS の Linux で動かす)。CRLF だと動かない。
+bastion/*.sh text eol=lf

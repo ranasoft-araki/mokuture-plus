@@ -1,0 +1,22 @@
+# mokuture+ 遠隔ログインの受け口(この端末の中だけで待つ sshd)。
+# OS の sshd(/etc/ssh/sshd_config)とは別物で、そちらの設定は一切変えない。
+# 待ち受けは mokuture-tunnel-sshd.socket の 127.0.0.1:2222 だけ。
+#
+# 入れるのは、署名つきのシステム更新で配った運営の公開鍵(system/operator_keys)を
+# 持つ人だけ。パスワードでは入れない。端末の利用者が自分で置いた鍵(~/.ssh)も見ない。
+HostKey /etc/mokuture/tunnel_sshd/ssh_host_ed25519_key
+AuthorizedKeysFile /etc/mokuture/tunnel_sshd/authorized_keys
+AllowUsers @AGENT_USER@
+PermitRootLogin no
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+HostbasedAuthentication no
+UsePAM yes
+X11Forwarding no
+AllowAgentForwarding no
+PrintMotd no
+# だれの鍵で入ったか(指紋)を端末の記録に残す: journalctl -t sshd
+LogLevel VERBOSE
+Subsystem sftp internal-sftp

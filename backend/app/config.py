@@ -102,6 +102,22 @@ class Settings(BaseSettings):
     smtp_starttls: bool = True  # 587: STARTTLS で暗号化
     smtp_ssl: bool = False      # 465: implicit TLS を使う場合 True(starttls は無視)
 
+    # 遠隔ログイン(運営が、問題の起きた端末へ必要なときだけ SSH で入る)。
+    # 端末は普段どこにもつながない。運営パネルで要求が出た端末だけが、踏み台サーバー
+    # (自前の VPS・OpenSSH を 443 番で待受)へ外向きに SSH をつなぎ、逆向きの転送口を開く。
+    # 踏み台は「いま誰をつながせてよいか」を下の合言葉でこの API に聞く(bastion/README.md)。
+    # HOST / HOST_KEY / SECRET の 3 つが揃わなければ機能は無効(tunnel_enabled)。
+    tunnel_bastion_host: str = ""          # 踏み台のホスト名(または IP)
+    tunnel_bastion_port: int = 443
+    tunnel_bastion_user: str = "mokuture-tunnel"   # 端末がつなぐ踏み台側の利用者(転送口を開くことしかできない)
+    tunnel_bastion_host_key: str = ""      # 踏み台の sshd の公開鍵("ssh-ed25519 AAAA...")。端末が相手を確かめる
+    tunnel_bastion_secret: str = ""        # 踏み台 → この API の合言葉(Bearer)
+    tunnel_default_minutes: int = 60       # 開いてから自動で閉じるまで
+    tunnel_max_minutes: int = 240
+    tunnel_port_base: int = 20000          # 踏み台の上で端末ごとに割り当てる転送口の番号
+    tunnel_port_count: int = 40000
+    tunnel_idle_poll_sec: int = 60         # 要求が無いときに端末が聞きに来る間隔
+
     @property
     def slack_oauth_enabled(self) -> bool:
         return bool(self.slack_client_id and self.slack_client_secret and self.slack_redirect_uri)
@@ -113,6 +129,10 @@ class Settings(BaseSettings):
     @property
     def smtp_enabled(self) -> bool:
         return bool(self.smtp_host and self.smtp_username and self.smtp_password)
+
+    @property
+    def tunnel_enabled(self) -> bool:
+        return bool(self.tunnel_bastion_host and self.tunnel_bastion_host_key and self.tunnel_bastion_secret)
 
 
 def insecure_default_secrets(s: "Settings") -> list[str]:

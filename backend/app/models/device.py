@@ -42,6 +42,14 @@ class Device(Base):
     # ここへミラーする。管理画面は GET /lockers/status で端末ごとに表示する。
     locker_state_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     locker_state_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # 遠隔ログイン(models/tunnel.py)。端末の遠隔ログイン用の常駐(tunnel_agent.py)が報告する。
+    tunnel_pubkey: Mapped[Optional[str]] = mapped_column(Text, nullable=True)       # 踏み台へつなぐときの端末の公開鍵
+    tunnel_host_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)     # 端末の受け口(sshd)の公開鍵。運営が相手を確かめる
+    tunnel_login_user: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)  # 端末にログインするときの利用者名
+    # 踏み台の上の転送口(端末ごとに固定)。2 台が同じ番号を持つと、運営が別の端末へつながってしまうので一意
+    tunnel_port: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, unique=True)
+    tunnel_reach: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # 踏み台へ届くか: ok / blocked
+    tunnel_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # 常駐が最後に聞きに来た時刻
 
     tenant = relationship("Tenant", back_populates="devices")
 

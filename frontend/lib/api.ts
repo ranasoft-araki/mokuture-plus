@@ -355,6 +355,15 @@ export const api = {
     const qs = p.toString();
     return request<PaginatedResponse<OperatorDevice>>(`/operator/devices${qs ? `?${qs}` : ""}`, {}, token);
   },
+  // 遠隔ログイン(運営が、必要なときだけ端末へ SSH で入る)
+  getTunnelStatus: (token: string, deviceIds: string[]) =>
+    request<TunnelStatus>(`/operator/tunnel/status?device_ids=${encodeURIComponent(deviceIds.join(","))}`, {}, token),
+  openTunnel: (token: string, deviceId: string, body: { reason: string; minutes: number }) =>
+    request<TunnelSession>(`/operator/tunnel/${deviceId}/open`, { method: "POST", body: JSON.stringify(body) }, token),
+  closeTunnel: (token: string, deviceId: string) =>
+    request<{ ok: boolean; session: TunnelSession | null }>(`/operator/tunnel/${deviceId}/close`, { method: "POST" }, token),
+  listTunnelSessions: (token: string, deviceId?: string) =>
+    request<{ sessions: TunnelSession[] }>(`/operator/tunnel/sessions${deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ""}`, {}, token),
   listOperatorReception: (token: string, params?: { tenant_id?: string; reseller_id?: string; q?: string; status?: string; method?: string; date_from?: string; date_to?: string; offset?: number; limit?: number }) => {
     const p = new URLSearchParams();
     if (params?.tenant_id) p.set("tenant_id", params.tenant_id);
@@ -1006,6 +1015,47 @@ export interface OperatorReceptionItem {
   id: string;
   tenant_id: string;
   tenant_name: string;
+// 遠隔ログインの 1 回ぶん。state: requested=端末の接続待ち / open=接続中 / closing=終了待ち / closed=終了
+export interface TunnelSession {
+  id: string;
+  device_id: string;
+  device_name: string;
+  tenant_name: string;
+  state: "requested" | "open" | "closing" | "closed";
+  port: number;
+  reason: string;
+  requested_by: string;
+  requested_at: string | null;
+  expires_at: string | null;
+  opened_at: string | null;
+  closed_at: string | null;
+  close_reason: "operator" | "expired" | null;
+  closed_by: string | null;
+  error: string | null;
+}
+
+export interface TunnelDeviceStatus {
+  ready: boolean;        // 端末側の仕組みが入っていて、鍵が届いている
+  alive: boolean;        // 端末の遠隔ログイン用の常駐が、最近サーバーへ聞きに来ている
+  seen_at: string | null;
+  reach: "ok" | "blocked" | null;   // 端末から踏み台へ届くか
+  port: number | null;
+  login_user: string | null;
+  host_key: string | null;
+  session: TunnelSession | null;
+}
+
+export interface TunnelStatus {
+  enabled: boolean;
+  bastion_host: string;
+  bastion_port: number;
+  default_minutes: number;
+  max_minutes: number;
+  min_minutes: number;
+  bastion_host_key: string;   // 踏み台の公開鍵(初めてつなぐときに指紋を確かめる)
+  devices: Record<string, TunnelDeviceStatus>;
+}
+
   visitor_name: string;
   company: string | null;
   staff: string | null;

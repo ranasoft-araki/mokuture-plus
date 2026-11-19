@@ -652,6 +652,26 @@ OTA（上の節）はエージェントの利用者権限でファイルを置�
 ### 名刺読み取り（QR無し来訪者の受付フォーム自動入力）
 
 受付フォーム(`showReception`)の「名刺で入力」から、カメラにかざした名刺を読み取って
+### 遠隔ログイン（運営が、問題の起きた端末へ必要なときだけ SSH で入る。2026-11-18）
+
+端末は顧客のネットワークの内側にあって外から届かないので、**端末のほうから**自前の踏み台サーバー（VPS・OpenSSH を 443 番で待受）へ外向きに SSH をつなぎ、逆向きの転送口を開く。運営は踏み台を経由（`ssh -J`）して、端末の中だけで待つ受け口へ入る。踏み台の作り方と使い方は [`bastion/README.md`](bastion/README.md)。**2026-11-18 時点で、踏み台も実機も未確認**（開発機にあるのは単体テストだけ）。
+
+- **流れ**: 運営パネル「デバイス管理」の「開く…」（理由と時間が必須）→ `tunnel_sessions` に `requested` で記録 → 端末の常駐（`kiosk_agent/tunnel_agent.py`・`mokuture-tunnel.service`）が次に `POST /kiosk/tunnel/poll` で聞きに来たとき受け取る（要求が無いあいだは 60 秒ごと・あるあいだは 5 秒ごと）→ 端末が踏み台へ `ssh -N -R 127.0.0.1:<転送口>:127.0.0.1:2222` → ssh が転送口を開けたと記録してから端末が `open` を報告（動き続けているだけでは報告しない） → 運営が入る → 「終了する」か時間切れで `closing` → 端末が閉じたと報告して `closed`。
+- **閉じる経路は 3 つあり、どれか 1 つが働けば閉じる**: ①運営の「終了する」②端末が、サーバーから受け取った残り秒数を**経過時間で**数えて自分で閉じる（サーバー・回線が落ちて終了が届かなくても開きっぱなしにならない。時計を持たない端末があるので時刻では比べない）③踏み台の見回り（1 分ごと・`GET /bastion/active-ports` に無い転送口を切る）。端末を再起動したら必ず閉じた状態から始まる。
+- **鍵は 2 つに分かれている。これを崩さないこと**: API が握るのは「どの端末を、いつまで、つながせてよいか」だけ。端末へ入る鍵は運営それぞれの PC にしかなく、公開鍵を ①踏み台（`bastion/add-operator.sh`）②端末（`kiosk_agent/system/operator_keys`＝**署名つきのシステム更新で配る**）の両方に登録する。**API が乗っ取られても、この遠隔ログインの経路からは端末の中へ入れない**（できるのは端末を踏み台へつながせることまで）。API に SSH の鍵・パスワードを持たせたり、API から端末へコマンドを流す口を足したりしない。**ただし、これは「遠隔ログインが新しい穴にならない」という意味で、端末全体が守られているという意味ではない**: OTA（`updater.py`）は署名が無く、配信サーバー（API）か GitHub を乗っ取った者は、遠隔ログインを使わなくても `main.py` などを差し替えて端末の中でコードを動かせる（この機能より前からある弱点。塞ぐには OTA にも署名が要る＝未対応）。同じ理由で、つなぎ先（踏み台のホスト・番号・公開鍵）も API の返事をそのまま使っている（API を乗っ取った者は端末を別のサーバーへつながせられるが、運営の鍵が無いので受け口には入れない）。OTA に署名を入れるときは、つなぎ先も署名つきの `system/` に固定すること。
+- **踏み台は鍵を持たない**。端末がつなぎに来るたびに sshd の `AuthorizedKeysCommand` が `GET /bastion/authorized-keys`（合言葉 `TUNNEL_BASTION_SECRET`）へ聞き、**いま `requested`/`open` で期限内の端末の鍵だけ**が `restrict,port-forwarding,permitlisten="127.0.0.1:<転送口>"` 付きで返る。端末用の利用者にできるのは、決まった転送口を 1 つ開くことだけ（シェル・ほかへの転送なし）。運営用の利用者も踏み台にシェルは無く、踏み台の 127.0.0.1 へ中継してもらえるだけ。
+- **端末の受け口は OS の sshd とは別物**（`system/mokuture-tunnel-sshd.socket` ＝ `127.0.0.1:2222` だけで待つ・接続ごとに `sshd -i`・設定は `system/tunnel_sshd_config`）。パスワード不可、見る鍵は `/etc/mokuture/tunnel_sshd/authorized_keys`（＝`operator_keys` の写し）だけで、端末の利用者の `~/.ssh` は見ない。**OS の sshd の設定は変えない**。`openssh-server` が入っていなかった端末では、入れた直後に OS の sshd（22 番・LAN 向け）を止め直す（顧客の LAN に新しい入口を作らない）。置くのは `system/apply.sh` の「5. 遠隔ログイン」（管理者権限・署名済み）。
+- **常駐はキオスク本体に頼らない**（本体が起動しなくなった端末にこそ入りたい）。別の systemd 単位・システムの `python3`・標準ライブラリだけ（`tests/test_tunnel_agent.py` が import を見張る）。`RESTART_FILES` には入れない＝配信で `tunnel_agent.py` が変わったら、**開いていないときに**自分で終了して systemd に起こし直してもらう。聞きに来ても端末の `last_seen_at` は動かさない（本体が止まっているのに「オンライン」に見えるため）。
+- **サーバーが返す値（つなぎ先のホスト・利用者・踏み台の公開鍵・番号）は、端末が形を確かめてから ssh に渡す**（`parse_want`。ssh のオプションに化ける値を通さない）。端末が届ける公開鍵も、API が ed25519 の形に厳密に合うものだけ受け取る（踏み台の authorized_keys の行としてそのまま出すため）。**開いている最中は、端末の鍵の差し替えを受け付けない**（転送口の横取りを防ぐ）。
+- **記録（`tunnel_sessions`）の書き換えは必ず `svc.move`**（読んだときの状態のままのときだけ書く条件つき UPDATE）。端末の問い合わせ（5 秒ごと）と運営の操作は同時に届くので、読んだ値をそのまま書き戻すと「終了」を「接続中」で上書きし、画面は終了待ちなのに踏み台が鍵を通し続ける（2026-11-18 の検証で実際に再現した）。片づいていない記録は端末ごとに 1 件だけ（部分一意インデックス `ix_tunnel_sessions_one_pending`。「開く」が同時に届いても 2 件目は 409）。
+- **状態の表示は端末の報告を元にする**（ボタンを押した事実ではなく）。`tunnel_reach`（端末から踏み台へ届くか・起動時と 6 時間ごとに端末が確かめる）が `blocked` の端末は「踏み台へ届かない」と出す＝443 番の SSH を通さない設置先。その端末は遠隔ログインの対象外（決定済み）。
+- **記録**: `tunnel_sessions` が、誰が・いつ・どの端末を・何のために開け、誰がどう閉じたかの記録を兼ねる（端末やテナントを消しても残るよう外部キーは張らず、そのときの名前を写す）。延長は同じ行の `expires_at` を延ばし、`reason` に「延長（誰）: 理由」を足す。顧客への都度の通知はしない（契約での包括同意。決定済み）。
+- **設定が無ければ機能ごと無効**（`TUNNEL_BASTION_HOST` / `_HOST_KEY` / `_SECRET` の 3 つ。`settings.tunnel_enabled`）。無効のあいだ端末は 10 分ごとに聞きに来るだけで何もつながない。
+- **転送口の番号は端末ごとに固定**（`devices.tunnel_port`・初めて開くときに 20000 番から割り当て）。`bastion/setup.sh` の `PORT_FROM`/`PORT_TO` と `TUNNEL_PORT_BASE`/`_COUNT` を変えるときは両方そろえる。
+- **既設の端末に届く条件**: システム更新の仕組みが入っていること（「システム更新」節。未導入の端末は `install.sh` を一度）。届くまでは運営パネルに「端末が未対応」と出る。
+- **未対応（次の候補）**: シェルに入らずに済む決まった操作（ログの取得・サービスの再起動・端末の再起動・更新のやり直し）。443 番の SSH が通らない設置先ではこれだけが手段になる。足すときも「API から任意のコマンドを流せる口」にはしないこと（決まった操作の名前だけを受け取る）。
+- テスト: `backend/tests/test_tunnel.py`・`kiosk_agent/tests/test_tunnel_agent.py`。API: `GET /operator/tunnel/status?device_ids=`・`POST /operator/tunnel/{device_id}/open|close`・`GET /operator/tunnel/sessions`（運営のみ）、`POST /kiosk/tunnel/poll`（デバイストークン）、`GET /bastion/authorized-keys|active-ports`（合言葉）。実装: `backend/app/api/tunnel.py`・`services/tunnel.py`・`models/tunnel.py`、画面は `frontend/app/operator/devices/RemoteLogin.tsx`。
+
 **お名前・会社名・部署**を自動入力する。**端末内で完結**し、外部 OCR/生成AI/外部APIは一切使わない。
 詳細は [`kiosk_agent/CARD_READER.md`](kiosk_agent/CARD_READER.md)（セットアップ/API仕様/しきい値/トラブルシュート）。
 
@@ -1099,6 +1119,18 @@ SMTP_SSL=false
 > 分析ログ(ANALYTICS.md)にバックエンド専用の追加設定は無い（既存の DB とデバイストークンを使う）。
 
 ### Kiosk Agent (.env) — 分析ログ関連（すべて任意・未設定なら既定値）
+遠隔ログイン（→「遠隔ログイン」節・`bastion/README.md`）。**HOST / HOST_KEY / SECRET の 3 つが揃わなければ機能は無効**:
+```
+TUNNEL_BASTION_HOST=          # 踏み台のホスト名(または IP)
+TUNNEL_BASTION_HOST_KEY=      # 踏み台の sshd の公開鍵 "ssh-ed25519 AAAA..."(bastion/setup.sh が表示する)
+TUNNEL_BASTION_SECRET=        # 踏み台 → API の合言葉(bastion/setup.sh が作って表示する)
+TUNNEL_BASTION_PORT=443       # 以下は任意(既定値)
+TUNNEL_BASTION_USER=mokuture-tunnel
+TUNNEL_DEFAULT_MINUTES=60     # 開けておく時間の既定
+TUNNEL_MAX_MINUTES=240
+TUNNEL_IDLE_POLL_SEC=60       # 要求が無いとき、端末が聞きに来る間隔
+```
+
 
 ```bash
 ANALYTICS_HEARTBEAT_SEC=60        # ハートビート(device_metrics 1行)の間隔

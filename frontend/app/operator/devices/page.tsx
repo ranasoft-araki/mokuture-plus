@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { api, OperatorDevice, OperatorTenant } from "@/lib/api";
+import { api, OperatorDevice, OperatorTenant, TunnelStatus } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { MkCard, MkSectionTitle, MkPill } from "@/components/AdminShell";
+import { RemoteLoginCell, RemoteLoginModal } from "./RemoteLogin";
 
 const inputStyle: React.CSSProperties = {
   height: 34,
@@ -31,6 +32,11 @@ export default function OperatorDevicesPage() {
   const [filterStatus, setFilterStatus] = useState("");
   const [filterQ, setFilterQ] = useState("");
 
+  // 遠隔ログイン(運営が、必要なときだけ端末へ SSH で入る)。表示中の端末ぶんの状態を読む
+  const [tunnel, setTunnel] = useState<TunnelStatus | null>(null);
+  const [tunnelDeviceId, setTunnelDeviceId] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
   const token = getAccessToken() ?? "";
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -43,6 +49,21 @@ export default function OperatorDevicesPage() {
     api.listResellers(token).then(setResellers);
     fetchDevices({});
   }, []);
+
+  const deviceIds = devices.map((d) => d.id).join(",");
+  const loadTunnel = () => {
+    if (!deviceIds) return;
+    // 読めなかったときも時刻は進める(「オンライン」の判定と残り時間が古いまま止まらないように)
+    api.getTunnelStatus(token, deviceIds.split(",")).then((r) => { setTunnel(r); setNow(Date.now()); }).catch(() => setNow(Date.now()));
+  };
+  // 開いている(または操作中の)あいだは 5 秒ごと、それ以外は 30 秒ごとに読み直す
+  const tunnelBusy = tunnelDeviceId !== null || Object.values(tunnel?.devices ?? {}).some((d) => d.session);
+  useEffect(() => {
+    loadTunnel();
+    const timer = setInterval(loadTunnel, tunnelBusy ? 5000 : 30000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deviceIds, tunnelBusy]);
 
   const triggerFetch = (overrides: { reseller_id?: string; tenant_id?: string; status?: string; q?: string }) => {
     fetchDevices({
@@ -77,7 +98,7 @@ export default function OperatorDevicesPage() {
 
   const isOnline = (lastSeen: string | null) => {
     if (!lastSeen) return false;
-    return Date.now() - new Date(lastSeen).getTime() < 3 * 60 * 1000;
+    return now - new Date(lastSeen).getTime() < 3 * 60 * 1000;
   };
 
   return (
@@ -122,10 +143,11 @@ export default function OperatorDevicesPage() {
         <div style={{ color: "#a8a198", fontSize: 14 }}>読み込み中…</div>
       ) : (
         <MkCard padding="0">
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <div className="adm-scroll-x">
+          <table style={{ width: "100%", minWidth: 860, borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: "1px solid #efece5" }}>
-                {["デバイス名", "場所", "ステータス", "テナントID", "最終接続"].map((h) => (
+                {["デバイス名", "場所", "ステータス", "テナントID", "最終接続", "遠隔ログイン"].map((h) => (
                   <th key={h} style={{ padding: "10px 16px", textAlign: "left" as const, fontSize: 11, fontWeight: 600, color: "#a8a198", letterSpacing: "0.4px" }}>{h}</th>
                 ))}
               </tr>
@@ -140,15 +162,32 @@ export default function OperatorDevicesPage() {
                   </td>
                   <td style={{ padding: "12px 16px", color: "#a8a198", fontFamily: '"JetBrains Mono", monospace', fontSize: 11 }}>{d.tenant_id}</td>
                   <td style={{ padding: "12px 16px", color: "#a8a198", fontSize: 12 }}>{d.last_seen_at ? new Date(d.last_seen_at).toLocaleString("ja-JP") : "未接続"}</td>
+                  <td style={{ padding: "12px 16px" }}>
+                    <RemoteLoginCell status={tunnel} device={d} now={now} onOpen={() => setTunnelDeviceId(d.id)} />
+                  </td>
                 </tr>
               ))}
               {devices.length === 0 && (
-                <tr><td colSpan={5} style={{ padding: "24px", textAlign: "center" as const, color: "#a8a198" }}>デバイスがありません</td></tr>
+                <tr><td colSpan={6} style={{ padding: "24px", textAlign: "center" as const, color: "#a8a198" }}>デバイスがありません</td></tr>
               )}
             </tbody>
           </table>
+          </div>
         </MkCard>
       )}
+      {(() => {
+        const target = devices.find((d) => d.id === tunnelDeviceId);
+        return target ? (
+          <RemoteLoginModal
+            token={token}
+            device={target}
+            status={tunnel}
+            now={now}
+            onClose={() => setTunnelDeviceId(null)}
+            onChanged={loadTunnel}
+          />
+        ) : null;
+      })()}
     </div>
   );
 }

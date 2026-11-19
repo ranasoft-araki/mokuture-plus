@@ -1,0 +1,10 @@
+# 遠隔ログインで端末に入れる人の公開鍵(1 行に 1 つ。OpenSSH の authorized_keys の書式)。
+#
+# ここに鍵が無いあいだは、遠隔ログインを開いても誰も端末に入れない。
+# 足す・外すときは、この行の下に書いてから署名し直して push する:
+#     bash kiosk_agent/scripts/sign_system.sh
+# 端末は署名を確かめてから /etc/mokuture/tunnel_sshd/authorized_keys に置く(10 分ごと)。
+# 書くのは公開鍵(.pub の中身)だけ。秘密鍵は各自の PC から出さない。
+# 行の最後に、だれの鍵か分かる名前を付ける。例:
+#     ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... yamada@ranasoft
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPCQUDJIiSxMlheNEVIujwxJb34Ko6lSaR/1fJ/Wwk93 araki@mokuture-operator

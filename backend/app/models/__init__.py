@@ -7,6 +7,7 @@ from app.models.notification import NotificationSetting, PushSubscription
 from app.models.staff_route import StaffNotificationRoute
 from app.models.room import MeetingRoom
 from app.models.inquiry import Inquiry
+from app.models.tunnel import TunnelSession
 from app.models.calendar_integration import CalendarIntegration, CalendarEventTombstone
 from app.models.visitor_appointment import VisitorAppointment
 from app.models.analytics import (
@@ -32,6 +33,7 @@ __all__ = [
     "StaffNotificationRoute",
     "MeetingRoom",
     "Inquiry",
+    "TunnelSession",
     "CalendarIntegration",
     "CalendarEventTombstone",
     "VisitorAppointment",

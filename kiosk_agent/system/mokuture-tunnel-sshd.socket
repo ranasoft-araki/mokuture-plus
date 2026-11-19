@@ -1,0 +1,11 @@
+[Unit]
+Description=mokuture+ remote login endpoint (127.0.0.1 only)
+
+[Socket]
+# この端末の中からしか届かない。外(LAN)からは見えない。届くのは、遠隔ログインを
+# 開いているあいだに踏み台から転送されてくる接続だけ。
+ListenStream=127.0.0.1:2222
+Accept=yes
+
+[Install]
+WantedBy=sockets.target
