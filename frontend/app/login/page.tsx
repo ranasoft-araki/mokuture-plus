@@ -143,7 +143,7 @@ export default function LoginPage() {
           </form>
 
           <div style={{ marginTop: 24, fontSize: 11, color: "#a8a198", textAlign: "center" as const, lineHeight: 1.6 }}>
-            サインインすることで、<a href="#" style={{ color: "#6b6559" }}>利用規約</a> および <a href="#" style={{ color: "#6b6559" }}>プライバシーポリシー</a> に同意したものとみなされます
+            サインインすることで、<a href="/terms" target="_blank" rel="noopener" style={{ color: "#6b6559" }}>利用規約</a> および <a href="/privacy" target="_blank" rel="noopener" style={{ color: "#6b6559" }}>プライバシーポリシー</a> に同意したものとみなされます
           </div>
         </div>
       </div>

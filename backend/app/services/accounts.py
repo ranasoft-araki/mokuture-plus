@@ -19,6 +19,7 @@ RESERVED_SLUGS = frozenset({
     "login", "operator", "ops-console", "partner-portal", "api", "_next",
     "admin", "kiosk", "inquiry", "static",
     "google-calendar",  # Google カレンダー連携の戻り先(/google-calendar/callback)
+    "privacy", "terms",  # プライバシーポリシー・利用規約(Google の同意画面からも開かれる)
 })
 RESERVED_SLUG_MESSAGE = "このスラッグは使用できません。別の名前を指定してください"
 

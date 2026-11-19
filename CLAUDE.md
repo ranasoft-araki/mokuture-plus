@@ -131,6 +131,8 @@ mokuture/
 │   │   ├── ops-console/page.tsx ← 運営ログイン（隠しURL）
 │   │   ├── partner-portal/page.tsx ← 代理店ログイン（隠しURL）
 │   │   ├── google-calendar/callback/page.tsx ← Google カレンダー連携の戻り先(GOOGLE_REDIRECT_URI)。ログイン中の管理者の JWT でコードを API へ渡して連携を仕上げる
+│   │   ├── privacy/page.tsx   ← プライバシーポリシー(公開・ログイン不要。Google の OAuth 同意画面の「プライバシー ポリシー」リンク先。運営者=株式会社ラナソフト)
+│   │   ├── terms/page.tsx     ← 利用規約(公開。同意画面の「利用規約」リンク先)。2つの枠は components/LegalPage.tsx
 │   │   ├── operator/          ← 運営画面 (operator JWT 必須)
 │   │   │   ├── page.tsx       ← 運営ダッシュボード
 │   │   │   ├── reception/page.tsx ← 受付ログ（クロステナント）
@@ -305,7 +307,7 @@ mokuture/
 - **設定の取得 API は秘密をそのまま返さない**: カスタム Webhook の URL は `***` で返し、`***` のまま保存されたら元の値を保つ
 - **SSE は使い捨てのチケットでつなぐ**: `POST /events/ticket` → `GET /events/stream?ticket=…`（60秒）。`?token=` は画面と backend の配備がずれる間の移行用で、いずれ外す
 - **本番（SQLite 以外）で JWT・暗号化の鍵が既定値のままなら起動しない**（`main._refuse_insecure_defaults`）
-- **テナントの slug に使えない語**: `login` `operator` `ops-console` `partner-portal` `api` `_next` `admin` `kiosk` `inquiry` `static` `google-calendar`
+- **テナントの slug に使えない語**: `login` `operator` `ops-console` `partner-portal` `api` `_next` `admin` `kiosk` `inquiry` `static` `google-calendar` `privacy` `terms`
 - **保存先の URL**（ロゴ・メディア・会議室の地図）は自分のストレージのものだけ（`storage.is_own_storage_url`）
 
 **端末エージェント・キオスク画面**
@@ -998,6 +1000,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - **権限**: 連携・設定・今すぐ同期・解除は管理者だけ(`require_tenant_admin`)。状態の参照だけスタッフも可(来社予定画面の表示用)。**来社予定はスタッフも閲覧専用アカウントも操作できるので、その操作も Google へ反映される**。認可 URL は閲覧専用アカウントには出さない(`readonly._RO_BLOCKED_GET`)。
 - **同時実行**: テナントごとの同期は `asyncio.Lock`(`tenant_lock`)で直列(定期同期・今すぐ同期・画面操作直後の送信・設定の保存・連携の仕上げが同じ予定を同時に触らない)。想定外の例外も画面の「最後のエラー」に出す(`UNEXPECTED_MESSAGE`)。単一ワーカー前提(複数ワーカー化するなら担当プロセスを決めるかロックを外へ)。
 - **画面**: 「来社予定」の上部に連携中の帯(方向・カレンダー名・未送信の数)、取り込んだ予定に「Googleから」、送れなかった予定に「Google未反映」のバッジ。取り込んだ予定の編集画面には「お名前と日時は上書きされる」旨を出す。削除の確認には Google 側がどうなるかを書く。
+- **Google Cloud(2026-11-19 設定済み)**: プロジェクト `mokuture-plus`(Calendar API 有効)・同意画面(アプリ名 mokuture+・外部・サポートメール=作成した Google アカウントのアドレス(mokuture@ranasoft.co.jp へ変えたいが、選べるのはログイン中のアカウントか管理している Google グループだけ)・連絡先 mokuture@ranasoft.co.jp・スコープ2つ)・OAuth クライアント「mokuture+ calendar」(ウェブ)。Render に GOOGLE_* 3つ設定済み。**本番公開にはブランディングにホームページ・`/privacy`・`/terms`・承認済みドメイン `mokuture-plus.netlify.app` が要る**。`calendar.events` は機密スコープなので、公開しても Google の確認(審査)が通るまでは「確認されていないアプリ」の警告が出て、新規に連携できるのは100人まで。
 - **要ユーザー作業**: Google Cloud で OAuth クライアント(ウェブアプリ)を作り、承認済みのリダイレクト URI に `GOOGLE_REDIRECT_URI`(**画面の URL** `https://mokuture-plus.netlify.app/google-calendar/callback`)を登録・Calendar API を有効化・同意画面にスコープ2つを登録して公開。Render に `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/`GOOGLE_REDIRECT_URI`(3つ揃うまで機能は無効＝画面は「この環境では使えません」)。**2026-11-19 時点で本物の Google とは未接続(テストは偽物のみ)**。
 
 ### Slack 受付通知の対応ボタン（Block Kit + Interactivity）
