@@ -25,3 +25,14 @@ class VisitorAppointment(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     duration_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=60)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    # ── Google カレンダー連携(→ CLAUDE.md「Google カレンダー連携」・models/calendar_integration.py) ──
+    # 結び付いている Google のイベント。(tenant_id, gcal_event_id) で一意(main._ensure_schema)。
+    gcal_event_id: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    gcal_calendar_id: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    # どちらで作られた予定か。"google"=Google から取り込んだ / None=mokuture で登録した。
+    gcal_origin: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    # Google のイベントの `updated`(変わったときだけ取り込み直す)。
+    gcal_updated: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # 書き出しの状態。pending=まだ送っていない / synced=送れた / error=送れなかった(定期同期で再送)。
+    gcal_sync_state: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)

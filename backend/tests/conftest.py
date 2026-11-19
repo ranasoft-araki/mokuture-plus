@@ -71,6 +71,10 @@ async def fresh_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_staff_routes_tenant_staff "
             "ON staff_notification_routes (tenant_id, staff_name)"
         ))
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_appointments_tenant_gcal_event "
+            "ON visitor_appointments (tenant_id, gcal_event_id)"
+        ))
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)

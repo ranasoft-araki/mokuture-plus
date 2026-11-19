@@ -24,7 +24,8 @@ _RO_ALLOWED_EXACT = ("/events/ticket",)
 
 # GET でも状態を変える操作の入口。閲覧専用アカウントには開かせない。
 #  - Slack 連携の開始: 認可 URL を受け取って進めると、テナントの Slack 連携が差し替わる。
-_RO_BLOCKED_GET = ("/notifications/slack/oauth/url",)
+#  - Google カレンダー連携の開始: 同じく、テナントの Google アカウントの連携が差し替わる。
+_RO_BLOCKED_GET = ("/notifications/slack/oauth/url", "/integrations/google-calendar/oauth/url")
 
 
 def _ro_allows_write(path: str) -> bool:

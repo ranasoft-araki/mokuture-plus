@@ -92,6 +92,7 @@ mokuture/
 │       │   ├── analytics.py   ← /analytics/* (分析ログ: 端末からの投入 + 運営の参照/CSV出力)
 │       │   ├── notifications.py ← /notifications (Slack/Chatwork 設定)
 │       │   ├── staff_routes.py ← /notifications/staff-routes (担当者ごとの通知先・代理通知の設定)
+│       │   ├── calendar_integration.py ← /integrations/google-calendar (Google カレンダー連携: OAuth・カレンダー一覧・設定・今すぐ同期・解除)
 │       │   ├── lockers.py     ← /lockers (ロッカー制御モック)
 │       │   ├── inquiries.py   ← /inquiries (共通問い合わせフォーム: 公開送信・管理閲覧)
 │       │   ├── push.py        ← /push (Web Push 購読管理)
@@ -105,7 +106,8 @@ mokuture/
 │       │   ├── inquiry.py     ← Inquiry (共通問い合わせフォーム受信)
 │       │   ├── analytics.py   ← ReceptionSession/ReceptionEvent/DeviceEvent/DeviceMetric (匿名・個人情報の列は無い)
 │       │   ├── notification.py ← NotificationSetting, PushSubscription
-│       │   └── staff_route.py  ← StaffNotificationRoute (担当者ごとの通知先・代理通知先)
+│       │   ├── staff_route.py  ← StaffNotificationRoute (担当者ごとの通知先・代理通知先)
+│       │   └── calendar_integration.py ← CalendarIntegration (Google カレンダー連携・テナントに1行) / CalendarEventTombstone (削除の後始末)
 │       ├── middleware/
 │       │   └── tenant.py      ← JWT 検証・テナント分離 (get_current_user)
 │       └── services/
@@ -118,6 +120,7 @@ mokuture/
 │           ├── analytics_vocab.py ← 分析ログの固定語彙(イベント名/画面ID/エラーコード)。analytics.js と一致させる
 │           ├── analytics_link.py  ← 受付ログID→匿名セッションID の**プロセス内 TTL マップ**(永続化しない)
 │           ├── webpush.py     ← Web Push 送信
+│           ├── google_calendar.py ← Google カレンダー連携(OAuth・トークン更新・来社予定の書き出し/取り込み・定期同期ループ)。httpx で REST を直接呼ぶ(SDK 不使用)
 │           └── email.py       ← SMTP メール送信(aiosmtplib, best-effort)。来社予定QRのメール送信(segno で QR PNG 生成→CIDインライン画像+添付)。SMTP未設定なら送信APIが 503
 │
 ├── frontend/                  ← Next.js フロントエンド
@@ -127,6 +130,7 @@ mokuture/
 │   │   ├── login/page.tsx     ← ログイン画面
 │   │   ├── ops-console/page.tsx ← 運営ログイン（隠しURL）
 │   │   ├── partner-portal/page.tsx ← 代理店ログイン（隠しURL）
+│   │   ├── google-calendar/callback/page.tsx ← Google カレンダー連携の戻り先(GOOGLE_REDIRECT_URI)。ログイン中の管理者の JWT でコードを API へ渡して連携を仕上げる
 │   │   ├── operator/          ← 運営画面 (operator JWT 必須)
 │   │   │   ├── page.tsx       ← 運営ダッシュボード
 │   │   │   ├── reception/page.tsx ← 受付ログ（クロステナント）
@@ -143,6 +147,7 @@ mokuture/
 │   │       │   ├── inquiries/page.tsx ← 共通問い合わせフォーム受信の閲覧・状態更新・削除
 │   │       │   ├── appointments/page.tsx ← 来社予定管理・QRコード発行 (qrcode.react)。QRは印刷＋PNG画像DL＋メール送信可(表示は鮮明なSVG、DLは非表示の高解像度Canvas1024pxから toDataURL、メールは QRモーダルの「メールで送信」欄に宛先を都度入力→POST /appointments/{id}/send-email)。日付/ステータスフィルタ + 会議室紐付け。審査用デモモード(is_demo)では①〜⑤のQR発行ガイドバルーン(QrGuideBalloon)を表示し、既定会議室=「商談ルーム」を自動選択
 │   │       │   ├── meeting-rooms/page.tsx ← 会議室管理 (CRUD・カラー・定員・場所)
+│   │       │   ├── calendar/page.tsx  ← カレンダー連携 (Google アカウント1つ・方向=mokuture→Google / Google→mokuture のどちらか・カレンダー選択(マイカレンダー/他のカレンダー)・取り込み条件・同期の状況)
 │   │       │   ├── kiosk-settings/page.tsx ← 受付設定 (実機準拠の5画面WYSIWYGプレビュー: 待機/ようこそ/受付メニュー/呼び出し中/完了。文言はプレビュー上を直接クリックしてインライン編集=Canva風、ロゴは受付メニュー画面でドラッグ配置・リサイズ)
 │   │       │   ├── settings/page.tsx  ← 基本設定 (ブランディング: ロゴ・カラー・フォント)
 │   │       │   ├── notify/page.tsx    ← 通知設定 (Slack=OAuth「Slackに追加」/Chatwork/PWA/カスタムWebhook + 配達専用通知先: Slack=共通連携のチャンネル上書き/Webhook/プッシュON-OFF。Chatworkの配達宛先は共通カードのルームそのもの)
@@ -300,7 +305,7 @@ mokuture/
 - **設定の取得 API は秘密をそのまま返さない**: カスタム Webhook の URL は `***` で返し、`***` のまま保存されたら元の値を保つ
 - **SSE は使い捨てのチケットでつなぐ**: `POST /events/ticket` → `GET /events/stream?ticket=…`（60秒）。`?token=` は画面と backend の配備がずれる間の移行用で、いずれ外す
 - **本番（SQLite 以外）で JWT・暗号化の鍵が既定値のままなら起動しない**（`main._refuse_insecure_defaults`）
-- **テナントの slug に使えない語**: `login` `operator` `ops-console` `partner-portal` `api` `_next` `admin` `kiosk` `inquiry` `static`
+- **テナントの slug に使えない語**: `login` `operator` `ops-console` `partner-portal` `api` `_next` `admin` `kiosk` `inquiry` `static` `google-calendar`
 - **保存先の URL**（ロゴ・メディア・会議室の地図）は自分のストレージのものだけ（`storage.is_own_storage_url`）
 
 **端末エージェント・キオスク画面**
@@ -395,7 +400,9 @@ mokuture/
 - **lockers** — ロッカー (door_number=gpio_pin, state, **name**=表示ラベル, **pin_hash**=bcrypt(4桁PIN) nullable, **occupied**=利用中フラグ, **occupied_at**)
 - **reception_logs** — 受付ログ (visitor_name, company, staff, **department**(訪問先部署), purpose, method, **state**, staff_notes, appointment_id, **decided_at**)。`department` は来訪者が受付フォームで選んだ訪問先部署(管理画面「受付設定」の `department_list` から選択)。カラム追加は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS.reception_logs`)。受付ログ一覧/詳細・CSV・Slack/Push/Webhook 通知にも `部署` を出す。`state`: `received | notified | accepted(受付=参ります) | phone(電話=対応不可・電話番号案内) | declined(お断り=営業お断り+フォーム案内) | completed | cancelled`。`decided_at`=スタッフが応答した時刻(nullable)。**`escalated_at`**=代理通知(エスカレーション)を送った時刻(nullable)。`escalated_at` は二重送信の防止も兼ねる＝スイーパーが**送信前に先に確定・commit** する。state/decided_at は素の型でDB制約なし＝カラム追加は `main.py` の起動時自動マイグレーション(`_ENSURE_COLUMNS`)で対応済み。`method`: `form | qr | calendar | delivery(配達呼出) | dropoff(置き配)`。**置き配(dropoff)** は `notify-delivery`/`occupy-delivery` が `visitor_name="置き配"`/`company=ロッカーラベル`/`purpose="解錠PIN: XXXX（受付端末: …）"`/`state="completed"` で記録する＝**スタッフが通知を見逃しても管理画面の受付ログから解錠PINを後追いできる**。一時的PIN(受取で端末が破棄し無効化)のため通知本文と同じく平文で載せる(`_log_delivery_dropoff`)。誰かの応答を待つ受付ではないので受付/電話ボタンは出さない
 - **inquiries** — mokuture 共通問い合わせフォーム受信 (tenant_id, name, company, email, phone, message, **state**=`new|read|archived`, created_at)。公開送信 `POST /inquiries/public/{slug}`、管理閲覧 `GET /inquiries`。キオスク「営業お断り」画面が案内する共通フォーム(`/{slug}/inquiry`)の受け皿。テーブルは起動時 `create_all` で自動作成
-- **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired, meeting_room_id FK nullable)
+- **visitor_appointments** — 来社予定 (visitor_name, company, staff, purpose, scheduled_at, token, status: pending|received|expired, meeting_room_id FK nullable)。**`scheduled_at` は JST の壁時計(naive)**(管理画面のブラウザ時刻のまま保存。naive-UTC で統一している他の列の例外)。Google カレンダー連携の列: `gcal_event_id`/`gcal_calendar_id`(結び付いたイベント。`(tenant_id, gcal_event_id)` で一意 = `main._ensure_schema` の `ix_appointments_tenant_gcal_event`)、`gcal_origin`("google"=取り込んだ予定 / NULL=mokuture で登録)、`gcal_updated`(イベントの `updated`)、`gcal_sync_state`(pending/synced/error)。起動時自動マイグレーションで追加
+- **calendar_integrations** — Google カレンダー連携(テナントに1行 = 連携できるアカウントは1つ)。`credentials_json`(Fernet 暗号化の refresh/access token。**API・ログに出さない**)、`account_email`、`status`(active/reauth_required/disconnected)、`direction`(to_google/from_google)、`calendar_id`/`calendar_name`、`import_keyword`、`default_staff`、`last_synced_at`/`last_error`/`last_error_at`。起動時 `create_all` で作成
+- **calendar_event_tombstones** — 来社予定を消したときの Google 側の後始末。`kind="delete"`=書き出し中に消した予定のイベントを消す(消せるまで残る・定期同期が拾い直す)、`kind="ignore"`=取り込んだ予定を mokuture で消した(次から取り込まない。日時を過ぎたら掃除)
 - **meeting_rooms** — 会議室 (name, location, capacity, color, description, is_active, **map_image_url**=館内マップ画像URL nullable)
 - **notification_settings** — 通知先設定 (Fernet 暗号化, `type` で種別)。受付: `slack`/`chatwork`/`webhook`。**VAPID 鍵は全テナント共通の1組(Render の `VAPID_PRIVATE_KEY`/`VAPID_PUBLIC_KEY`)で、DB には持たない。2026-10-24 にテナントごとの `vapid`/`webpush` 行・鍵の生成/再生成 API とボタン・旧鍵の購読を全廃した。共通鍵を作り直すと全テナントの全購読が無効になる**。配達専用: `slack_delivery`/`webhook_delivery`(未設定時は受付用にフォールバック)、`push_delivery`(`{enabled}` プッシュ通知ON/OFF, 既定ON)。**`slack`(受付)は OAuth 連携で `{team_id, team_name, bot_access_token, bot_user_id, channel_id, channel_name, auth_method:"bot", created_at, updated_at}` を暗号化保存**(専用テーブルは作らず既存 row を拡張＝マイグレーション不要)。`bot_access_token` は API レスポンス・ログに一切出さない。旧・手入力 `{webhook_url}` の row も送信は後方互換で動く(`SlackNotifier.send_to_config` が bot/webhook を自動判別)。**2026-10-24: 配達専用に別のSlack/Chatwork連携を結ばせる仕組みを廃止した**（通常の通知先と配達の通知先で、それぞれSlack/Chatworkに二重で連携させるのが無駄だったため）。`slack_delivery` は配達専用の**チャンネル上書きのみ**(`{channel_id, channel_name, updated_at}`、Bot Token は複製せず共通の `slack` 連携を使い回す。`POST /notifications/slack/channel` に `target="slack_delivery"` を渡して設定。未設定/解除時は受付と同じ共通チャンネルへ。`SlackNotifier.resolve_delivery_config(base, override)` が合成)。旧形式(`slack_delivery` が自前の `webhook_url` を持つ行)はそのまま後方互換で動く。Chatworkは元から共通 `chatwork` 行のルームが配達専用の宛先だった(受付通知には使われない)ので、専用の `chatwork_delivery` 書き込み/テストendpointを削除しただけ(読み取りのフォールバックは残置し、既存の旧形式データも動き続ける)
 - **staff_notification_routes** — **訪問先担当者ごとの通知先と代理通知設定**。`(tenant_id, staff_name)` で一意(`main.py` の起動時に `CREATE UNIQUE INDEX IF NOT EXISTS ix_staff_routes_tenant_staff`)。`staff_name` は `tenants.staff_list`(キオスクの訪問先ドロップダウン) の1件＝`reception_logs.staff` と突き合わせる。宛先は `config_json`(Fernet 暗号化)に `{slack_channel_id, slack_channel_name, chatwork_room_id, email, webhook_url}` と、列 `push_user_id`(→`users.id`。Web Push を届ける管理ユーザー。購読はブラウザ＝ユーザーに紐づくため、担当者(ただの名前)とここで結びつける。NULL=従来どおり共通の購読へ)。**`webhook_url` は API レスポンスに出さない**(`webhook_configured` の真偽だけ)＝CLAUDE.md「秘密情報」方針。`include_default`(既定 true)=テナント共通の通知先(Slack/Webhook/**プッシュ**)へも送るか、`fallback_staff_name`=応答が無いときに転送する代理担当者(**1段のみ・連鎖しない**)、`escalate_after_sec`(既定 60、0=代理通知しない、30〜3600)。**行が無い担当者は従来どおり共通の通知先だけ**(後方互換)。テーブルは起動時 `create_all` で自動作成
@@ -458,6 +465,13 @@ mokuture/
 | PATCH | /appointments/{id} | JWT | 来社予定更新 (meeting_room_id 対応) |
 | DELETE | /appointments/{id} | JWT | 来社予定削除 |
 | POST | /appointments/{id}/send-email | JWT | 来社予定QRを指定メールへ送信 (body `{email}`・**宛先は保存しない**)。`segno` で `appt:<token>` の QR PNG を生成し CID インライン画像+添付でHTMLメール送信。SMTP未設定(`smtp_enabled=false`)は 503、送信失敗は 502。閲覧専用アカウントも `/appointments/*` は許可 |
+| GET | /integrations/google-calendar | JWT(スタッフ可) | Google カレンダー連携の状態 `{enabled, connected, status, account_email, direction, calendar_id, calendar_name, import_keyword, default_staff, active, last_synced_at, last_error, last_error_at, unsynced_count, staff_list}`。**トークンは返さない** |
+| GET | /integrations/google-calendar/oauth/url | JWT(管理者) | Google の認可 URL `{enabled, authorize_url?}`(署名 state・TTL10分・`access_type=offline`+`prompt=consent`)。env 未設定は `{enabled:false}`。**閲覧専用アカウントは 403**(`readonly._RO_BLOCKED_GET`) |
+| POST | /integrations/google-calendar/oauth/complete | JWT(管理者) | Google から戻った画面 `/google-calendar/callback`(=GOOGLE_REDIRECT_URI)が `{code, state, error}` を渡して連携を仕上げる → `{result: connected\|denied\|scope\|error\|mismatch}`(画面は `/{slug}/admin/calendar?google=<result>` へ移る)。**state の利用者(連携を始めた管理者)と JWT の利用者が違えば `mismatch` で何もしない**。スコープが欠けていたら保存せず `scope`。アカウントの確認に失敗したら何も変えず `error` |
+| GET | /integrations/google-calendar/calendars | JWT(管理者) | 選べるカレンダー `{calendars:[{id,name,primary,access_role,writable,group:"mine"\|"other"}]}`(メイン→マイカレンダー→他のカレンダー順) |
+| PUT | /integrations/google-calendar/settings | JWT(管理者) | `{direction, calendar_id, import_keyword?, default_staff?}` を保存して裏で1回同期。書き出しに閲覧だけのカレンダーは 422、担当者は担当者リストの名前だけ。応答に `removed_imports`(取り込み元を変えて消した予定の数) |
+| POST | /integrations/google-calendar/sync | JWT(管理者) | 今すぐ同期(終わるまで待つ) → `{result:{pushed,imported,updated,removed,failed,error}, ...状態}` |
+| POST | /integrations/google-calendar/disconnect | JWT(管理者) | 解除(Google の revoke を best-effort・トークン破棄・`status=disconnected`)。**カレンダーの予定も来社予定も消さない**。同じアカウントで結び直せば設定を引き継ぐ |
 | GET | /meeting-rooms | JWT | 会議室一覧 (active_only フィルタ) |
 | POST | /meeting-rooms | JWT | 会議室作成 (map_image_url 対応) |
 | POST | /meeting-rooms/map-upload-url | JWT | 館内マップ画像 Presigned URL 取得 (logo-upload と同形式) |
@@ -908,7 +922,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 ### 管理画面ナビゲーション
 - `AdminShell.tsx` の `NavId` 型・`NAV_SETTINGS`・`NAV_PATHS`・`NavIcon` を一括管理。
 - ページを追加したら 4 箇所全て更新すること。
-- 現在の設定メニュー: 通知設定 / **受付設定** / 基本設定
+- 現在の設定メニュー: 通知設定 / **カレンダー連携** / **受付設定** / 基本設定
 - **通知設定(`notify`)** に「担当者ごとの通知先」カード(`StaffRoutesPanel`)がある。行は「受付設定」の担当者リスト(`staff_list`)から生成するので、**担当者を増減したら両画面が連動する**(消えた担当者の設定は `orphan` として残り、注意表示つきで編集/解除できる)。
 - 運用メニューに **ロッカー**(`locker`)を配置。ローカルファースト化後は**読み取り専用の「ロッカー状況」ビュー**(`admin/locker/page.tsx`、`GET /lockers/status`、端末ごとにグルーピング・15s自動更新)。旧DBモデル前提のCRUD(作成/削除/開錠/施錠)は廃止し、施錠・解錠・PINは各キオスク端末で管理(端末が真実の源)。`NavId`/`NAV_OPS`/`NAV_PATHS`/`NavIcon` の4箇所に配線済み
 - 運用メニューに **問い合わせ**(`inquiries`)を追加（`AdminShell` の `NavId`/`NAV_OPS`/`NAV_PATHS`/`NavIcon` の4箇所を更新済み）。
@@ -949,6 +963,22 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - **エラー**: Slack送信失敗でも受付は止めない(best-effort)。失敗は `logger.warning` で残すが**秘密情報は出さない**(exc_infoも付けない)。Bot連携済だがチャンネル未選択の受付は「エラー」ではなく静かにスキップ。テスト通知(`POST /notifications/test/slack`)はチャンネル未選択なら 400 で促す。
 - **受付通知文面**(`SlackNotifier.build_reception_message`): `:bell: 来客がありました` + 会社名/お名前 様/訪問先/時刻(JST)。会社名・訪問先は空なら行を省略（最低=お名前+時刻）。
 - **Slack App設定**: OAuth&Permissions に `SLACK_REDIRECT_URI` を Redirect URL 登録、Bot Token Scopes に `chat:write`/`channels:read`/`groups:read`/`channels:join`/`im:write`/`users:read`。非公開チャンネルへ通知するには事前に Slack で Bot をそのチャンネルへ招待。連携解除(`POST /notifications/slack/disconnect`)は自テナントの設定削除のみ（Slack側App削除まではPhase1では必須にしない）。
+
+### Google カレンダー連携（来社予定 ⇔ Google カレンダー。2026-11-19）
+
+管理画面「カレンダー連携」(`/{slug}/admin/calendar`・設定メニュー)で、テナントに **Google アカウントを1つだけ**結び、**同期するカレンダーを1つ**選び、**方向をどちらか一方**選ぶ。実装は `services/google_calendar.py`・`api/calendar_integration.py`・`models/calendar_integration.py`。テストは `backend/tests/test_google_calendar.py`(Google は偽物に差し替え)。
+
+- **OAuth は Slack と違い、戻りを画面で受けてログイン中の管理者が仕上げる**。署名 state(`create_google_state_token(tenant_id, user_id)`・type=`google_calendar_oauth`・10分)を付けて Google へ → Google は **画面の `/google-calendar/callback`**(`GOOGLE_REDIRECT_URI`)へ戻す → 画面が JWT 付きで `POST /oauth/complete` → **state の利用者と JWT の利用者が同じときだけ**コードを交換してトークンを Fernet 暗号化保存。Slack のような未認証の callback で保存すると、他テナントの管理者が作った認可 URL を踏まされた人のカレンダーがそのテナントへつながってしまう(ログイン CSRF)ため。`google-calendar` はテナントの slug に使えない(`accounts.RESERVED_SLUGS`)。認可 URL は `prompt=select_account consent`(「別のアカウントに切り替える」で必ず選択画面を出す)。スコープは `calendar.events`(予定の読み書き)と `calendar.calendarlist.readonly`(カレンダー一覧)だけ。`access_type=offline`+`prompt=consent` で refresh_token を必ず受け取る。Google の同意画面は項目ごとにチェックを外せるので、**どちらかが欠けたら保存せず `?google=scope`**。アカウントのメールはメインのカレンダーの ID(`calendarList/primary`)から取る。**SDK は入れない**(httpx で REST)。
+- **「マイカレンダー」**: カレンダー一覧は Google の画面と同じく、連携したアカウントがオーナーのもの(`accessRole=owner`、メインを含む)を「マイカレンダー」、それ以外を「他のカレンダー」に分けて出す。書き出し(to_google)は owner/writer のカレンダーだけ選べる。
+- **日時**: 来社予定の `scheduled_at` は **JST の壁時計(naive)**。Google へは `+09:00` 付き・`timeZone=Asia/Tokyo` で送り、Google からは JST に直してから tz を外す(9時間ずれをテストで見張っている)。新しく足した時刻の列(`last_synced_at` 等)は従来どおり naive-UTC。
+- **mokuture → Google(`to_google`)**: 来社予定の作成・変更の直後に `BackgroundTasks` で1件送る(`push_appointment`)。**イベント ID は予約の UUID からハイフンを抜いた値**(base32hex の範囲内)＝送り直しても二重にならない。409 なら上書きに回す。イベントには `extendedProperties.private.mokuture_appointment_id` を付ける。**QR の予約コード(token)はイベントに入れない**(カレンダーの共有先へ渡さない)。送れなかった予定は `gcal_sync_state="error"` のまま残り、定期同期が送り直す(再デプロイで BackgroundTasks が消えても取りこぼさない)。削除は `calendar_event_tombstones(kind=delete)` に残してから消す(**作成直後でまだイベント ID を記録していない予定も、予約から決まる ID で消しに行く**＝送信中に消されて Google に孤児が残るのを防ぐ)。書き出すのは**前日以降の予定だけ**。**Google から取り込んだ予定(`gcal_origin="google"`)は書き出さない**(相手の元の予定を書き換えないため)。書き出し先のカレンダーを変えると、前のカレンダーのこれからの予定を消して新しい方へ書き直す。担当者の改名(`staff_routes.rename`)は書き出し済みの予定を `pending` に戻して説明欄を書き直させる(取り込みの既定の担当者 `default_staff` も追随)。
+- **Google → mokuture(`from_google`)**: 定期同期(`google_calendar_sync_interval_sec`・既定300秒)と「今すぐ同期」で、**前日〜90日先**のイベントを `singleEvents=true`+`showDeleted=true` で読み、`(tenant_id, gcal_event_id)` で upsert する。**取り込む条件**: 時刻のある予定(**終日は取り込まない**)・`import_keyword` をタイトルに含む(空=全部。画面の初期値は「来社」＝空にすると社内の会議まで来社予定になるため)・自分が「いいえ」と返事していない。`eventType` が default 以外(不在・集中時間・勤務場所・Gmail からの予定)は取り込まない。タイトルから取り込みの言葉と、それを囲む【】[]「」・区切り記号を外したものが `visitor_name`(`visitor_name_from_title`。キオスク・通知に「【来社】B社 田中様 様」と出さないため。何も残らなければ元のタイトル)、場所に会議室名が含まれればその会議室、説明欄(HTML は素の文字にする)がメモ、担当者は `default_staff`。**Google が元なので Google で変わったら取り込み直すのは「お名前・日時・所要時間」だけ。担当者・会議室・会社名・目的・メモは作るとき以外上書きしない**(上書きすると受付の担当者の割り当てが同期のたびに消える)。Google で消された・条件に合わなくなった予定は、**まだ受付していない(pending)ものだけ**消す(受付済みは記録として残す)。期間の一覧に出てこなかった取り込み済みの予定は個別に取り直す(期間外へ延期された予定に追従)。**mokuture で消した取り込み予定は作り直さない**(`tombstones(kind=ignore)`)。**`mokuture_appointment_id` の付いたイベントは新規には取り込まない**(書き出しから切り替えたとき自分の書いた予定を二重に取り込まないため。元の予定があれば結び付けて日時だけ追従)。取り込み元のカレンダーを変えると、前のカレンダーから取り込んだ未受付のこれからの予定を消す(画面で保存前に予告する)。
+- **方向の切り替え**: 書き出し→取り込みにしても、書き出した予定は Google に残る。取り込み→書き出しにしても、取り込んだ予定は来社予定に残る(書き出しはしない)。**別のアカウントで結び直したとき、前に選んでいたカレンダーが新しいアカウントからも見えるなら(共有カレンダー)何も外さない**(イベント ID はカレンダーのもの)。見えなければカレンダーの選択と結び付きを外し、そのとき取り込み済みの未受付のこれからの予定は消す(残すと二度と更新されない孤児になり、同じカレンダーを選び直したときに二重に取り込まれる)。**アカウントの確認(`calendarList`)に失敗したら何も変えない**(確かめられないまま「別のアカウント」とみなさない)。解除は Google 側の許可も取り消すが、カレンダーの予定・来社予定はどちらも消さない。
+- **連携が切れたとき**: トークンの取り直しで `invalid_grant` が返ったら `status="reauth_required"` にして同期を止め、「カレンダー連携」と「来社予定」の上部に「もう一度連携してください」を出す(黙って止まり続けない)。**Google Cloud の OAuth 同意画面が「テスト」のままだと、refresh_token が7日で失効してこの状態になる**ので、本番では「本番環境」に公開すること(`calendar.events` は機密スコープのため Google の確認(審査)が要る場合がある)。
+- **権限**: 連携・設定・今すぐ同期・解除は管理者だけ(`require_tenant_admin`)。状態の参照だけスタッフも可(来社予定画面の表示用)。**来社予定はスタッフも閲覧専用アカウントも操作できるので、その操作も Google へ反映される**。認可 URL は閲覧専用アカウントには出さない(`readonly._RO_BLOCKED_GET`)。
+- **同時実行**: テナントごとの同期は `asyncio.Lock`(`tenant_lock`)で直列(定期同期・今すぐ同期・画面操作直後の送信・設定の保存・連携の仕上げが同じ予定を同時に触らない)。想定外の例外も画面の「最後のエラー」に出す(`UNEXPECTED_MESSAGE`)。単一ワーカー前提(複数ワーカー化するなら担当プロセスを決めるかロックを外へ)。
+- **画面**: 「来社予定」の上部に連携中の帯(方向・カレンダー名・未送信の数)、取り込んだ予定に「Googleから」、送れなかった予定に「Google未反映」のバッジ。取り込んだ予定の編集画面には「お名前と日時は上書きされる」旨を出す。削除の確認には Google 側がどうなるかを書く。
+- **要ユーザー作業**: Google Cloud で OAuth クライアント(ウェブアプリ)を作り、承認済みのリダイレクト URI に `GOOGLE_REDIRECT_URI`(**画面の URL** `https://mokuture-plus.netlify.app/google-calendar/callback`)を登録・Calendar API を有効化・同意画面にスコープ2つを登録して公開。Render に `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/`GOOGLE_REDIRECT_URI`(3つ揃うまで機能は無効＝画面は「この環境では使えません」)。**2026-11-19 時点で本物の Google とは未接続(テストは偽物のみ)**。
 
 ### Slack 受付通知の対応ボタン（Block Kit + Interactivity）
 受付通知(`_notify_slack`)を **Block Kit 化**し、Slack メッセージ内の 受付/電話/お断り ボタンでスタッフが応答できる。Web Push・管理画面「受付ログ」と同じ `_apply_decision`(冪等)に集約。
@@ -1041,6 +1071,15 @@ SLACK_REDIRECT_URI=https://mokuture-plus-api.onrender.com/api/notifications/slac
 # 設定時のみ 受付/電話/お断り ボタンを付け、押下(/notifications/slack/interactions)を署名検証する。
 # 未設定ならボタン無し(従来のテキスト通知)。Slack App 側で Interactivity Request URL の登録も必要。
 SLACK_SIGNING_SECRET=...
+
+# Google カレンダー連携(管理画面「カレンダー連携」)。3つ揃わないと機能無効(settings.google_calendar_enabled)。
+# Google Cloud: OAuth クライアント(ウェブアプリ)の「承認済みのリダイレクト URI」に GOOGLE_REDIRECT_URI を登録、
+# Calendar API を有効化、同意画面のスコープに calendar.events / calendar.calendarlist.readonly。
+# 同意画面が「テスト」のままだと refresh_token が7日で失効する(=連携が切れる)ので本番では公開すること。
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=https://mokuture-plus.netlify.app/google-calendar/callback   # API ではなく画面の URL(画面がログイン中の管理者として連携を仕上げる)
+GOOGLE_CALENDAR_SYNC_INTERVAL_SEC=300   # 任意。取り込みと送り直しの間隔(秒・最小60)
 
 # SMTP メール送信(来社予定QRのメール送信 = 管理画面「来社予定」QRモーダルの「メールで送信」)。
 # HOST/USERNAME/PASSWORD が揃ったときのみ有効(settings.smtp_enabled)。未設定なら送信APIは 503。

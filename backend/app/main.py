@@ -14,6 +14,7 @@ from app.api import api_router
 from app.middleware.readonly import ReadOnlyGuardMiddleware
 from app.services.escalation import run_escalation_loop
 from app.services.analytics import run_analytics_sweeper_loop
+from app.services.google_calendar import run_sync_loop as run_google_calendar_loop
 
 
 # Alembic 未導入のため、起動時に冪等な軽量カラム追加を適用する。
@@ -22,6 +23,14 @@ from app.services.analytics import run_analytics_sweeper_loop
 _ENSURE_COLUMNS = {
     "meeting_rooms": {
         "map_image_url": "VARCHAR(512)",
+    },
+    "visitor_appointments": {
+        # Google カレンダー連携(services/google_calendar.py)。既存行は NULL = どのイベントとも結び付いていない。
+        "gcal_event_id": "VARCHAR(1024)",
+        "gcal_calendar_id": "VARCHAR(1024)",
+        "gcal_origin": "VARCHAR(16)",
+        "gcal_updated": "VARCHAR(64)",
+        "gcal_sync_state": "VARCHAR(16)",
     },
     "users": {
         # パスワード変更時刻。これより前に発行されたトークンを無効にする。既存行は NULL。
@@ -130,6 +139,17 @@ def _ensure_schema(sync_conn) -> None:
             ))
         except Exception:
             pass  # 既存の重複データ等で作成できなくても致命的ではない
+
+    # Google カレンダー連携: 1 つのイベントに結び付く来社予定は 1 件だけ(取り込みの upsert の前提)。
+    # NULL(結び付いていない予定)は Postgres/SQLite とも「相異なる」扱いなので衝突しない。
+    if "visitor_appointments" in tables:
+        try:
+            sync_conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_appointments_tenant_gcal_event "
+                "ON visitor_appointments (tenant_id, gcal_event_id)"
+            ))
+        except Exception:
+            pass
 
     # 承認フロー: (tenant_id, hardware_id) の重複登録を防ぐ一意インデックス。
     # hardware_id が NULL の行(手動作成端末)は Postgres/SQLite とも「相異なる」扱いのため衝突しない。
@@ -253,11 +273,16 @@ async def lifespan(app: FastAPI):
     escalation_task = asyncio.create_task(run_escalation_loop())
     # 分析ログ: 終了イベントが来なかった匿名セッションを畳む定期スイープ（単一ワーカー前提）。
     analytics_task = asyncio.create_task(run_analytics_sweeper_loop())
+    # Google カレンダー連携: 取り込み(Google→mokuture)と、送れなかった予定の送り直し(単一ワーカー前提)。
+    gcal_task = asyncio.create_task(run_google_calendar_loop())
     try:
         yield
     finally:
         escalation_task.cancel()
         analytics_task.cancel()
+        gcal_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await gcal_task
         with suppress(asyncio.CancelledError):
             await escalation_task
         with suppress(asyncio.CancelledError):

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { QRCodeSVG, QRCodeCanvas } from "qrcode.react";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle, QrGuideBalloon } from "@/components/AdminShell";
-import { api, type AppointmentCreate, type MeetingRoom, type TenantSettings, type VisitorAppointment } from "@/lib/api";
+import { api, type AppointmentCreate, type GoogleCalendarStatus, type MeetingRoom, type TenantSettings, type VisitorAppointment } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { withHonorific } from "@/lib/honorific";
 
@@ -699,6 +699,7 @@ export default function AppointmentsPage() {
   const [staffList,   setStaffList]   = useState<string[]>([]);
   const [purposeList, setPurposeList] = useState<string[]>([]);
   const [rooms, setRooms] = useState<MeetingRoom[]>([]);
+  const [gcal, setGcal] = useState<GoogleCalendarStatus | null>(null);  // Google カレンダー連携の状態(表示だけ)
   const [isDemo, setIsDemo] = useState(false);   // 審査用デモモード店舗（QR発行の初期値プリフィル）
 
   // QR
@@ -754,6 +755,7 @@ export default function AppointmentsPage() {
       setIsDemo(!!s.is_demo);
     }).catch(() => {});
     api.listMeetingRooms(token).then(setRooms).catch(() => {});
+    api.getGoogleCalendarStatus(token).then(setGcal).catch(() => {});
   }, []);
 
   // List reload — cancelled flag prevents stale responses from overwriting newer state
@@ -1090,6 +1092,8 @@ export default function AppointmentsPage() {
     >
       <div style={{ padding: isMobile ? "16px 12px" : "24px 28px" }}>
 
+        <GcalBanner status={gcal} tenant={tenant} />
+
         {viewMode === "timeline" ? (
           /* ════════════ TIMELINE ════════════ */
           <div>
@@ -1198,7 +1202,7 @@ export default function AppointmentsPage() {
                     <div key={appt.id} style={{ background: "#faf8f4", border: "1px solid #efece5", borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15", fontFamily: FONT_JP }}>{appt.visitor_name}</div>
+                          <div style={{ fontSize: 15, fontWeight: 600, color: "#1d1a15", fontFamily: FONT_JP }}>{appt.visitor_name}<GcalBadge appt={appt} status={gcal} /></div>
                           {appt.company && <div style={{ fontSize: 12.5, color: "#6b6559", fontFamily: FONT_JP }}>{appt.company}</div>}
                         </div>
                         <StatusBadge status={appt.status} />
@@ -1243,7 +1247,7 @@ export default function AppointmentsPage() {
                     {appointments.map((appt, idx) => (
                       <tr key={appt.id} style={{ borderBottom: idx < appointments.length - 1 ? "1px solid #efece5" : "none" }}>
                         <td style={{ padding: "10px 12px", fontSize: 12.5, color: "#1d1a15", fontFamily: FONT_MONO, whiteSpace: "nowrap" }}>{fmtDatetime(appt.scheduled_at)}</td>
-                        <td style={{ padding: "10px 12px", fontSize: 13, fontWeight: 500, color: "#1d1a15", fontFamily: FONT_JP, whiteSpace: "nowrap" }}>{appt.visitor_name}</td>
+                        <td style={{ padding: "10px 12px", fontSize: 13, fontWeight: 500, color: "#1d1a15", fontFamily: FONT_JP, whiteSpace: "nowrap" }}>{appt.visitor_name}<GcalBadge appt={appt} status={gcal} /></td>
                         <td style={{ padding: "10px 12px", fontSize: 13, color: "#6b6559", fontFamily: FONT_JP, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{appt.company ?? "—"}</td>
                         <td style={{ padding: "10px 12px", fontSize: 13, color: "#6b6559", fontFamily: FONT_JP, whiteSpace: "nowrap" }}>{appt.staff ?? "—"}</td>
                         <td style={{ padding: "10px 12px", fontSize: 13, color: "#6b6559", fontFamily: FONT_JP, whiteSpace: "nowrap" }}>{appt.purpose ?? "—"}</td>
@@ -1287,7 +1291,12 @@ export default function AppointmentsPage() {
           onClick={() => setEditAppt(null)}>
           <div style={{ background: "#fffefb", borderRadius: 20, padding: isMobile ? "24px 20px" : "32px 36px", maxWidth: 580, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)", maxHeight: "90vh", overflowY: "auto" }}
             onClick={e => e.stopPropagation()}>
-            <MkSectionTitle title="来社予定を編集" style={{ marginBottom: 20 }} />
+            <MkSectionTitle title="来社予定を編集" style={{ marginBottom: editAppt.gcal_origin === "google" ? 12 : 20 }} />
+            {editAppt.gcal_origin === "google" && (
+              <div style={{ marginBottom: 18, padding: "10px 14px", background: "#e4eef5", border: "1px solid rgba(46,107,142,0.25)", borderRadius: 8, color: "#2e6b8e", fontSize: 12, lineHeight: 1.7, fontFamily: FONT_JP }}>
+                Google カレンダーから取り込んだ予定です。<b>お名前と日時</b>は、Google カレンダーで予定が変わると上書きされます（ここで変えても Google カレンダーには反映されません）。担当者・会議室・会社名・目的・メモは、ここで変えた内容が残ります。
+              </div>
+            )}
             <AppointmentForm data={editFormData} onChange={setEditFormData} onSubmit={handleUpdate}
               onCancel={() => setEditAppt(null)}
               saving={editSaving} error={editError} submitLabel="保存"
@@ -1405,6 +1414,12 @@ export default function AppointmentsPage() {
             <div style={{ fontSize: 18, fontWeight: 700, color: "#1d1a15", fontFamily: FONT_JP, marginBottom: 10 }}>来社予定を削除しますか？</div>
             <div style={{ fontSize: 13.5, color: "#6b6559", fontFamily: FONT_JP, marginBottom: 24, lineHeight: 1.6 }}>
               削除すると元に戻せません。
+              {(() => {
+                const target = appointments.find(a => a.id === confirmDeleteId) ?? timelineAppts.find(a => a.id === confirmDeleteId);
+                if (target?.gcal_origin === "google") return <><br />Google カレンダーの予定は消えません。この予定は次から取り込みません。</>;
+                if (target?.gcal_linked && gcal?.active && gcal.direction === "to_google") return <><br />Google カレンダー（{gcal.calendar_name}）の予定も消えます。</>;
+                return null;
+              })()}
             </div>
             {deleteError && (
               <div style={{ fontSize: 13, color: "#a84238", fontFamily: FONT_JP, marginBottom: 16, padding: "8px 12px", background: "#fff5f5", borderRadius: 8, border: "1px solid #f5c6c6" }}>
@@ -1436,4 +1451,37 @@ export default function AppointmentsPage() {
       <QrGuideBalloon anchorRef={emailBtnRef}  active={isDemo && !!qrAppt}                                              text="QR送信はこちら⑤" placement="top" />
     </AdminShell>
   );
+}
+
+// ── Google カレンダー連携の表示(設定は「カレンダー連携」画面) ──────────────────────
+function GcalBanner({ status, tenant }: { status: GoogleCalendarStatus | null; tenant: string }) {
+  if (!status?.connected || !status.direction || !status.calendar_id) return null;
+  const broken = status.status === "reauth_required";
+  const link = <a href={`/${tenant}/admin/calendar`} style={{ color: "inherit", fontWeight: 600 }}>「カレンダー連携」</a>;
+  return (
+    <div style={{
+      marginBottom: 14, padding: "9px 14px", borderRadius: 8, fontSize: 12, lineHeight: 1.7, fontFamily: FONT_JP,
+      background: broken ? "#f6e0dc" : "#e4eef5", border: `1px solid ${broken ? "rgba(168,66,56,0.3)" : "rgba(46,107,142,0.25)"}`,
+      color: broken ? "#a84238" : "#2e6b8e",
+    }}>
+      {broken ? (
+        <>Google カレンダーとの連携が切れています。{link}でもう一度連携してください。</>
+      ) : status.direction === "to_google" ? (
+        <>ここで登録した予定は Google カレンダー（{status.calendar_name}）にも書き出されます。設定は{link}で変えられます。{status.unsynced_count > 0 && <>（まだ送れていない予定 {status.unsynced_count}件・自動で送り直します）</>}</>
+      ) : (
+        <>Google カレンダー（{status.calendar_name}）の予定を約5分ごとに取り込んでいます。「Googleから」の付いた予定が取り込んだ予定です。設定は{link}で変えられます。</>
+      )}
+    </div>
+  );
+}
+
+function GcalBadge({ appt, status }: { appt: VisitorAppointment; status: GoogleCalendarStatus | null }) {
+  const base = { marginLeft: 6, padding: "1px 6px", borderRadius: 999, fontSize: 10, fontWeight: 600, verticalAlign: "middle", whiteSpace: "nowrap" as const, fontFamily: FONT_JP };
+  if (appt.gcal_origin === "google") {
+    return <span style={{ ...base, background: "#e4eef5", color: "#2e6b8e" }} title="Google カレンダーから取り込んだ予定">Googleから</span>;
+  }
+  if (status?.active && status.direction === "to_google" && appt.gcal_sync_state === "error") {
+    return <span style={{ ...base, background: "#f7ecd9", color: "#b8763a" }} title="Google カレンダーへ送れませんでした。自動で送り直します">Google未反映</span>;
+  }
+  return null;
 }

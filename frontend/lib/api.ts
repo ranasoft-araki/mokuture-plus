@@ -786,6 +786,23 @@ export const api = {
   sendAppointmentEmail: (token: string, id: string, email: string) =>
     request<{ ok: boolean; sent_to: string }>(`/appointments/${id}/send-email`, { method: "POST", body: JSON.stringify({ email }) }, token),
 
+  // Google カレンダー連携(管理画面「カレンダー連携」)。連携・設定・同期・解除は管理者だけ。
+  getGoogleCalendarStatus: (token: string) =>
+    request<GoogleCalendarStatus>("/integrations/google-calendar", {}, token),
+  getGoogleCalendarOAuthUrl: (token: string) =>
+    request<{ enabled: boolean; authorize_url?: string }>("/integrations/google-calendar/oauth/url", {}, token),
+  /** Google から戻った画面(/google-calendar/callback)が、コードと state を渡して連携を仕上げる。 */
+  completeGoogleCalendarOAuth: (token: string, body: { code: string; state: string; error: string }) =>
+    request<{ result: "connected" | "denied" | "scope" | "error" | "mismatch" }>("/integrations/google-calendar/oauth/complete", { method: "POST", body: JSON.stringify(body) }, token),
+  listGoogleCalendars: (token: string) =>
+    request<{ calendars: GoogleCalendarItem[] }>("/integrations/google-calendar/calendars", {}, token),
+  saveGoogleCalendarSettings: (token: string, body: { direction: "to_google" | "from_google"; calendar_id: string; import_keyword: string; default_staff: string }) =>
+    request<GoogleCalendarStatus>("/integrations/google-calendar/settings", { method: "PUT", body: JSON.stringify(body) }, token),
+  syncGoogleCalendar: (token: string) =>
+    request<GoogleCalendarStatus & { result: GoogleCalendarSyncResult }>("/integrations/google-calendar/sync", { method: "POST" }, token),
+  disconnectGoogleCalendar: (token: string) =>
+    request<{ ok: boolean }>("/integrations/google-calendar/disconnect", { method: "POST" }, token),
+
   // Kiosk appointment lookup (device token auth)
   getKioskAppointment: (kioskToken: string, apptToken: string) =>
     request<KioskAppointmentResponse>(`/kiosk/appointment/${encodeURIComponent(apptToken)}`, { headers: { "X-Kiosk-Token": kioskToken } }),
@@ -1376,6 +1393,49 @@ export interface VisitorAppointment {
   meeting_room: MeetingRoom | null;
   duration_minutes: number | null;
   created_at: string;
+  /** "google" = Google カレンダーから取り込んだ予定。null = mokuture で登録した予定。 */
+  gcal_origin?: "google" | null;
+  /** Google カレンダーへの書き出し状態。synced=揃っている / pending=まだ送っていない / error=送れなかった(自動で再送)。 */
+  gcal_sync_state?: "pending" | "synced" | "error" | null;
+  gcal_linked?: boolean;
+}
+
+/** Google カレンダー連携の状態(GET /integrations/google-calendar)。トークンは含まない。 */
+export interface GoogleCalendarStatus {
+  enabled: boolean;
+  connected: boolean;
+  status: "active" | "reauth_required" | "disconnected";
+  account_email: string | null;
+  direction: "to_google" | "from_google" | null;
+  calendar_id: string | null;
+  calendar_name: string | null;
+  import_keyword: string;
+  default_staff: string;
+  /** 連携済み・方向とカレンダーを選んであり、同期が動いている。 */
+  active: boolean;
+  last_synced_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  /** 書き出し中に、まだ Google へ送れていないこれからの来社予定の数。 */
+  unsynced_count: number;
+  staff_list: string[];
+  removed_imports?: number;
+}
+
+export interface GoogleCalendarItem {
+  id: string;
+  name: string;
+  primary: boolean;
+  access_role: string;
+  writable: boolean;
+  /** mine = マイカレンダー(自分がオーナー) / other = 他のカレンダー */
+  group: "mine" | "other";
+  color: string | null;
+}
+
+export interface GoogleCalendarSyncResult {
+  pushed: number; imported: number; updated: number; removed: number; failed: number;
+  error: string | null; skipped: boolean;
 }
 
 export interface AppointmentCreate {

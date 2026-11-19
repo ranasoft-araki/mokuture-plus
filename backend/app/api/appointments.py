@@ -5,7 +5,7 @@ from datetime import datetime
 from html import escape
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +18,7 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.visitor_appointment import VisitorAppointment
 from app.services import email as email_service
+from app.services import google_calendar as gcal
 from app.services import mail_quota
 from app.services.honorific import with_honorific
 
@@ -106,6 +107,11 @@ class AppointmentResponse(BaseModel):
     meeting_room: Optional[MeetingRoomResponse] = None
     duration_minutes: Optional[int] = None
     created_at: Optional[str] = None
+    # Google カレンダー連携。gcal_origin="google" = Google カレンダーから取り込んだ予定。
+    # gcal_sync_state: synced=Google と揃っている / pending=まだ送っていない / error=送れなかった(自動で再送)。
+    gcal_origin: Optional[str] = None
+    gcal_sync_state: Optional[str] = None
+    gcal_linked: bool = False
 
 
 def _room_out(room: Optional[MeetingRoom]) -> Optional[dict]:
@@ -139,6 +145,9 @@ def _out(appt: VisitorAppointment, room: Optional[MeetingRoom] = None) -> dict:
         "meeting_room": _room_out(room),
         "duration_minutes": appt.duration_minutes,
         "created_at": appt.created_at.isoformat() if appt.created_at else None,
+        "gcal_origin": appt.gcal_origin,
+        "gcal_sync_state": appt.gcal_sync_state,
+        "gcal_linked": bool(appt.gcal_event_id),
     }
 
 
@@ -198,6 +207,7 @@ async def list_appointments(
 @router.post("", status_code=201, response_model=AppointmentResponse)
 async def create_appointment(
     body: AppointmentCreate,
+    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -216,10 +226,13 @@ async def create_appointment(
         scheduled_at=scheduled_at,
         notes=body.notes,
         duration_minutes=body.duration_minutes,
+        gcal_sync_state="pending",
     )
     db.add(appt)
     await db.commit()
     await db.refresh(appt)
+    # Google カレンダーへ書き出し中なら送る(そうでなければ何もしない。失敗は定期同期が送り直す)。
+    background_tasks.add_task(gcal.push_appointment, user.tenant_id, appt.id)
     room = None
     if appt.meeting_room_id is not None:
         room_result = await db.execute(select(MeetingRoom).where(MeetingRoom.id == appt.meeting_room_id))
@@ -258,6 +271,7 @@ async def get_appointment(
 async def update_appointment(
     appt_id: str,
     body: AppointmentUpdate,
+    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -294,8 +308,13 @@ async def update_appointment(
     if body.duration_minutes is not None:
         appt.duration_minutes = body.duration_minutes
 
+    # mokuture で登録した予定は Google カレンダーへ送り直す(取り込んだ予定は Google が元なので送らない)。
+    if appt.gcal_origin != "google":
+        appt.gcal_sync_state = "pending"
     await db.commit()
     await db.refresh(appt)
+    if appt.gcal_origin != "google":
+        background_tasks.add_task(gcal.push_appointment, user.tenant_id, appt.id)
     room = None
     if appt.meeting_room_id is not None:
         room_result = await db.execute(select(MeetingRoom).where(MeetingRoom.id == appt.meeting_room_id))
@@ -306,6 +325,7 @@ async def update_appointment(
 @router.delete("/{appt_id}", status_code=204)
 async def delete_appointment(
     appt_id: str,
+    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -318,8 +338,12 @@ async def delete_appointment(
     appt = result.scalar_one_or_none()
     if appt is None:
         raise HTTPException(status_code=404, detail="Appointment not found")
+    # Google カレンダーの後始末の印(書き出し中=イベントを消す / 取り込んだ予定=作り直さない)。
+    send_delete = await gcal.note_appointment_deleted(db, appt)
     await db.delete(appt)
     await db.commit()
+    if send_delete:
+        background_tasks.add_task(gcal.process_deletes, user.tenant_id)
 
 
 # ── 来社予定QRのメール送信 ────────────────────────────────────────────────────

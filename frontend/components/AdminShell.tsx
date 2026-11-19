@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { api } from "@/lib/api";
 
-export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "inquiries" | "appointments" | "meeting_rooms" | "notify" | "locker" | "kiosk_settings" | "settings" | "users" | "profile";
+export type NavId = "dashboard" | "media" | "playlist" | "schedule" | "device" | "reception" | "inquiries" | "appointments" | "meeting_rooms" | "notify" | "calendar" | "locker" | "kiosk_settings" | "settings" | "users" | "profile";
 
 interface Props {
   active: NavId;
@@ -34,6 +34,7 @@ const NAV_OPS: { id: NavId; label: string }[] = [
 
 const NAV_SETTINGS: { id: NavId; label: string }[] = [
   { id: "notify",         label: "通知設定" },
+  { id: "calendar",       label: "カレンダー連携" },
   { id: "kiosk_settings", label: "受付設定" },
   { id: "settings",       label: "基本設定" },
   { id: "users",          label: "ユーザー管理" },
@@ -51,6 +52,7 @@ const NAV_PATHS: Record<NavId, (t: string) => string> = {
   appointments:  (t) => `/${t}/admin/appointments`,
   meeting_rooms: (t) => `/${t}/admin/meeting-rooms`,
   notify:        (t) => `/${t}/admin/notify`,
+  calendar:      (t) => `/${t}/admin/calendar`,
   locker:        (t) => `/${t}/admin/locker`,
   kiosk_settings:(t) => `/${t}/admin/kiosk-settings`,
   settings:      (t) => `/${t}/admin/settings`,
@@ -881,6 +883,11 @@ function NavIcon({ id, active }: { id: NavId; active: boolean }) {
     case "notify":
       return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
         <path d="M6 8a6 6 0 0112 0v5l2 3H4l2-3z"/><path d="M10 19a2 2 0 004 0"/>
+      </svg>;
+    case "calendar":
+      return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>
+        <path d="M9 15h6M13 13l2 2-2 2"/>
       </svg>;
     case "locker":
       return <svg width={w} height={w} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">

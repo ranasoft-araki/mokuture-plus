@@ -197,3 +197,35 @@ def verify_slack_state_token(token: str) -> str:
     if not tenant_id:
         raise JWTError("missing tenant_id")
     return tenant_id
+
+
+# Google カレンダー連携の OAuth `state`。署名 JWT でテナントと「連携を始めた管理者」を運ぶ(サーバ側の
+# セッション保存は不要)。type を分けて Slack の state を流用させない。Google からの戻りは画面
+# (/google-calendar/callback)が受け、ログイン中の管理者の JWT 付きでコードを API へ渡す。API は
+# state の利用者と JWT の利用者が同じときだけ連携する＝他人に認可 URL を踏ませて、その人の
+# カレンダーを自分のテナントへつながせる手(ログイン CSRF)が通らない。
+_GOOGLE_STATE_EXPIRE_MINUTES = 10
+
+
+def create_google_state_token(tenant_id: str, user_id: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=_GOOGLE_STATE_EXPIRE_MINUTES)
+    payload = {
+        "tenant_id": tenant_id,
+        "sub": user_id,
+        "type": "google_calendar_oauth",
+        "jti": secrets.token_hex(8),
+        "exp": expire,
+    }
+    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
+def verify_google_state_token(token: str) -> tuple[str, str]:
+    """有効な Google 連携の state なら (tenant_id, user_id) を返す。それ以外は JWTError。"""
+    payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+    if payload.get("type") != "google_calendar_oauth":
+        raise JWTError("wrong token type")
+    tenant_id = payload.get("tenant_id")
+    user_id = payload.get("sub")
+    if not tenant_id or not user_id:
+        raise JWTError("missing tenant_id/sub")
+    return tenant_id, user_id

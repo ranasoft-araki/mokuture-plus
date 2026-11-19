@@ -18,6 +18,7 @@ EMAIL_TAKEN_DETAIL = "このメールアドレスは既に登録されていま�
 RESERVED_SLUGS = frozenset({
     "login", "operator", "ops-console", "partner-portal", "api", "_next",
     "admin", "kiosk", "inquiry", "static",
+    "google-calendar",  # Google カレンダー連携の戻り先(/google-calendar/callback)
 })
 RESERVED_SLUG_MESSAGE = "このスラッグは使用できません。別の名前を指定してください"
 

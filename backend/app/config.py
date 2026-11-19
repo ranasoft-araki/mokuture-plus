@@ -63,6 +63,19 @@ class Settings(BaseSettings):
     # 各リクエストをこの署名シークレットで検証する。未設定ならボタン無し(従来のテキスト通知)。
     slack_signing_secret: str = ""
 
+    # Google カレンダー連携(来社予定 ⇔ Google カレンダー。方向はテナントごとにどちらか一方)。
+    # 管理画面「カレンダー連携」の「Googleアカウントで連携」から OAuth で 1 アカウントだけ結ぶ。
+    # スコープ: calendar.events(予定の読み書き) / calendar.calendarlist.readonly(カレンダー一覧)。
+    # 3 つ揃わないと機能ごと無効(google_calendar_enabled)。GOOGLE_REDIRECT_URI は Google Cloud の
+    # OAuth クライアントに登録した「承認済みのリダイレクト URI」と完全一致させる。例:
+    # https://mokuture-plus.netlify.app/google-calendar/callback (API ではなく画面の URL。画面がログイン中の
+    # 管理者として POST /integrations/google-calendar/oauth/complete を呼んで連携を仕上げる)
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = ""
+    # 定期同期の間隔(秒)。Google→mokuture の取り込みと、送れなかった予定の送り直しに使う。
+    google_calendar_sync_interval_sec: int = 300
+
     # 審査用デモモード(demo テナント: tenants.is_demo=true)向け設定。
     # DEMO_LOCKER_PIN: 手荷物預かりで来訪者が何を入力しても内部的に施錠する固定PIN(受取もこれ)。既定 0805。
     # DEMO_AUTO_REPLY_MIN/MAX_SEC: 受付通知後、担当者返信「受付(参ります)」を自動再現するまでの待機秒。
@@ -92,6 +105,10 @@ class Settings(BaseSettings):
     @property
     def slack_oauth_enabled(self) -> bool:
         return bool(self.slack_client_id and self.slack_client_secret and self.slack_redirect_uri)
+
+    @property
+    def google_calendar_enabled(self) -> bool:
+        return bool(self.google_client_id and self.google_client_secret and self.google_redirect_uri)
 
     @property
     def smtp_enabled(self) -> bool:

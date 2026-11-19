@@ -32,6 +32,7 @@ from app.models.staff_route import StaffNotificationRoute
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.visitor_appointment import VisitorAppointment
+from app.models.calendar_integration import CalendarIntegration
 from app.services import chatwork as chatwork_service
 from app.services.escalation import PENDING_STATES
 from app.services import reception_notify, staff_routing
@@ -614,6 +615,17 @@ async def rename_staff(
     )).scalars().all()
     for appt in upcoming:
         appt.staff = body.to_name
+        # Google カレンダーへ書き出した予定は説明欄に担当者名が入っている。次の同期で書き直す。
+        if appt.gcal_origin != "google" and appt.gcal_sync_state == "synced":
+            appt.gcal_sync_state = "pending"
+
+    # Google カレンダーから取り込んだ予定に入れる担当者(カレンダー連携の設定)も追随させる。
+    # 旧名のまま残すと、担当者リストに無い名前なので取り込み時に黙って空欄になる。
+    integ = (await db.execute(
+        select(CalendarIntegration).where(CalendarIntegration.tenant_id == user.tenant_id)
+    )).scalar_one_or_none()
+    if integ is not None and (integ.default_staff or "") == body.from_name:
+        integ.default_staff = body.to_name
 
     try:
         await db.commit()
