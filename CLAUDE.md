@@ -649,9 +649,6 @@ OTA（上の節）はエージェントの利用者権限でファイルを置�
 - **守れる範囲**: 署名で防げるのは「配信元（GitHub・配信サーバー）や端末のエージェントを乗っ取った者が、人手を介さずに管理者権限を得ること」。**エージェントを動かす利用者（いまは install.sh を実行した人＝sudo できる利用者）を乗っ取られると、その人が次に sudo を使うときに管理者権限を奪われうる**のは、この仕組みの有無に関係なく残る。そこまで塞ぐには、エージェントを sudo できない専用の利用者で動かす必要がある（未対応）。
 - テスト: `kiosk_agent/tests/test_system_update.py`。確かめる手順そのもの（署名なし・別の鍵・あとから差し替え・一覧の書き換え・連番の巻き戻し）は、`SYSUPDATE_TEST_ROOT`（管理者でない利用者のときだけ効く試験用の根）で実際に `sysupdate-root.sh` を動かして確かめている。**`apply.sh` の中身（apt / raspi-config / pip）は開発機では動かせない＝2026-11-17 時点で実機では未確認**。
 
-### 名刺読み取り（QR無し来訪者の受付フォーム自動入力）
-
-受付フォーム(`showReception`)の「名刺で入力」から、カメラにかざした名刺を読み取って
 ### 遠隔ログイン（運営が、問題の起きた端末へ必要なときだけ SSH で入る。2026-11-18）
 
 端末は顧客のネットワークの内側にあって外から届かないので、**端末のほうから**自前の踏み台サーバー（VPS・OpenSSH を 443 番で待受）へ外向きに SSH をつなぎ、逆向きの転送口を開く。運営は踏み台を経由（`ssh -J`）して、端末の中だけで待つ受け口へ入る。踏み台の作り方と使い方は [`bastion/README.md`](bastion/README.md)。**2026-11-18 時点で、踏み台も実機も未確認**（開発機にあるのは単体テストだけ）。
@@ -672,6 +669,9 @@ OTA（上の節）はエージェントの利用者権限でファイルを置�
 - **未対応（次の候補）**: シェルに入らずに済む決まった操作（ログの取得・サービスの再起動・端末の再起動・更新のやり直し）。443 番の SSH が通らない設置先ではこれだけが手段になる。足すときも「API から任意のコマンドを流せる口」にはしないこと（決まった操作の名前だけを受け取る）。
 - テスト: `backend/tests/test_tunnel.py`・`kiosk_agent/tests/test_tunnel_agent.py`。API: `GET /operator/tunnel/status?device_ids=`・`POST /operator/tunnel/{device_id}/open|close`・`GET /operator/tunnel/sessions`（運営のみ）、`POST /kiosk/tunnel/poll`（デバイストークン）、`GET /bastion/authorized-keys|active-ports`（合言葉）。実装: `backend/app/api/tunnel.py`・`services/tunnel.py`・`models/tunnel.py`、画面は `frontend/app/operator/devices/RemoteLogin.tsx`。
 
+### 名刺読み取り（QR無し来訪者の受付フォーム自動入力）
+
+受付フォーム(`showReception`)の「名刺で入力」から、カメラにかざした名刺を読み取って
 **お名前・会社名・部署**を自動入力する。**端末内で完結**し、外部 OCR/生成AI/外部APIは一切使わない。
 詳細は [`kiosk_agent/CARD_READER.md`](kiosk_agent/CARD_READER.md)（セットアップ/API仕様/しきい値/トラブルシュート）。
 
@@ -1116,9 +1116,6 @@ SMTP_STARTTLS=true
 SMTP_SSL=false
 ```
 
-> 分析ログ(ANALYTICS.md)にバックエンド専用の追加設定は無い（既存の DB とデバイストークンを使う）。
-
-### Kiosk Agent (.env) — 分析ログ関連（すべて任意・未設定なら既定値）
 遠隔ログイン（→「遠隔ログイン」節・`bastion/README.md`）。**HOST / HOST_KEY / SECRET の 3 つが揃わなければ機能は無効**:
 ```
 TUNNEL_BASTION_HOST=          # 踏み台のホスト名(または IP)
@@ -1131,6 +1128,9 @@ TUNNEL_MAX_MINUTES=240
 TUNNEL_IDLE_POLL_SEC=60       # 要求が無いとき、端末が聞きに来る間隔
 ```
 
+> 分析ログ(ANALYTICS.md)にバックエンド専用の追加設定は無い（既存の DB とデバイストークンを使う）。
+
+### Kiosk Agent (.env) — 分析ログ関連（すべて任意・未設定なら既定値）
 
 ```bash
 ANALYTICS_HEARTBEAT_SEC=60        # ハートビート(device_metrics 1行)の間隔

@@ -1011,10 +1011,6 @@ export interface OperatorDevice {
   status?: string; // "pending" | "active"
 }
 
-export interface OperatorReceptionItem {
-  id: string;
-  tenant_id: string;
-  tenant_name: string;
 // 遠隔ログインの 1 回ぶん。state: requested=端末の接続待ち / open=接続中 / closing=終了待ち / closed=終了
 export interface TunnelSession {
   id: string;
@@ -1056,6 +1052,10 @@ export interface TunnelStatus {
   devices: Record<string, TunnelDeviceStatus>;
 }
 
+export interface OperatorReceptionItem {
+  id: string;
+  tenant_id: string;
+  tenant_name: string;
   visitor_name: string;
   company: string | null;
   staff: string | null;

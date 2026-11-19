@@ -101,8 +101,6 @@ _ENSURE_COLUMNS = {
         "os_version": "VARCHAR(64)",
         "ui_version": "VARCHAR(32)",
         "last_boot_at": "TIMESTAMP",
-    },
-}
         # 遠隔ログイン(端末の常駐 tunnel_agent.py が報告する。models/tunnel.py)。
         "tunnel_pubkey": "TEXT",
         "tunnel_host_key": "TEXT",
@@ -110,6 +108,8 @@ _ENSURE_COLUMNS = {
         "tunnel_port": "INTEGER",
         "tunnel_reach": "VARCHAR(16)",
         "tunnel_seen_at": "TIMESTAMP",
+    },
+}
 
 
 def _ensure_schema(sync_conn) -> None:
@@ -168,8 +168,6 @@ def _ensure_schema(sync_conn) -> None:
             ))
         except Exception:
             pass  # 既存の重複データ等で作成できなくても致命的ではない
-
-
         # 遠隔ログイン: 踏み台の上の転送口は端末ごとに別(同時に開いた 2 台へ同じ番号を割り当てない)。
         # あとから足した列なので、モデルの unique は既存の DB には効かない。ここで作る。
         try:
@@ -178,6 +176,8 @@ def _ensure_schema(sync_conn) -> None:
             ))
         except Exception:
             pass
+
+
 # 審査用デモモードの既定マスタ。QR発行(来局予定)の初期値プリフィルが有効な選択肢になるよう、
 # demo テナントに担当者(訪問先)・目的(用件)・会議室(案内先)を冪等にシードする。
 _DEMO_SLUGS = ("demo1", "demo2")
