@@ -815,6 +815,20 @@ export const api = {
   },
   resetUserPassword: (token: string, userId: string, newPassword: string): Promise<void> =>
     request(`/users/${userId}/reset-password`, { method: "POST", body: JSON.stringify({ new_password: newPassword }) }, token),
+  // 招待(メールで招待リンクを送る)。管理者のみ。
+  listInvitations: (token: string) =>
+    request<InvitationList>("/users/invitations", {}, token),
+  inviteUsers: (token: string, emails: string[], role: string) =>
+    request<InviteResponse>("/users/invitations", { method: "POST", body: JSON.stringify({ emails, role }) }, token),
+  resendInvitation: (token: string, invitationId: string) =>
+    request<InvitationItem>(`/users/invitations/${invitationId}/resend`, { method: "POST" }, token),
+  cancelInvitation: (token: string, invitationId: string): Promise<void> =>
+    request(`/users/invitations/${invitationId}`, { method: "DELETE" }, token),
+  // 招待リンクを開いた人が使う(認証なし)。トークンはパスでなく本文で送る(アクセスログに残さない)。
+  lookupInvitation: (inviteToken: string) =>
+    request<InvitationLookup>("/auth/invitations/lookup", { method: "POST", body: JSON.stringify({ token: inviteToken }) }),
+  acceptInvitation: (inviteToken: string, password: string, name?: string) =>
+    request<AuthResponse>("/auth/invitations/accept", { method: "POST", body: JSON.stringify({ token: inviteToken, password, name }) }),
   getMe: (token: string) =>
     request<MeProfile>("/users/me", {}, token),
   updateMe: (token: string, data: string | { email?: string; name?: string }) =>
@@ -855,6 +869,43 @@ export interface UserListItem {
   email: string;
   role: string;
   created_at: string;
+}
+
+export interface InvitationItem {
+  id: string;
+  email: string;
+  role: string;
+  created_at: string | null;
+  sent_at: string | null;
+  expires_at: string | null;
+  expired: boolean;
+}
+
+export interface InvitationList {
+  smtp_enabled: boolean;
+  mail_remaining: number;
+  mail_limit: number;
+  expire_days: number;
+  max_per_request: number;
+  invitations: InvitationItem[];
+}
+
+/** sent=送った / resent=招待中だったので送り直した / already_user=登録済み / invalid=形式の誤り / duplicate=同じ宛先が2回 / failed=送れなかった */
+export type InviteStatus = "sent" | "resent" | "already_user" | "invalid" | "duplicate" | "failed";
+
+export interface InviteResponse {
+  results: { email: string; status: InviteStatus }[];
+  counts: Partial<Record<InviteStatus, number>>;
+  mail_remaining: number;
+}
+
+export interface InvitationLookup {
+  email: string;
+  role: string;
+  tenant_name: string;
+  tenant_slug: string;
+  expires_at: string | null;
+  email_taken: boolean;
 }
 
 export interface MeProfile {

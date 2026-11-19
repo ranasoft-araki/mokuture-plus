@@ -147,7 +147,7 @@ mokuture/
 │   │       │   ├── settings/page.tsx  ← 基本設定 (ブランディング: ロゴ・カラー・フォント)
 │   │       │   ├── notify/page.tsx    ← 通知設定 (Slack=OAuth「Slackに追加」/Chatwork/PWA/カスタムWebhook + 配達専用通知先: Slack=共通連携のチャンネル上書き/Webhook/プッシュON-OFF。Chatworkの配達宛先は共通カードのルームそのもの)
 │   │       │   ├── locker/page.tsx    ← ロッカー管理
-│   │       │   ├── users/page.tsx     ← テナント内ユーザー管理
+│   │       │   ├── users/page.tsx     ← テナント内ユーザー管理。「メールで招待」=複数アドレスを貼り付けて一括で招待メール(区切りは改行/,/;/、/タブ/空白・「名前 <addr>」可。解析は lib/inviteEmails.ts)＋「招待中」一覧(送り直す/取り消す)。「パスワードを決めて追加」=従来の直接追加
 │   │       │   └── profile/page.tsx   ← 管理者プロフィール（メール変更・パスワード変更）
 │   │       ├── reseller/      ← 代理店画面 (reseller JWT 必須)
 │   │       │   ├── page.tsx           ← 代理店ダッシュボード
@@ -158,6 +158,7 @@ mokuture/
 │   │       │   ├── profile/page.tsx   ← 代理店プロフィール
 │   │       │   └── settings/page.tsx  ← 代理店テナント設定
 │   │       ├── inquiry/page.tsx ← 共通問い合わせフォーム(公開・認証不要)。お断り画面のQRリンク先
+│   │       ├── invite/page.tsx  ← 招待メールのリンク先(公開・認証不要)。`#token=` を読み、パスワードを決めて登録→そのままログインして管理画面へ
 │   │       └── kiosk/         ← キオスク受付画面 (デバイストークン必須)
 │   │           ├── page.tsx           ← KioskFlow マウント
 │   │           ├── KioskFlow.tsx      ← メインキオスクコンポーネント (全画面遷移管理)
@@ -244,6 +245,8 @@ mokuture/
 - `GET /inquiries` — 問い合わせ一覧 (JWT, `state`/`date_from`/`date_to` フィルタ)。`PATCH /inquiries/{id}`(state 更新)・`DELETE /inquiries/{id}` も管理者用
 - `GET /kiosk/reception/{id}` — 受付のスタッフ応答結果(state) 取得 (デバイストークン)。キオスク「お待ちください」画面が 2.5s 間隔でポーリングして OK/NG 画面へ切替する
 - `_apply_decision` は冪等：既に accepted/declined の受付は上書きしない（通知ボタン＋アプリ内ボタンの二重タップでも安全）
+- `GET/POST /users/invitations` — 招待の一覧(+`smtp_enabled`/残り通数)・複数アドレスへ一括招待(管理者のみ)。`POST /users/invitations/{id}/resend`・`DELETE /users/invitations/{id}`
+- `POST /auth/invitations/lookup|accept` — 招待リンクの照会・登録(認証なし・トークンは本文)
 - `PATCH /users/me/password` — 自分のパスワード変更
 - `POST /users/{id}/reset-password` — 管理者によるパスワードリセット
 - `GET /settings/stats` — テナント統計（受付件数・デバイス数等）
@@ -383,6 +386,7 @@ mokuture/
 
 ### その他テーブル
 - **users** — email / password_hash / role / tenant_id
+- **user_invitations** — 管理画面から送った招待(tenant_id, email, role, **token_hash**=リンクのトークンの sha256・平文は持たない, invited_by, sent_at, expires_at=送ってから7日, accepted_at)。`accepted_at IS NULL` が「招待中」。起動時 `create_all` で作成。→「ユーザー招待」節
 - **media** — アップロードファイル (URL, mime_type, duration_sec)
 - **playlists / playlist_items** — メディアのプレイリスト（transition_type: fade/slide/zoom/wipe/random）
 - **schedules** — 曜日・時間帯ごとのプレイリスト割当
@@ -991,6 +995,18 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - **後方互換**: 担当者ごとの設定を1件も作らなければ挙動は従来どおり（共通の通知先だけ・代理通知なし）。担当者リストから名前が消えても設定行は残り、一覧に `orphan`（「受付設定に無い担当者」）として出す。
 - **配達の呼び出し・置き配は対象外**（`log.staff` が無いので宛先ルーティングは働かず、スイープも `method` で明示的に除外する。従来どおり `_fire_delivery_notifications`）。
 - **Webhook ペイロードの変更**: 受付 Webhook に `reception_id` が増え、`created_at` は `iso_z()` の単一 `Z` 形式に揃えた（従来は naive/aware で `...` と `...+00:00` が混在していた）。代理通知では `event` が `reception_escalated` になり `escalated_from`(元の担当者名) が付く。管理画面「カスタムWebhook」のサンプル表示も同じ形に更新済み。
+
+### ユーザー招待（複数アドレスの一括招待メール）
+
+管理画面「ユーザー管理」の「メールで招待」。招待された人がメールのリンクから自分でパスワードを決めて登録する（管理者がパスワードを決めて伝える従来の「パスワードを決めて追加」も残す。SMTP が無くても使える手段なので）。
+
+- **貼り付けの解析は画面側 `frontend/lib/inviteEmails.ts`**（その場でプレビューを出すため）。区切りは 改行 / `,` `;` / タブ / 全角 `、` `，` `；` / 空白。`名前 <addr>` はかっこの中、`mailto:`・引用符は外す、NFKC で全角を半角へ。「@」を含むのに崩れているものは「形式の誤り」として見せ、「@」の無い語(名前)は「読み飛ばした語」として別に出す（黙って捨てない）。**語の中からアドレスの部分だけを取り出し、ASCII だけの厳しい形で判定する**（`services/invitations.STRICT_EMAIL_RE`/`_EXTRACT_RE` と画面側を同じ正規表現にそろえる）。緩い形（`staff_routing._EMAIL_RE`）だと「E-mail:taro@x.jp」「taro@x.jpまで」が通り、SMTP は taro@x.jp へ届けるのに崩れた文字列がログインIDとして保存され、全ユーザーでの重複確認もすり抜けていた（テストエージェントの指摘）。backend は `parseaddr()` で読み直して同じ値になることも確かめる。
+- **backend は受け取った一覧を自分でも判定し直し、アドレスごとに結果を返す**（`sent / resent / already_user / invalid / duplicate / failed`。`api/users.py` `POST /users/invitations`）。重複と登録済みは大文字小文字を区別しない（`accounts.email_in_use`＝全テナントのユーザーと重ねない）。このテナントで招待中のアドレスはリンクを作り直して送り直す（前のリンクは使えなくなる）。
+- **回数制限は来社予定QRメールと共有**（`mail_quota`、テナントごと1時間30通）。送る件数が残りを超えるときは **1通も送らず 429**（一部だけ送られた状態にしない）。枠は送る前に一度だけ確保する。送信は同時4本（1通最大20秒なので直列だとプロキシの待ち時間を越える）。送れなかった宛先は招待を作らない（送り直しなら前のリンクを残す）。
+- **リンクは `{public_web_url}/{slug}/invite#token=…`**。トークンは `#` の後ろ＝ブラウザがサーバーへ送らない部分に置き、画面が公開 API（`POST /auth/invitations/lookup|accept`）へ**本文で**渡す（パスやクエリに載せると Netlify/Render のアクセスログに残る）。DB には sha256 だけ。有効期限は7日（`services/invitations.EXPIRE_DAYS`）。
+- **登録(accept)**: 期限切れ・使用済みは 410、取り消し/作り直し済みは 404、招待のあとで同じアドレスが別経路で登録されていたら 409。同じリンクの同時押しでユーザーを2人作らないよう、`accepted_at` を条件つき UPDATE で先に確定してからユーザーを作る。成功すると通常ログインと同じトークンを返し、画面は `saveTokens`（ログイン状態を保持）して `/{slug}/admin` へ。
+- 招待の送信・一覧・送り直し・取り消しは管理者(`admin`/`superadmin`)のみ。送るメールの文面は `services/invitations.build_email`（件名のテナント名から改行を除く・HTML は全部 escape）。
+- テスト: `backend/tests/test_user_invitations.py`。
 
 ### DB マイグレーション
 - Alembic は使っていない。backend の起動時に `app/main.py` が `create_all`（新しいテーブル）と `_ENSURE_COLUMNS`（既存テーブルへの列追加）を自動で流す。列を足すときはモデルに加えて `_ENSURE_COLUMNS` にも書くこと（手作業の `ALTER TABLE` は不要）。

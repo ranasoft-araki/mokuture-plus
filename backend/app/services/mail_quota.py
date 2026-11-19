@@ -1,7 +1,7 @@
 """画面から送るメールの回数制限（テナント単位・プロセス内）。
 
-来社予定 QR のメール送信と、担当者ごとの通知先のテスト送信は、宛先を画面で自由に
-指定できる。共有の SMTP アカウントから送るので、1テナントが短時間に大量に送ると
+来社予定 QR のメール送信・担当者ごとの通知先のテスト送信・ユーザー招待メールは、
+宛先を画面で自由に指定できる。共有の SMTP アカウントから送るので、1テナントが短時間に大量に送ると
 送信元の評価が下がり、全テナントのメールが届かなくなる。直近1時間で30通までにする。
 
 受付時の自動通知メール(reception_notify)は来訪者の受付に応じて送る本来の通知なので
@@ -38,6 +38,14 @@ def consume(tenant_id: str, count: int = 1) -> None:
     # 空になったテナントの行を残さない(辞書が増え続けないように)。
     for key in [k for k, v in _sent.items() if not v]:
         del _sent[key]
+
+
+def remaining(tenant_id: str) -> int:
+    """直近1時間であと何通送れるか(画面に出す・まとめて送る前の確認用)。枠は確保しない。"""
+    now = time.monotonic()
+    q = _sent.get(tenant_id or "")
+    used = sum(1 for t in q if now - t <= WINDOW_SEC) if q else 0
+    return max(0, LIMIT_PER_HOUR - used)
 
 
 def clear_all() -> None:

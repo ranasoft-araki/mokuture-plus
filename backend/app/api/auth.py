@@ -2,11 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, field_validator
 from slowapi import Limiter
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, func, select, update
 
 from app.database import get_db
 from app.models.tenant import Tenant
-from app.models.user import User
+from app.models.user import User, UserInvitation
+from app.services.timeutil import iso_z, to_naive_utc, utcnow_naive
 from jose import JWTError
 from app.services import accounts, login_throttle
 from app.services.auth import (
@@ -138,6 +139,114 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
         access_token=create_access_token(user.tenant_id or "", user.id, user.role, readonly=is_readonly_account(user.email)),
         refresh_token=create_refresh_token(user.tenant_id or "", user.id),
         tenant_slug=tenant.slug if tenant else "",
+        role=user.role,
+    )
+
+
+# ── 招待リンクから登録する(公開・認証なし) ──────────────────────────────────
+# 招待を送る側は api/users.py の /users/invitations。トークンは URL のパスではなく
+# 本文で受け取る(パスに載せるとアクセスログに残るため)。
+
+_INVITE_NOT_FOUND = "この招待リンクは使えません。取り消されたか、新しいリンクが送り直されています。最新の招待メールを開いてください。"
+_INVITE_EXPIRED = "この招待リンクは有効期限が切れています。招待した人に送り直しを頼んでください。"
+_INVITE_USED = "この招待リンクは登録に使用済みです。ログイン画面からログインしてください。"
+_INVITE_EMAIL_TAKEN = "このメールアドレスは既に登録されています。ログイン画面からログインしてください。"
+
+
+class InvitationTokenRequest(BaseModel):
+    token: str
+
+
+class AcceptInvitationRequest(BaseModel):
+    token: str
+    password: str
+    name: str | None = None
+
+
+async def _find_invitation(db: AsyncSession, token: str) -> tuple[UserInvitation, Tenant | None]:
+    """トークンから招待を引く。見つからない・期限切れ・使用済みはそれぞれの理由で断る。"""
+    from app.services.invitations import hash_token
+
+    inv = (await db.execute(
+        select(UserInvitation).where(UserInvitation.token_hash == hash_token((token or "").strip()))
+    )).scalar_one_or_none()
+    if inv is None or not token:
+        raise HTTPException(status_code=404, detail=_INVITE_NOT_FOUND)
+    if inv.accepted_at is not None:
+        raise HTTPException(status_code=410, detail=_INVITE_USED)
+    expires = to_naive_utc(inv.expires_at)
+    if expires is None or expires <= utcnow_naive():
+        raise HTTPException(status_code=410, detail=_INVITE_EXPIRED)
+    tenant = (await db.execute(select(Tenant).where(Tenant.id == inv.tenant_id))).scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(status_code=404, detail=_INVITE_NOT_FOUND)
+    return inv, tenant
+
+
+@router.post("/invitations/lookup")
+@_limiter.limit("30/minute")
+async def lookup_invitation(request: Request, body: InvitationTokenRequest, db: AsyncSession = Depends(get_db)):
+    """招待リンクを開いた画面が、誰をどのテナントへ招待しているかを表示するために使う。"""
+    inv, tenant = await _find_invitation(db, body.token)
+    return {
+        "email": inv.email,
+        "role": inv.role,
+        "tenant_name": tenant.name,
+        "tenant_slug": tenant.slug,
+        "expires_at": iso_z(inv.expires_at),
+        "email_taken": await accounts.email_in_use(db, inv.email),
+    }
+
+
+@router.post("/invitations/accept", response_model=TokenResponse)
+@_limiter.limit("10/minute")
+async def accept_invitation(request: Request, body: AcceptInvitationRequest, db: AsyncSession = Depends(get_db)):
+    """招待リンクからパスワードを決めて登録し、そのままログインした状態のトークンを返す。"""
+    if len(body.password or "") < 8:
+        raise HTTPException(status_code=422, detail="パスワードは8文字以上にしてください")
+    inv, tenant = await _find_invitation(db, body.token)
+    # 招待のあとで、同じアドレスが別の経路(別テナントの招待・直接追加)で登録されていることがある。
+    if await accounts.email_in_use(db, inv.email):
+        raise HTTPException(status_code=409, detail=_INVITE_EMAIL_TAKEN)
+    # 同じリンクで同時に2回押されても、ユーザーを2人作らない(先に「使用済み」へ条件つきで書く)。
+    # token_hash も条件に入れる: 照会から確定までの間に送り直されたら、古いリンクでは登録させない。
+    claimed = await db.execute(
+        update(UserInvitation)
+        .where(
+            UserInvitation.id == inv.id,
+            UserInvitation.token_hash == inv.token_hash,
+            UserInvitation.accepted_at.is_(None),
+        )
+        .values(accepted_at=utcnow_naive())
+    )
+    if claimed.rowcount != 1:
+        await db.rollback()
+        raise HTTPException(status_code=410, detail=_INVITE_USED)
+    # 同じテナントで同じアドレスへの招待が他にも残っていれば消す(同時に送られた等。「招待中」に残り続けないように)。
+    await db.execute(
+        delete(UserInvitation).where(
+            UserInvitation.tenant_id == inv.tenant_id,
+            UserInvitation.id != inv.id,
+            UserInvitation.accepted_at.is_(None),
+            func.lower(UserInvitation.email) == inv.email.lower(),
+        )
+    )
+    name = (body.name or "").strip()[:255] or None
+    user = User(
+        tenant_id=inv.tenant_id,
+        email=accounts.normalize_email(inv.email),
+        hashed_password=await hash_password_async(body.password),
+        role=inv.role if inv.role in ("admin", "staff") else "staff",
+        name=name,
+    )
+    db.add(user)
+    await db.commit()
+    return TokenResponse(
+        access_token=create_access_token(
+            user.tenant_id or "", user.id, user.role, readonly=is_readonly_account(user.email),
+        ),
+        refresh_token=create_refresh_token(user.tenant_id or "", user.id),
+        tenant_slug=tenant.slug,
         role=user.role,
     )
 
