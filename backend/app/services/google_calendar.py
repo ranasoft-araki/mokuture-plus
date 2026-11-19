@@ -602,7 +602,36 @@ async def _list_window(db: AsyncSession, integ: CalendarIntegration) -> list[dic
     return out
 
 
-def _should_remove(ev: dict, keyword: str) -> bool:
+# Google カレンダーの予定の色(colorId)。名前と色は Google カレンダーの画面の表示に合わせる
+# (API の /colors が返す色は古い淡い色で画面と違うため、ここに持つ)。"default" = 予定に色を付けていない
+# (カレンダーの色のまま)。取り込みの条件(import_colors)に使う。
+EVENT_COLORS: list[dict] = [
+    {"id": "default", "name": "色を付けていない予定", "hex": None},
+    {"id": "11", "name": "トマト", "hex": "#d50000"},
+    {"id": "4", "name": "フラミンゴ", "hex": "#e67c73"},
+    {"id": "6", "name": "ミカン", "hex": "#f4511e"},
+    {"id": "5", "name": "バナナ", "hex": "#f6bf26"},
+    {"id": "2", "name": "セージ", "hex": "#33b679"},
+    {"id": "10", "name": "バジル", "hex": "#0b8043"},
+    {"id": "7", "name": "ピーコック", "hex": "#039be5"},
+    {"id": "9", "name": "ブルーベリー", "hex": "#3f51b5"},
+    {"id": "1", "name": "ラベンダー", "hex": "#7986cb"},
+    {"id": "3", "name": "ブドウ", "hex": "#8e24aa"},
+    {"id": "8", "name": "グラファイト", "hex": "#616161"},
+]
+EVENT_COLOR_IDS = frozenset(c["id"] for c in EVENT_COLORS)
+
+
+def parse_colors(raw: Optional[str]) -> set[str]:
+    """保存した import_colors("default,5,11")を集合へ。知らない値は捨てる。空 = 色で絞らない。"""
+    return {c for c in (s.strip() for s in (raw or "").split(",")) if c in EVENT_COLOR_IDS}
+
+
+def event_color(ev: dict) -> str:
+    return str(ev.get("colorId") or "").strip() or "default"
+
+
+def _should_remove(ev: dict, keyword: str, colors: frozenset[str] | set[str] = frozenset()) -> bool:
     """この予定を来社予定として持たない(消す・作らない)べきか。"""
     if ev.get("status") == "cancelled":
         return True
@@ -612,6 +641,8 @@ def _should_remove(ev: dict, keyword: str) -> bool:
         return True
     if keyword and keyword not in str(ev.get("summary") or ""):
         return True
+    if colors and event_color(ev) not in colors:
+        return True
     return _declined_by_me(ev)
 
 
@@ -620,6 +651,7 @@ async def _pull(db: AsyncSession, integ: CalendarIntegration) -> "SyncResult":
     tid = integ.tenant_id
     cal = integ.calendar_id or ""
     keyword = (integ.import_keyword or "").strip()
+    colors = parse_colors(integ.import_colors)
     events = await _list_window(db, integ)
 
     linked: dict[str, VisitorAppointment] = {
@@ -654,7 +686,7 @@ async def _pull(db: AsyncSession, integ: CalendarIntegration) -> "SyncResult":
             ))).scalar_one_or_none()
             if appt is not None and appt.gcal_event_id and appt.gcal_event_id != eid:
                 appt = None  # 別のイベントに結び付いている予定は奪わない
-        await _apply_event(db, integ, ev, appt, res, keyword=keyword, rooms=rooms,
+        await _apply_event(db, integ, ev, appt, res, keyword=keyword, colors=colors, rooms=rooms,
                            default_staff=default_staff, ignored=ignored, from_mokuture=bool(mid))
 
     # 期間の一覧に出てこなかった、取り込み済み・未受付の先の予定(期間外へ動かされた等)を個別に確かめる。
@@ -674,8 +706,8 @@ async def _pull(db: AsyncSession, integ: CalendarIntegration) -> "SyncResult":
             res.failed += 1
             res.error = api_error_message(status, _reason(ev))
             continue
-        await _apply_event(db, integ, ev, appt, res, keyword=keyword, rooms=rooms, default_staff=default_staff,
-                           ignored=ignored, from_mokuture=False)
+        await _apply_event(db, integ, ev, appt, res, keyword=keyword, colors=colors, rooms=rooms,
+                           default_staff=default_staff, ignored=ignored, from_mokuture=False)
 
     # 日時を過ぎた「取り込まない」印は掃除する。
     await db.execute(delete(CalendarEventTombstone).where(
@@ -695,6 +727,7 @@ async def _apply_event(
     res: "SyncResult",
     *,
     keyword: str,
+    colors: set[str],
     rooms: list[MeetingRoom],
     default_staff: Optional[str],
     ignored: set[str],
@@ -702,9 +735,13 @@ async def _apply_event(
 ) -> None:
     eid = str(ev["id"])
     cal = integ.calendar_id or ""
-    if _should_remove(ev, keyword):
+    if appt is not None and appt.gcal_origin != "google":
+        # mokuture で作った予定(書き出しから切り替えた等)は、取り込みの条件(言葉・色)で選んだものではない。
+        # 条件に合わなくても、Google で日時が動いたら追う。
+        keyword, colors = "", set()
+    if _should_remove(ev, keyword, colors):
         # まだ受付していない予定だけ消す(受付済みは記録として残す)。mokuture で作った予定は、
-        # Google で消されたときだけ消す(終日・キーワードは取り込みの条件なので当てはめない)。
+        # Google で消されたときだけ消す(終日・キーワード・色は取り込みの条件なので当てはめない)。
         if appt is not None and appt.status == "pending" and appt.gcal_calendar_id == cal and (
             appt.gcal_origin == "google" or ev.get("status") == "cancelled"
         ):

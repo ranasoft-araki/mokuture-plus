@@ -35,6 +35,9 @@ class CalendarIntegration(Base):
     calendar_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     # 取り込み(from_google)のときだけ使う。タイトルにこの言葉を含む予定だけ取り込む(空=全部)。
     import_keyword: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # 取り込み(from_google)のときだけ使う。この色の予定だけ取り込む("default,5,11"。default=色を付けていない予定。
+    # 空=色で絞らない)。値は services/google_calendar.EVENT_COLORS の id。言葉と両方あれば両方に合う予定だけ。
+    import_colors: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     # 取り込んだ予定に最初に入れる担当者(受付設定の担当者リストの1件)。空=入れない。
     default_staff: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # naive-UTC

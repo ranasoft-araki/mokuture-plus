@@ -69,6 +69,8 @@ async def _status(db: AsyncSession, tenant_id: str) -> dict:
         "calendar_id": integ.calendar_id if integ else None,
         "calendar_name": integ.calendar_name if integ else None,
         "import_keyword": (integ.import_keyword or "") if integ else "",
+        "import_colors": sorted(gcal.parse_colors(integ.import_colors), key=_color_order) if integ else [],
+        "event_colors": gcal.EVENT_COLORS,
         "default_staff": (integ.default_staff or "") if integ else "",
         "active": gcal.is_active(integ),
         "last_synced_at": iso_z(integ.last_synced_at) if integ else None,
@@ -198,10 +200,16 @@ async def calendars(user: User = Depends(require_tenant_admin()), db: AsyncSessi
     return {"calendars": items}
 
 
+def _color_order(cid: str) -> int:
+    return next((i for i, c in enumerate(gcal.EVENT_COLORS) if c["id"] == cid), 99)
+
+
 class SettingsBody(BaseModel):
     direction: Literal["to_google", "from_google"]
     calendar_id: str
     import_keyword: str = ""
+    # 取り込む予定の色(EVENT_COLORS の id)。空 = 色で絞らない。
+    import_colors: list[str] = []
     default_staff: str = ""
 
     @field_validator("calendar_id")
@@ -216,6 +224,16 @@ class SettingsBody(BaseModel):
     @classmethod
     def _trim(cls, v: str) -> str:
         return (v or "").strip()
+
+    @field_validator("import_colors")
+    @classmethod
+    def _colors(cls, v: list[str]) -> list[str]:
+        out = sorted({str(c).strip() for c in (v or [])}, key=_color_order)
+        if any(c not in gcal.EVENT_COLOR_IDS for c in out):
+            raise ValueError("取り込む予定の色は一覧から選んでください")
+        if len(out) == len(gcal.EVENT_COLOR_IDS):
+            return []  # 全部の色 = 色で絞らないのと同じ
+        return out
 
 
 @router.put("/settings")
@@ -301,6 +319,8 @@ async def _apply_settings(
     integ.calendar_id = cal["id"]
     integ.calendar_name = cal["name"][:255]
     integ.import_keyword = body.import_keyword or None
+    # 色は取り込み(from_google)の条件。書き出しでは持たない。
+    integ.import_colors = (",".join(body.import_colors) or None) if body.direction == "from_google" else None
     integ.default_staff = body.default_staff or None
     gcal.record_error(integ, None)
     integ.updated_at = utcnow_naive()

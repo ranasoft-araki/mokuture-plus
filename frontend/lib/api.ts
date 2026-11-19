@@ -805,7 +805,7 @@ export const api = {
     request<{ result: "connected" | "denied" | "scope" | "error" | "mismatch" }>("/integrations/google-calendar/oauth/complete", { method: "POST", body: JSON.stringify(body) }, token),
   listGoogleCalendars: (token: string) =>
     request<{ calendars: GoogleCalendarItem[] }>("/integrations/google-calendar/calendars", {}, token),
-  saveGoogleCalendarSettings: (token: string, body: { direction: "to_google" | "from_google"; calendar_id: string; import_keyword: string; default_staff: string }) =>
+  saveGoogleCalendarSettings: (token: string, body: { direction: "to_google" | "from_google"; calendar_id: string; import_keyword: string; import_colors: string[]; default_staff: string }) =>
     request<GoogleCalendarStatus>("/integrations/google-calendar/settings", { method: "PUT", body: JSON.stringify(body) }, token),
   syncGoogleCalendar: (token: string) =>
     request<GoogleCalendarStatus & { result: GoogleCalendarSyncResult }>("/integrations/google-calendar/sync", { method: "POST" }, token),
@@ -1460,6 +1460,10 @@ export interface GoogleCalendarStatus {
   calendar_id: string | null;
   calendar_name: string | null;
   import_keyword: string;
+  /** 取り込む予定の色(event_colors の id)。空 = 色で絞らない。 */
+  import_colors: string[];
+  /** 選べる予定の色(Google カレンダーの画面の名前と色)。id "default" = 色を付けていない予定。 */
+  event_colors: GoogleEventColor[];
   default_staff: string;
   /** 連携済み・方向とカレンダーを選んであり、同期が動いている。 */
   active: boolean;
@@ -1470,6 +1474,13 @@ export interface GoogleCalendarStatus {
   unsynced_count: number;
   staff_list: string[];
   removed_imports?: number;
+}
+
+export interface GoogleEventColor {
+  id: string;
+  name: string;
+  /** null = 色を付けていない予定(カレンダーの色で表示される) */
+  hex: string | null;
 }
 
 export interface GoogleCalendarItem {

@@ -581,3 +581,80 @@ def test_title_becomes_a_clean_visitor_name():
     # 短い言葉でもタイトルの途中は削らない
     assert gcal.visitor_name_from_title("ABC社 田中様", "社") == "ABC社 田中様"
     assert gcal.visitor_name_from_title("  A社   佐藤 ", "") == "A社 佐藤"
+
+
+# ── 取り込みの色の条件 ─────────────────────────────────────────────────────────
+
+async def save_pull(client, admin_headers, *, keyword: str = "", colors: list[str]) -> dict:
+    r = await client.put(f"{API}/settings", headers=admin_headers, json={
+        "direction": "from_google", "calendar_id": PRIMARY, "import_keyword": keyword,
+        "import_colors": colors, "default_staff": ""})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def test_from_google_imports_only_selected_colors(client, tenant, admin_headers, google):
+    google.put_event(PRIMARY, summary="来社 バナナ", colorId="5", start={"dateTime": rfc(future(2, 10))},
+                     end={"dateTime": rfc(future(2, 11))})
+    google.put_event(PRIMARY, summary="来社 トマト", colorId="11", start={"dateTime": rfc(future(2, 12))},
+                     end={"dateTime": rfc(future(2, 13))})
+    google.put_event(PRIMARY, summary="来社 色なし", start={"dateTime": rfc(future(2, 14))},
+                     end={"dateTime": rfc(future(2, 15))})
+    google.put_event(PRIMARY, summary="社内 バナナ", colorId="5", start={"dateTime": rfc(future(2, 16))},
+                     end={"dateTime": rfc(future(2, 17))})
+    await connect(client, tenant, admin_headers)
+
+    # 色だけ(言葉は空): バナナと「色を付けていない予定」
+    body = await save_pull(client, admin_headers, colors=["5", "default"])
+    assert body["import_colors"] == ["default", "5"]  # 画面の並び順にそろえて返す
+    assert {c["id"] for c in body["event_colors"]} >= {"default", "5", "11"}
+    assert sorted(a.visitor_name for a in await appts(tenant.id)) == ["来社 バナナ", "来社 色なし", "社内 バナナ"]
+
+    # 言葉と色の両方: 両方に合う予定だけ。合わなくなった未受付の予定は消える
+    await save_pull(client, admin_headers, keyword="来社", colors=["5"])
+    # (お名前は Google 側で予定が変わったときに付け直すので、ここでは取り込んだときのまま)
+    assert [a.visitor_name for a in await appts(tenant.id)] == ["来社 バナナ"]
+
+
+async def test_from_google_color_changed_in_google_is_followed(client, tenant, admin_headers, google):
+    ev = google.put_event(PRIMARY, summary="来訪 D社", colorId="7", start={"dateTime": rfc(future(3, 10))},
+                          end={"dateTime": rfc(future(3, 11))})
+    await connect(client, tenant, admin_headers)
+    await save_pull(client, admin_headers, colors=["7"])
+    assert len(await appts(tenant.id)) == 1
+    google.put_event(PRIMARY, id=ev["id"], summary="来訪 D社", colorId="8",
+                     start={"dateTime": rfc(future(3, 10))}, end={"dateTime": rfc(future(3, 11))})
+    res = (await client.post(f"{API}/sync", headers=admin_headers)).json()["result"]
+    assert res["removed"] == 1 and await appts(tenant.id) == []
+    google.put_event(PRIMARY, id=ev["id"], summary="来訪 D社", colorId="7",
+                     start={"dateTime": rfc(future(3, 10))}, end={"dateTime": rfc(future(3, 11))})
+    assert (await client.post(f"{API}/sync", headers=admin_headers)).json()["result"]["imported"] == 1
+
+
+async def test_color_settings_are_validated(client, tenant, admin_headers, google):
+    await connect(client, tenant, admin_headers)
+    r = await client.put(f"{API}/settings", headers=admin_headers, json={
+        "direction": "from_google", "calendar_id": PRIMARY, "import_colors": ["99"]})
+    assert r.status_code == 422
+    # 全部の色を選ぶ = 色で絞らない
+    body = await save_pull(client, admin_headers, colors=[c["id"] for c in gcal.EVENT_COLORS])
+    assert body["import_colors"] == []
+    # 書き出し(to_google)では色を保存しない
+    r = await client.put(f"{API}/settings", headers=admin_headers, json={
+        "direction": "to_google", "calendar_id": PRIMARY, "import_colors": ["5"]})
+    assert r.status_code == 200 and r.json()["import_colors"] == []
+
+
+async def test_mokuture_written_event_is_followed_even_outside_the_color_filter(client, tenant, admin_headers, google):
+    await connect(client, tenant, admin_headers)
+    await client.put(f"{API}/settings", headers=admin_headers, json={"direction": "to_google", "calendar_id": PRIMARY})
+    r = await client.post("/api/appointments", headers=admin_headers, json={
+        "visitor_name": "書き出し済み", "scheduled_at": future(4, 10).isoformat()})
+    aid = r.json()["id"]
+    await save_pull(client, admin_headers, colors=["5"])  # 書き出した予定には色が無い
+    eid = aid.replace("-", "").lower()
+    ev = google.events[PRIMARY][eid]
+    google.put_event(PRIMARY, **{**ev, "start": {"dateTime": rfc(future(4, 15))}, "end": {"dateTime": rfc(future(4, 16))}})
+    await client.post(f"{API}/sync", headers=admin_headers)
+    rows = await appts(tenant.id)
+    assert len(rows) == 1 and rows[0].scheduled_at == future(4, 15)  # 消さず、日時は追う

@@ -94,6 +94,7 @@ export default function AdminCalendarPage() {
   const [direction, setDirection] = useState<Direction | null>(null);
   const [calendarId, setCalendarId] = useState("");
   const [keyword, setKeyword] = useState("来社");
+  const [colors, setColors] = useState<string[]>([]);
   const [defaultStaff, setDefaultStaff] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -109,6 +110,7 @@ export default function AdminCalendarPage() {
     // 取り込みをまだ保存していないときは「来社」を入れておく(空欄だとカレンダーの全予定が来社予定になるため)。
     // 書き出しで保存したあとに取り込みへ切り替える場合もここに入る(書き出しでは言葉を保存しない)。
     setKeyword(s.direction === "from_google" ? s.import_keyword : (s.import_keyword || "来社"));
+    setColors(s.direction === "from_google" ? (s.import_colors ?? []) : []);
     setDefaultStaff(s.default_staff);
   }, []);
 
@@ -199,6 +201,11 @@ export default function AdminCalendarPage() {
   if (changingDirection && direction === "from_google") {
     consequences.push("これまで Google カレンダーに書き出した予定は、Google カレンダーにそのまま残ります。");
   }
+  const sameColors = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+  if (status?.direction === "from_google" && direction === "from_google" && !changingCalendar
+      && (keyword.trim() !== (status.import_keyword || "") || !sameColors(colors, status.import_colors ?? []))) {
+    consequences.push("取り込む条件を変えると、これまで取り込んだ予定のうち新しい条件に合わないもの（まだ受付していない予定）は、続けて行う同期で「来社予定」から消えます。");
+  }
   if (changingDirection && direction === "to_google") {
     consequences.push("これまで取り込んだ予定は「来社予定」に残りますが、Google カレンダーへは書き出しません（元の予定が Google カレンダーにあるため）。");
   }
@@ -214,6 +221,7 @@ export default function AdminCalendarPage() {
       const s = await api.saveGoogleCalendarSettings(token, {
         direction, calendar_id: calendarId,
         import_keyword: direction === "from_google" ? keyword : "",
+        import_colors: direction === "from_google" ? colors : [],
         default_staff: direction === "from_google" ? defaultStaff : "",
       });
       applyStatus(s);
@@ -408,8 +416,51 @@ export default function AdminCalendarPage() {
                       style={{ width: "100%", maxWidth: 320, padding: "8px 10px", fontSize: 13, border: "1px solid #d8d3c7", borderRadius: 7, background: "#fffefb" }}
                     />
                     <div style={HINT}>
-                      タイトルにこの言葉を含む予定だけを取り込みます。<b>空欄にすると、選んだカレンダーの時間が決まっている予定がすべて「来社予定」になります</b>（会議などの社内の予定も含みます）。
+                      タイトルにこの言葉を含む予定だけを取り込みます。<b>空欄にして、下の「取り込む予定（色）」も選ばないと、選んだカレンダーの時間が決まっている予定がすべて「来社予定」になります</b>（会議などの社内の予定も含みます）。
                       終日の予定と、自分が「いいえ」と返事した予定は取り込みません。予定のタイトルが、そのまま来社予定の「お名前」になります。
+                    </div>
+
+                    <div style={{ ...LABEL, marginTop: 20 }}>取り込む予定（色）</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {(status?.event_colors ?? []).map((c) => {
+                        const on = colors.includes(c.id);
+                        const swatch = c.hex ?? selectedCal?.color ?? "#c8c3b8";
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            aria-pressed={on}
+                            onClick={() => setColors((cur) => (cur.includes(c.id) ? cur.filter((x) => x !== c.id) : [...cur, c.id]))}
+                            style={{
+                              display: "inline-flex", alignItems: "center", gap: 7, padding: "6px 11px", borderRadius: 999, cursor: "pointer",
+                              fontSize: 12.5, color: "#1d1a15", background: on ? "#f3f7f1" : "#fffefb",
+                              border: on ? "2px solid #4a7c4e" : "1px solid #d8d3c7",
+                            }}
+                          >
+                            <span style={{ width: 14, height: 14, borderRadius: "50%", background: swatch, flexShrink: 0, ...(c.hex ? {} : { boxShadow: "inset 0 0 0 2px #fffefb, 0 0 0 1px " + swatch }) }} />
+                            {c.name}
+                            {on && <span style={{ color: "#4a7c4e", fontWeight: 700 }}>✓</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div style={{ ...BOX, marginTop: 10, fontSize: 12.5, color: "#1d1a15", lineHeight: 1.7 }}>
+                      いまの条件：{(() => {
+                        const kw = keyword.trim();
+                        const names = (status?.event_colors ?? []).filter((c) => colors.includes(c.id)).map((c) => c.name);
+                        if (!kw && names.length === 0) return "選んだカレンダーの、時間が決まっている予定をすべて取り込みます。";
+                        const parts = [kw ? `タイトルに「${kw}」を含む` : "", names.length ? `色が「${names.join("」「")}」の` : ""].filter(Boolean);
+                        return `${parts.join("、かつ ")}予定だけを取り込みます。`;
+                      })()}
+                    </div>
+                    {keyword.trim() && colors.length > 0 && (
+                      <div style={{ ...HINT, color: "#8a5a12" }}>
+                        色だけで選びたいときは、上の「取り込む予定（タイトルに含まれる言葉）」を空欄にしてください（言葉が入っていると、言葉と色の両方に合う予定だけになります）。
+                      </div>
+                    )}
+                    <div style={HINT}>
+                      Google カレンダーで予定に付けた色で絞り込めます（予定を開いて色を選ぶと付きます）。「色を付けていない予定」は、色を選ばずカレンダーの色のまま表示されている予定です。色を選ばなければ、色では絞り込みません。
+                      Google カレンダーで予定の色を変えて条件から外れると、まだ受付していないその予定は「来社予定」から消えます（色を戻すと、新しい予定としてもう一度取り込みます。担当者などは付け直しになります）。
                     </div>
 
                     <div style={{ ...LABEL, marginTop: 20 }}>取り込んだ予定の担当者</div>

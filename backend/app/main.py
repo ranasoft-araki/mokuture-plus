@@ -21,6 +21,10 @@ from app.services.google_calendar import run_sync_loop as run_google_calendar_lo
 # 既存テーブルに後付けしたカラムを本番(Postgres/Neon)・開発(SQLite)双方で揃える。
 # (テーブルが無ければ create_all が全カラム込みで作成するためここでは何もしない)
 _ENSURE_COLUMNS = {
+    "calendar_integrations": {
+        # 取り込みの色の条件(Google カレンダー連携)。既存行は NULL = 色で絞らない。
+        "import_colors": "VARCHAR(64)",
+    },
     "meeting_rooms": {
         "map_image_url": "VARCHAR(512)",
     },
