@@ -229,10 +229,10 @@ export function RemoteLoginModal({
         {session && live && status && (
           <div style={section}>
             <div style={{ fontSize: 13, fontWeight: 700, color: "#1d1a15", marginBottom: 10 }}>つなぎ方</div>
-            <label style={label}>踏み台サーバーでのあなたの利用者名（踏み台サーバーの管理者が登録した名前。このブラウザに覚えます）</label>
+            <label style={label}>踏み台サーバーでのあなたの利用者名（踏み台サーバーの管理者が add-operator.sh で登録した運営用の名前。踏み台サーバーの管理用の ubuntu ではありません。このブラウザに覚えます）</label>
             <input style={{ ...field, maxWidth: 260 }} value={bastionUser} onChange={(e) => saveBastionUser(e.target.value)} placeholder="例: yamada" />
             <label style={{ ...label, marginTop: 14 }}>
-              {session.state === "open" ? "あなたの PC のターミナルで、次を実行します" : "「接続中」になったら、あなたの PC のターミナルで次を実行します"}
+              {session.state === "open" ? "運営用の鍵を置いたあなたの PC のターミナル（Windows なら PowerShell）で、次を実行します。踏み台サーバーにログインして実行するのではありません" : "「接続中」になったら、運営用の鍵を置いたあなたの PC のターミナル（Windows なら PowerShell）で次を実行します。踏み台サーバーにログインして実行するのではありません"}
             </label>
             <div style={{ display: "flex", gap: 8, alignItems: "stretch", flexWrap: "wrap" }}>
               <code style={{ flex: "1 1 320px", minWidth: 0, background: "#f4f1ea", borderRadius: 6, padding: "10px 12px", fontSize: 12, fontFamily: '"JetBrains Mono", monospace', color: "#1d1a15", wordBreak: "break-all" }}>
