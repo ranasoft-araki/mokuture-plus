@@ -37,7 +37,7 @@ export function describeTunnel(
   }
   if (s?.state === "requested") {
     return {
-      label: "端末の接続待ち",
+      label: "接続準備中",
       tone: "warn",
       detail: s.error
         ? `端末が踏み台サーバーへ接続できていません（${s.error}）。端末は接続をやり直し続けています。`
@@ -45,7 +45,7 @@ export function describeTunnel(
           ? "この端末の設置先のネットワークからは、踏み台サーバーへ接続できない見込みです。しばらく待っても「接続中」にならなければ終了してください。"
           : !d.alive
             ? "端末がしばらくサーバーへ問い合わせに来ていません（電源・回線が切れている可能性）。端末が戻れば接続されます。"
-            : "端末が要求を受け取るのを待っています（最大 1 分ほど）。",
+            : "端末が要求を受け取ると、自動で踏み台サーバーへ接続します（最大 1 分ほど）。端末側での操作や承認は要りません（端末の画面も変わりません）。",
     };
   }
   if (s?.state === "closing") {
@@ -272,7 +272,7 @@ export function RemoteLoginModal({
             {!live && (
               <div style={{ ...note, marginBottom: 12 }}>
                 開くと、この端末が踏み台サーバー（{status.bastion_host}:{status.bastion_port}）へ接続します。
-                端末が要求を受け取るまで最大 1 分ほどかかります。下で選んだ時間が過ぎると自動で閉じます。
+                端末が要求を受け取るまで最大 1 分ほどかかります。端末側での操作や承認は要らず、キオスクの画面も変わりません。下で選んだ時間が過ぎると自動で閉じます。
               </div>
             )}
             <label style={label}>{live ? "延ばす理由（記録に残ります）" : "理由（記録に残ります）"}</label>
@@ -314,7 +314,7 @@ export function RemoteLoginModal({
                 {h.requested_at ? new Date(h.requested_at).toLocaleString("ja-JP") : "—"} ／ {h.requested_by || "—"} ／{" "}
                 {h.state === "closed"
                   ? `終了（${CLOSE_REASON[h.close_reason ?? ""] ?? "—"}${h.opened_at ? "" : "・端末は接続しなかった"}${h.error ? "・端末が閉じたことは未確認" : ""}）`
-                  : h.state === "open" ? "接続中" : h.state === "closing" ? "終了待ち" : "端末の接続待ち"}
+                  : h.state === "open" ? "接続中" : h.state === "closing" ? "終了待ち" : "接続準備中"}
                 <div style={{ whiteSpace: "pre-wrap", color: "#a8a198" }}>{h.reason}</div>
               </div>
             ))}

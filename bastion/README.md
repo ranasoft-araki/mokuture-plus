@@ -105,8 +105,8 @@ git add kiosk_agent/system && git commit && git push
 | 「遠隔ログイン」の列が「使えません」 | Render の `TUNNEL_BASTION_*` の 3 つが入っているか |
 | 「端末が未対応」 | その端末にシステム更新が届いているか(キオスク設定 → デバイスチェック → ソフトウェア更新の「OS の設定・部品」)。既設の端末は一度 `install.sh` が必要 |
 | 「踏み台へ届かない」 | 設置先のネットワークが 443 番の SSH を通さない。この端末では遠隔ログインは使えない |
-| 「端末の接続待ち」のまま、理由に `Permission denied` | 踏み台が API に聞けていない。VPS で `sudo -u mokuture-akc /usr/local/sbin/mokuture-authorized-keys` を動かし、鍵の行が返るか |
-| 「端末の接続待ち」のまま、理由に `Host key verification failed` | `TUNNEL_BASTION_HOST_KEY` が踏み台の今の鍵と違う。VPS で `cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub` |
+| 「接続準備中」のまま、理由に `Permission denied` | 踏み台が API に聞けていない。VPS で `sudo -u mokuture-akc /usr/local/sbin/mokuture-authorized-keys` を動かし、鍵の行が返るか |
+| 「接続準備中」のまま、理由に `Host key verification failed` | `TUNNEL_BASTION_HOST_KEY` が踏み台の今の鍵と違う。VPS で `cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub` |
 | 「接続中」なのに自分の PC から入れない(踏み台で断られる) | `add-operator.sh` で登録した名前と鍵か。`ssh -v -J ...` の出力で、どちらで断られたかを見る |
 | 踏み台は通るが端末で断られる | `operator_keys` に鍵を足して署名・push したか。端末で `cat /etc/mokuture/tunnel_sshd/authorized_keys` |
 
