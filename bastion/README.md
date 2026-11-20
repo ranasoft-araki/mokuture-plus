@@ -109,6 +109,7 @@ git add kiosk_agent/system && git commit && git push
 | 「接続準備中」のまま、理由に `Permission denied` | 踏み台が API に聞けていない。VPS で `sudo -u mokuture-akc /usr/local/sbin/mokuture-authorized-keys` を動かし、鍵の行が返るか |
 | 「接続準備中」のまま、理由に `Host key verification failed` | `TUNNEL_BASTION_HOST_KEY` が踏み台の今の鍵と違う。VPS で `cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub` |
 | 「接続中」なのに自分の PC から入れない(踏み台で断られる) | `add-operator.sh` で登録した名前と鍵か。`ssh -v -J ...` の出力で、どちらで断られたかを見る |
+| 自分の PC で `channel 0: open failed: connect failed: Connection refused` | 踏み台までは入れたが、その端末の経路が無い。遠隔ログインが閉じている(時間切れ・終了済み)か、まだ「接続中」になっていない。運営パネルで状態を確かめ、閉じていれば開き直す |
 | 踏み台は通るが端末で断られる | `operator_keys` に鍵を足して署名・push したか。端末で `cat /etc/mokuture/tunnel_sshd/authorized_keys` |
 
 記録を見る場所:
