@@ -238,6 +238,17 @@ def test_受け口は端末の中だけで鍵でしか入れない():
     assert settings["AllowUsers"] == "@AGENT_USER@"
 
 
+def test_遠隔ログインの待ち受けは手で止めても戻るがキオスク本体は戻さない():
+    """10 分ごとに動く管理者権限の仕組みが、止まっている待ち受けを起こし直す。適用済みで何もしない回
+    (applied.version と同じで exit 0)より前に置かないと、版が変わらない限り一度も動かない。"""
+    src = (AGENT_DIR / "system" / "sysupdate-root.sh").read_text(encoding="utf-8")
+    start = src.index("for unit in mokuture-tunnel-sshd.socket mokuture-tunnel.service; do")
+    block = src[start:src.index("done", start)]
+    assert start < src.index('applied.version" 2>/dev/null)" ]; then')
+    assert 'is-enabled "$unit"' in block and 'systemctl start "$unit"' in block
+    assert "mokuture-kiosk" not in block
+
+
 def test_運営の鍵と受け口の設定は署名の対象():
     """ここが署名されていないと、配信元を乗っ取った者が自分の鍵を足して端末に入れる。"""
     listed = {line.split("  ", 1)[1] for line in

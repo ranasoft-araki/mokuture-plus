@@ -59,6 +59,19 @@ if command -v flock >/dev/null 2>&1; then
 fi
 rm -rf "$STATE_DIR"/stage.*   # 前の回が途中で止められたときの残り
 
+# 遠隔ログインの待ち受けは、手で止められても戻す(10 分ごと。適用済みで何もしない回も含めて毎回)。
+# 止まったままだと、遠隔からは二度と入れず、現地で電源を入れ直すしかなくなる。
+# キオスク本体(mokuture-kiosk)は戻さない: 現地や遠隔で作業するときに止めておきたいため。
+# 遠隔ログインを本当に止めたままにしたいときは `systemctl disable --now` にする(enabled のものだけ起こす)。
+if [ "$TESTING" = "0" ] && command -v systemctl >/dev/null 2>&1; then
+    for unit in mokuture-tunnel-sshd.socket mokuture-tunnel.service; do
+        if [ "$(systemctl is-enabled "$unit" 2>/dev/null)" = "enabled" ] && ! systemctl is-active --quiet "$unit"; then
+            echo "遠隔ログインの $unit が止まっていたので起動する"
+            systemctl start "$unit" || echo "遠隔ログインの $unit を起動できなかった"
+        fi
+    done
+fi
+
 STAGE=$(mktemp -d "$STATE_DIR/stage.XXXXXX") || exit 1
 trap 'rm -rf "$STAGE"' EXIT
 
