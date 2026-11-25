@@ -9,7 +9,33 @@ import { hasHonorific } from "@/lib/honorific";
 import { AdminShell, MkCard } from "@/components/AdminShell";
 import { ConfirmModal } from "@/components/ConfirmModal";
 
-type DateFilter = "today" | "week" | "month" | "all";
+type DateFilter = "today" | "week" | "month" | "all" | "range";
+
+// <input type="date"> の値(YYYY-MM-DD)をその日の 0:00(端末の時刻)にする。不正なら null。
+function parseDateInput(v: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// 期間指定の開始日・終了日。逆に入れられても(直接入力ではあり得る)入れ替えて扱う。
+function orderedRange(fromStr: string, toStr: string): [Date | null, Date | null] {
+  const a = parseDateInput(fromStr), b = parseDateInput(toStr);
+  return a && b && a > b ? [b, a] : [a, b];
+}
+
+// ページ番号の並び。多いときは 先頭・現在の前後・末尾 だけ出し、間を「…」で詰める。
+function pageItems(page: number, total: number): (number | "…")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const keep = new Set([1, total, page - 1, page, page + 1]);
+  const out: (number | "…")[] = [];
+  for (let p = 1; p <= total; p++) {
+    if (keep.has(p)) out.push(p);
+    else if (out[out.length - 1] !== "…") out.push("…");
+  }
+  return out;
+}
 type AgingLevel = "fresh" | "warn" | "alert" | "urgent";
 
 function getAgingLevel(log: ReceptionLog): AgingLevel {
@@ -62,7 +88,8 @@ const DATE_LABELS: Record<DateFilter, string> = {
   today:  "今日",
   week:   "今週",
   month:  "今月",
-  all:    "過去30日",
+  all:    "全期間",
+  range:  "期間を指定",
 };
 
 const PAGE_SIZE = 10;
@@ -486,6 +513,8 @@ export default function ReceptionLogsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState<DateFilter>("today");
+  const [rangeFrom, setRangeFrom] = useState("");
+  const [rangeTo, setRangeTo] = useState("");
   const [page, setPage] = useState(1);
   const [selectedLog, setSelectedLog] = useState<ReceptionLog | null>(null);
   const [token, setToken] = useState("");
@@ -627,20 +656,27 @@ export default function ReceptionLogsPage() {
   };
 
   const filtered = useMemo(() => {
-    const now = new Date();
-    const startOf = (offset: number) => {
-      const d = new Date(now);
-      d.setDate(d.getDate() - offset);
-      d.setHours(0, 0, 0, 0);
-      return d;
-    };
-    const cutoff: Record<DateFilter, Date> = {
-      today:  startOf(0),
-      week:   startOf(7),
-      month:  startOf(30),
-      all:    startOf(30),
-    };
-    let list = logs.filter((r) => new Date(r.created_at) >= cutoff[dateFilter]);
+    // 期間の下限(含む)と上限(含まない)。null は「その側に制限なし」。
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    let from: Date | null = null;
+    let to: Date | null = null;
+    if (dateFilter === "today") {
+      from = today;
+    } else if (dateFilter === "week") {
+      from = new Date(today);
+      from.setDate(today.getDate() - ((today.getDay() + 6) % 7)); // 月曜はじまり
+    } else if (dateFilter === "month") {
+      from = new Date(today.getFullYear(), today.getMonth(), 1);
+    } else if (dateFilter === "range") {
+      const [start, end] = orderedRange(rangeFrom, rangeTo);
+      from = start;
+      if (end) { to = new Date(end); to.setDate(end.getDate() + 1); } // 終了日の当日分まで含める
+    }
+    let list = logs.filter((r) => {
+      const t = new Date(r.created_at);
+      return (!from || t >= from) && (!to || t < to);
+    });
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter((r) =>
@@ -651,7 +687,17 @@ export default function ReceptionLogsPage() {
     if (methodFilter) list = list.filter(r => r.method === methodFilter);
     if (stateFilter) list = list.filter(r => r.state === stateFilter);
     return list;
-  }, [logs, dateFilter, search, methodFilter, stateFilter]);
+  }, [logs, dateFilter, rangeFrom, rangeTo, search, methodFilter, stateFilter]);
+
+  const periodLabel = (() => {
+    if (dateFilter !== "range") return DATE_LABELS[dateFilter];
+    const [start, end] = orderedRange(rangeFrom, rangeTo);
+    const fmt = (d: Date | null) => (d ? d.toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" }) : "");
+    if (!start && !end) return "全期間";
+    if (!end) return `${fmt(start)} 以降`;
+    if (!start) return `${fmt(end)} まで`;
+    return `${fmt(start)} 〜 ${fmt(end)}`;
+  })();
 
   const respondLog = useMemo(
     () => (respondId ? logs.find((l) => l.id === respondId) ?? null : null),
@@ -723,7 +769,7 @@ export default function ReceptionLogsPage() {
       active="reception"
       title="受付ログ"
       breadcrumb="ホーム / 受付ログ"
-      subtitle={`過去30日 · 合計 ${logs.length} 件`}
+      subtitle={`${periodLabel} · ${filtered.length} 件（記録は全部で ${logs.length} 件）`}
       receptionUnread={receptionUnread}
       actions={
         waitingCount >= 3 ? (
@@ -764,8 +810,8 @@ export default function ReceptionLogsPage() {
             style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 12.5, color: "#2d2a24", height: "100%" }}
           />
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          {(["today", "week", "month", "all"] as DateFilter[]).map((f) => (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          {(["today", "week", "month", "all", "range"] as DateFilter[]).map((f) => (
             <button
               key={f}
               onClick={() => { setDateFilter(f); setPage(1); }}
@@ -780,6 +826,27 @@ export default function ReceptionLogsPage() {
               {DATE_LABELS[f]}
             </button>
           ))}
+          {dateFilter === "range" && (
+            <span style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: 6, fontSize: 12, color: "#6b6559" }}>
+              <input
+                type="date"
+                aria-label="開始日"
+                value={rangeFrom}
+                max={rangeTo || undefined}
+                onChange={(e) => { setRangeFrom(e.target.value); setPage(1); }}
+                style={{ ...SELECT_STYLE, height: 30, fontSize: 12, minWidth: 130 }}
+              />
+              〜
+              <input
+                type="date"
+                aria-label="終了日"
+                value={rangeTo}
+                min={rangeFrom || undefined}
+                onChange={(e) => { setRangeTo(e.target.value); setPage(1); }}
+                style={{ ...SELECT_STYLE, height: 30, fontSize: 12, minWidth: 130 }}
+              />
+            </span>
+          )}
         </div>
         <select
           value={methodFilter}
@@ -982,8 +1049,10 @@ export default function ReceptionLogsPage() {
             <div style={{ padding: "14px 20px", display: "flex", alignItems: "center", borderTop: "1px solid #efece5", fontSize: 11.5 }}>
               <span style={{ color: "#a8a198" }}>{paginated.length} / {filtered.length} 件</span>
               <span style={{ flex: 1 }} />
-              <div style={{ display: "flex", gap: 4 }}>
-                {["←", ...Array.from({ length: Math.min(totalPages, 5) }, (_, i) => String(i + 1)), "→"].map((p, i) => (
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                {["←", ...pageItems(page, totalPages).map(String), "→"].map((p, i) => p === "…" ? (
+                  <span key={i} style={{ minWidth: 20, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#a8a198", fontSize: 11.5 }}>…</span>
+                ) : (
                   <button
                     key={i}
                     onClick={() => {
