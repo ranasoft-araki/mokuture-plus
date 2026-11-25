@@ -147,7 +147,7 @@ mokuture/
 │   │       │   ├── playlists/page.tsx ← プレイリスト管理
 │   │       │   ├── schedules/page.tsx ← スケジュール管理
 │   │       │   ├── kiosk/page.tsx     ← キオスク端末管理・承認待ち端末の承認・端末名/場所の変更(鉛筆ボタン or ダブルクリック)
-│   │       │   ├── reception/page.tsx ← 受付ログ一覧・フィルター・受付/電話/お断り応答ボタン
+│   │       │   ├── reception/page.tsx ← 受付ログ一覧・フィルター・受付/電話/お断り応答ボタン。**一覧は全件を取らず `GET /reception/page` で選んだ期間・条件の1ページぶん(10件)と件数だけを取る**(期間=今日/今週(月曜から)/今月(1日から)/全期間/期間を指定。境目はブラウザの時刻で決めて UTC の時刻で送り、取りに行くたびに計算し直す)。「この条件でCSV出力」も同じ条件(`buildQuery`)
 │   │       │   ├── inquiries/page.tsx ← 共通問い合わせフォーム受信の閲覧・状態更新・削除
 │   │       │   ├── appointments/page.tsx ← 来社予定管理・QRコード発行 (qrcode.react)。QRは印刷＋PNG画像DL＋メール送信可(表示は鮮明なSVG、DLは非表示の高解像度Canvas1024pxから toDataURL、メールは QRモーダルの「メールで送信」欄に宛先を都度入力→POST /appointments/{id}/send-email)。日付/ステータスフィルタ + 会議室紐付け。審査用デモモード(is_demo)では①〜⑤のQR発行ガイドバルーン(QrGuideBalloon)を表示し、既定会議室=「商談ルーム」を自動選択
 │   │       │   ├── meeting-rooms/page.tsx ← 会議室管理 (CRUD・カラー・定員・場所)
@@ -244,7 +244,7 @@ mokuture/
 - `GET|POST|DELETE|PATCH /users` — テナント内ユーザー管理
 - `PATCH /operator/tenants/{id}/suspend` — テナント停止/再開
 - `POST /devices/{id}/force-refresh` — デバイス強制更新
-- `GET /reception/export.csv` — 受付ログCSVエクスポート（管理者）
+- `GET /reception/export.csv` — 受付ログCSVエクスポート（管理者）。`since`/`until`(UTC の時刻・until は含まない)/`state`/`q`/`method` で一覧と同じ絞り込み(条件なし=全件)。日時の列は日本時間
 - `GET /operator/reception/export.csv` — 受付ログCSVエクスポート（運営）
 - `GET /reseller/reception/export.csv` — 受付ログCSVエクスポート（代理店）
 - `GET /reseller/reception` — 代理店クロステナント受付ログ
@@ -273,7 +273,7 @@ mokuture/
 - 受付OK/NG応答: 管理画面「受付ログ」の未応答行(received/notified)に「すぐ伺います」「只今対応できません」ボタン(`DecisionButtons`)を表示し `api.decideReception` を呼ぶ。ステータス `accepted`(対応中)/`declined`(対応不可) を `STATUS_LABEL`/`STATUS_COLOR`・フィルタに追加。
 - 来訪回数(「N回目の来訪」): 受付ログ詳細モーダルは `getVisitorHistory(visitor_name)` で来訪回数を表示するが、**配達(delivery)・置き配(dropoff)は visitor_name が総称ラベル(「配達」「置き配」)に潰れる**ため取得・表示しない(宅配業者に「4回目の来訪」等の無意味表示を避ける)。
 - Web Push: スタッフPWAの Service Worker(`public/sw.js`)は受付プッシュ(`kind==="reception_decision"`)に 受付/電話/お断り アクションボタンを表示し、通知タップ(`accept`/`phone`/`decline`)で署名トークン付き `POST /reception/decision` を送る。iOS PWA は通知アクション非対応のため上記アプリ内ボタンがフォールバック。
-- Web Push 通知本体タップ→対応モーダル直起動: プッシュ payload の `data.url` は `/{tenant_id}/admin/reception?respond={log.id}`(`build_decision_push_extras`)。通知**本体**をタップすると受付ログ画面が該当受付の対応モーダル(`RespondModal`: 大型の 受付/電話/お断り ボタン)を自動で開く。SW `notificationclick` は既に受付ログ画面が開いていれば `/admin/reception` サフィックスで捕捉して focus + `postMessage({type:'FOCUS_RECEPTION', logId})`、無ければ `?respond=` 付きURLで `openWindow`。受付ログ画面は マウント時の `?respond=` 読取＋SW message 購読の両経路で `respondId` を立て、手元に無ければ即時リフレッシュしてモーダルを表示。通知アクション非対応端末(iOS PWA)の主要導線。
+- Web Push 通知本体タップ→対応モーダル直起動: プッシュ payload の `data.url` は `/{tenant_id}/admin/reception?respond={log.id}`(`build_decision_push_extras`)。通知**本体**をタップすると受付ログ画面が該当受付の対応モーダル(`RespondModal`: 大型の 受付/電話/お断り ボタン)を自動で開く。SW `notificationclick` は既に受付ログ画面が開いていれば `/admin/reception` サフィックスで捕捉して focus + `postMessage({type:'FOCUS_RECEPTION', logId})`、無ければ `?respond=` 付きURLで `openWindow`。受付ログ画面は マウント時の `?respond=` 読取＋SW message 購読の両経路で `respondId` を立て、その受付を一覧とは別に手元(`focusLogs`)に持ってモーダルを表示(いまのページ・期間に無ければ `GET /reception/{id}` で1件だけ読む。一覧の条件から外れてもモーダルは消えない)。通知アクション非対応端末(iOS PWA)の主要導線。
 - Web Push 置き配通知タップ→**詳細モーダル**直起動: 置き配(dropoff)は応答不要なので対応ボタンは付けず、通知タップで**受付詳細モーダル(`ReceptionDetailModal`)を開き解錠PINを大きく表示**する(受付応答通知が `RespondModal` を開くのと同じ導線)。置き配プッシュの payload は `kind="delivery_dropoff"`/`logId`/`url=/{tenant_id}/admin/reception?detail={log.id}`(`_fire_delivery_notifications` の `dropoff_log_id` 経由。`_log_delivery_dropoff` が受付ログ id を返す)。SW `notificationclick` は `delivery_dropoff` も `/admin/reception` サフィックスで既存タブを捕捉し `postMessage({type:'FOCUS_DETAIL', logId})`、無ければ `?detail=` 付きURLで `openWindow`。受付ログ画面は マウント時の `?detail=` 読取＋SW `FOCUS_DETAIL` 購読で `detailId` を立て、`ReceptionDetailModal` を表示(行クリックの `selectedLog` と同じモーダル。`method==="dropoff"` のとき `purpose` の「解錠PIN: XXXX」を正規表現で抜き出し上部に大きく表示)。
 - ログイン(`login`/`partner-portal`/`ops-console`): 全入力欄に `name`/`id`/`autoComplete`(username / current-password、新規登録時は new-password) を付与し Chrome のパスワード保存/自動入力に対応。`login` の「ログイン状態を保持」チェックは既定ON(localStorage 保存)。アクセストークンは60分(`jwt_access_expire_minutes`)、JWT refresh は 30日(`jwt_refresh_expire_days`)＝この期間ログイン維持。**起動高速化**: `lib/api.ts` はアクセストークンの `exp` を**ローカルで先読み**し、失効(間近)なら叩く前に先に refresh する（ホーム画面ショートカット起動時の「叩く→401→refresh→再叩き」の無駄な往復を削減。米国サーバーへの1往復≈140ms×余分回数を消す）。先読みで漏れた場合は従来どおり401で自動更新。**セッション切れの扱いは `lib/api.ts` に集約**: refresh トークンが無い、または `/auth/refresh` が 401/403 のときだけ「セッションが切れた」と確定し、保存情報を消して役割に合ったログイン画面(`/login`・運営 `/ops-console`・代理店 `/partner-portal`)へ `location.replace` で移る（その通信の Promise は解決させない＝エラーを一瞬も出さない）。通信断・デプロイ中の 5xx ではログアウトさせず「サーバーに接続できません。…」を投げる（**この文言に「セッション」を入れない**＝ダッシュボードはこの語でログアウトさせる）。各画面の catch で `clearTokens()`＋`/login` へ飛ばさないこと（ここに来るのは一時的な失敗だけ）。**ダッシュボード(`admin/page.tsx`)は前回統計を `mk_stats_{tenant}` にキャッシュし stale-while-revalidate で即描画**（起動時の空白待ちを体感ゼロに）。ネットワーク一時失敗ではログアウトせずキャッシュ表示を維持し、真のセッション切れ時のみ `/login` へ。**起動ゲート(`app/page.tsx`=`/`)**: PWAショートカット起動が約10秒かかっていた主因は、ログイン済みでも `/ → /login(Reactをhydrate) → window.location.assign(ハード遷移) → /{tenant}/admin` と「アプリを2回フル起動」していたこと。対策として `/` を **hydration 前に走るインラインscriptの軽量ゲート**(`export const dynamic="force-static"`)にし、localStorageを同期読みしてログイン済みなら **/login を素通りして直接** `/{tenant}/admin`(operator=`/operator`/reseller=`/{slug}/reseller`)へ `location.replace`。**判定分岐は `lib/auth.ts` の `getHomeUrl` と一致させること**(変更時は両方直す)。`/login` の自動リダイレクトも `window.location.assign`→`router.replace`(ソフト遷移)に変更（ハード遷移=iOSパスワード保存目的はログインsubmit直後のみ）。SW(`public/sw.js`)は起動ゲート `/` のみ **cache-first+背景更新**(ゲートはチャンクを実行せず即離脱するので stale でも安全＝起動時のネット往復を消す)、遷移先ページは network-first 維持でチャンク不整合を防ぐ。
 - 問い合わせ管理: 管理画面「問い合わせ」(`/{tenant}/admin/inquiries`)で共通フォーム受信を閲覧・既読/対応済み/削除。公開入力ページは `/{tenant}/inquiry`(認証不要, `app/[tenant]/inquiry/page.tsx`)。
@@ -483,7 +483,9 @@ mokuture/
 | POST | /meeting-rooms/map-upload-url | JWT | 館内マップ画像 Presigned URL 取得 (logo-upload と同形式) |
 | PATCH | /meeting-rooms/{id} | JWT | 会議室更新 (map_image_url 対応) |
 | DELETE | /meeting-rooms/{id} | JWT | 会議室削除 |
-| GET | /reception | JWT | 受付ログ一覧 |
+| GET | /reception | JWT | 受付ログ一覧(全件。管理画面はもう使っていない・後方互換で残置) |
+| GET | /reception/page | JWT | 管理画面「受付ログ」の1ページぶん。`since`/`until`(UTC の時刻)・`q`(氏名/会社名・大文字小文字区別なし)・`method`・`state`・`offset`・`limit`(≤200)・`today_since` → `{items, total(条件に合う件数), all_total, waiting_count(受付済みのまま15分超), unread_today}` |
+| GET | /reception/{id} | JWT | 受付ログ1件(自テナントのみ)。**固定パスの GET より後に定義すること** |
 | GET | /events/stream | クエリ`token`(access JWT) | **管理画面ニアリアルタイム連動の SSE ストリーム**。受付/ロッカーが変化すると `data: {"type":"reception"\|"locker"}` を push。EventSource はヘッダを送れないため token はクエリで受け接続時に一度だけ検証。ストリームは秘密情報を運ばない(再取得対象の型マーカーのみ)。保持中は DB 接続を握らない・20秒ごとに keepalive コメント |
 | POST | /inquiries/public/{slug} | なし | 共通問い合わせフォーム送信 (rate-limit 10/min) |
 | GET/PATCH/DELETE | /inquiries | JWT | 問い合わせ閲覧・状態更新・削除 |

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, type ReceptionLog } from "@/lib/api";
+import { api, type ReceptionLog, type ReceptionQuery } from "@/lib/api";
 import { subscribeRealtime } from "@/lib/realtime";
 import { getAccessToken } from "@/lib/auth";
 import { hasHonorific } from "@/lib/honorific";
@@ -64,12 +64,14 @@ const SELECT_STYLE: React.CSSProperties = {
   color: "#2d2a24",
 };
 
-async function downloadCsv(token: string) {
-  const blob = await api.exportReceptionCsv(token);
+async function downloadCsv(token: string, query: ReceptionQuery) {
+  const blob = await api.exportReceptionCsv(token, query);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `reception_${new Date().toISOString().slice(0, 10)}.csv`;
+  const d = new Date(); // ファイル名はこの端末の日付(toISOString は UTC なので朝 9 時まで前日になる)
+  const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  a.download = `reception_${ymd}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -509,9 +511,15 @@ function RespondModal({ log, token, onClose, onUpdate }: { log: ReceptionLog; to
 
 export default function ReceptionLogsPage() {
   const router = useRouter();
+  // いま表示しているページの受付ログだけを持つ(全件は取らない)。件数はサーバーが数える
   const [logs, setLogs] = useState<ReceptionLog[]>([]);
+  const [total, setTotal] = useState(0);
+  const [allTotal, setAllTotal] = useState(0);
+  const [waitingCount, setWaitingCount] = useState(0);
+  const [receptionUnread, setReceptionUnread] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [searchQuery, setSearchQuery] = useState(""); // 入力が止まってから送る検索語
   const [dateFilter, setDateFilter] = useState<DateFilter>("today");
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
@@ -529,18 +537,102 @@ export default function ReceptionLogsPage() {
   const [stateFilter, setStateFilter] = useState("");
   const [respondId, setRespondId] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  // 通知から開いた受付が、いまのページ・期間に無いときに1件だけ読んだもの
+  const [focusLogs, setFocusLogs] = useState<Record<string, ReceptionLog>>({});
+  const [csvError, setCsvError] = useState("");
 
   useEffect(() => {
     const t = getAccessToken();
     if (!t) { router.push("/login"); return; }
     setToken(t);
-    api.listReception(t)
-      .then((data) => { setLogs(data); setLastRefreshed(new Date()); setLoadError(""); })
-      // セッション切れは api.ts がログイン画面へ移す。通信断などの一時的な失敗ではログアウトさせず、理由を出す
-      .catch((e) => setLoadError(e instanceof Error ? e.message : "受付ログを取得できませんでした"))
-      .finally(() => setLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 検索は打つたびに取りに行かず、入力が 300ms 止まってから
+  useEffect(() => {
+    const id = setTimeout(() => setSearchQuery(search.trim()), 300);
+    return () => clearTimeout(id);
+  }, [search]);
+
+  // 一覧の条件(期間・受付経路・ステータス・検索)。CSV 出力も同じ条件を使う。
+  // 期間の境目はこの端末の時刻で決め、UTC の時刻にして送る(サーバー側で日付がずれない)。
+  // 境目は取りに行くたびに計算し直す(開いたまま日付をまたいでも「今日」が前日のままにならない)。
+  const buildQuery = useCallback((): ReceptionQuery => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    let from: Date | null = null;
+    let to: Date | null = null;
+    if (dateFilter === "today") {
+      from = today;
+    } else if (dateFilter === "week") {
+      from = new Date(today);
+      from.setDate(today.getDate() - ((today.getDay() + 6) % 7)); // 月曜はじまり
+    } else if (dateFilter === "month") {
+      from = new Date(today.getFullYear(), today.getMonth(), 1);
+    } else if (dateFilter === "range") {
+      const [start, end] = orderedRange(rangeFrom, rangeTo);
+      from = start;
+      if (end) { to = new Date(end); to.setDate(end.getDate() + 1); } // 終了日の当日分まで含める
+    }
+    return {
+      since: from?.toISOString(),
+      until: to?.toISOString(),
+      q: searchQuery || undefined,
+      method: methodFilter || undefined,
+      state: stateFilter || undefined,
+    };
+  }, [dateFilter, rangeFrom, rangeTo, searchQuery, methodFilter, stateFilter]);
+
+  // 取得の順番が入れ替わっても、最後に頼んだ条件の結果だけを使う
+  const loadSeq = useRef(0);
+  // いま表示している一覧が、どの条件・ページの結果か(条件を変えた直後は「更新中」を出す)
+  const viewKey = JSON.stringify([dateFilter, rangeFrom, rangeTo, searchQuery, methodFilter, stateFilter, page]);
+  const [shownKey, setShownKey] = useState("");
+  const load = useCallback(async () => {
+    if (!token) return;
+    const seq = ++loadSeq.current;
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    try {
+      const data = await api.listReceptionPage(token, {
+        ...buildQuery(),
+        offset: (page - 1) * PAGE_SIZE,
+        limit: PAGE_SIZE,
+        today_since: todayStart.toISOString(),
+      });
+      if (seq !== loadSeq.current) return;
+      setLogs(data.items);
+      setShownKey(viewKey);
+      // 通知から開いているモーダルの受付が一覧に載っていれば、最新の状態に揃える
+      setFocusLogs((prev) => {
+        let next = prev;
+        for (const it of data.items) {
+          if (prev[it.id]) { if (next === prev) next = { ...prev }; next[it.id] = it; }
+        }
+        return next;
+      });
+      setTotal(data.total);
+      setAllTotal(data.all_total);
+      setWaitingCount(data.waiting_count);
+      setReceptionUnread(data.unread_today);
+      setLastRefreshed(new Date());
+      setLoadError("");
+      // 削除などでページが減ったら、最後のページへ寄せる
+      const last = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
+      if (page > last) setPage(last);
+    } catch (e) {
+      // セッション切れは api.ts がログイン画面へ移す。通信断などの一時的な失敗ではログアウトさせず、理由を出す
+      if (seq === loadSeq.current) setLoadError(e instanceof Error ? e.message : "受付ログを取得できませんでした");
+    } finally {
+      if (seq === loadSeq.current) setLoading(false);
+    }
+  }, [token, buildQuery, page, viewKey]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // SSE・定期取得からは、そのときの条件で取り直す(条件が変わるたびに購読を張り直さない)
+  const loadRef = useRef(load);
+  useEffect(() => { loadRef.current = load; }, [load]);
 
   // プッシュ通知タップ経由でモーダルを開く。
   // ・受付応答通知 → 対応モーダル(受付/電話/お断り)。?respond=<id> / postMessage(FOCUS_RECEPTION)。
@@ -563,13 +655,16 @@ export default function ReceptionLogsPage() {
     return () => navigator.serviceWorker?.removeEventListener("message", onMsg);
   }, []);
 
-  // 通知直後は一覧が古い可能性があるため、対象が手元に無ければ即時リフレッシュ
+  // 通知から開いた受付は、一覧とは別に手元に持つ(一覧の条件・ページから外れてもモーダルが消えない)。
+  // 一覧に載っていればそれを写し、無ければ1件だけ読む。
   useEffect(() => {
-    const wantId = respondId ?? detailId;
-    if (!wantId || !token) return;
-    if (!logs.some((l) => l.id === wantId)) {
-      api.listReception(token)
-        .then((data) => { setLogs(data); setLastRefreshed(new Date()); })
+    if (!token) return;
+    for (const wantId of [respondId, detailId]) {
+      if (!wantId || focusLogs[wantId]) continue;
+      const inList = logs.find((l) => l.id === wantId);
+      if (inList) { setFocusLogs((prev) => ({ ...prev, [inList.id]: inList })); continue; }
+      api.getReceptionLog(token, wantId)
+        .then((log) => setFocusLogs((prev) => ({ ...prev, [log.id]: log })))
         .catch(() => {});
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -580,11 +675,7 @@ export default function ReceptionLogsPage() {
   // 「自動更新 OFF」時は SSE もポーリングも張らない（ユーザーが更新を止めた意図を尊重）。
   useEffect(() => {
     if (!autoRefresh || !token) return;
-    const refetch = () => {
-      api.listReception(token)
-        .then((data) => { setLogs(data); setLastRefreshed(new Date()); setLoadError(""); })
-        .catch(() => {});
-    };
+    const refetch = () => { loadRef.current(); };
     // 連続イベント(通知直後の状態変化が続く等)を300msでまとめて1回だけ取得する。
     let debounce: ReturnType<typeof setTimeout> | null = null;
     const unsub = subscribeRealtime((e) => {
@@ -600,12 +691,19 @@ export default function ReceptionLogsPage() {
     };
   }, [autoRefresh, token]);
 
+  const patchFocusLog = (id: string, patch: Partial<ReceptionLog>) => {
+    setFocusLogs((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], ...patch } } : prev));
+  };
+
   const handleStateUpdate = (id: string, state: string) => {
     setLogs((prev) => prev.map((l) => l.id === id ? { ...l, state } : l));
+    patchFocusLog(id, { state });
+    load(); // ステータスの絞り込み・対応待ちの件数を合わせる
   };
 
   const handleNotesUpdate = (id: string, staff_notes: string | null) => {
     setLogs((prev) => prev.map((l) => l.id === id ? { ...l, staff_notes } : l));
+    patchFocusLog(id, { staff_notes });
     setSelectedLog((prev) => prev && prev.id === id ? { ...prev, staff_notes } : prev);
   };
 
@@ -617,6 +715,7 @@ export default function ReceptionLogsPage() {
         await api.deleteReceptionLog(token, logId);
         setLogs((prev) => prev.filter((l) => l.id !== logId));
         setSelectedIds((prev) => { const s = new Set(prev); s.delete(logId); return s; });
+        load();
       },
     });
   };
@@ -632,6 +731,7 @@ export default function ReceptionLogsPage() {
           setSelectedIds(new Set());
         } finally {
           setBulkDeleting(false);
+          load();
         }
       },
     });
@@ -651,43 +751,10 @@ export default function ReceptionLogsPage() {
         setLogs(prev => prev.map(l => selectedIds.has(l.id) ? { ...l, state: newState } : l));
         setSelectedIds(new Set());
         setBulkDeleting(false);
+        load();
       },
     });
   };
-
-  const filtered = useMemo(() => {
-    // 期間の下限(含む)と上限(含まない)。null は「その側に制限なし」。
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    let from: Date | null = null;
-    let to: Date | null = null;
-    if (dateFilter === "today") {
-      from = today;
-    } else if (dateFilter === "week") {
-      from = new Date(today);
-      from.setDate(today.getDate() - ((today.getDay() + 6) % 7)); // 月曜はじまり
-    } else if (dateFilter === "month") {
-      from = new Date(today.getFullYear(), today.getMonth(), 1);
-    } else if (dateFilter === "range") {
-      const [start, end] = orderedRange(rangeFrom, rangeTo);
-      from = start;
-      if (end) { to = new Date(end); to.setDate(end.getDate() + 1); } // 終了日の当日分まで含める
-    }
-    let list = logs.filter((r) => {
-      const t = new Date(r.created_at);
-      return (!from || t >= from) && (!to || t < to);
-    });
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      list = list.filter((r) =>
-        r.visitor_name.toLowerCase().includes(q) ||
-        (r.company ?? "").toLowerCase().includes(q)
-      );
-    }
-    if (methodFilter) list = list.filter(r => r.method === methodFilter);
-    if (stateFilter) list = list.filter(r => r.state === stateFilter);
-    return list;
-  }, [logs, dateFilter, rangeFrom, rangeTo, search, methodFilter, stateFilter]);
 
   const periodLabel = (() => {
     if (dateFilter !== "range") return DATE_LABELS[dateFilter];
@@ -699,33 +766,21 @@ export default function ReceptionLogsPage() {
     return `${fmt(start)} 〜 ${fmt(end)}`;
   })();
 
-  const respondLog = useMemo(
-    () => (respondId ? logs.find((l) => l.id === respondId) ?? null : null),
-    [respondId, logs],
-  );
-
+  const findLog = (id: string | null) => (id ? focusLogs[id] ?? logs.find((l) => l.id === id) ?? null : null);
+  const hasList = shownKey !== ""; // 一度でも一覧を取れたか
+  const listIsOld = hasList && shownKey !== viewKey; // 出ている一覧は、変える前の条件のもの
+  const stale = !loading && !loadError && listIsOld; // 条件を変えて、まだ結果が届いていない
+  // 通知から開いたモーダルを閉じたら手元の写しも捨てる(次に開くときは最新を読み直す)
+  const forgetFocusLog = (id: string | null) => {
+    if (!id) return;
+    setFocusLogs((prev) => { if (!prev[id]) return prev; const next = { ...prev }; delete next[id]; return next; });
+  };
+  const respondLog = findLog(respondId);
   // 置き配通知タップで開く詳細対象。行クリックの selectedLog と同じ ReceptionDetailModal を使う。
-  const detailLog = useMemo(
-    () => (detailId ? logs.find((l) => l.id === detailId) ?? null : null),
-    [detailId, logs],
-  );
+  const detailLog = findLog(detailId);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-
-  const waitingCount = useMemo(() => {
-    return logs.filter((l) => {
-      if (l.state !== "received") return false;
-      const elapsedMin = (Date.now() - new Date(l.created_at).getTime()) / 60000;
-      return elapsedMin >= 15;
-    }).length;
-  }, [logs]);
-
-  const receptionUnread = useMemo(() => {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    return logs.filter((l) => l.state === "received" && new Date(l.created_at) >= todayStart).length;
-  }, [logs]);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const paginated = logs;
 
   const allPageSelected = paginated.length > 0 && paginated.every((r) => selectedIds.has(r.id));
   const somePageSelected = paginated.some((r) => selectedIds.has(r.id));
@@ -769,7 +824,7 @@ export default function ReceptionLogsPage() {
       active="reception"
       title="受付ログ"
       breadcrumb="ホーム / 受付ログ"
-      subtitle={`${periodLabel} · ${filtered.length} 件（記録は全部で ${logs.length} 件）`}
+      subtitle={`${periodLabel} · ${total} 件（記録は全部で ${allTotal} 件）`}
       receptionUnread={receptionUnread}
       actions={
         waitingCount >= 3 ? (
@@ -790,12 +845,12 @@ export default function ReceptionLogsPage() {
         <ReceptionDetailModal
           log={(selectedLog ?? detailLog)!}
           token={token}
-          onClose={() => { setSelectedLog(null); setDetailId(null); }}
+          onClose={() => { setSelectedLog(null); forgetFocusLog(detailId); setDetailId(null); }}
           onNotesUpdate={handleNotesUpdate}
         />
       )}
       {respondLog && (
-        <RespondModal log={respondLog} token={token} onClose={() => setRespondId(null)} onUpdate={handleStateUpdate} />
+        <RespondModal log={respondLog} token={token} onClose={() => { forgetFocusLog(respondId); setRespondId(null); }} onUpdate={handleStateUpdate} />
       )}
 
       <div className="adm-toolbar" style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap", justifyContent: "space-between" }}>
@@ -807,6 +862,7 @@ export default function ReceptionLogsPage() {
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1); }}
             placeholder="来訪者名・会社名で検索"
+            maxLength={100}
             style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontSize: 12.5, color: "#2d2a24", height: "100%" }}
           />
         </div>
@@ -877,8 +933,12 @@ export default function ReceptionLogsPage() {
         <button
           onClick={() => {
             const token = getAccessToken();
-            if (token) downloadCsv(token).catch(() => {});
+            if (!token) return;
+            setCsvError("");
+            downloadCsv(token, buildQuery()).catch((e) =>
+              setCsvError(e instanceof Error ? e.message : "CSV の書き出しに失敗しました。"));
           }}
+          title="いま一覧に出している期間・受付経路・ステータス・検索の条件で書き出します"
           style={{
             padding: "6px 14px", fontSize: 11.5,
             background: "#fffefb", color: "#6b6559",
@@ -889,7 +949,7 @@ export default function ReceptionLogsPage() {
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
           </svg>
-          CSV出力
+          この条件でCSV出力
         </button>
         <button
           onClick={() => {
@@ -932,19 +992,31 @@ export default function ReceptionLogsPage() {
         </div>
       </div>
 
+      {csvError && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#f6e0dc", border: "1px solid #a84238", color: "#a84238", fontSize: 13 }}>
+          CSV を書き出せませんでした（{csvError}）
+        </div>
+      )}
       {loadError && (
         <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 7, background: "#f6e0dc", border: "1px solid #a84238", color: "#a84238", fontSize: 13 }}>
-          受付ログを取得できませんでした（{loadError}）。下の一覧は最新ではない可能性があります。
+          受付ログを取得できませんでした（{loadError}）。{!hasList ? "" : listIsOld ? "下の一覧は、変える前の条件のものです。" : "下の一覧は最新ではない可能性があります。"}
         </div>
       )}
       <MkCard padding="0">
         {loading ? (
           <div style={{ padding: "48px 20px", textAlign: "center", color: "#a8a198" }}>読み込み中…</div>
-        ) : filtered.length === 0 ? (
-          <div style={{ padding: "48px 20px", textAlign: "center", color: "#a8a198" }}>受付記録がありません</div>
+        ) : !hasList && loadError ? (
+          <div style={{ padding: "48px 20px", textAlign: "center", color: "#a8a198" }}>受付ログを表示できません{autoRefresh ? "（30秒ごとに取り直します）" : ""}</div>
+        ) : stale && total === 0 ? (
+          <div style={{ padding: "48px 20px", textAlign: "center", color: "#a8a198" }}>更新中…</div>
+        ) : total === 0 ? (
+          <div style={{ padding: "48px 20px", textAlign: "center", color: "#a8a198" }}>この条件の受付記録はありません</div>
         ) : (
           <>
-            <div className="adm-scroll-x">
+            {stale && (
+              <div style={{ padding: "8px 20px", fontSize: 12, color: "#6b6559", background: "#f4f1ea", borderBottom: "1px solid #efece5" }}>更新中…</div>
+            )}
+            <div className="adm-scroll-x" style={{ opacity: stale ? 0.5 : 1, transition: "opacity .15s" }}>
             <table style={{ width: "100%", minWidth: 850, borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "#f4f1ea", fontSize: 10.5, color: "#a8a198", textAlign: "left", letterSpacing: "0.3px" }}>
@@ -1047,7 +1119,7 @@ export default function ReceptionLogsPage() {
             </div>
 
             <div style={{ padding: "14px 20px", display: "flex", alignItems: "center", borderTop: "1px solid #efece5", fontSize: 11.5 }}>
-              <span style={{ color: "#a8a198" }}>{paginated.length} / {filtered.length} 件</span>
+              <span style={{ color: "#a8a198" }}>{paginated.length} / {total} 件</span>
               <span style={{ flex: 1 }} />
               <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                 {["←", ...pageItems(page, totalPages).map(String), "→"].map((p, i) => p === "…" ? (

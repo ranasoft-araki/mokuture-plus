@@ -2,13 +2,13 @@ import csv
 import io
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from jose import JWTError
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete, update
+from sqlalchemy import case, literal, select, func, delete, update
 
 from app.database import get_db
 from app.middleware.tenant import get_current_user, require_tenant_admin
@@ -19,7 +19,7 @@ from app.services.auth import create_decision_token, decode_token
 from app.services import decision_link
 from app.services import events as event_bus
 from app.services import reception_notify
-from app.services.timeutil import iso_z
+from app.services.timeutil import iso_z, to_naive_utc, utcnow_naive
 from app.services.csv_safe import safe_row
 from app.config import settings
 
@@ -252,6 +252,111 @@ async def list_reception(
     return [_log_out(r) for r in result.scalars()]
 
 
+# 管理画面「受付ログ」の一覧は、選んだ期間・条件の1ページぶんだけ返す(全件を取り直さない)。
+# 期間はブラウザが自分の時刻で決めた境目を UTC の時刻(ISO・Z付き)で送る＝日本時間の
+# 0:00〜9:00 の受付が前日扱いになる、といった日付のずれが起きない。
+PAGE_LIMIT_MAX = 200
+WAITING_AFTER_MIN = 15  # 画面の「N件対応待ち」= 受付済みのまま 15 分を過ぎたもの
+
+
+_JST = timezone(timedelta(hours=9))
+
+
+def _csv_jst(when: datetime | None) -> str:
+    if when is None:
+        return ""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.astimezone(_JST).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _escape_like(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _filter_reception(
+    stmt,
+    *,
+    since: datetime | None,
+    until: datetime | None,
+    q: str | None,
+    method: str | None,
+    state: str | None,
+):
+    """一覧と CSV で同じ絞り込みにする。since は含む・until は含まない。"""
+    since = to_naive_utc(since)
+    until = to_naive_utc(until)
+    if since:
+        stmt = stmt.where(ReceptionLog.created_at >= since)
+    if until:
+        stmt = stmt.where(ReceptionLog.created_at < until)
+    if q and q.strip():
+        pat = f"%{_escape_like(q.strip())}%"
+        stmt = stmt.where(
+            ReceptionLog.visitor_name.ilike(pat, escape="\\")
+            | ReceptionLog.company.ilike(pat, escape="\\")
+        )
+    if method:
+        stmt = stmt.where(ReceptionLog.method == method)
+    if state:
+        stmt = stmt.where(ReceptionLog.state == state)
+    return stmt
+
+
+class ReceptionPageOut(BaseModel):
+    items: list[ReceptionOut]
+    total: int          # 条件に合う件数(ページ送りの元)
+    all_total: int      # このテナントの受付ログ全部の件数
+    waiting_count: int  # 受付済みのまま 15 分を過ぎた件数(期間・条件に関係なく)
+    unread_today: int   # today_since 以降の受付済みの件数(サイドバーの未対応バッジ)
+
+
+@router.get("/page", response_model=ReceptionPageOut)
+async def list_reception_page(
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    q: str | None = Query(None, max_length=100),
+    method: str | None = Query(None),
+    state: str | None = Query(None),
+    today_since: datetime | None = Query(None),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=PAGE_LIMIT_MAX),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tid = user.tenant_id
+    base = _filter_reception(
+        select(ReceptionLog).where(ReceptionLog.tenant_id == tid),
+        since=since, until=until, q=q, method=method, state=state,
+    )
+    rows = (await db.execute(
+        base.order_by(ReceptionLog.created_at.desc(), ReceptionLog.id.desc()).offset(offset).limit(limit)
+    )).scalars().all()
+    total = (await db.execute(
+        select(func.count()).select_from(base.order_by(None).subquery())
+    )).scalar_one()
+
+    waiting_before = utcnow_naive() - timedelta(minutes=WAITING_AFTER_MIN)
+    today_from = to_naive_utc(today_since)
+    received = ReceptionLog.state == "received"
+    counts = (await db.execute(
+        select(
+            func.count(),
+            func.coalesce(func.sum(case((received & (ReceptionLog.created_at <= waiting_before), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((received & (ReceptionLog.created_at >= today_from), 1), else_=0)), 0)
+            if today_from else literal(0),
+        ).where(ReceptionLog.tenant_id == tid)
+    )).one()
+
+    return {
+        "items": [_log_out(r) for r in rows],
+        "total": int(total),
+        "all_total": int(counts[0]),
+        "waiting_count": int(counts[1]),
+        "unread_today": int(counts[2]),
+    }
+
+
 @router.get("/contacts.csv")
 async def export_contacts_csv(
     current_user: User = Depends(require_tenant_admin()),
@@ -293,10 +398,18 @@ async def export_reception_csv(
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
     method: str | None = Query(None),
+    # 管理画面「受付ログ」は一覧と同じ条件(期間・受付経路・ステータス・検索)を送る。
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    state: str | None = Query(None),
+    search: str | None = Query(None, alias="q", max_length=100),
     user: User = Depends(require_tenant_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(ReceptionLog).where(ReceptionLog.tenant_id == user.tenant_id).order_by(ReceptionLog.created_at.desc())
+    q = _filter_reception(
+        select(ReceptionLog).where(ReceptionLog.tenant_id == user.tenant_id),
+        since=since, until=until, q=search, method=None, state=state,
+    ).order_by(ReceptionLog.created_at.desc())
     if date_from:
         q = q.where(func.date(ReceptionLog.created_at) >= date_from)
     if date_to:
@@ -309,10 +422,11 @@ async def export_reception_csv(
     output = io.StringIO()
     output.write("﻿")
     writer = csv.writer(output)
-    writer.writerow(["日時", "訪問者名", "会社名", "部署", "担当者", "目的", "受付方法", "ステータス", "スタッフメモ"])
+    writer.writerow(["日時(日本時間)", "訪問者名", "会社名", "部署", "担当者", "目的", "受付方法", "ステータス", "スタッフメモ"])
     for r in logs:
         writer.writerow(safe_row([
-            r.created_at.isoformat() if r.created_at else "",
+            # 日本時間で書く(画面で選んだ期間と同じ見え方にする。UTC のままだと前日の行に見える)
+            _csv_jst(r.created_at),
             r.visitor_name,
             r.company or "",
             r.department or "",
@@ -663,7 +777,8 @@ def _log_out(
         "method": r.method,
         "state": r.state,
         "staff_notes": r.staff_notes,
-        "created_at": r.created_at.isoformat() if r.created_at else "",
+        # 単一の Z を付けた UTC。naive のまま返すとブラウザが端末の時刻として読み 9 時間ずれる
+        "created_at": iso_z(r.created_at) or "",
         "escalated_at": iso_z(getattr(r, "escalated_at", None)),
         "decided_by_name": getattr(r, "decided_by_name", None),
         "decision_applied": decision_applied,
@@ -673,3 +788,19 @@ def _log_out(
             else getattr(r, "decided_via", None) == "kiosk_timeout"
         ),
     }
+
+
+@router.get("/{log_id}", response_model=ReceptionOut)
+async def get_reception(
+    log_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """受付ログ1件。通知から開いた受付が、いま一覧に出ているページ・期間に無いときに読む。
+    (固定パスの GET より後に置くこと。前に置くと /daily-stats 等を飲み込む)"""
+    log = (await db.execute(
+        select(ReceptionLog).where(ReceptionLog.id == log_id, ReceptionLog.tenant_id == user.tenant_id)
+    )).scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="Reception log not found")
+    return _log_out(log)
