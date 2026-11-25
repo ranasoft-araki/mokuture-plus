@@ -237,6 +237,15 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
   return res.json();
 }
 
+// 受付ログの一覧・CSV の条件をクエリ文字列にする(空の項目は送らない)
+function receptionParams(query: Record<string, string | number | undefined>): URLSearchParams {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    if (v !== undefined && v !== "") p.set(k, String(v));
+  }
+  return p;
+}
+
 export const api = {
   // Kiosk API (device token auth via X-Kiosk-Token header)
   getKioskSchedule: (kioskToken: string) =>
@@ -561,6 +570,11 @@ export const api = {
     request<ReceptionLog>("/reception", { method: "POST", body: JSON.stringify(body) }, token),
   listReception: (token: string) =>
     request<ReceptionLog[]>("/reception", {}, token),
+  // 管理画面「受付ログ」: 選んだ期間・条件の1ページぶんと件数だけを取る(全件は取らない)
+  listReceptionPage: (token: string, query: ReceptionQuery & { offset: number; limit: number; today_since?: string }) =>
+    request<ReceptionPage>(`/reception/page?${receptionParams(query).toString()}`, {}, token),
+  getReceptionLog: (token: string, logId: string) =>
+    request<ReceptionLog>(`/reception/${encodeURIComponent(logId)}`, {}, token),
   updateReceptionLog: (token: string, logId: string, updates: { state?: string; staff_notes?: string }) =>
     request<ReceptionLog>(`/reception/${logId}`, { method: "PATCH", body: JSON.stringify(updates) }, token),
   // 受付応答（受付/電話/お断り。アプリ内ボタン。iOS PWA フォールバック兼・全端末共通経路）
@@ -571,14 +585,10 @@ export const api = {
     if (!res.ok) throw new Error(res.status === 403 ? PERMISSION_DENIED_MESSAGE : "CSV の書き出しに失敗しました。少し待ってからもう一度お試しください。");
     return res.blob();
   },
-  exportReceptionCsv: async (token: string, params?: { q?: string; status?: string; date_from?: string; date_to?: string; method?: string }): Promise<Blob> => {
-    const p = new URLSearchParams();
-    if (params?.date_from) p.set("date_from", params.date_from);
-    if (params?.date_to) p.set("date_to", params.date_to);
-    if (params?.method) p.set("method", params.method);
-    const qs = p.toString();
-    const headers: Record<string, string> = { "Content-Type": "application/json", "Authorization": `Bearer ${token}` };
-    const res = await fetch(`${API_BASE}/reception/export.csv${qs ? `?${qs}` : ""}`, { headers });
+  // 一覧と同じ条件で出力する(条件なし=全件)
+  exportReceptionCsv: async (token: string, query?: ReceptionQuery): Promise<Blob> => {
+    const qs = receptionParams(query ?? {}).toString();
+    const res = await _fetch(`/reception/export.csv${qs ? `?${qs}` : ""}`, {}, token);
     if (!res.ok) throw new Error(res.status === 403 ? PERMISSION_DENIED_MESSAGE : "CSV の書き出しに失敗しました。少し待ってからもう一度お試しください。");
     return res.blob();
   },
@@ -649,7 +659,7 @@ export const api = {
     request<NotificationHealth>("/notifications/health", {}, token),
   updateNotificationChannelEnabled: (
     token: string,
-    channel: "slack" | "chatwork" | "push",
+    channel: NotificationChannel,
     enabled: boolean,
   ) =>
     request<{ ok: boolean }>(
@@ -733,6 +743,9 @@ export const api = {
     return request<{ ok: boolean }>(`/notifications/test/${type}`, { method: "POST" }, token)
       .catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
   },
+  /** Teams の「ワークフロー」の URL(テナント共通)。"***"=変更しない・""=解除。 */
+  updateTeamsSettings: (token: string, webhook_url: string) =>
+    request<{ ok: boolean }>("/notifications/settings/teams", { method: "PUT", body: JSON.stringify({ webhook_url }) }, token),
   updateWebhookSettings: (token: string, webhook_url: string) =>
     request("/notifications/settings/webhook", { method: "PUT", body: JSON.stringify({ webhook_url }) }, token),
   testWebhookNotification: (token: string) =>
@@ -853,6 +866,12 @@ export const api = {
   // 招待リンクを開いた人が使う(認証なし)。トークンはパスでなく本文で送る(アクセスログに残さない)。
   lookupInvitation: (inviteToken: string) =>
     request<InvitationLookup>("/auth/invitations/lookup", { method: "POST", body: JSON.stringify({ token: inviteToken }) }),
+  // メール・Teams の「返事をする」リンクから開いた画面が使う(認証なし・署名トークン)。
+  // 読むだけ(lookup)では何も変わらない。返事は decideByLinkToken を押したときだけ。
+  lookupDecisionLink: (decisionToken: string) =>
+    request<DecisionLinkLookup>("/reception/decision/lookup", { method: "POST", body: JSON.stringify({ token: decisionToken }) }),
+  decideByLinkToken: (decisionToken: string, decision: string, via: "email" | "teams") =>
+    request<DecisionLinkResult>("/reception/decision", { method: "POST", body: JSON.stringify({ token: decisionToken, decision, via }) }),
   acceptInvitation: (inviteToken: string, password: string, name?: string) =>
     request<AuthResponse>("/auth/invitations/accept", { method: "POST", body: JSON.stringify({ token: inviteToken, password, name }) }),
   getMe: (token: string) =>
@@ -1135,6 +1154,28 @@ export interface ReceptionLog extends ReceptionCreate {
   decision_expired?: boolean | null;
 }
 
+/** 管理画面「受付ログ」の一覧の条件。since/until は UTC の時刻(ISO)。since は含む・until は含まない。 */
+export type ReceptionQuery = {
+  since?: string;
+  until?: string;
+  q?: string;
+  method?: string;
+  state?: string;
+};
+
+/** 受付ログ一覧の1ページぶん(GET /reception/page)。 */
+export interface ReceptionPage {
+  items: ReceptionLog[];
+  /** 条件に合う件数 */
+  total: number;
+  /** このテナントの受付ログ全部の件数 */
+  all_total: number;
+  /** 受付済みのまま15分を過ぎた件数(期間・条件に関係なく) */
+  waiting_count: number;
+  /** today_since 以降の受付済みの件数 */
+  unread_today: number;
+}
+
 /** 訪問先担当者ごとの通知先と代理通知の設定（管理画面「通知設定」）。 */
 export interface StaffNotificationRoute {
   id: string;
@@ -1150,6 +1191,8 @@ export interface StaffNotificationRoute {
   email: string;
   /** Webhook URL が設定済みか。URL 自体は秘密情報なのでサーバから返さない。 */
   webhook_configured: boolean;
+  /** Teams の「ワークフロー」の URL が設定済みか（URL は返さない）。 */
+  teams_configured: boolean;
   /** テナント共通の通知先(Slack/Webhook/プッシュ)へも送るか。 */
   include_default: boolean;
   /** 応答が無いときに転送する代理担当者名（空＝代理通知しない）。 */
@@ -1205,6 +1248,8 @@ export interface StaffRouteInput {
   email?: string;
   /** null/未指定=変更しない（既存を維持）、""=解除、URL=差し替え。 */
   webhook_url?: string | null;
+  /** Teams の URL。webhook_url と同じ3状態（null=変更しない／""=解除／URL=差し替え）。 */
+  teams_webhook_url?: string | null;
   include_default?: boolean;
   fallback_staff_name?: string;
   escalate_after_sec?: number;
@@ -1276,12 +1321,45 @@ export interface PushSubscriptionInfo {
   created_at: string;
 }
 
+export type NotificationChannel = "slack" | "chatwork" | "push" | "teams";
+
 export interface NotificationHealth {
-  issues: { channel: "slack" | "chatwork" | "push"; failed_at: string; target: string }[];
+  issues: { channel: NotificationChannel; failed_at: string; target: string }[];
   issue_count: number;
-  configured: Record<"slack" | "chatwork" | "push", boolean>;
-  enabled: Record<"slack" | "chatwork" | "push", boolean>;
+  configured: Record<NotificationChannel, boolean>;
+  enabled: Record<NotificationChannel, boolean>;
   no_active_channel: boolean;
+}
+
+/** 返事用の画面(/{slug}/respond)が表示する受付。 */
+export interface DecisionLinkLookup {
+  id: string;
+  tenant_name: string;
+  tenant_slug: string;
+  visitor_name: string;
+  company: string | null;
+  staff: string | null;
+  department: string | null;
+  purpose: string | null;
+  method: string | null;
+  created_at: string | null;
+  state: string;
+  /** すでに誰かが返事をした(または時間切れで電話案内に切り替わった)。 */
+  decided: boolean;
+  decided_by_name: string | null;
+  /** 時間切れでキオスクが電話案内に切り替えた。 */
+  decision_expired: boolean;
+  actions: { action: "accept" | "phone" | "decline"; title: string }[];
+}
+
+export interface DecisionLinkResult {
+  ok: boolean;
+  id: string;
+  state: string;
+  /** 自分の返事で確定したか(false=先に誰かが返事をしていた)。 */
+  decision_applied: boolean;
+  decided_by_name: string;
+  decision_expired: boolean;
 }
 
 export interface KioskMediaItem {

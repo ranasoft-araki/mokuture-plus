@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { AdminShell, MkBtn, MkCard, MkPill, MkSectionTitle } from "@/components/AdminShell";
-import { api, PERMISSION_DENIED_MESSAGE, type NotificationHealth, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffPushUser, type StaffRouteTestResult } from "@/lib/api";
+import { api, PERMISSION_DENIED_MESSAGE, type NotificationChannel, type NotificationHealth, type StaffNotificationRoute, type StaffNotificationRoutesResponse, type StaffPushUser, type StaffRouteTestResult } from "@/lib/api";
 import { requestAndSubscribe, getCurrentPushSubscription, getPushStatus, getClientOsName, matchesVapidKey, type PushStatus } from "@/lib/push";
 import { getAccessToken } from "@/lib/auth";
 
@@ -11,11 +11,13 @@ import { getAccessToken } from "@/lib/auth";
 // 戻すときは true にする。説明文に出てくるカード名もこれに合わせて切り替わる。
 const SHOW_CUSTOM_WEBHOOK = false;
 /** 担当者の個別設定が無いときに届く先（カード名）。 */
-const DEFAULT_CARDS = SHOW_CUSTOM_WEBHOOK ? "「Slack」「カスタムWebhook」「プッシュ通知」" : "「Slack」「プッシュ通知」";
+const DEFAULT_CARDS = SHOW_CUSTOM_WEBHOOK
+  ? "「Slack」「Chatwork」「Microsoft Teams」「カスタムWebhook」「プッシュ通知」"
+  : "「Slack」「Chatwork」「Microsoft Teams」「プッシュ通知」";
 /** 担当者の個別設定にある、共通の宛先にも送るチェックの名前。 */
 const INCLUDE_DEFAULT_LABEL = SHOW_CUSTOM_WEBHOOK
-  ? "上の「Slack」・下の「カスタムWebhook」・上の「プッシュ通知」にも送る"
-  : "上の「Slack」・上の「プッシュ通知」にも送る";
+  ? "上の「Slack」「Chatwork」「Microsoft Teams」・下の「カスタムWebhook」・上の「プッシュ通知」にも送る"
+  : "上の「Slack」「Chatwork」「Microsoft Teams」「プッシュ通知」にも送る";
 
 function Field({ label, hint, children, required }: { label: string; hint?: string; children: React.ReactNode; required?: boolean }) {
   return (
@@ -513,7 +515,10 @@ function ChatworkRoomPicker({
 }
 
 function channelLabel(channel: string): string {
-  return channel === "slack" ? "Slack" : channel === "email" ? "メール" : "Webhook";
+  const labels: Record<string, string> = {
+    slack: "Slack", chatwork: "Chatwork", teams: "Teams", push: "プッシュ通知", email: "メール", webhook: "Webhook",
+  };
+  return labels[channel] ?? channel;
 }
 
 function formatEscalate(sec: number): string {
@@ -533,6 +538,8 @@ type RouteDraft = {
   email: string;
   /** null=変更しない（既存を維持）、""=解除、URL=差し替え。URL自体はサーバから返らない。 */
   webhook_url: string | null;
+  /** Teams のワークフローの URL。webhook_url と同じ3状態（URLはサーバから返らない）。 */
+  teams_webhook_url: string | null;
   include_default: boolean;
   fallback_staff_name: string;
   escalate_after_sec: number;
@@ -548,6 +555,7 @@ function draftFrom(route: StaffNotificationRoute | undefined, defaultSec: number
     push_user_id: route?.push_user_id ?? "",
     email: route?.email ?? "",
     webhook_url: null,
+    teams_webhook_url: null,
     include_default: route?.include_default ?? true,
     fallback_staff_name: route?.fallback_staff_name ?? "",
     escalate_after_sec: route?.escalate_after_sec ?? defaultSec,
@@ -564,6 +572,7 @@ function routeSummary(
     parts.push(`Slack ${route.slack_channel_name || route.slack_channel_id}`);
   }
   if (route.chatwork_room_id) parts.push(`Chatwork ${route.chatwork_room_name || `ルーム${route.chatwork_room_id}`}`);
+  if (route.teams_configured) parts.push("Teams");
   if (route.email) parts.push(`メール ${route.email}`);
   if (SHOW_CUSTOM_WEBHOOK && route.webhook_configured) parts.push("Webhook");
   if (route.push_user_id) {
@@ -1031,12 +1040,44 @@ function StaffRoutesPanel({ authToken, refreshSignal }: { authToken: string; ref
                         ))}
                       </select>
                     </Field>
-                    <Field label="メール" hint="複数はカンマ区切り（最大5件）">
+                    <Field label="メール" hint="複数はカンマ区切り（最大5件）。メールの「受付」「電話」「お断り」から、ログインせずに返事できます">
                       <TextInput
                         placeholder="tanaka@example.co.jp"
                         value={draft.email}
                         onChange={(v) => setDraft({ ...draft, email: v })}
                       />
+                    </Field>
+                    <Field
+                      label="Microsoft Teams（ワークフローの URL）"
+                      hint={
+                        route?.teams_configured
+                          ? draft.teams_webhook_url === null
+                            ? "設定済み。URLは安全のため表示しません（変更するときだけ入力）"
+                            : draft.teams_webhook_url === ""
+                              ? "保存すると解除されます"
+                              : "保存すると新しいURLに差し替わります"
+                          : "この担当者宛の受付を、このワークフローのチャネル（またはチャット）へ投稿します。URLの作り方は上の「Microsoft Teams」カードの手順と同じです"
+                      }
+                    >
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <TextInput
+                            placeholder={route?.teams_configured ? "設定済み（変更するときだけ入力）" : "https://….powerplatform.com/…"}
+                            mono
+                            value={draft.teams_webhook_url ?? ""}
+                            onChange={(v) => setDraft({ ...draft, teams_webhook_url: v ? v : route?.teams_configured ? null : "" })}
+                          />
+                        </div>
+                        {route?.teams_configured && (
+                          <button
+                            type="button"
+                            onClick={() => setDraft({ ...draft, teams_webhook_url: draft.teams_webhook_url === null ? "" : null })}
+                            style={testBtnStyle(false)}
+                          >
+                            {draft.teams_webhook_url === null ? "解除" : "取り消し"}
+                          </button>
+                        )}
+                      </div>
                     </Field>
                     {SHOW_CUSTOM_WEBHOOK && (
                       <Field
@@ -1214,8 +1255,18 @@ export default function AdminNotifyPage() {
   const [slackNotificationsEnabled, setSlackNotificationsEnabled] = useState(true);
   const [chatworkNotificationsEnabled, setChatworkNotificationsEnabled] = useState(true);
   const [pushNotificationsEnabled, setPushNotificationsEnabled] = useState(true);
-  const [channelToggleSaving, setChannelToggleSaving] = useState<"" | "slack" | "chatwork" | "push">("");
-  const [channelToggleError, setChannelToggleError] = useState<{ channel: "slack" | "chatwork" | "push"; message: string } | null>(null);
+  const [teamsNotificationsEnabled, setTeamsNotificationsEnabled] = useState(true);
+  const [channelToggleSaving, setChannelToggleSaving] = useState<"" | NotificationChannel>("");
+  const [channelToggleError, setChannelToggleError] = useState<{ channel: NotificationChannel; message: string } | null>(null);
+
+  // Microsoft Teams（「ワークフロー」の Webhook URL。URL は秘密なので画面へは返らない）。
+  const [teamsUrl, setTeamsUrl] = useState("");
+  const [teamsConfigured, setTeamsConfigured] = useState(false);
+  const [teamsSaving, setTeamsSaving] = useState(false);
+  const [teamsTesting, setTeamsTesting] = useState(false);
+  const [teamsError, setTeamsError] = useState("");
+  const [teamsNotice, setTeamsNotice] = useState("");
+  const [teamsConfirmRemove, setTeamsConfirmRemove] = useState(false);
   const [notificationHealth, setNotificationHealth] = useState<NotificationHealth | null>(null);
 
   // 「担当者ごとの通知先」パネルは別フェッチなので、ここでの連携/解除/保存を伝えて
@@ -1346,6 +1397,8 @@ export default function AdminNotifyPage() {
       setSlackNotificationsEnabled(settings["channel_enabled_slack"]?.["enabled"] !== false);
       setChatworkNotificationsEnabled(settings["channel_enabled_chatwork"]?.["enabled"] !== false);
       setPushNotificationsEnabled(settings["channel_enabled_push"]?.["enabled"] !== false);
+      setTeamsNotificationsEnabled(settings["channel_enabled_teams"]?.["enabled"] !== false);
+      setTeamsConfigured(Boolean((settings["teams"] ?? {})["webhook_url"]));
     } catch {
       /* leave previous state */
     }
@@ -1360,11 +1413,12 @@ export default function AdminNotifyPage() {
     } catch { /* 通知設定そのものの操作は成功扱いのままにする */ }
   }, [authToken]);
 
-  const handleToggleChannel = async (channel: "slack" | "chatwork" | "push", enabled: boolean) => {
+  const handleToggleChannel = async (channel: NotificationChannel, enabled: boolean) => {
     const setters = {
       slack: setSlackNotificationsEnabled,
       chatwork: setChatworkNotificationsEnabled,
       push: setPushNotificationsEnabled,
+      teams: setTeamsNotificationsEnabled,
     };
     const setEnabled = setters[channel];
     setEnabled(enabled);
@@ -1450,6 +1504,47 @@ export default function AdminNotifyPage() {
     setSlackShowPicker(true);
     loadSlackChannels();
     loadSlackUsers();
+  };
+
+  const handleSaveTeams = async (remove = false) => {
+    const url = remove ? "" : teamsUrl.trim();
+    if (!remove && !url) {
+      setTeamsError("ワークフローの URL を貼ってください");
+      return;
+    }
+    setTeamsSaving(true);
+    setTeamsError("");
+    setTeamsNotice("");
+    try {
+      await api.updateTeamsSettings(authToken, url);
+      setTeamsConfigured(!remove);
+      setTeamsUrl("");
+      setTeamsConfirmRemove(false);
+      setTeamsNotice(remove ? "解除しました" : "保存しました。「テスト送信」で届くか確かめてください");
+      bumpStaffRoutesRefresh();
+      void refreshNotificationHealth();
+    } catch (e: unknown) {
+      setTeamsError(e instanceof Error ? e.message : "保存に失敗しました");
+    } finally {
+      setTeamsSaving(false);
+    }
+  };
+
+  const handleTestTeams = async () => {
+    setTeamsTesting(true);
+    setTeamsError("");
+    setTeamsNotice("");
+    try {
+      const res = await api.testNotification(authToken, "teams");
+      if (res.ok) {
+        setTeamsNotice("Teams が受け取りました。チャネルに「mokuture+ の Teams 通知テストです」が出たか確かめてください（1分ほどかかることがあります。出ないときはワークフローの実行履歴をご確認ください）");
+        void refreshNotificationHealth();
+      } else {
+        setTeamsError(res.error ?? "送信できませんでした。URL が正しいか、ワークフローがオンになっているかご確認ください");
+      }
+    } finally {
+      setTeamsTesting(false);
+    }
   };
 
   const handleSaveChatwork = async () => {
@@ -1670,10 +1765,10 @@ export default function AdminNotifyPage() {
       active="notify"
       title="通知設定"
       breadcrumb="ホーム / 設定 / 通知"
-      subtitle="Slack · Chatwork · プッシュ通知の連携と受信者管理"
+      subtitle="Slack · Chatwork · Microsoft Teams · プッシュ通知の連携と受信者管理"
     >
       {notificationHealth?.issues.map((issue) => {
-        const label = issue.channel === "slack" ? "Slack" : issue.channel === "chatwork" ? "Chatwork" : "プッシュ通知";
+        const label = issue.channel === "slack" ? "Slack" : issue.channel === "chatwork" ? "Chatwork" : issue.channel === "teams" ? "Microsoft Teams" : "プッシュ通知";
         const action = issue.channel === "push"
           ? "登録端末の通知許可を確認し、必要に応じて端末を登録し直してください。"
           : "通知先が削除・変更されていないか確認し、通知先を設定し直してください。";
@@ -1688,7 +1783,7 @@ export default function AdminNotifyPage() {
       {notificationHealth?.no_active_channel && (
         <div style={{ marginBottom: 16, padding: "12px 16px", background: "#fef6e4", border: "1px solid rgba(180,130,0,0.3)", borderRadius: 8, color: "#7a5c00", fontSize: 12.5, lineHeight: 1.65 }}>
           <strong>通知を受け取れるサービスが設定されていません。</strong><br />
-          Slack、Chatwork、またはプッシュ通知のいずれかを連携し、「通知する」に設定することをおすすめします。このままでも運用は続けられます。
+          Slack、Chatwork、Microsoft Teams、またはプッシュ通知のいずれかを連携し、「通知する」に設定することをおすすめします。このままでも運用は続けられます。
         </div>
       )}
       {authToken ? (
@@ -1929,7 +2024,7 @@ export default function AdminNotifyPage() {
             <Field
               label="共通の通知先ルーム"
               hint={
-                "担当者ごとの通知先が未設定の受付、「共通の通知先にも送る」が有効な受付、配達の呼び出しがこのルームへ届きます。" +
+                `担当者ごとの通知先が未設定の受付、下の「担当者ごとの通知先」でチェック『${INCLUDE_DEFAULT_LABEL}』をONにした担当者宛の受付、配達の呼び出しがこのルームへ届きます。` +
                 (cwConfigured ? "空欄のままにすると現在の設定を維持します。" : "未設定でも連携・テスト送信はできます。")
               }
             >
@@ -1964,6 +2059,88 @@ export default function AdminNotifyPage() {
             {cwTested && (
               <span style={{ fontSize: 12, color: "#4a7c4e", fontWeight: 500 }}>送信しました ✓</span>
             )}
+          </div>
+        </MkCard>
+
+        {/* Microsoft Teams（「ワークフロー」の Webhook へカードを投稿） */}
+        <MkCard style={{ gridColumn: "span 2" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 18 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 7, background: "#ebeaf8", color: "#4b4fae", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 15, flexShrink: 0 }}>
+              T
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#1d1a15" }}>Microsoft Teams</div>
+              <div style={{ fontSize: 11.5, color: "#a8a198", marginTop: 2 }}>Teams の「ワークフロー」でチャネルに投稿。来客の受付通知・配達の呼び出し・置き配の通知で使う</div>
+            </div>
+            <MkPill tone={teamsConfigured ? "live" : "off"}>{teamsConfigured ? "設定済" : "未設定"}</MkPill>
+          </div>
+          <div className="adm-cols-2">
+            <div>
+              <NotificationToggle
+                enabled={teamsNotificationsEnabled}
+                saving={channelToggleSaving !== ""}
+                error={channelToggleError?.channel === "teams" ? channelToggleError.message : undefined}
+                onChange={(enabled) => handleToggleChannel("teams", enabled)}
+              />
+              <Field
+                label="ワークフローの URL"
+                required={!teamsConfigured}
+                hint={teamsConfigured
+                  ? "設定済み。URLは安全のため表示しません（変更するときだけ貼り直して保存）"
+                  : `「URL の作り方」の手順で作った URL を貼ってください。担当者ごとの通知先が未設定の受付、下の「担当者ごとの通知先」でチェック『${INCLUDE_DEFAULT_LABEL}』をONにした担当者宛の受付、配達の通知がここへ届きます`}
+              >
+                <TextInput
+                  placeholder={teamsConfigured ? "設定済み（変更するときだけ入力）" : "https://….powerplatform.com/…"}
+                  mono
+                  value={teamsUrl}
+                  onChange={setTeamsUrl}
+                />
+              </Field>
+              {teamsError && (
+                <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6e0dc", border: "1px solid rgba(168,66,56,0.3)", borderRadius: 7, color: "#a84238", fontSize: 12, lineHeight: 1.6 }}>
+                  {teamsError}
+                </div>
+              )}
+              {teamsNotice && (
+                <div style={{ marginTop: 10, padding: "8px 12px", background: "#e8f0e6", border: "1px solid rgba(74,124,78,0.3)", borderRadius: 7, color: "#3e6b42", fontSize: 12, lineHeight: 1.6 }}>
+                  {teamsNotice}
+                </div>
+              )}
+              <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <MkBtn variant="primary" size="sm" onClick={() => { if (!teamsSaving) void handleSaveTeams(false); }}>
+                  {teamsSaving ? "保存中…" : "保存"}
+                </MkBtn>
+                {teamsConfigured && (
+                  <button onClick={handleTestTeams} disabled={teamsTesting} style={testBtnStyle(teamsTesting)}>
+                    {teamsTesting ? "送信中..." : "テスト送信"}
+                  </button>
+                )}
+                {teamsConfigured && !teamsConfirmRemove && (
+                  <button onClick={() => setTeamsConfirmRemove(true)} style={testBtnStyle(false)}>解除</button>
+                )}
+                {teamsConfirmRemove && (
+                  <span style={{ display: "inline-flex", gap: 8, alignItems: "center", fontSize: 12, color: "#a84238" }}>
+                    Teams への通知を止めます。よろしいですか？
+                    <button onClick={() => handleSaveTeams(true)} disabled={teamsSaving} style={{ ...testBtnStyle(teamsSaving), color: "#a84238", borderColor: "rgba(168,66,56,0.4)" }}>解除する</button>
+                    <button onClick={() => setTeamsConfirmRemove(false)} style={testBtnStyle(false)}>やめる</button>
+                  </span>
+                )}
+              </div>
+            </div>
+            <div style={{ fontSize: 12.5, color: "#4a463d", lineHeight: 1.8, background: "#f7f5f0", border: "1px solid #efece5", borderRadius: 8, padding: "12px 16px" }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>URL の作り方（Teams 側で1回だけ）</div>
+              <ol style={{ margin: 0, paddingLeft: 20 }}>
+                <li>Teams で、通知を受け取りたいチャネルの「…」から「ワークフロー」を開く</li>
+                <li>「Webhook 要求を受信するとチャネルに投稿する」（似た名前のテンプレート）を選ぶ</li>
+                <li>名前を付け、投稿するチームとチャネルを選んで追加する</li>
+                <li>表示された URL をコピーし、「ワークフローの URL」の欄に貼って「保存」→「テスト送信」</li>
+              </ol>
+              <div style={{ marginTop: 8, fontSize: 11.5, color: "#6b6559" }}>
+                ・受付の通知の「受付」「電話」「お断り」を押すとブラウザが開き、そこでもう一度押すと返事が確定してキオスクに伝わります（ログイン不要）。<br />
+                ・旧方式の「Incoming Webhook（コネクタ）」の URL は使えません（Microsoft が廃止を進めています）。<br />
+                ・ワークフローは作った人のアカウントで動きます。その人が使えなくなると届かなくなるので、ワークフローの所有者を複数にしておくと安心です。
+              </div>
+            </div>
           </div>
         </MkCard>
 

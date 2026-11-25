@@ -46,7 +46,7 @@
       confidence: ["very_secure", "secure", "neutral", "slightly_anxious", "very_anxious"],
       assistance: ["none", "received"],
     },
-    notifyChannels: ["slack", "push", "webhook", "chatwork", "email", "any"],
+    notifyChannels: ["slack", "push", "webhook", "chatwork", "email", "teams", "any"],
   };
 
   // go() の内部画面名 → 分析ログの screen_id

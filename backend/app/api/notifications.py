@@ -24,6 +24,7 @@ from app.services import chatwork as chatwork_service
 from app.services import notification_channels
 from app.services import notification_health
 from app.services import reception_notify
+from app.services import teams as teams_service
 from app.services import url_safety
 from app.services.slack import SlackNotifier, SlackOAuthError, SlackApiError, escape_mrkdwn
 from app.services.webpush import send_push
@@ -41,6 +42,7 @@ _VISIBLE_SETTING_TYPES = {
     "slack", "slack_delivery",
     "chatwork", "chatwork_delivery",
     "webhook", "webhook_delivery",
+    "teams",
     "push_delivery",
     *(notification_channels.setting_type(c) for c in notification_channels.CHANNELS),
 }
@@ -100,7 +102,8 @@ async def get_settings(user: User = Depends(require_roles("admin", "superadmin")
         if s.type.startswith("chatwork") and "api_token" in config:
             config["api_token"] = _MASK
         # カスタム Webhook の URL も秘密(知っていれば誰でも送れる)。有無だけ分かる伏せ字にする。
-        if s.type in ("webhook", "webhook_delivery") and config.get("webhook_url"):
+        # Teams の「ワークフロー」の URL も同じく秘密(URL に署名が入っていて、知っていれば誰でも投稿できる)。
+        if s.type in ("webhook", "webhook_delivery", "teams") and config.get("webhook_url"):
             config["webhook_url"] = _MASK
         out[s.type] = config
     return out
@@ -114,7 +117,7 @@ async def get_notification_health(
     """Failures visible in the admin UI plus whether any usable channel exists."""
     rows = (await db.execute(select(NotificationSetting).where(
         NotificationSetting.tenant_id == user.tenant_id,
-        NotificationSetting.type.in_(("slack", "chatwork")),
+        NotificationSetting.type.in_(("slack", "chatwork", "teams")),
     ))).scalars().all()
     configs: dict[str, dict] = {}
     for row in rows:
@@ -138,6 +141,7 @@ async def get_notification_health(
         ),
         "chatwork": bool(chatwork.get("api_token")),
         "push": push_count > 0,
+        "teams": bool(configs.get("teams", {}).get("webhook_url")),
     }
     issues = await notification_health.get_issues(db, user.tenant_id)
     return {
@@ -217,6 +221,29 @@ async def _save_webhook(tenant_id: str, type_: str, raw_url: str, db: AsyncSessi
         except url_safety.UnsafeUrlError as e:
             raise HTTPException(status_code=400, detail=str(e))
     await _upsert_setting(tenant_id, type_, {"webhook_url": url}, db)
+
+
+@router.put("/settings/teams")
+async def update_teams(
+    body: WebhookConfig,
+    user: User = Depends(require_roles("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Teams の「ワークフロー」の Webhook URL(テナント共通)を保存する。
+
+    伏せ字(`***`)のままなら変更しない・空なら解除。旧方式の Incoming Webhook(コネクタ)の URL と、
+    ワークフロー以外の URL は 400(理由つき)。"""
+    url = (body.webhook_url or "").strip()
+    if url == _MASK:
+        return {"ok": True}
+    if url:
+        try:
+            await teams_service.validate_url(url)
+        except url_safety.UnsafeUrlError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    await _upsert_setting(user.tenant_id, "teams", {"webhook_url": url}, db)
+    await notification_health.clear(user.tenant_id, "teams")
+    return {"ok": True}
 
 
 @router.put("/settings/webhook")
@@ -440,6 +467,27 @@ async def test_slack(user: User = Depends(require_roles("admin", "superadmin")),
 @router.post("/test/chatwork")
 async def test_chatwork(user: User = Depends(require_roles("admin", "superadmin")), db: AsyncSession = Depends(get_db)):
     return await _run_test_chatwork(user.tenant_id, "chatwork", db)
+
+
+@router.post("/test/teams")
+async def test_teams(user: User = Depends(require_roles("admin", "superadmin")), db: AsyncSession = Depends(get_db)):
+    """「Teams」カードの URL へテストのカードを送る。ワークフローは受け取っただけで 202 を返すので、
+    ok=True は「ワークフローが受け取った」まで。チャネルに出たかは Teams で確かめてもらう。"""
+    url = await teams_service.load_default_url(db, user.tenant_id)
+    if not url:
+        raise HTTPException(status_code=400, detail="Teams の URL がまだ登録されていません")
+    try:
+        await teams_service.validate_url(url)
+    except url_safety.UnsafeUrlError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    card = teams_service.build_text_card(
+        "🔔 mokuture+ の Teams 通知テストです",
+        ["このチャネルに受付・配達の通知が届きます。"],
+    )
+    ok = await teams_service.post(url, card)
+    if ok:
+        await notification_health.clear(user.tenant_id, "teams")
+    return {"ok": ok}
 
 
 @router.post("/test/webhook")

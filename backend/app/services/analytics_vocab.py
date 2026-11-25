@@ -171,7 +171,7 @@ SURVEY_COLUMN = {
 }
 
 # ── 通知経路（element_id に入れる固定語） ───────────────────────────────────
-NOTIFY_CHANNELS = {"slack", "push", "webhook", "chatwork", "email", "any"}
+NOTIFY_CHANNELS = {"slack", "push", "webhook", "chatwork", "email", "teams", "any"}
 
 # ── 端末イベント ─────────────────────────────────────────────────────────────
 DEVICE_EVENT_NAMES = {

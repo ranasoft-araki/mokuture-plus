@@ -91,6 +91,8 @@ class Destinations:
     emails: tuple[str, ...] = ()
     webhooks: tuple[str, ...] = ()
     chatwork_rooms: tuple[str, ...] = ()
+    # Teams の「ワークフロー」の Webhook URL（担当者ごと）。秘密なので画面へ返さない。
+    teams_webhooks: tuple[str, ...] = ()
     # Web Push を届ける管理ユーザーの id。購読はユーザーのブラウザに紐づくため、
     # 「担当者ごとのプッシュ」はこの結びつけで実現する。空なら従来どおり
     # テナント内の全購読へ（use_default に従う）。
@@ -104,7 +106,7 @@ class Destinations:
         """担当者個別の宛先を1つでも持っているか。"""
         return bool(
             self.slack_channels or self.emails or self.webhooks
-            or self.chatwork_rooms or self.push_user_ids
+            or self.chatwork_rooms or self.push_user_ids or self.teams_webhooks
         )
 
 
@@ -139,12 +141,14 @@ def _destinations_from(route: StaffNotificationRoute, *, use_default: bool) -> D
     channel_name = (config.get("slack_channel_name") or channel_id).strip()
     webhook = (config.get("webhook_url") or "").strip()
     chatwork_room = (config.get("chatwork_room_id") or "").strip()
+    teams_url = (config.get("teams_webhook_url") or "").strip()
     push_user_id = (getattr(route, "push_user_id", None) or "").strip()
     return Destinations(
         slack_channels=((channel_id, channel_name),) if channel_id else (),
         emails=tuple(parse_emails(config.get("email"))),
         webhooks=(webhook,) if webhook else (),
         chatwork_rooms=(chatwork_room,) if chatwork_room else (),
+        teams_webhooks=(teams_url,) if teams_url else (),
         push_user_ids=(push_user_id,) if push_user_id else (),
         use_default=use_default,
         routed_to=route.staff_name,

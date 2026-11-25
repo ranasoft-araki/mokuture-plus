@@ -47,6 +47,8 @@ from app.services.ratelimit import client_ip
 from app.services.slack import escape_mrkdwn
 from app.services import url_safety
 from app.services import chatwork as chatwork_service
+from app.services import decision_link
+from app.services import teams as teams_service
 from app.services import notification_channels
 from app.services import notification_health
 from app.services import events as event_bus
@@ -1428,6 +1430,10 @@ class _DeliveryText:
     def chatwork(self) -> str:
         return self._build(chatwork_service.escape_tags)
 
+    @property
+    def teams(self) -> str:
+        return self._build(teams_service.escape_md)
+
 
 def _dropoff_text(esc, locker_label: str, pin: str, device_label: str) -> str:
     return (
@@ -1666,6 +1672,39 @@ async def _notify_chatwork_text(
     return ok
 
 
+async def _notify_teams_text(
+    tenant_id: str, title: str, text: str, db: AsyncSession | None = None,
+    decision_log: "ReceptionLog | None" = None,
+) -> bool | None:
+    """配達の呼び出し・置き配を「Microsoft Teams」カードの URL へ投稿する（Chatwork の共通ルームと同じく、
+    受付と配達で同じ宛先を使う）。`text` は**無害化済み**（`_DeliveryText.teams`）。
+
+    呼び出し(`decision_log`)には 受付/電話 のボタンを付ける＝ログイン無しで返事できる画面を開くリンク
+    (`services/decision_link.py`)。戻り値は分析ログ用: True=成功 / False=失敗 / None=未設定。"""
+    # 呼び出し元は同じセッションをほかの送信と並行(gather)で使うので、ここでは自前のセッションで読む
+    # (1 つの AsyncSession を同時に使うと asyncpg が「別の操作が進行中」で落とす)。
+    async with AsyncSessionLocal() as own:
+        if not await notification_channels.is_enabled(own, tenant_id, "teams"):
+            return None
+        url = await teams_service.load_default_url(own, tenant_id)
+        if not url:
+            return None
+        tenant = await own.get(Tenant, tenant_id)
+    links = None
+    if decision_log is not None:
+        slug = tenant.slug if tenant else tenant_id
+        token = decision_link.new_token(decision_log.id, tenant_id)
+        links = decision_link.button_links(slug, token, decision_log, via="teams")
+    # 本文の1行目(「🔔 配達の呼び出し」など)を見出しにする。`title` を見出しにすると同じ言葉が2回並ぶ。
+    lines = [line for line in text.splitlines() if line.strip()] or [title]
+    card = teams_service.build_delivery_card(lines[0], lines[1:], links)
+    ok = await teams_service.post(url, card)
+    await notification_health.record_result(
+        tenant_id, "teams", failed=not ok, target="「Microsoft Teams」カードの URL"
+    )
+    return ok
+
+
 async def _log_delivery_dropoff(
     db: AsyncSession, tenant_id: str, locker_label: str, pin: str, device_label: str
 ) -> str | None:
@@ -1744,8 +1783,9 @@ async def _fire_delivery_notifications(
                 _notify_slack_text(tenant_id, text.slack, db, decision=slack_decision),
                 _notify_webhook_event(tenant_id, webhook_payload, db, types=("webhook_delivery", "webhook")),
                 _notify_chatwork_text(tenant_id, text.chatwork, db, types=("chatwork_delivery", "chatwork")),
+                _notify_teams_text(tenant_id, title, text.teams, decision_log=decision_log),
             ]
-            channels = ["slack", "webhook", "chatwork"]
+            channels = ["slack", "webhook", "chatwork", "teams"]
             if await _push_delivery_enabled(tenant_id, db):
                 channels.append("push")
                 tasks.append(_notify_push_text(

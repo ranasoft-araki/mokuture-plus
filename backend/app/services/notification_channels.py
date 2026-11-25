@@ -12,7 +12,7 @@ from app.models.notification import NotificationSetting
 from app.services.crypto import decrypt_dict
 
 
-CHANNELS = ("slack", "chatwork", "push")
+CHANNELS = ("slack", "chatwork", "push", "teams")
 
 
 def setting_type(channel: str) -> str:

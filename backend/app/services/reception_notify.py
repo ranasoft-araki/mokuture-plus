@@ -30,10 +30,12 @@ from app.models.user import User
 from app.services import analytics as analytics_service
 from app.services import analytics_link
 from app.services import chatwork
+from app.services import decision_link
 from app.services import notification_channels
 from app.services import notification_health
 from app.services import email as email_service
 from app.services import staff_routing
+from app.services import teams
 from app.services.crypto import decrypt_dict
 from app.services.honorific import with_honorific
 from app.services import url_safety
@@ -75,6 +77,7 @@ async def notify_reception(
         "push": await _notify_push(db, tenant_id, log, dest, escalated_from),
         "webhook": await _notify_webhook(db, tenant_id, log, dest, escalated_from),
         "email": await _notify_email(db, tenant_id, log, dest, escalated_from),
+        "teams": await _notify_teams(db, tenant_id, log, dest, escalated_from),
     }
     await _record_analytics(tenant_id, log, results, stage)
 
@@ -201,6 +204,19 @@ async def fire_decision_notifications(tenant_id: str, log_id: str) -> None:
                             from_name=settings.smtp_from_name or tenant_name,
                             starttls=settings.smtp_starttls, use_ssl=settings.smtp_ssl,
                         )
+                    except Exception:
+                        pass
+
+            # Teams: 受付カードは書き換えられない(Webhook 投稿)ので、済んだことを別のカードで知らせる。
+            teams_urls: set[str] = set()
+            for dest in destinations:
+                teams_urls.update(url for url, _, _ in await teams_targets(db, tenant_id, dest))
+            if teams_urls:
+                teams_lines = build_text(teams.escape_md).split("\n")
+                card = teams.build_text_card(teams_lines[0], teams_lines[1:])
+                for url in teams_urls:
+                    try:
+                        await teams.post(url, card)
                     except Exception:
                         pass
 
@@ -404,6 +420,60 @@ async def _notify_chatwork(
     return any_ok
 
 
+# ── Teams ──────────────────────────────────────────────────────────────────────
+
+async def teams_targets(
+    db: AsyncSession, tenant_id: str, dest: Destinations
+) -> list[tuple[str, str, str]]:
+    """[(URL, 返事をした人として出す名前, 失敗したときの表示名)]。
+
+    担当者ごとの URL は全体スイッチに左右されない（Chatwork の担当者ルームと同じ）。
+    `dest.use_default` の受付では、Teams 通知が ON なら「Microsoft Teams」カードの URL も宛先に加える。"""
+    targets = [(url, dest.routed_to, f"担当者「{dest.routed_to}」") for url in dest.teams_webhooks if url]
+    if dest.use_default and await notification_channels.is_enabled(db, tenant_id, "teams"):
+        default_url = await teams.load_default_url(db, tenant_id)
+        if default_url and all(url != default_url for url, _, _ in targets):
+            targets.append((default_url, "", "「Microsoft Teams」カードの URL"))
+    return targets
+
+
+async def _notify_teams(
+    db: AsyncSession, tenant_id: str, log: ReceptionLog, dest: Destinations, escalated_from: str
+) -> bool | None:
+    """Teams の「ワークフロー」へ受付カードを投稿する。受付/電話/お断り は返事用の画面へのリンク。
+
+    戻り値は他チャネルと同じ契約: True=1件以上成功 / False=全滅 / None=未設定。"""
+    targets = await teams_targets(db, tenant_id, dest)
+    if not targets:
+        return None
+    tenant = await db.get(Tenant, tenant_id)
+    slug = tenant.slug if tenant else tenant_id
+    any_ok = False
+    failed_labels: list[str] = []
+    for url, actor, label in targets:
+        token = decision_link.new_token(log.id, tenant_id, actor_name=actor)
+        payload = teams.build_reception_card(
+            visitor_name=log.visitor_name,
+            company=log.company,
+            # 代理通知でも訪問先は来訪者が選んだ担当者のまま（Slack・Chatwork と同じ）。
+            host_name=log.staff,
+            department=log.department,
+            purpose=log.purpose,
+            when=log.created_at,
+            escalated_from=escalated_from or None,
+            decision_links=decision_link.button_links(slug, token, log, via="teams"),
+            admin_url=decision_link.admin_reception_url(slug, log.id),
+        )
+        ok = await teams.post(url, payload)
+        any_ok = ok or any_ok
+        if not ok:
+            failed_labels.append(label)
+    await notification_health.record_result(
+        tenant_id, "teams", failed=bool(failed_labels), target="、".join(failed_labels),
+    )
+    return any_ok
+
+
 # ── Web Push ───────────────────────────────────────────────────────────────────
 
 async def _notify_push(
@@ -566,8 +636,13 @@ def build_reception_email(
     log: ReceptionLog,
     admin_url: str,
     escalated_from: str = "",
+    decision_links: list[tuple[str, str]] | None = None,
 ) -> tuple[str, str, str]:
-    """(subject, text, html) を返す。担当者ごとのメール通知用。"""
+    """(subject, text, html) を返す。担当者ごとのメール通知用。
+
+    `decision_links` は [(ボタンの文字, 返事用の画面の URL)]。押すとログイン無しで返事できる
+    画面が開く(`services/decision_link.py`)。無ければ従来どおり「受付ログを開く」だけ。"""
+    decision_links = decision_links or []
     rows: list[tuple[str, str]] = []
     if (log.company or "").strip():
         rows.append(("会社名", log.company.strip()))
@@ -589,8 +664,10 @@ def build_reception_email(
     subject = f"【{tenant_name}】{heading}"
 
     text = "\n".join(
-        [lead, ""] + [f"{k}：{v}" for k, v in rows] + [
-            "",
+        [lead, ""] + [f"{k}：{v}" for k, v in rows] + [""]
+        + (["返事をする（ログイン不要）"] + [f"・{title}: {url}" for title, url in decision_links] + [""]
+           if decision_links else [])
+        + [
             f"受付ログ: {admin_url}",
             "",
             "※このメールは送信専用です。ご返信いただけません。",
@@ -609,6 +686,30 @@ def build_reception_email(
         f'</tr>'
         for k, v in rows
     )
+    if decision_links:
+        # 受付=色付き・ほかは白抜き。押すと返事用の画面が開き、そこでもう1回押すと確定する
+        # (メールのセキュリティ機能がリンクを勝手に開いても返事にならないように)。
+        def _btn(i: int, title: str, url: str) -> str:
+            style = (
+                "display:inline-block;margin:0 8px 8px 0;padding:12px 26px;font-size:15px;font-weight:700;"
+                "text-decoration:none;border-radius:8px;"
+                + (f"background:{accent};color:#fff;border:1px solid {accent}" if i == 0
+                   else f"background:#fffefb;color:{accent};border:1px solid {accent}")
+            )
+            return f'<a href="{escape(url, quote=True)}" style="{style}">{escape(title)}</a>'
+
+        buttons_html = (
+            '<p style="margin:0 0 8px;font-size:12px;color:#8a8478">返事をする（ログイン不要）</p>'
+            + "".join(_btn(i, t, u) for i, (t, u) in enumerate(decision_links))
+            + f'<p style="margin:14px 0 0;font-size:12px"><a href="{escape(admin_url, quote=True)}" '
+            'style="color:#8a8478">受付ログを開く（ログインが必要です）</a></p>'
+        )
+    else:
+        buttons_html = (
+            f'<a href="{escape(admin_url, quote=True)}" style="display:inline-block;padding:11px 22px;'
+            f'background:{accent};color:#fff;font-size:14px;font-weight:600;text-decoration:none;'
+            'border-radius:8px">受付ログを開く</a>'
+        )
     html = f"""\
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -621,8 +722,7 @@ def build_reception_email(
         <h1 style="margin:0 0 18px;font-size:20px;color:#1d1a15">{escape(heading)}</h1>
         <p style="margin:0 0 20px;font-size:14px;line-height:1.8;color:#4a463d">{e_lead}</p>
         <table style="width:100%;border-collapse:collapse;margin:0 0 22px">{detail_html}</table>
-        <a href="{escape(admin_url, quote=True)}"
-           style="display:inline-block;padding:11px 22px;background:{accent};color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:8px">受付ログを開く</a>
+        {buttons_html}
       </div>
       <div style="padding:14px 30px;background:#f7f5f0;border-top:1px solid #efece5">
         <p style="margin:0;font-size:11px;color:#a8a198;line-height:1.7">
@@ -644,10 +744,13 @@ async def _notify_email(
     tenant_name = tenant.name if tenant else settings.app_name
     brand_color = tenant.brand_color if tenant else "#4a7c4e"
     slug = tenant.slug if tenant else tenant_id
-    admin_url = f"{settings.public_web_url.rstrip('/')}/{slug}/admin/reception?respond={log.id}"
+    admin_url = decision_link.admin_reception_url(slug, log.id)
+    # メールの宛先は担当者ごとの設定にしか無い＝受け取るのはその担当者(代理通知なら代理の人)。
+    token = decision_link.new_token(log.id, tenant_id, actor_name=dest.routed_to)
+    links = decision_link.button_links(slug, token, log, via="email")
 
     subject, text, html = build_reception_email(
-        tenant_name, brand_color, log, admin_url, escalated_from
+        tenant_name, brand_color, log, admin_url, escalated_from, links
     )
     any_ok = False
     for addr in dest.emails:

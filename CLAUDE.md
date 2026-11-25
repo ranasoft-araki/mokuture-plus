@@ -121,6 +121,8 @@ mokuture/
 │           ├── analytics_link.py  ← 受付ログID→匿名セッションID の**プロセス内 TTL マップ**(永続化しない)
 │           ├── webpush.py     ← Web Push 送信
 │           ├── google_calendar.py ← Google カレンダー連携(OAuth・トークン更新・来社予定の書き出し/取り込み・定期同期ループ)。httpx で REST を直接呼ぶ(SDK 不使用)
+│           ├── teams.py       ← Microsoft Teams 通知(「ワークフロー」の Webhook へ Adaptive Card を POST・URL の確認・来訪者の入力の無害化 `escape_md`)
+│           ├── decision_link.py ← ログイン無しで返事できるリンク(メール・Teams 用。`/{slug}/respond#token=…`)
 │           └── email.py       ← SMTP メール送信(aiosmtplib, best-effort)。来社予定QRのメール送信(segno で QR PNG 生成→CIDインライン画像+添付)。SMTP未設定なら送信APIが 503
 │
 ├── frontend/                  ← Next.js フロントエンド
@@ -152,7 +154,7 @@ mokuture/
 │   │       │   ├── calendar/page.tsx  ← カレンダー連携 (Google アカウント1つ・方向=mokuture→Google / Google→mokuture のどちらか・カレンダー選択(マイカレンダー/他のカレンダー)・取り込み条件・同期の状況)
 │   │       │   ├── kiosk-settings/page.tsx ← 受付設定 (実機準拠の5画面WYSIWYGプレビュー: 待機/ようこそ/受付メニュー/呼び出し中/完了。文言はプレビュー上を直接クリックしてインライン編集=Canva風、ロゴは受付メニュー画面でドラッグ配置・リサイズ)
 │   │       │   ├── settings/page.tsx  ← 基本設定 (ブランディング: ロゴ・カラー・フォント)
-│   │       │   ├── notify/page.tsx    ← 通知設定 (Slack=OAuth「Slackに追加」/Chatwork/PWA/カスタムWebhook + 配達専用通知先: Slack=共通連携のチャンネル上書き/Webhook/プッシュON-OFF。Chatworkの配達宛先は共通カードのルームそのもの)
+│   │       │   ├── notify/page.tsx    ← 通知設定 (Slack=OAuth「Slackに追加」/Chatwork/**Microsoft Teams**/PWA/カスタムWebhook + 配達専用通知先: Slack=共通連携のチャンネル上書き/Webhook/プッシュON-OFF。Chatworkの配達宛先は共通カードのルームそのもの)
 │   │       │   ├── locker/page.tsx    ← ロッカー管理
 │   │       │   ├── users/page.tsx     ← テナント内ユーザー管理。「メールで招待」=複数アドレスを貼り付けて一括で招待メール(区切りは改行/,/;/、/タブ/空白・「名前 <addr>」可。解析は lib/inviteEmails.ts)＋「招待中」一覧(送り直す/取り消す)。「パスワードを決めて追加」=従来の直接追加
 │   │       │   └── profile/page.tsx   ← 管理者プロフィール（メール変更・パスワード変更）
@@ -165,6 +167,7 @@ mokuture/
 │   │       │   ├── profile/page.tsx   ← 代理店プロフィール
 │   │       │   └── settings/page.tsx  ← 代理店テナント設定
 │   │       ├── inquiry/page.tsx ← 共通問い合わせフォーム(公開・認証不要)。お断り画面のQRリンク先
+│   │       ├── respond/page.tsx ← メール・Teams の受付通知の「受付/電話/お断り」から開く返事の画面(公開・ログイン不要)。`#token=…&via=…&d=…` を読み、開いただけでは何もせず、押したときだけ返事を確定する。→「Microsoft Teams 通知とログイン無しの返事」節
 │   │       ├── invite/page.tsx  ← 招待メールのリンク先(公開・認証不要)。`#token=` を読み、パスワードを決めて登録→そのままログインして管理画面へ
 │   │       └── kiosk/         ← キオスク受付画面 (デバイストークン必須)
 │   │           ├── page.tsx           ← KioskFlow マウント
@@ -247,7 +250,8 @@ mokuture/
 - `GET /reseller/reception` — 代理店クロステナント受付ログ
 - `PATCH /reception/{id}` — 受付ログのステータス・スタッフメモ更新 (body: `{ state?, staff_notes? }`)
 - `POST /reception/{id}/decision` — 受付応答 (JWT)。body `{ decision: accept|phone|decline }` → state を `accepted`/`phone`/`declined` に更新。管理画面「受付ログ」のアプリ内3ボタン(受付/電話/お断り)用（iOS PWA は通知アクション非対応のためのフォールバック兼・全端末共通経路）
-- `POST /reception/decision` — 受付応答 (**認証なし・署名トークン**)。body `{ token, decision: accept|phone|decline }`。スタッフPWAの Service Worker が通知アクションボタン（受付/電話/お断り）から、JWTを持たずに応答するための経路。token は `services/auth.create_decision_token`（JWT HS256, type=decision, 2h）
+- `POST /reception/decision/lookup` — 返事用の画面(`/{slug}/respond`)が受付の内容を読む (**認証なし・署名トークン・読むだけ**)。body `{ token }` → `{id, tenant_name, tenant_slug, visitor_name, company, staff, department, purpose, method, created_at, state, decided, decided_by_name, decision_expired, actions}`。**何も書き換えない**(メール・Teams のセキュリティ機能がリンクを勝手に開くため)
+- `POST /reception/decision` — 受付応答 (**認証なし・署名トークン**)。body `{ token, decision: accept|phone|decline, via? }`(`via`=`push`(既定)/`email`/`teams`。`decided_via` に残る。それ以外は `push` 扱い)。スタッフPWAの Service Worker が通知アクションボタン（受付/電話/お断り）から、JWTを持たずに応答するための経路。token は `services/auth.create_decision_token`（JWT HS256, type=decision, 2h）
 - `POST /inquiries/public/{slug}` — mokuture共通問い合わせフォーム送信 (**認証なし**, rate-limit 10/min)。body `{ name, company?, email?, phone?, message }`。キオスク「営業お断り」画面が案内する共通フォームの受け皿
 - `GET /inquiries` — 問い合わせ一覧 (JWT, `state`/`date_from`/`date_to` フィルタ)。`PATCH /inquiries/{id}`(state 更新)・`DELETE /inquiries/{id}` も管理者用
 - `GET /kiosk/reception/{id}` — 受付のスタッフ応答結果(state) 取得 (デバイストークン)。キオスク「お待ちください」画面が 2.5s 間隔でポーリングして OK/NG 画面へ切替する
@@ -406,8 +410,8 @@ mokuture/
 - **calendar_integrations** — Google カレンダー連携(テナントに1行 = 連携できるアカウントは1つ)。`credentials_json`(Fernet 暗号化の refresh/access token。**API・ログに出さない**)、`account_email`、`status`(active/reauth_required/disconnected)、`direction`(to_google/from_google)、`calendar_id`/`calendar_name`、`import_keyword`、`import_colors`(取り込む予定の色。`"default,5,11"`・空=色で絞らない。起動時自動マイグレーションで追加)、`default_staff`、`last_synced_at`/`last_error`/`last_error_at`。起動時 `create_all` で作成
 - **calendar_event_tombstones** — 来社予定を消したときの Google 側の後始末。`kind="delete"`=書き出し中に消した予定のイベントを消す(消せるまで残る・定期同期が拾い直す)、`kind="ignore"`=取り込んだ予定を mokuture で消した(次から取り込まない。日時を過ぎたら掃除)
 - **meeting_rooms** — 会議室 (name, location, capacity, color, description, is_active, **map_image_url**=館内マップ画像URL nullable)
-- **notification_settings** — 通知先設定 (Fernet 暗号化, `type` で種別)。受付: `slack`/`chatwork`/`webhook`。**VAPID 鍵は全テナント共通の1組(Render の `VAPID_PRIVATE_KEY`/`VAPID_PUBLIC_KEY`)で、DB には持たない。2026-10-24 にテナントごとの `vapid`/`webpush` 行・鍵の生成/再生成 API とボタン・旧鍵の購読を全廃した。共通鍵を作り直すと全テナントの全購読が無効になる**。配達専用: `slack_delivery`/`webhook_delivery`(未設定時は受付用にフォールバック)、`push_delivery`(`{enabled}` プッシュ通知ON/OFF, 既定ON)。**`slack`(受付)は OAuth 連携で `{team_id, team_name, bot_access_token, bot_user_id, channel_id, channel_name, auth_method:"bot", created_at, updated_at}` を暗号化保存**(専用テーブルは作らず既存 row を拡張＝マイグレーション不要)。`bot_access_token` は API レスポンス・ログに一切出さない。旧・手入力 `{webhook_url}` の row も送信は後方互換で動く(`SlackNotifier.send_to_config` が bot/webhook を自動判別)。**2026-10-24: 配達専用に別のSlack/Chatwork連携を結ばせる仕組みを廃止した**（通常の通知先と配達の通知先で、それぞれSlack/Chatworkに二重で連携させるのが無駄だったため）。`slack_delivery` は配達専用の**チャンネル上書きのみ**(`{channel_id, channel_name, updated_at}`、Bot Token は複製せず共通の `slack` 連携を使い回す。`POST /notifications/slack/channel` に `target="slack_delivery"` を渡して設定。未設定/解除時は受付と同じ共通チャンネルへ。`SlackNotifier.resolve_delivery_config(base, override)` が合成)。旧形式(`slack_delivery` が自前の `webhook_url` を持つ行)はそのまま後方互換で動く。Chatworkは元から共通 `chatwork` 行のルームが配達専用の宛先だった(受付通知には使われない)ので、専用の `chatwork_delivery` 書き込み/テストendpointを削除しただけ(読み取りのフォールバックは残置し、既存の旧形式データも動き続ける)
-- **staff_notification_routes** — **訪問先担当者ごとの通知先と代理通知設定**。`(tenant_id, staff_name)` で一意(`main.py` の起動時に `CREATE UNIQUE INDEX IF NOT EXISTS ix_staff_routes_tenant_staff`)。`staff_name` は `tenants.staff_list`(キオスクの訪問先ドロップダウン) の1件＝`reception_logs.staff` と突き合わせる。宛先は `config_json`(Fernet 暗号化)に `{slack_channel_id, slack_channel_name, chatwork_room_id, email, webhook_url}` と、列 `push_user_id`(→`users.id`。Web Push を届ける管理ユーザー。購読はブラウザ＝ユーザーに紐づくため、担当者(ただの名前)とここで結びつける。NULL=従来どおり共通の購読へ)。**`webhook_url` は API レスポンスに出さない**(`webhook_configured` の真偽だけ)＝CLAUDE.md「秘密情報」方針。`include_default`(既定 true)=テナント共通の通知先(Slack/Webhook/**プッシュ**)へも送るか、`fallback_staff_name`=応答が無いときに転送する代理担当者(**1段のみ・連鎖しない**)、`escalate_after_sec`(既定 60、0=代理通知しない、30〜3600)。**行が無い担当者は従来どおり共通の通知先だけ**(後方互換)。テーブルは起動時 `create_all` で自動作成
+- **notification_settings** — 通知先設定 (Fernet 暗号化, `type` で種別)。受付: `slack`/`chatwork`/`webhook`/**`teams`**(`{webhook_url}`=Teams の「ワークフロー」の URL。受付と配達の両方の宛先。GET では `***`)。**VAPID 鍵は全テナント共通の1組(Render の `VAPID_PRIVATE_KEY`/`VAPID_PUBLIC_KEY`)で、DB には持たない。2026-10-24 にテナントごとの `vapid`/`webpush` 行・鍵の生成/再生成 API とボタン・旧鍵の購読を全廃した。共通鍵を作り直すと全テナントの全購読が無効になる**。配達専用: `slack_delivery`/`webhook_delivery`(未設定時は受付用にフォールバック)、`push_delivery`(`{enabled}` プッシュ通知ON/OFF, 既定ON)。**`slack`(受付)は OAuth 連携で `{team_id, team_name, bot_access_token, bot_user_id, channel_id, channel_name, auth_method:"bot", created_at, updated_at}` を暗号化保存**(専用テーブルは作らず既存 row を拡張＝マイグレーション不要)。`bot_access_token` は API レスポンス・ログに一切出さない。旧・手入力 `{webhook_url}` の row も送信は後方互換で動く(`SlackNotifier.send_to_config` が bot/webhook を自動判別)。**2026-10-24: 配達専用に別のSlack/Chatwork連携を結ばせる仕組みを廃止した**（通常の通知先と配達の通知先で、それぞれSlack/Chatworkに二重で連携させるのが無駄だったため）。`slack_delivery` は配達専用の**チャンネル上書きのみ**(`{channel_id, channel_name, updated_at}`、Bot Token は複製せず共通の `slack` 連携を使い回す。`POST /notifications/slack/channel` に `target="slack_delivery"` を渡して設定。未設定/解除時は受付と同じ共通チャンネルへ。`SlackNotifier.resolve_delivery_config(base, override)` が合成)。旧形式(`slack_delivery` が自前の `webhook_url` を持つ行)はそのまま後方互換で動く。Chatworkは元から共通 `chatwork` 行のルームが配達専用の宛先だった(受付通知には使われない)ので、専用の `chatwork_delivery` 書き込み/テストendpointを削除しただけ(読み取りのフォールバックは残置し、既存の旧形式データも動き続ける)
+- **staff_notification_routes** — **訪問先担当者ごとの通知先と代理通知設定**。`(tenant_id, staff_name)` で一意(`main.py` の起動時に `CREATE UNIQUE INDEX IF NOT EXISTS ix_staff_routes_tenant_staff`)。`staff_name` は `tenants.staff_list`(キオスクの訪問先ドロップダウン) の1件＝`reception_logs.staff` と突き合わせる。宛先は `config_json`(Fernet 暗号化)に `{slack_channel_id, slack_channel_name, chatwork_room_id, email, webhook_url, teams_webhook_url}` と、列 `push_user_id`(→`users.id`。Web Push を届ける管理ユーザー。購読はブラウザ＝ユーザーに紐づくため、担当者(ただの名前)とここで結びつける。NULL=従来どおり共通の購読へ)。**`webhook_url`・`teams_webhook_url` は API レスポンスに出さない**(`webhook_configured`/`teams_configured` の真偽だけ)＝CLAUDE.md「秘密情報」方針。`include_default`(既定 true)=テナント共通の通知先(Slack/Webhook/**プッシュ**)へも送るか、`fallback_staff_name`=応答が無いときに転送する代理担当者(**1段のみ・連鎖しない**)、`escalate_after_sec`(既定 60、0=代理通知しない、30〜3600)。**行が無い担当者は従来どおり共通の通知先だけ**(後方互換)。テーブルは起動時 `create_all` で自動作成
 - **push_subscriptions** — Web Push 購読情報
 
 ### 分析ログ（実証実験・製品改善）— 詳細は [`ANALYTICS.md`](ANALYTICS.md)
@@ -492,9 +496,11 @@ mokuture/
 | POST | /notifications/slack/channel | JWT | 通知先を確定。チャンネル=`{channel_id}`(`conversations.info`で名称取得＋公開ch未参加なら`conversations.join`)。**DM=`{user_id, display_name?}`**(`conversations.open`, scope `im:write`。issue #1 追記分)。どちらも`{channel_id, channel_name}`保存→`{ok, channel_name}`(DMは`channel_name="DM: <display_name>"`)。**`target`省略時は`"slack"`(受付の共通チャンネル)。`target="slack_delivery"`は配達専用のチャンネル上書き**(Bot Tokenは複製せず共通連携を使い回す。channel_id/user_idを両方省略すると上書きを解除し受付と同じ共通チャンネルに戻る。2026-10-24追記) |
 | POST | /notifications/slack/disconnect | JWT | Slack連携解除(type=slack の row 削除。Bot Token 破棄) |
 | POST | /notifications/chatwork/rooms | JWT | **ルーム選択の一覧**(issue #1 2026-10-23 追記分) `{api_token?}`→`{rooms:[{room_id,name,type}]}`(`GET /v2/rooms`)。`api_token`省略時は保存済みの共通トークンを使う。1:1の会話は`type="direct"` |
-| GET | /notifications/staff-routes | JWT | **担当者ごとの通知先の一覧**。`{staff_list, routes:[{id,staff_name,slack_channel_id,slack_channel_name,chatwork_room_id,chatwork_room_name,email,webhook_configured,include_default,fallback_staff_name,escalate_after_sec,orphan,updated_at}], slack:{bot_connected,default_channel_name}, chatwork:{connected}, smtp_enabled, default_escalate_sec, min/max_escalate_sec}`。`orphan`=受付設定の担当者リストから消えた担当者(UIで注意表示) |
+| GET | /notifications/staff-routes | JWT | **担当者ごとの通知先の一覧**。`{staff_list, routes:[{id,staff_name,slack_channel_id,slack_channel_name,chatwork_room_id,chatwork_room_name,email,webhook_configured,teams_configured,include_default,fallback_staff_name,escalate_after_sec,orphan,updated_at}], slack:{bot_connected,default_channel_name}, chatwork:{connected}, smtp_enabled, default_escalate_sec, min/max_escalate_sec}`。`orphan`=受付設定の担当者リストから消えた担当者(UIで注意表示) |
 | PUT | /notifications/staff-routes | JWT | **担当者1人ぶんの通知先を upsert**(担当者名がキー)。`{staff_name, slack_channel_id?, slack_user_id?, slack_display_name?, chatwork_room_id?, chatwork_room_name?, email?, webhook_url?, include_default?, fallback_staff_name?, escalate_after_sec?}`。**`slack_user_id` 指定時は `slack_channel_id` を無視し `conversations.open` でDM先を解決する**(issue #1 追記分)。チャンネル指定は `conversations.info` で名称解決＋公開ch未参加なら `conversations.join`(best-effort)。**`slack_channel_id` が保存済みの値と同じならSlack APIを呼び直さない**(DM先の名称がIDへ戻って壊れるのを防ぐ)。**`webhook_url` は3状態**: 未指定/`null`=変更しない(既存を維持)・`""`=解除・URL=差し替え（**URL は GET で返さない**ので画面が値を持てないため）。**それ以外の項目は省略すると既定値に戻る**(フル置換。画面は常に全項目を送る)。メールはカンマ区切り最大5件で**1件でも形式不正なら 422**(`staff_routing.validate_emails`。保存済みを読む `parse_emails` は寛容)、Webhookは http(s) 必須、`escalate_after_sec` は 0 または 30〜3600、代理に自分自身を指定すると 422。同一担当者への同時 PUT は一意制約違反を拾って既存行の更新にフォールバック |
 | DELETE | /notifications/staff-routes/{route_id} | JWT | 担当者ごとの設定を解除(以後は共通の通知先だけに送られる) |
+| PUT | /notifications/settings/teams | JWT(管理者) | **Teams の「ワークフロー」の URL(テナント共通)**を保存 `{webhook_url}`(`***`=変更しない・空=解除)。旧方式の Incoming Webhook(`*.webhook.office.com`)とワークフロー以外のホスト(`logic.azure.com`/`powerplatform.com`/`powerautomate.com` 以外)は 400。担当者ごとの URL は `PUT /notifications/staff-routes` の `teams_webhook_url`(`webhook_url` と同じ3状態) |
+| POST | /notifications/test/teams | JWT(管理者) | 「Teams」カードの URL へテストのカードを送る → `{ok}`。**ok=ワークフローが受け取った(202)まで**。チャネルに出たかは分からない |
 | POST | /notifications/staff-routes/test | JWT | **宛先ごとのテスト送信**。`{staff_name, stage:"primary"|"fallback"}` → `{ok, results:[{channel,target,ok,error?}]}`。**受付ログは作らない**(保存しない `ReceptionLog` で文面だけ実運用と揃える)・応答ボタンは付けない。代理未設定で `stage="fallback"` は 400 |
 | POST | /notifications/slack/interactions | なし(署名検証) | **受付通知の対応ボタン(受付/電話/お断り)押下の受け口**。Slack が Block Kit ボタン押下時にPOSTする。`X-Slack-Signature`(v0, `SLACK_SIGNING_SECRET`)＋5分リプレイ防止で検証→ボタン`value`の署名トークン(`create_decision_token`)で受付ログ→テナント特定→`_apply_decision`(冪等)→`response_url`で元メッセージを「対応済み」に置換(ボタン除去)、即200。`SLACK_SIGNING_SECRET`未設定時は404 |
 | GET/POST | /lockers | JWT | ロッカー管理 (name 永続化, occupied/has_pin 返却)。旧DB台帳CRUD・後方互換で残置 |
@@ -1048,7 +1054,22 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
   - キオスク設定ページは `staff_list` を**PATCH の対象から外した**。読み取り専用にしたまま送ると、そのページを開いた時点の古いリストで上書きしてしまう。
 - **後方互換**: 担当者ごとの設定を1件も作らなければ挙動は従来どおり（共通の通知先だけ・代理通知なし）。担当者リストから名前が消えても設定行は残り、一覧に `orphan`（「受付設定に無い担当者」）として出す。
 - **配達の呼び出し・置き配は対象外**（`log.staff` が無いので宛先ルーティングは働かず、スイープも `method` で明示的に除外する。従来どおり `_fire_delivery_notifications`）。
+- **メールと Teams の通知の「受付/電話/お断り」はログイン無しで返事できる**(→「Microsoft Teams 通知とログイン無しの返事」節)。
 - **Webhook ペイロードの変更**: 受付 Webhook に `reception_id` が増え、`created_at` は `iso_z()` の単一 `Z` 形式に揃えた（従来は naive/aware で `...` と `...+00:00` が混在していた）。代理通知では `event` が `reception_escalated` になり `escalated_from`(元の担当者名) が付く。管理画面「カスタムWebhook」のサンプル表示も同じ形に更新済み。
+
+### Microsoft Teams 通知とログイン無しの返事（2026-11-25）
+
+Teams を使う会社でも、担当者が通知からすぐ返事をしてキオスクの来訪者を待たせないための仕組み。あわせて**メール通知も同じ返事の仕組みにした**（以前はメールのリンクがログインの要る受付ログに飛ぶだけで、スマホではログイン画面で止まっていた）。
+
+- **Teams へは「ワークフロー」の Webhook へ Adaptive Card を POST する**（`services/teams.py`）。Teams 側の準備は利用者が行う(チャネルの「…」→「ワークフロー」→「Webhook 要求を受信するとチャネルに投稿する」で URL を作って管理画面に貼る)。Bot・Azure の登録は要らない。送る形は `{"type":"message","attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","content":{AdaptiveCard v1.4}}]}`。**旧方式の Incoming Webhook(コネクタ・`*.webhook.office.com`)は受け付けない**(Microsoft が廃止を進めている)。受け付けるホストは `logic.azure.com`/`powerplatform.com`/`powerautomate.com`(保存時と送信直前の両方で確かめ、`url_safety` も通す)。**ワークフローは受け取っただけで 202 を返す**＝投稿できたかは mokuture からは分からない(テスト送信の文言もそう伝える)。
+- **宛先**: 「Teams」カードの URL(`notification_settings` type=`teams`)＝受付(`include_default` が有効な受付・担当者設定の無い受付)と配達の呼び出し・置き配(Chatwork の共通ルームと同じく受付と配達で共有)。担当者ごとの URL(`staff_notification_routes` の `teams_webhook_url`)は全体スイッチ(`channel_enabled_teams`)に左右されない。代理通知・対応済みのお知らせ(`fire_decision_notifications`)も送る。宛先の決定は `reception_notify.teams_targets`。
+- **来訪者の入力は `teams.escape_md` で無害化する**。カードの文字は常にマークダウンとして描かれ、素の文字として出す指定が無いので、`[ ] ( ) * _ ~ # < > { } | \ `` ` `` を全角へ寄せ、行頭の箇条書き・改行も潰す(リンク・見出し・太字を作らせない)。
+- **カードのボタンはリンクしか開けない**(Webhook 投稿のカードは Teams の中で返事を受け取れない・あとから書き換えられない)。受付/電話/お断り(予約・配達は お断り なし＝`decision_actions`)は**ログイン無しで返事できる画面 `/{slug}/respond#token=…&via=teams&d=accept`** を開く(`services/decision_link.py`)。トークンは Slack ボタン・プッシュと同じ `create_decision_token`(2時間)。**担当者ごとの宛先へ送るトークンには `actor_name`=担当者名**を入れる(「〇〇さんが対応しました」に出る)。共通の宛先は「担当者」。
+- **返事の画面は開いただけでは返事にしない**。メール・Teams のセキュリティ機能(Microsoft Defender の Safe Links など)はリンクの中身を勝手に開くので、開いたときは `POST /reception/decision/lookup`(読むだけ)で受付の内容を出し、**画面のボタンを押したときだけ** `POST /reception/decision`(`via=email|teams`)で確定する。トークンは `#` の後ろ(サーバーのアクセスログに残らない)に置き、画面は読んだらアドレス欄から消して sessionStorage へ移す(招待の画面と同じ)。すでに返事が済んでいる/時間切れ/リンク切れはそれぞれ案内を出す。
+- **メール**(担当者ごとのメール)にも同じ 受付/電話/お断り ボタン(返事の画面へのリンク・`via=email`)を付け、「受付ログを開く（ログインが必要です）」は控えのリンクにした。
+- **分析ログ**: 通知の経路の固定語に `teams` を足した(`analytics_vocab.NOTIFY_CHANNELS` と `kiosk_agent/static/analytics.js` の `notifyChannels` の両方)。
+- **画面**: 通知設定に「Microsoft Teams」カード(URL・通知する/しない・テスト送信・解除(2段階)・URL の作り方)、担当者ごとの編集欄に「Microsoft Teams（ワークフローの URL）」。
+- テスト: `backend/tests/test_teams_and_decision_link.py`(Teams への実送信はしない)。**2026-11-25 時点で本物の Teams のワークフローでの通し確認は未実施**(投稿までの遅れも未計測。キオスクは 90 秒で電話案内に切り替わる)。
 
 ### ユーザー招待（複数アドレスの一括招待メール）
 

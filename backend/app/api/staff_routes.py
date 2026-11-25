@@ -38,6 +38,7 @@ from app.services.escalation import PENDING_STATES
 from app.services import reception_notify, staff_routing
 from app.services import email as email_service
 from app.services import mail_quota, url_safety
+from app.services import teams as teams_service
 from app.services.crypto import encrypt_dict
 from app.services.slack import SlackApiError, SlackNotifier
 from app.services.webpush import send_push
@@ -79,6 +80,8 @@ class StaffRouteBody(BaseModel):
     # Webhook URL は秘密情報としてレスポンスに出さない(CLAUDE.md「秘密情報の暗号化」)ので、
     # 画面は値を持たずに編集できる必要がある。None=変更しない / ""=解除 / URL=差し替え。
     webhook_url: str | None = None
+    # Teams の「ワークフロー」の Webhook URL。Webhook と同じく秘密なので返さない＝同じ3状態。
+    teams_webhook_url: str | None = None
     include_default: bool = True
     fallback_staff_name: str = ""
     escalate_after_sec: int = DEFAULT_ESCALATE_SEC
@@ -123,6 +126,16 @@ class StaffRouteBody(BaseModel):
             raise ValueError("Webhook URL は http(s):// で始めてください")
         if len(v) > _MAX_WEBHOOK_URL:
             raise ValueError("Webhook URL が長すぎます")
+        return v
+
+    @field_validator("teams_webhook_url")
+    @classmethod
+    def teams_url_len(cls, v: str | None) -> str | None:
+        if v is None:
+            return None  # 未指定＝既存の設定を維持する
+        v = v.strip()
+        if len(v) > _MAX_WEBHOOK_URL:
+            raise ValueError("Teams の URL が長すぎます")
         return v
 
     @field_validator("escalate_after_sec")
@@ -188,6 +201,7 @@ def _route_out(route: StaffNotificationRoute, known_staff: set[str]) -> dict:
         "email": config.get("email", ""),
         # Webhook URL 自体は返さない（設定の有無だけ）。CLAUDE.md「秘密情報」方針。
         "webhook_configured": bool(config.get("webhook_url")),
+        "teams_configured": bool(config.get("teams_webhook_url")),
         "include_default": bool(route.include_default),
         "fallback_staff_name": route.fallback_staff_name or "",
         "escalate_after_sec": int(route.escalate_after_sec or 0),
@@ -315,6 +329,11 @@ async def upsert_staff_route(
             await url_safety.validate_public_url(body.webhook_url)
         except url_safety.UnsafeUrlError as e:
             raise HTTPException(status_code=400, detail=f"Webhook URL: {e}")
+    if body.teams_webhook_url:
+        try:
+            await teams_service.validate_url(body.teams_webhook_url)
+        except url_safety.UnsafeUrlError as e:
+            raise HTTPException(status_code=400, detail=f"Teams: {e}")
 
     existing_route = await staff_routing.get_route(db, user.tenant_id, body.staff_name)
     existing_config = route_config(existing_route)
@@ -390,6 +409,10 @@ async def upsert_staff_route(
     def apply(target: StaffNotificationRoute) -> None:
         """body の内容を行へ反映する。webhook_url 未指定はその行の現在値を維持する。"""
         webhook = existing_config.get("webhook_url", "") if body.webhook_url is None else body.webhook_url
+        teams_url = (
+            existing_config.get("teams_webhook_url", "")
+            if body.teams_webhook_url is None else body.teams_webhook_url
+        )
         target.config_json = encrypt_dict({
             "slack_channel_id": channel_id,
             "slack_channel_name": channel_name,
@@ -397,6 +420,7 @@ async def upsert_staff_route(
             "chatwork_room_name": chatwork_room_name,
             "email": ",".join(emails),
             "webhook_url": webhook,
+            "teams_webhook_url": teams_url,
         })
         target.push_user_id = push_user_id or None
         target.include_default = body.include_default
@@ -770,6 +794,28 @@ async def test_staff_route(
             results.append({
                 "channel": "push", "target": f"{len(push_subs)}台", "ok": sent > 0,
                 **({} if sent else {"error": "送信できませんでした"}),
+            })
+
+    # Teams は実運用と同じ宛先（担当者の URL＋必要なら「Teams」カードの URL）へ、ボタン無しで送る。
+    teams_test_targets = await reception_notify.teams_targets(db, user.tenant_id, dest)
+    if teams_test_targets:
+        card = teams_service.build_reception_card(
+            visitor_name=sample.visitor_name,
+            company=sample.company,
+            host_name=sample.staff,
+            department=None,
+            purpose=sample.purpose,
+            when=sample.created_at,
+            escalated_from=escalated_from or None,
+        )
+        card["attachments"][0]["content"]["body"].append(
+            {"type": "TextBlock", "text": "（これはテスト送信です）", "wrap": True, "isSubtle": True}
+        )
+        for url, _actor, label in teams_test_targets:
+            ok = await teams_service.post(url, card)
+            results.append({
+                "channel": "teams", "target": label, "ok": ok,
+                **({} if ok else {"error": "送信できませんでした（URL をご確認ください）"}),
             })
 
     for url in dest.webhooks:

@@ -13,8 +13,10 @@ from sqlalchemy import select, func, delete, update
 from app.database import get_db
 from app.middleware.tenant import get_current_user, require_tenant_admin
 from app.models.reception import ReceptionLog
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.services.auth import create_decision_token, decode_token
+from app.services import decision_link
 from app.services import events as event_bus
 from app.services import reception_notify
 from app.services.timeutil import iso_z
@@ -367,6 +369,67 @@ class DecisionRequest(BaseModel):
 class TokenDecisionRequest(BaseModel):
     token: str
     decision: str
+    # 返事をした経路。プッシュ通知のボタン(Service Worker)は送らない＝"push"。
+    # メール・Teams のリンクから開いた返事用の画面は "email"/"teams" を送る。
+    via: str = "push"
+
+    @field_validator("via")
+    @classmethod
+    def via_allowed(cls, v: str) -> str:
+        v = (v or "push").strip().lower()
+        return v if v in ("push", *decision_link.LINK_VIAS) else "push"
+
+
+class TokenLookupRequest(BaseModel):
+    token: str
+
+
+def _decode_decision_token(token: str) -> dict:
+    try:
+        payload = decode_token(token)
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if payload.get("type") != "decision":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    return payload
+
+
+@router.post("/decision/lookup")
+async def lookup_reception_by_token(
+    body: TokenLookupRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public, token-authenticated, **read-only**. メール・Teams のリンクから開く返事用の画面
+    (`/{slug}/respond`)が、どの受付への返事かを表示するために読む。
+
+    ここでは何も書き換えない。メールや Teams のセキュリティ機能はリンクを勝手に開くので、
+    開いただけで返事が確定しないよう、確定は画面のボタンから `POST /reception/decision` で行う。"""
+    payload = _decode_decision_token(body.token)
+    log = (await db.execute(
+        select(ReceptionLog).where(ReceptionLog.id == payload.get("sub"))
+    )).scalar_one_or_none()
+    if not log or log.tenant_id != payload.get("tenant_id"):
+        raise HTTPException(status_code=404, detail="Reception log not found")
+    tenant = await db.get(Tenant, log.tenant_id)
+    return {
+        "id": log.id,
+        "tenant_name": tenant.name if tenant else "",
+        "tenant_slug": tenant.slug if tenant else "",
+        "visitor_name": log.visitor_name,
+        "company": log.company,
+        "staff": log.staff,
+        "department": log.department,
+        "purpose": log.purpose,
+        "method": log.method,
+        "created_at": iso_z(log.created_at),
+        "state": log.state,
+        # 返事を受け付けるのは received/notified のときだけ(_apply_decision と同じ条件)。
+        # 管理画面で「完了」「取り消し」にした受付にもボタンを出さない。
+        "decided": log.state not in ("received", "notified"),
+        "decided_by_name": getattr(log, "decided_by_name", None),
+        "decision_expired": getattr(log, "decided_via", None) == "kiosk_timeout",
+        "actions": decision_actions(log),
+    }
 
 
 @router.post("/decision")
@@ -377,13 +440,9 @@ async def decide_reception_by_token(
 ):
     """Public, token-authenticated. Called by the staff PWA Service Worker when a
     notification action button (受付 / 電話 / お断り) is tapped — the SW has no JWT,
-    so the signed decision token in the push payload is the credential."""
-    try:
-        payload = decode_token(body.token)
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    if payload.get("type") != "decision":
-        raise HTTPException(status_code=401, detail="Invalid token type")
+    so the signed decision token in the push payload is the credential.
+    メール・Teams のリンクから開いた返事用の画面(`/{slug}/respond`)も、押したときにここを呼ぶ。"""
+    payload = _decode_decision_token(body.token)
     log_id = payload.get("sub")
     tenant_id = payload.get("tenant_id")
     result = await db.execute(select(ReceptionLog).where(ReceptionLog.id == log_id))
@@ -396,7 +455,7 @@ async def decide_reception_by_token(
         body.decision,
         actor_user_id=payload.get("actor_user_id"),
         actor_name=payload.get("actor_name") or "担当者",
-        via="push",
+        via=body.via,
     )
     if outcome.applied:
         background.add_task(reception_notify.fire_decision_notifications, log.tenant_id, log.id)

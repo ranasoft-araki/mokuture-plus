@@ -209,7 +209,7 @@ JS 例外は種別を上記語彙にマップし、未知なら `unknown` に丸
 | `staff_responded` | browser | 待機画面のポーリングで state が確定（`result` に accepted/phone/declined、`duration_ms` に通知送信からの経過） |
 
 **担当者名・担当者ID・チャンネル名は保存しない。** 経路は `element_id` に
-`slack` / `push` / `webhook` / `chatwork` / `email` の固定語で入れる。
+`slack` / `push` / `webhook` / `chatwork` / `email` / `teams` の固定語で入れる。
 
 ### 4-6. アンケート
 
