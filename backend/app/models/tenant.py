@@ -54,6 +54,10 @@ class Tenant(Base):
     # デモバッジ表示・配達導線の無効化・手荷物預かりの固定PIN化を行う(非デモは一切不変)。
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # モニター（実証実験の協力先）。true のテナントだけ、キオスクで受付完了後のアンケートを出す。
+    # モニター契約は運営が決めるので、切り替えは運営パネルだけ(店舗の管理画面には出さない)。既定は false。
+    is_monitor: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # 【廃止】受付の音声のクラウド中継(AmiVoice)の可否。機能は 2026-09-29 に削除した。
     # 列は本番 DB に残っており、既定値なしの NOT NULL で作られた DB もあるので、
     # 定義だけ残して INSERT が失敗しないようにしている。読み書きするコードは無い。

@@ -108,6 +108,8 @@ class PublicTenantSettingsOut(BaseModel):
     # 審査用デモモード。デモテナントのときだけ true + 固定PIN を返す(非デモは false / None)。
     is_demo: bool = False
     demo_locker_pin: str | None = None
+    # モニター(実証実験の協力先)。true のときだけキオスクが受付完了後のアンケートを出す。
+    is_monitor: bool = False
 
 
 class TenantSettingsPatch(BaseModel):
@@ -232,6 +234,7 @@ def _public_out(tenant: Tenant) -> PublicTenantSettingsOut:
         inquiry_qr=_inquiry_qr_data_uri(inquiry_url),
         is_demo=is_demo,
         demo_locker_pin=(app_settings.demo_locker_pin if is_demo else None),
+        is_monitor=bool(getattr(tenant, "is_monitor", False)),
     )
 
 

@@ -186,6 +186,7 @@ async def list_tenants(
                 "brand_color": t.brand_color,
                 "is_suspended": t.is_suspended,
                 "is_demo": bool(getattr(t, "is_demo", False)),
+                "is_monitor": bool(getattr(t, "is_monitor", False)),
                 "created_at": t.created_at.isoformat() if t.created_at else None,
                 "operator_notes": t.operator_notes,
                 "device_count": device_counts.get(t.id, 0),
@@ -292,6 +293,28 @@ async def set_tenant_demo(
     tenant.is_demo = body.demo
     await db.commit()
     return {"ok": True, "tenant_id": tenant_id, "is_demo": tenant.is_demo}
+
+
+class MonitorTenantRequest(BaseModel):
+    monitor: bool
+
+
+@router.patch("/tenants/{tenant_id}/monitor")
+async def set_tenant_monitor(
+    tenant_id: str,
+    body: MonitorTenantRequest,
+    _: User = Depends(require_operator()),
+    db: AsyncSession = Depends(get_db),
+):
+    """モニター(実証実験の協力先)の ON/OFF。true のテナントだけ、キオスクで受付完了後の
+    アンケートを出す。キオスクは起動時と60秒ごとに設定を読むので、1分ほどで反映される。"""
+    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    tenant.is_monitor = body.monitor
+    await db.commit()
+    return {"ok": True, "tenant_id": tenant_id, "is_monitor": tenant.is_monitor}
 
 
 class UpdateNotesRequest(BaseModel):

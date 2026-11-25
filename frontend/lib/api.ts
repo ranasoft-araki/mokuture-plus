@@ -414,6 +414,9 @@ export const api = {
 
   setDemoTenant: (token: string, tenantId: string, demo: boolean) =>
     request<{ ok: boolean; tenant_id: string; is_demo: boolean }>(`/operator/tenants/${tenantId}/demo`, { method: "PATCH", body: JSON.stringify({ demo }) }, token),
+  // モニター(実証実験の協力先)の ON/OFF。true のテナントだけキオスクで受付完了後のアンケートを出す
+  setMonitorTenant: (token: string, tenantId: string, monitor: boolean) =>
+    request<{ ok: boolean; tenant_id: string; is_monitor: boolean }>(`/operator/tenants/${tenantId}/monitor`, { method: "PATCH", body: JSON.stringify({ monitor }) }, token),
   updateTenantNotes: (token: string, tenantId: string, notes: string): Promise<void> =>
     request(`/operator/tenants/${tenantId}/notes`, { method: "PATCH", body: JSON.stringify({ notes }) }, token),
   updateTenantReseller: (token: string, tenantId: string, resellerId: string | null) =>
@@ -1003,6 +1006,7 @@ export interface OperatorTenant {
   brand_color?: string;
   is_suspended: boolean;
   is_demo?: boolean;
+  is_monitor?: boolean;
   created_at: string | null;
   operator_notes: string | null;
   device_count?: number;

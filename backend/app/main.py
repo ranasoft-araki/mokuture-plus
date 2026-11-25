@@ -56,6 +56,8 @@ _ENSURE_COLUMNS = {
         "department_list": "TEXT",
         # 審査用デモモード。既存行は FALSE。demo1/demo2 は下でバックフィルして有効化。
         "is_demo": "BOOLEAN DEFAULT FALSE",
+        # モニター(受付完了後のアンケートを出すテナント)。既存行は FALSE。運営パネルで切り替える。
+        "is_monitor": "BOOLEAN DEFAULT FALSE",
         # 【廃止】受付の音声のクラウド中継。機能は削除済みだが、モデルに列の定義を残して
         # いるので古い DB にも揃えておく(既存行は FALSE)。
         "voice_cloud_enabled": "BOOLEAN DEFAULT FALSE",

@@ -97,6 +97,7 @@ let ST = {
   inquiry_url: "",          // 営業お断り画面で案内する問い合わせフォールURL(解決済み)
   inquiry_qr: null,         // 上記URLのQR(SVG data URI)。バックエンドが生成
   is_demo: false,           // 審査用デモモード(バックエンドの is_demo テナントのみ true)
+  is_monitor: false,        // モニター(実証実験の協力先)。true のテナントだけ受付完了後のアンケートを出す
   demo_locker_pin: "",      // デモ時の手荷物預かり固定PIN(バックエンド .env DEMO_LOCKER_PIN)
 };
 let ITEMS = [];
@@ -209,7 +210,9 @@ const PAGE_ID = (() => {
 // キオスク画面(UI)の版数ラベル。UIバージョン別の完了率・滞在時間を比べるための目印。
 // 画面構成を大きく変えたらここを上げる(既定 default)。
 const UI_VERSION = "default";
-// 受付完了後アンケート。端末単位で切りたいときは localStorage に kiosk_feedback="off"。
+// 受付完了後アンケート。**出すのはモニター(実証実験の協力先)のテナントだけ**(ST.is_monitor。
+// 運営パネルのテナント管理で切り替える。goAfterResult で判定)。さらに端末単位で切りたいときは
+// localStorage に kiosk_feedback="off"。
 const FEEDBACK_ENABLED = (() => {
   try { return localStorage.getItem("kiosk_feedback") !== "off"; } catch (e) { return true; }
 })();
@@ -5075,7 +5078,7 @@ const FEEDBACK_QUESTION_SEC = 20;
 // 結果画面のあとの遷移。アンケートを出す条件を1か所に集約する。
 function goAfterResult() {
   cleanup();
-  if (FEEDBACK_ENABLED && !MOCK && AN.isActive()) { go("feedback"); return; }
+  if (FEEDBACK_ENABLED && ST.is_monitor && !MOCK && AN.isActive()) { go("feedback"); return; }
   anEnd("completed");
   go("idle");
 }
@@ -6676,6 +6679,13 @@ async function boot() {
   setInterval(async () => {
     const t = localStorage.getItem(TOKEN_KEY);
     if (!t) return;
+    // モニター(受付完了後のアンケートを出すか)は運営パネルで切り替わる。起動時に1回読むだけだと
+    // 端末を再起動するまで反映されず、起動時に設定を取れなかった端末ではモニター先でもアンケートが
+    // 出ないままになるので、ここで読み直す。**is_monitor だけ**更新する(画面の文言などを来訪の途中で変えない)。
+    try {
+      const st = await apiGet("/proxy/settings");
+      if (st && typeof st.is_monitor === "boolean") ST.is_monitor = st.is_monitor;
+    } catch {}
     try {
       const s = await apiGet("/proxy/schedule", t);
       syncDeviceName(s?.device_name);

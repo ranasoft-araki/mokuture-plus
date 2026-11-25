@@ -251,6 +251,24 @@ export default function OperatorTenantsPage() {
     });
   };
 
+  const handleMonitor = (tenant: OperatorTenant) => {
+    const turningOn = !tenant.is_monitor;
+    setModal({
+      msg: turningOn
+        ? `テナント「${tenant.name}」をモニターにしますか？ キオスクで受付が終わったあとに、任意回答のアンケート（3問）を出すようになります。各キオスクには1分ほどで反映されます。`
+        : `テナント「${tenant.name}」のモニターを解除しますか？ キオスクで受付完了後のアンケートを出さなくなります（各キオスクには1分ほどで反映されます）。`,
+      confirmLabel: turningOn ? "モニターにする" : "モニター解除",
+      action: async () => {
+        try {
+          await api.setMonitorTenant(token, tenant.id, turningOn);
+          await load(page);
+        } catch (err: unknown) {
+          setActionError(err instanceof Error ? err.message : "操作に失敗しました");
+        }
+      },
+    });
+  };
+
   const handlePageChange = (newPage: number) => {
     setPage(newPage);
     load(newPage);
@@ -717,6 +735,22 @@ export default function OperatorTenantsPage() {
                             デモ
                           </span>
                         )}
+                        {t.is_monitor && (
+                          <span
+                            style={{
+                              background: "#e0f2fe",
+                              border: "1px solid #0ea5e9",
+                              color: "#0369a1",
+                              fontSize: 11,
+                              fontWeight: 600,
+                              padding: "2px 8px",
+                              borderRadius: 999,
+                            }}
+                            title="受付完了後のアンケートをキオスクに出しています"
+                          >
+                            モニター
+                          </span>
+                        )}
                         {t.operator_notes && (
                           <span
                             style={{
@@ -858,6 +892,22 @@ export default function OperatorTenantsPage() {
                         title="審査用デモモード（自動受付・デモ表示・固定PIN）"
                       >
                         {t.is_demo ? "デモ解除" : "デモにする"}
+                      </button>
+                      <button
+                        onClick={() => handleMonitor(t)}
+                        style={{
+                          border: t.is_monitor ? "none" : "1px solid #0ea5e9",
+                          color: t.is_monitor ? "#fff" : "#0369a1",
+                          background: t.is_monitor ? "#0284c7" : "transparent",
+                          padding: "4px 10px",
+                          borderRadius: 6,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                        title="モニター（実証実験の協力先）。オンのテナントだけ、キオスクで受付完了後にアンケートを出す"
+                      >
+                        {t.is_monitor ? "モニター解除" : "モニターにする"}
                       </button>
                       <button
                         onClick={() => handleProxyLogin(t)}

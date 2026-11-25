@@ -243,6 +243,7 @@ mokuture/
 - `POST /operator/tenants/{id}/proxy-login` — 代理ログイン
 - `GET|POST|DELETE|PATCH /users` — テナント内ユーザー管理
 - `PATCH /operator/tenants/{id}/suspend` — テナント停止/再開
+- `PATCH /operator/tenants/{id}/monitor` — モニター(受付完了後のアンケートを出すテナント)の ON/OFF。body `{monitor: bool}`
 - `POST /devices/{id}/force-refresh` — デバイス強制更新
 - `GET /reception/export.csv` — 受付ログCSVエクスポート（管理者）。`since`/`until`(UTC の時刻・until は含まない)/`state`/`q`/`method` で一覧と同じ絞り込み(条件なし=全件)。日時の列は日本時間
 - `GET /operator/reception/export.csv` — 受付ログCSVエクスポート（運営）
@@ -372,6 +373,8 @@ mokuture/
 | kiosk_style | VARCHAR(32) | （廃止予定・常に `default`）旧・業種別テーマID。テーマ機能廃止により UI からは選択不可。`ALLOWED_KIOSK_STYLES = {"default"}` |
 | kiosk_default_lang | VARCHAR(8) | キオスクの既定表示言語(`ja`/`en`)。来訪者がタッチで切り替えるまでの既定。`ALLOWED_KIOSK_LANGS = {"ja","en"}`。管理画面「受付設定」で切替 |
 | is_suspended | BOOLEAN | テナント停止フラグ |
+| is_demo | BOOLEAN | 審査用デモモード（運営パネルで切替） |
+| is_monitor | BOOLEAN | モニター（実証実験の協力先）。true のテナントだけキオスクで受付完了後のアンケートを出す。既定 false。**運営パネル「テナント管理」でだけ切り替える**（店舗の管理画面には出さない）。`GET /settings/public/{slug}` の `is_monitor` でキオスクへ渡る（起動時と60秒ごとのスケジュール確認のついでに `is_monitor` だけ読み直す＝1分ほどで反映。起動時に設定を取れなかった端末も後から追いつく）。起動時自動マイグレーションで追加 |
 | operator_notes | TEXT | 運営用内部メモ (nullable) |
 | kiosk_phone_number | VARCHAR(32) | 受付応答「電話(対応不可)」時にキオスクへ表示する電話番号 (nullable) |
 | inquiry_form_url | VARCHAR(512) | 「お断り」時に案内する外部問い合わせフォームURL (nullable、未設定時は共通フォーム `/{slug}/inquiry`) |
@@ -905,7 +908,7 @@ idle ──(人感センサー PIR / タップ)──▶ welcome(統合QR画面:
 - **QR読取**: `welcome`(統合)に統合。`parseQR()` は **`appt:<token>` / `name` パラメータ付きURLのみ受付**、未対応/エラーは `pauseScan()` でメッセージ＋クールダウン。`scanLoop` は ≈8fps 間引き、`getUserMedia` は `disposed` フラグで teardown ガード。
 - **resultPhone（電話案内・`showResultPhone`）**: スタッフ「電話(対応不可)」応答時。`ST.kiosk_phone_number` を大きく表示（未設定時は「受付までお声がけください」）。一定時間で idle 復帰。
 - **resultDecline（営業お断り・`showResultDecline`）**: スタッフ「お断り」応答時。「営業・セールス等の…ご協力をお願いいたします」＋「お問い合わせフォームよりお願いいたします。受付でのお取次ぎは行っておりません」＋`ST.inquiry_qr`(SVG data URI, backend生成) の問い合わせフォールQRを表示。未生成時はURL文字列で代替。一定時間で idle 復帰。
-- **feedback（受付完了後アンケート・`showFeedback`）**: **お断り(resultDecline)以外のすべての終了パターン**の直後に表示する（受付/電話/歓迎画面/ロッカー完了/配達完了）。`goAfterResult()` が1か所で判定する。3問を1問ずつ・大きなボタンで、**すべて任意回答**。常に「回答せず終了」を出し、1問 20 秒（`FEEDBACK_QUESTION_SEC`）で自動終了する。保存されるのは **質問IDと回答コードだけ**（`clarity`/`confidence`/`assistance`。自由記述は無い）。未回答は `unknown` 扱いで、**行動ログからスタッフ支援の有無を推測しない**。端末単位で止めるには localStorage `kiosk_feedback="off"`。`?mock=1` では出さない。
+- **feedback（受付完了後アンケート・`showFeedback`）**: **お断り(resultDecline)以外のすべての終了パターン**の直後に表示する（受付/電話/歓迎画面/ロッカー完了/配達完了）。`goAfterResult()` が1か所で判定する。3問を1問ずつ・大きなボタンで、**すべて任意回答**。常に「回答せず終了」を出し、1問 20 秒（`FEEDBACK_QUESTION_SEC`）で自動終了する。保存されるのは **質問IDと回答コードだけ**（`clarity`/`confidence`/`assistance`。自由記述は無い）。未回答は `unknown` 扱いで、**行動ログからスタッフ支援の有無を推測しない**。**出すのはモニターのテナント(`ST.is_monitor`)だけ**（運営パネルで切替・既定オフ。2026-11-18〜。それまでは全テナントに出ていた）。端末単位で止めるには localStorage `kiosk_feedback="off"`。`?mock=1` では出さない。
 - **complete（歓迎画面「お待ちしておりました」）**: 氏名と「様」を同サイズでインライン表示。予約情報を拡大表示。QR受付で行き先（会議室）が確定し、かつその会議室に `map_image_url` が登録されている場合のみ館内マップを表示（`go("calling"/"complete", { name, staff, room, scheduledAt, method })` でデータを伝搬）。
 - **キオスク設定（スタッフ専用・`showKioskSettings`）**: 画面**左上＋右上の同時タッチ**（または `Ctrl+Shift+M`）で開く。上部の**タブで「設定」/「デバイスチェック」を切替**（統合済み）。
   - **設定タブ**: 音量スライダー＋サウンドON/OFF（タップ音, `/device/volume`）、Wi-Fi（`/device/wifi/networks|connect|toggle`）、**ロッカーの口数(3口/7口)選択**（`/device/locker-config`。増設時に設置者がタッチで切替＝JSON編集不要）、ロッカーの鍵 全解除（`/device/lockers/open-all`）、フッター端末名の**5連タップで再登録**。
@@ -1171,7 +1174,7 @@ ANALYTICS_SPOOL_DIR=              # スプールの置き場所(既定 kiosk_age
 ```
 
 端末ごとの切り替え（キオスク画面の localStorage）:
-`kiosk_feedback="off"` で受付完了後アンケートをその端末だけ止める。
+`kiosk_feedback="off"` で受付完了後アンケートをその端末だけ止める（アンケートを出すのは運営パネルでモニターにしたテナントだけ）。
 
 ### Frontend (.env.local)
 ```
